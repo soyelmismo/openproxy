@@ -66,7 +66,6 @@ pub mod validation;
 pub use di::ServiceContainer;
 pub use validation::Validatable;
 
-
 /// Install the rustls process-level crypto provider.
 ///
 /// Mandatory since rustls 0.23. Without this, the first TLS

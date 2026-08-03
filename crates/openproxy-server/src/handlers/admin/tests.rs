@@ -1082,7 +1082,8 @@ async fn test_run_test_for_model_cancellation() {
 
     // Create a pre-cancelled watch receiver
     let (tx, rx) = tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
-    tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
+    tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
+        .unwrap();
 
     let (r, _) = run_test_for_model(
         &state,

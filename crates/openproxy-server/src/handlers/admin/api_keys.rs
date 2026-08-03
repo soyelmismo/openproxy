@@ -26,7 +26,10 @@ pub async fn get_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<core_api_keys::ApiKey>, ApiError> {
-    let key = s.services().api_keys.get_by_id(ApiKeyId(id))?
+    let key = s
+        .services()
+        .api_keys
+        .get_by_id(ApiKeyId(id))?
         .ok_or_else(|| CoreError::Internal(format!("api_key {id} not found")))?;
     Ok(Json(key))
 }
@@ -48,18 +51,17 @@ pub async fn update_api_key(
 
     // `allowed_models`: absent = no-op; present + null = clear to NULL;
     // present + array = set to that array.
-    let allowed_models_owned: Option<Option<Vec<String>>> =
-        body.get("allowed_models").map(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_array().map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(String::from))
-                        .collect()
-                })
-            }
-        });
+    let allowed_models_owned: Option<Option<Vec<String>>> = body.get("allowed_models").map(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        }
+    });
     let allowed_models_slice: Option<Option<&[String]>> =
         allowed_models_owned.as_ref().map(|o| o.as_deref());
 

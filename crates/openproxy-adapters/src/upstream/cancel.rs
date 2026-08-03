@@ -260,7 +260,8 @@ mod tests {
         let (tx, mut rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         // Flip the watch to `true` BEFORE constructing the token —
         // mirrors the pre-flight check in the chat pipeline.
-        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
+            .unwrap();
         // Give the receiver a moment to see the change.
         rx.changed().await.unwrap();
         let token = CancellationToken::from_watch(rx);
@@ -274,7 +275,8 @@ mod tests {
         assert!(!token.is_cancelled());
         // Flip the watch — the background task should observe the
         // change and flip the token.
-        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
+            .unwrap();
         // Spin briefly to let the task run.
         for _ in 0..50 {
             if token.is_cancelled() {
@@ -349,7 +351,8 @@ mod tests {
         let token = CancellationToken::from_watch_and_token(rx, race_token);
         assert!(!token.is_cancelled());
 
-        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
+            .unwrap();
         for _ in 0..50 {
             if token.is_cancelled() {
                 break;
@@ -379,7 +382,8 @@ mod tests {
     #[tokio::test]
     async fn from_watch_and_token_already_cancelled_watch_starts_cancelled() {
         let (tx, mut rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
-        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
+            .unwrap();
         rx.changed().await.unwrap();
         let race_token = CancellationToken::new();
         let token = CancellationToken::from_watch_and_token(rx, race_token);

@@ -34,7 +34,6 @@ impl EndpointKind {
     }
 }
 
-
 impl std::str::FromStr for EndpointKind {
     type Err = String;
 

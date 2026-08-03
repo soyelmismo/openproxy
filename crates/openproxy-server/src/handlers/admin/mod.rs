@@ -90,10 +90,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::{
-    error::ApiError,
-    state::AppState,
-};
+use crate::{error::ApiError, state::AppState};
 
 // Resolve the adapter for a given provider.
 //

@@ -642,7 +642,19 @@ mod tests {
         assert_eq!(p.auto_activate_keyword.as_deref(), Some("claude"));
 
         // Clear the keyword: Some(None) sets NULL.
-        update(&conn, &id, None, None, None, Some(None), None, None, None, None).expect("clear keyword");
+        update(
+            &conn,
+            &id,
+            None,
+            None,
+            None,
+            Some(None),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("clear keyword");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.auto_activate_keyword, None);
 

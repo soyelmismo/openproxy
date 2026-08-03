@@ -18,12 +18,12 @@
 //!   an error.
 
 use crate::accounts;
-use crate::validation::{validate_base_url, Validatable};
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use crate::models;
 use crate::providers::{self, AuthType, ProviderFormat};
 use crate::quota::AccountQuota;
+use crate::validation::{Validatable, validate_base_url};
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::combos;
 use openproxy_db::secrets::MasterKey;
@@ -38,7 +38,6 @@ use std::time::Duration;
 
 /// Validate that a `base_url` is a well-formed HTTP(S) URL with a non-empty
 /// host. Rejects data URIs, file URIs, bare hosts, and any other scheme.
-
 
 // =====================================================================
 // Providers
@@ -68,7 +67,6 @@ impl Validatable for CreateProviderInput {
         Ok(())
     }
 }
-
 
 /// Insert a new provider. Returns the [`ProviderId`] used.
 ///
@@ -175,7 +173,6 @@ impl Validatable for UpdateProviderInput {
         Ok(())
     }
 }
-
 
 impl<'de> Deserialize<'de> for UpdateProviderInput {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>

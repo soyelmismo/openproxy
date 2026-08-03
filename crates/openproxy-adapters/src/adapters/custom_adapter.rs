@@ -156,7 +156,9 @@ impl ProviderAdapter for CustomAdapter {
             vec![]
         } else {
             match self.config.auth_type {
-                AdapterAuthType::Bearer | AdapterAuthType::OAuth => vec![("Authorization", format!("Bearer {api_key}"))],
+                AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
+                    vec![("Authorization", format!("Bearer {api_key}"))]
+                }
                 AdapterAuthType::XApiKey => vec![("x-api-key", api_key.to_string())],
                 AdapterAuthType::GoogApiKey => vec![("x-goog-api-key", api_key.to_string())],
                 AdapterAuthType::None => vec![],

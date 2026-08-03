@@ -134,5 +134,4 @@ mod tests {
         // Round-trip via std::str to verify we did not produce invalid UTF-8.
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
     }
-
 }

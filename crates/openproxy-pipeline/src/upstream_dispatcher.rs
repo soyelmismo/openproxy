@@ -197,7 +197,10 @@ impl UpstreamDispatcher {
         .unwrap()
     }
 
-    pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>) -> Option<openproxy_types::CancelReason> {
+    pub(crate) fn is_client_disconnected(
+        &self,
+        rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
+    ) -> Option<openproxy_types::CancelReason> {
         *rx.borrow_and_update()
     }
 
@@ -285,9 +288,11 @@ impl UpstreamDispatcher {
             let repo = self.tracker.repo.clone();
             let provider_id = target.provider_id.clone();
             let account_id = target.account_id.clone();
-            tokio::task::spawn_blocking(move || repo.get_or_assign_provider_proxy(&provider_id, account_id))
-                .await
-                .unwrap()
+            tokio::task::spawn_blocking(move || {
+                repo.get_or_assign_provider_proxy(&provider_id, account_id)
+            })
+            .await
+            .unwrap()
         };
         let proxy_url = match proxy_result {
             Ok(url) => url,
@@ -455,7 +460,8 @@ impl UpstreamDispatcher {
                         &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         Some(connect_and_send_ms),
                         None,
-                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected).http_status(),
+                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                            .http_status(),
                     ),
                 );
             }
@@ -463,7 +469,8 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError, None,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                        None,
                     )
                     .await;
                 let (phase_label, config_hint) = match phase {
@@ -511,7 +518,8 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError, None,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                        None,
                     )
                     .await;
                 let err = CoreError::UpstreamError {
@@ -532,7 +540,8 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError, None,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                        None,
                     )
                     .await;
                 let err = CoreError::UpstreamError {
@@ -677,7 +686,8 @@ impl UpstreamDispatcher {
                         &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         Some(connect_and_send_ms),
                         Some(ttft_ms),
-                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected).http_status(),
+                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                            .http_status(),
                     ),
                 );
             }
@@ -701,7 +711,8 @@ impl UpstreamDispatcher {
             Ok(Err(e)) => {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError, None,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    None,
                 )
                 .await;
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
@@ -1457,7 +1468,8 @@ impl UpstreamDispatcher {
                         &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         Some(connect_and_send_ms),
                         None,
-                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected).http_status(),
+                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                            .http_status(),
                     ),
                 );
             }

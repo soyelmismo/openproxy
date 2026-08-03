@@ -86,7 +86,8 @@ impl PipelineStage for UpstreamExecutorStage {
                     combo,
                     target,
                     overall_attempt,
-                    race_size as u8, to_run.len() as u8,
+                    race_size as u8,
+                    to_run.len() as u8,
                     &openproxy_adapters::upstream::CancellationToken::new(),
                 )
                 .await;
@@ -187,7 +188,8 @@ impl PipelineStage for UpstreamExecutorStage {
                         combo,
                         target,
                         overall_attempt,
-                        race_size as u8, to_run.len() as u8,
+                        race_size as u8,
+                        to_run.len() as u8,
                         &openproxy_adapters::upstream::CancellationToken::new(),
                     )
                     .await;

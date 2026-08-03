@@ -92,7 +92,11 @@ pub trait PipelineRepository: Send + Sync {
         status: &str,
         error_msg: Option<&str>,
     ) -> Result<()>;
-    fn get_or_assign_provider_proxy(&self, provider_id: &ProviderId, account_id: Option<AccountId>) -> Result<Option<String>>;
+    fn get_or_assign_provider_proxy(
+        &self,
+        provider_id: &ProviderId,
+        account_id: Option<AccountId>,
+    ) -> Result<Option<String>>;
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String>;
 
     // Batch Loading
@@ -821,12 +825,16 @@ impl PipelineRepository for SqlitePipelineRepository {
             source: Some(Box::new(e)),
         })
     }
-    
-    fn get_or_assign_provider_proxy(&self, provider_id: &ProviderId, account_id: Option<AccountId>) -> Result<Option<String>> {
+
+    fn get_or_assign_provider_proxy(
+        &self,
+        provider_id: &ProviderId,
+        account_id: Option<AccountId>,
+    ) -> Result<Option<String>> {
         use openproxy_db::cooldowns::is_provider_proxy_in_cooldown;
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        
+
         let provider = match openproxy_db::providers::get(&conn, provider_id)? {
             Some(p) => p,
             None => return Ok(None),
@@ -884,9 +892,21 @@ impl PipelineRepository for SqlitePipelineRepository {
 
             if let Some((host, port, proto, username, password)) = exists_and_alive {
                 if let (Some(u), Some(p)) = (username, password) {
-                    return Ok(Some(format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)));
+                    return Ok(Some(format!(
+                        "{}://{}:{}@{}:{}",
+                        proto.to_lowercase(),
+                        u,
+                        p,
+                        host,
+                        port
+                    )));
                 } else {
-                    return Ok(Some(format!("{}://{}:{}", proto.to_lowercase(), host, port)));
+                    return Ok(Some(format!(
+                        "{}://{}:{}",
+                        proto.to_lowercase(),
+                        host,
+                        port
+                    )));
                 }
             }
         }
@@ -896,8 +916,18 @@ impl PipelineRepository for SqlitePipelineRepository {
             let mut stmt = conn
                 .prepare("SELECT current_proxy_id FROM accounts WHERE provider_id = ?1 AND current_proxy_id IS NOT NULL AND id != ?2")
                 .map_err(|e| openproxy_types::error::CoreError::Database { message: e.to_string(), source: Some(Box::new(e)) })?;
-            let rows = stmt.query_map(rusqlite::params![provider_id.as_str(), account_id.as_ref().map(|id| id.0).unwrap_or(0)], |row| row.get::<_, String>(0))
-                .map_err(|e| openproxy_types::error::CoreError::Database { message: e.to_string(), source: Some(Box::new(e)) })?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![
+                        provider_id.as_str(),
+                        account_id.as_ref().map(|id| id.0).unwrap_or(0)
+                    ],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|e| openproxy_types::error::CoreError::Database {
+                    message: e.to_string(),
+                    source: Some(Box::new(e)),
+                })?;
             for r in rows.flatten() {
                 in_use_by_others.insert(r);
             }
@@ -933,7 +963,9 @@ impl PipelineRepository for SqlitePipelineRepository {
             if fallback_proxy.is_none() {
                 fallback_proxy = Some(item.clone());
             }
-            if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0) && !in_use_by_others.contains(&item.0) {
+            if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0)
+                && !in_use_by_others.contains(&item.0)
+            {
                 selected_proxy = Some(item);
                 break;
             }
@@ -944,17 +976,37 @@ impl PipelineRepository for SqlitePipelineRepository {
         if let Some((new_id, host, port, proto, username, password)) = new_proxy {
             if is_per_account {
                 if let Some(ref acc_id) = account_id {
-                    conn.execute("UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2", rusqlite::params![new_id, acc_id.0])
-                        .map_err(|e| openproxy_types::error::CoreError::Database { message: e.to_string(), source: Some(Box::new(e)) })?;
+                    conn.execute(
+                        "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
+                        rusqlite::params![new_id, acc_id.0],
+                    )
+                    .map_err(|e| {
+                        openproxy_types::error::CoreError::Database {
+                            message: e.to_string(),
+                            source: Some(Box::new(e)),
+                        }
+                    })?;
                 }
             } else {
                 openproxy_db::providers::update_current_proxy(&conn, provider_id, Some(&new_id))?;
             }
 
             if let (Some(u), Some(p)) = (username, password) {
-                return Ok(Some(format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)));
+                return Ok(Some(format!(
+                    "{}://{}:{}@{}:{}",
+                    proto.to_lowercase(),
+                    u,
+                    p,
+                    host,
+                    port
+                )));
             } else {
-                return Ok(Some(format!("{}://{}:{}", proto.to_lowercase(), host, port)));
+                return Ok(Some(format!(
+                    "{}://{}:{}",
+                    proto.to_lowercase(),
+                    host,
+                    port
+                )));
             }
         }
 

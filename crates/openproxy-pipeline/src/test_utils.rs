@@ -198,7 +198,12 @@ pub fn seed_provider_and_model(
 }
 
 /// Build a `PipelineRequest` with sensible defaults.
-pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<Option<openproxy_types::CancelReason>>) {
+pub fn make_request(
+    combo_id: ComboId,
+) -> (
+    PipelineRequest,
+    watch::Sender<Option<openproxy_types::CancelReason>>,
+) {
     let (_dis_tx, dis_rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
     let req = PipelineRequest {
         request_id: RequestId::new(),

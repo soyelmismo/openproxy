@@ -298,8 +298,14 @@ mod tests {
             .http_status(),
             429
         );
-        assert_eq!(CoreError::Cancelled(CancelReason::ClientDisconnected).http_status(), 499);
-        assert_eq!(CoreError::Cancelled(CancelReason::WatchdogTimeout).http_status(), 504);
+        assert_eq!(
+            CoreError::Cancelled(CancelReason::ClientDisconnected).http_status(),
+            499
+        );
+        assert_eq!(
+            CoreError::Cancelled(CancelReason::WatchdogTimeout).http_status(),
+            504
+        );
         assert_eq!(
             CoreError::UpstreamTimeout {
                 phase: "ttft".into(),

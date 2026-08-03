@@ -100,7 +100,8 @@ pub fn process_job(
                             }
                         }
                         "record" => {
-                            let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
+                            let reason =
+                                error_msg.unwrap_or_else(|| "retryable failure".to_string());
                             if let Err(e) = repo.record_cooldown(
                                 target_id,
                                 &reason,

@@ -285,13 +285,17 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
         .map_err(|e| match e {
-            openproxy_adapters::upstream::UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
+            openproxy_adapters::upstream::UpstreamError::Cancel => {
+                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            }
             other => CoreError::UpstreamConnection(format!("models.dev fetch: {other}")),
         })?;
 
     let status = response.status;
     let body = response.collect().await.map_err(|e| match e {
-        openproxy_adapters::upstream::UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
+        openproxy_adapters::upstream::UpstreamError::Cancel => {
+            CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+        }
         other => CoreError::UpstreamConnection(format!("models.dev body read: {other}")),
     })?;
 

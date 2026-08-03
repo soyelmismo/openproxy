@@ -8,7 +8,9 @@ use openproxy_core::admin as core_admin;
 use openproxy_core::oauth::OAuthProvider;
 use openproxy_core::providers as core_providers;
 
-pub async fn list_providers(State(s): State<AppState>) -> Result<Json<Vec<ProviderWithOAuth>>, ApiError> {
+pub async fn list_providers(
+    State(s): State<AppState>,
+) -> Result<Json<Vec<ProviderWithOAuth>>, ApiError> {
     // Read-only SELECT — use the READER so the dashboard's catalog
     // polling doesn't serialize through the writer mutex.
     let r = s.db_pool().reader();
@@ -65,8 +67,8 @@ pub async fn get_provider(
     // Read-only SELECT — use the READER.
     let r = s.db_pool().reader();
     let id = ProviderId::new(id);
-    let provider = core_providers::get(&r, &id)?
-        .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+    let provider =
+        core_providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
     let registry = s.oauth_provider_registry();
     let adapters = s.adapters();
     let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);

@@ -1,9 +1,9 @@
 use super::*;
+use crate::extractors::{DbReader, DbWriter};
 use axum::{
     Json,
     extract::{Path, Query},
 };
-use crate::extractors::{DbReader, DbWriter};
 
 pub async fn list_notifications(
     DbReader(r): DbReader,
@@ -36,9 +36,8 @@ pub async fn mark_notification_read(
 pub async fn mark_all_notifications_read(
     DbWriter(w): DbWriter,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let updated = openproxy_core::notifications::mark_all_read(&w).map_err(|e| {
-        CoreError::Internal(format!("core_notifications::mark_all_read: {}", e))
-    })?;
+    let updated = openproxy_core::notifications::mark_all_read(&w)
+        .map_err(|e| CoreError::Internal(format!("core_notifications::mark_all_read: {}", e)))?;
     Ok(Json(serde_json::json!({ "updated": updated })))
 }
 
@@ -56,9 +55,7 @@ pub async fn delete_notification(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let deleted = openproxy_core::notifications::delete(&w, id)
-        .map_err(|e| {
-            CoreError::Internal(format!("core_notifications::delete: {}", e))
-        })?;
+        .map_err(|e| CoreError::Internal(format!("core_notifications::delete: {}", e)))?;
     if deleted {
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {

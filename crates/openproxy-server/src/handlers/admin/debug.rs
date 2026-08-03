@@ -50,7 +50,9 @@ pub async fn debug_logs(
     }))
 }
 
-pub async fn debug_logs_clear(State(_s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+pub async fn debug_logs_clear(
+    State(_s): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     crate::debug_log::clear();
     Ok(Json(serde_json::json!({ "cleared": true })))
 }

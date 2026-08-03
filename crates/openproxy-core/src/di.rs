@@ -1,7 +1,7 @@
+use openproxy_types::error::{CoreError, Result};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use openproxy_types::error::{CoreError, Result};
 
 /// A thread-safe generic Service-Locator / TypeMap for Dependency Injection.
 #[derive(Clone, Default)]

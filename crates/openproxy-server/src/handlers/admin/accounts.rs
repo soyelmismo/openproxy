@@ -1,5 +1,5 @@
-use crate::extractors::DbReader;
 use super::*;
+use crate::extractors::DbReader;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -14,7 +14,10 @@ pub async fn list_accounts(
     Query(q): Query<AccountListQuery>,
 ) -> Result<Json<Vec<core_accounts::Account>>, ApiError> {
     let provider = q.provider_id.map(ProviderId::new);
-    let list = s.services().accounts.list(provider.as_ref(), s.master_key().as_ref())?;
+    let list = s
+        .services()
+        .accounts
+        .list(provider.as_ref(), s.master_key().as_ref())?;
     Ok(Json(list))
 }
 
@@ -22,7 +25,10 @@ pub async fn create_account(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateAccountInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let id = s.services().accounts.create(s.master_key().as_ref(), input)?;
+    let id = s
+        .services()
+        .accounts
+        .create(s.master_key().as_ref(), input)?;
     Ok(Json(serde_json::json!({ "id": id.0 })))
 }
 
@@ -45,7 +51,9 @@ pub async fn set_account_health(
         .and_then(|v| v.as_str())
         .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
     let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
-    s.services().accounts.set_health(AccountId::new(id), health)?;
+    s.services()
+        .accounts
+        .set_health(AccountId::new(id), health)?;
     Ok(Json(serde_json::json!({
         "id": id,
         "health": health_str,
@@ -57,7 +65,9 @@ pub async fn update_account_api_key(
     Path(id): Path<i64>,
     Json(body): Json<core_admin::UpdateAccountApiKeyInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    s.services().accounts.update_api_key(s.master_key().as_ref(), AccountId::new(id), body)?;
+    s.services()
+        .accounts
+        .update_api_key(s.master_key().as_ref(), AccountId::new(id), body)?;
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
@@ -65,7 +75,10 @@ pub async fn get_account_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let key = s.services().accounts.get_api_key(s.master_key().as_ref(), AccountId::new(id))?;
+    let key = s
+        .services()
+        .accounts
+        .get_api_key(s.master_key().as_ref(), AccountId::new(id))?;
     Ok(Json(serde_json::json!({ "api_key": key })))
 }
 
@@ -74,7 +87,9 @@ pub async fn update_account_label(
     Path(id): Path<i64>,
     Json(body): Json<core_admin::UpdateAccountLabelInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    s.services().accounts.update_label(AccountId::new(id), body)?;
+    s.services()
+        .accounts
+        .update_label(AccountId::new(id), body)?;
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
@@ -193,11 +208,16 @@ pub async fn apply_account_local_cli(
         .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
 
     if account.provider_id.as_str() != "antigravity" {
-        return Err(CoreError::Validation("Only antigravity accounts can be injected into agy-cli".into()).into());
+        return Err(CoreError::Validation(
+            "Only antigravity accounts can be injected into agy-cli".into(),
+        )
+        .into());
     }
 
-    let access_token = core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
-    let refresh_token = core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
+    let access_token =
+        core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
+    let refresh_token =
+        core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
 
     let payload = serde_json::json!({
         "token": {
@@ -215,8 +235,9 @@ pub async fn apply_account_local_cli(
         .join(".gemini")
         .join("antigravity-cli");
 
-    std::fs::create_dir_all(&cli_dir)
-        .map_err(|e| CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e)))?;
+    std::fs::create_dir_all(&cli_dir).map_err(|e| {
+        CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e))
+    })?;
 
     let token_file = cli_dir.join("antigravity-oauth-token");
 
@@ -229,13 +250,19 @@ pub async fn apply_account_local_cli(
         open_options.mode(0o600);
     }
 
-    let mut file = open_options.open(&token_file)
-        .map_err(|e| CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e)))?;
+    let mut file = open_options.open(&token_file).map_err(|e| {
+        CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e))
+    })?;
 
     let payload_str = serde_json::to_string(&payload)
         .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {}", e)))?;
-    file.write_all(payload_str.as_bytes())
-        .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
+    file.write_all(payload_str.as_bytes()).map_err(|e| {
+        CoreError::Validation(format!(
+            "Failed to write to {}: {}",
+            token_file.display(),
+            e
+        ))
+    })?;
 
     Ok(Json(serde_json::json!({
         "success": true,

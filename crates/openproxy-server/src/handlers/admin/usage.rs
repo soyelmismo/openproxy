@@ -56,9 +56,8 @@ pub async fn usage_by_day(
     Query(q): Query<UsageQuery>,
 ) -> Result<Json<Vec<core_usage::ByDayRow>>, ApiError> {
     let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| {
-        core_usage::by_day(conn, fl)
-    })?;
+    let result =
+        run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| core_usage::by_day(conn, fl))?;
     Ok(Json(result))
 }
 

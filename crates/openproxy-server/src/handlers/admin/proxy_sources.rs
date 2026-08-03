@@ -1,18 +1,13 @@
 use super::*;
-use axum::{
-    Json,
-    extract::Path,
-};
 use crate::extractors::{DbReader, DbWriter};
+use axum::{Json, extract::Path};
 use openproxy_core::free_proxies::{
     CreateProxySourceInput, ProxySource, UpdateProxySourceInput, create_proxy_source,
     delete_proxy_source, get_proxy_source, list_proxy_sources, test_proxy_source_url,
     update_proxy_source,
 };
 
-pub async fn list_sources(
-    DbReader(r): DbReader,
-) -> Result<Json<Vec<ProxySource>>, ApiError> {
+pub async fn list_sources(DbReader(r): DbReader) -> Result<Json<Vec<ProxySource>>, ApiError> {
     let list = list_proxy_sources(&r)?;
     Ok(Json(list))
 }
@@ -54,11 +49,16 @@ pub async fn delete_source(
     DbWriter(w): DbWriter,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let source = get_proxy_source(&w, &id)?
-        .ok_or_else(|| ApiError(CoreError::Validation(format!("proxy source '{id}' not found"))))?;
-    
+    let source = get_proxy_source(&w, &id)?.ok_or_else(|| {
+        ApiError(CoreError::Validation(format!(
+            "proxy source '{id}' not found"
+        )))
+    })?;
+
     if source.is_builtin {
-        return Err(ApiError(CoreError::Validation("Cannot delete built-in proxy sources".into())));
+        return Err(ApiError(CoreError::Validation(
+            "Cannot delete built-in proxy sources".into(),
+        )));
     }
 
     let deleted = delete_proxy_source(&w, &id)?;
@@ -123,7 +123,8 @@ pub async fn reorder_proxy_sources(
         tx.execute(
             "UPDATE proxy_sources SET priority = ?1 WHERE id = ?2",
             rusqlite::params![p, id],
-        ).map_err(|e| CoreError::Database {
+        )
+        .map_err(|e| CoreError::Database {
             message: e.to_string(),
             source: Some(Box::new(e)),
         })?;

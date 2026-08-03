@@ -1,10 +1,10 @@
 use super::*;
+use crate::extractors::{DbReader, DbWriter};
 use axum::{
     Json,
     extract::{Path, Query, State},
 };
 use openproxy_adapters::upstream::is_private_or_reserved;
-use crate::extractors::{DbReader, DbWriter};
 
 pub async fn list_proxies(
     DbReader(r): DbReader,
@@ -73,7 +73,9 @@ pub async fn test_proxy(
     Ok(Json(p))
 }
 
-pub async fn test_all_proxies(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+pub async fn test_all_proxies(
+    State(s): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     openproxy_core::free_proxies::test_all_proxies_background(s.db_pool().clone());
     Ok(Json(serde_json::json!({ "status": "started" })))
 }
@@ -86,7 +88,9 @@ pub async fn delete_proxy(
     Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
-pub async fn get_proxy_test_url(DbReader(r): DbReader) -> Result<Json<serde_json::Value>, ApiError> {
+pub async fn get_proxy_test_url(
+    DbReader(r): DbReader,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let url = openproxy_db::app_config::load_proxy_test_url(&r)?;
     Ok(Json(serde_json::json!({ "proxy_test_url": url })))
 }
@@ -102,7 +106,9 @@ pub async fn update_proxy_test_url(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let url = body.proxy_test_url.trim();
     if url.is_empty() {
-        return Err(ApiError(CoreError::Validation("url cannot be empty".into())));
+        return Err(ApiError(CoreError::Validation(
+            "url cannot be empty".into(),
+        )));
     }
     openproxy_db::app_config::save_proxy_test_url(&w, url)?;
     Ok(Json(serde_json::json!({ "proxy_test_url": url })))

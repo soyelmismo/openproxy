@@ -1558,7 +1558,10 @@ pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAtt
     // Retain only fresh inflight attempts (<60s)
     INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 60_000);
 
-    let mut list: Vec<_> = INFLIGHT_REGISTRY.iter().map(|r| r.value().clone()).collect();
+    let mut list: Vec<_> = INFLIGHT_REGISTRY
+        .iter()
+        .map(|r| r.value().clone())
+        .collect();
     list.sort_by(|a, b| b.started_at_ms.cmp(&a.started_at_ms));
     list
 }
@@ -1617,7 +1620,10 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
     let is_terminal = event.stage == "completed"
         || event.stage == "failed"
         || event.stage == "cancelled"
-        || event.status_code.map(|s| s >= 400 && s != 0).unwrap_or(false)
+        || event
+            .status_code
+            .map(|s| s >= 400 && s != 0)
+            .unwrap_or(false)
         || event.error.is_some();
 
     if is_terminal {
@@ -1627,38 +1633,57 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
         let started_at = now_ms.saturating_sub(event.elapsed_ms);
         let status_opt = event.status_code;
 
-        INFLIGHT_REGISTRY.entry(attempt_key.clone()).and_modify(|item| {
-            item.stage = event.stage.clone();
-            item.stage_rank = rank;
-            item.updated_at_ms = now_ms;
-            item.elapsed_ms_at_event = event.elapsed_ms;
-            if let Some(c) = event.connect_ms { item.connect_ms = Some(c); }
-            if let Some(t) = event.ttft_ms { item.ttft_ms = Some(t); }
-            if status_opt.is_some() { item.status_code = status_opt; }
-            if event.error.is_some() { item.error = event.error.clone(); }
-            if let Some(p) = &event.provider_id { if !p.is_empty() { item.provider_id = p.clone(); } }
-            if let Some(m) = &event.upstream_model_id { if !m.is_empty() { item.upstream_model_id = m.clone(); } }
-        }).or_insert_with(|| openproxy_types::usage::InflightAttempt {
-            attempt_key: attempt_key.clone(),
-            request_id: event.request_id.clone(),
-            trace_id: event.trace_id.clone(),
-            provider_id: event.provider_id.clone().unwrap_or_default(),
-            upstream_model_id: event.upstream_model_id.clone().unwrap_or_default(),
-            started_at_ms: started_at,
-            updated_at_ms: now_ms,
-            stage: event.stage.clone(),
-            stage_seq: event.elapsed_ms as u32,
-            stage_rank: rank,
-            elapsed_ms_at_event: event.elapsed_ms,
-            connect_ms: event.connect_ms,
-            ttft_ms: event.ttft_ms,
-            status_code: status_opt,
-            terminal: false,
-            terminal_kind: None,
-            error: event.error.clone(),
-            row_id: None,
-            source: "live".into(),
-        });
+        INFLIGHT_REGISTRY
+            .entry(attempt_key.clone())
+            .and_modify(|item| {
+                item.stage = event.stage.clone();
+                item.stage_rank = rank;
+                item.updated_at_ms = now_ms;
+                item.elapsed_ms_at_event = event.elapsed_ms;
+                if let Some(c) = event.connect_ms {
+                    item.connect_ms = Some(c);
+                }
+                if let Some(t) = event.ttft_ms {
+                    item.ttft_ms = Some(t);
+                }
+                if status_opt.is_some() {
+                    item.status_code = status_opt;
+                }
+                if event.error.is_some() {
+                    item.error = event.error.clone();
+                }
+                if let Some(p) = &event.provider_id {
+                    if !p.is_empty() {
+                        item.provider_id = p.clone();
+                    }
+                }
+                if let Some(m) = &event.upstream_model_id {
+                    if !m.is_empty() {
+                        item.upstream_model_id = m.clone();
+                    }
+                }
+            })
+            .or_insert_with(|| openproxy_types::usage::InflightAttempt {
+                attempt_key: attempt_key.clone(),
+                request_id: event.request_id.clone(),
+                trace_id: event.trace_id.clone(),
+                provider_id: event.provider_id.clone().unwrap_or_default(),
+                upstream_model_id: event.upstream_model_id.clone().unwrap_or_default(),
+                started_at_ms: started_at,
+                updated_at_ms: now_ms,
+                stage: event.stage.clone(),
+                stage_seq: event.elapsed_ms as u32,
+                stage_rank: rank,
+                elapsed_ms_at_event: event.elapsed_ms,
+                connect_ms: event.connect_ms,
+                ttft_ms: event.ttft_ms,
+                status_code: status_opt,
+                terminal: false,
+                terminal_kind: None,
+                error: event.error.clone(),
+                row_id: None,
+                source: "live".into(),
+            });
     }
 
     if let Some(tx) = STAGE_SENDER.get() {

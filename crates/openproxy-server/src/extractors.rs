@@ -8,9 +8,7 @@ use openproxy_db as db;
 use std::ops::{Deref, DerefMut};
 
 use crate::{
-    error::ApiError,
-    handlers::admin::authenticate_admin_ws,
-    middleware::auth::ValidatedApiToken,
+    error::ApiError, handlers::admin::authenticate_admin_ws, middleware::auth::ValidatedApiToken,
     state::AppState,
 };
 
@@ -35,9 +33,8 @@ where
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let r = app_state.db_pool().reader();
-        let r_static = unsafe {
-            std::mem::transmute::<db::ReaderGuard<'_>, db::ReaderGuard<'static>>(r)
-        };
+        let r_static =
+            unsafe { std::mem::transmute::<db::ReaderGuard<'_>, db::ReaderGuard<'static>>(r) };
         Ok(DbReader(r_static))
     }
 }
@@ -69,9 +66,8 @@ where
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let w = app_state.db_pool().writer();
-        let w_static = unsafe {
-            std::mem::transmute::<db::WriterGuard<'_>, db::WriterGuard<'static>>(w)
-        };
+        let w_static =
+            unsafe { std::mem::transmute::<db::WriterGuard<'_>, db::WriterGuard<'static>>(w) };
         Ok(DbWriter(w_static))
     }
 }

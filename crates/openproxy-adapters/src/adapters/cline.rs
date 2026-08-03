@@ -132,8 +132,9 @@ impl ProviderAdapter for ClineAdapter {
             .await
             .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
 
-        let payload: ClineRecommendedModels = serde_json::from_value(body)
-            .map_err(|e| openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e)))?;
+        let payload: ClineRecommendedModels = serde_json::from_value(body).map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e))
+        })?;
 
         let mut discovered = Vec::new();
 
@@ -143,7 +144,7 @@ impl ProviderAdapter for ClineAdapter {
                 if is_free && !id.ends_with(":free") && !id.contains("-free") {
                     id.push_str(":free");
                 }
-                
+
                 // Fallback capabilities for unknown models
                 let caps = openproxy_types::ModelCapabilities {
                     vision: Some(true),
@@ -196,7 +197,7 @@ impl ProviderAdapter for ClineAdapter {
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         let mut val: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
-        
+
         if let Some(obj) = val.as_object_mut() {
             if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model") {
                 if model_str.ends_with(":free") {
@@ -214,7 +215,7 @@ impl ProviderAdapter for ClineAdapter {
                 obj.insert("stream".to_string(), serde_json::Value::Bool(true));
             }
         }
-        
+
         let new_body = serde_json::to_vec(&val)
             .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
         Ok(bytes::Bytes::from(new_body))

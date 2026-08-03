@@ -98,7 +98,10 @@ impl CancelWatchKey {
 ///
 /// Exposed so tests (and the chat handler) can mint a
 /// pre-constructed pair without going through the middleware.
-pub fn new_cancel_pair() -> (watch::Sender<Option<openproxy_types::CancelReason>>, watch::Receiver<Option<openproxy_types::CancelReason>>) {
+pub fn new_cancel_pair() -> (
+    watch::Sender<Option<openproxy_types::CancelReason>>,
+    watch::Receiver<Option<openproxy_types::CancelReason>>,
+) {
     watch::channel(None)
 }
 
@@ -185,7 +188,11 @@ pub struct DisconnectBody<B: HttpBody> {
 impl<B: HttpBody> DisconnectBody<B> {
     /// Wrap `inner`. `tx` is fired (idempotently) the first time
     /// `poll_frame` returns `Err` on this body.
-    pub fn new(inner: B, tx: watch::Sender<Option<openproxy_types::CancelReason>>, fired: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        inner: B,
+        tx: watch::Sender<Option<openproxy_types::CancelReason>>,
+        fired: Arc<AtomicBool>,
+    ) -> Self {
         let complete = inner.is_end_stream();
         Self {
             inner,
@@ -198,9 +205,16 @@ impl<B: HttpBody> DisconnectBody<B> {
 
 impl<B: HttpBody> Drop for DisconnectBody<B> {
     fn drop(&mut self) {
-        if !self.complete && !self.inner.is_end_stream() && self.fired.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        if !self.complete
+            && !self.inner.is_end_stream()
+            && self
+                .fired
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
         {
-            let _ = self.tx.send(Some(openproxy_types::CancelReason::ClientDisconnected));
+            let _ = self
+                .tx
+                .send(Some(openproxy_types::CancelReason::ClientDisconnected));
         }
     }
 }
@@ -223,8 +237,14 @@ impl<B: HttpBody + Unpin> HttpBody for DisconnectBody<B> {
             // `fired` latch so the response-body wrapper (which
             // shares the same `Arc<AtomicBool>`) doesn't
             // double-fire if it later sees an error too.
-            if self.fired.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                let _ = self.tx.send(Some(openproxy_types::CancelReason::ClientDisconnected));
+            if self
+                .fired
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let _ = self
+                    .tx
+                    .send(Some(openproxy_types::CancelReason::ClientDisconnected));
             }
         }
         result
@@ -479,7 +499,9 @@ mod tests {
         let rx2 = cw.rx.clone();
 
         // Firing via the original `cw.tx` is visible on the clone.
-        let _ = cw.tx.send(Some(openproxy_types::CancelReason::ClientDisconnected));
+        let _ = cw
+            .tx
+            .send(Some(openproxy_types::CancelReason::ClientDisconnected));
         assert!(cw.rx.borrow().is_some(), "original rx should see the send");
         assert!(rx2.borrow().is_some(), "cloned rx should see the same send");
     }
@@ -498,7 +520,10 @@ mod tests {
 
         let result = poll_once(&mut body);
         assert!(matches!(result, Poll::Ready(Some(Err(_)))));
-        assert!(rx.borrow().is_some(), "watch not fired through Pin<Box<dyn Body>>");
+        assert!(
+            rx.borrow().is_some(),
+            "watch not fired through Pin<Box<dyn Body>>"
+        );
     }
 
     /// Sanity check that the newtype compiles and runs with a

@@ -417,17 +417,17 @@ impl OAuthProviderRegistry {
     /// Create a registry pre-populated with the built-in OAuth providers.
     pub fn builtin() -> Self {
         let reg = Self::new();
-        
+
         for provider in OAuthProviderEnum::builtin_providers() {
             // Register under its default name
             reg.register_arc(provider.clone());
-            
+
             // Antigravity (Cloud Code) — also register under `antigravity-cli` alias
             if provider.name() == "antigravity" {
                 reg.register_arc_with_name("antigravity-cli", provider);
             }
         }
-        
+
         reg
     }
 

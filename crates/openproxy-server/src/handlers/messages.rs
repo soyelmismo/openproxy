@@ -10,10 +10,7 @@ use std::task::{Context, Poll};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    disconnect::CancelWatch,
-    error::ApiError,
-    middleware::auth::ParsedChatRequest,
-    state::AppState,
+    disconnect::CancelWatch, error::ApiError, middleware::auth::ParsedChatRequest, state::AppState,
 };
 use openproxy_pipeline::translation::{
     AnthropicRequest, anthropic_request_to_openai, openai_response_to_anthropic,

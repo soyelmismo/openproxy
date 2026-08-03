@@ -30,10 +30,7 @@ use axum::{Json, extract::State, http::HeaderMap};
 use openproxy_core::{capabilities, models};
 use openproxy_types::{ApiKeyId, CoreError};
 
-use crate::{
-    error::ApiError,
-    state::AppState,
-};
+use crate::{error::ApiError, state::AppState};
 
 /// Default context length to report when neither the DB column nor
 /// the heuristic knows the model. 128k is the modern chat default and
@@ -61,7 +58,10 @@ pub async fn list_models(
 
     // Use try_writer_for to avoid blocking under admin lock contention.
     // The model list is bounded (typically <1000 rows) so 5s is plenty.
-    let rows = state.services().models.list_active_all(std::time::Duration::from_secs(5))?;
+    let rows = state
+        .services()
+        .models
+        .list_active_all(std::time::Duration::from_secs(5))?;
     let combo_rows = state.services().combos.list_combos()?;
 
     let mut data: Vec<serde_json::Value> =
@@ -73,12 +73,17 @@ pub async fn list_models(
         let effective_cw = if c.context_window.is_some() {
             c.context_window
         } else {
-            state.services().combos.compute_effective_context_window(c.id).unwrap_or(None)
+            state
+                .services()
+                .combos
+                .compute_effective_context_window(c.id)
+                .unwrap_or(None)
         };
         data.push(build_combo_entry(c, effective_cw));
     }
 
-    let is_anthropic = headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
+    let is_anthropic =
+        headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
     if is_anthropic {
         let anthropic_data: Vec<serde_json::Value> = data
             .into_iter()
@@ -93,8 +98,16 @@ pub async fn list_models(
             })
             .collect();
 
-        let first_id = anthropic_data.first().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
-        let last_id = anthropic_data.last().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
+        let first_id = anthropic_data
+            .first()
+            .and_then(|v| v.get("id"))
+            .cloned()
+            .unwrap_or(serde_json::json!(""));
+        let last_id = anthropic_data
+            .last()
+            .and_then(|v| v.get("id"))
+            .cloned()
+            .unwrap_or(serde_json::json!(""));
 
         Ok(Json(serde_json::json!({
             "data": anthropic_data,

@@ -105,7 +105,15 @@ pub(crate) async fn run_race(
                 }
 
                 let result = p
-                    .execute_single(req.clone(), &combo, &target, 1, race_size, total_targets, &worker_token)
+                    .execute_single(
+                        req.clone(),
+                        &combo,
+                        &target,
+                        1,
+                        race_size,
+                        total_targets,
+                        &worker_token,
+                    )
                     .await;
 
                 if result.error.is_none() {

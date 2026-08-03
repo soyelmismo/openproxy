@@ -12,8 +12,8 @@
 //! (`key_prefix=NULL`, `scopes=["chat"]`, `is_active=1`, etc.).
 
 use crate::error::{CoreError, Result};
-use crate::validation::Validatable;
 use crate::ids::ApiKeyId;
+use crate::validation::Validatable;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};

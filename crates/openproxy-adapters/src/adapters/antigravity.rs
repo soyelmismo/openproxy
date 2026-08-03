@@ -430,7 +430,11 @@ impl AntigravityAdapter {
             let cancel = CancellationToken::new();
             let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
                 Ok(r) => r,
-                Err(UpstreamError::Cancel) => return Err(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)),
+                Err(UpstreamError::Cancel) => {
+                    return Err(CoreError::Cancelled(
+                        openproxy_types::CancelReason::ClientDisconnected,
+                    ));
+                }
                 Err(e) => {
                     last_err = Some(CoreError::UpstreamConnection(format!(
                         "retrieveUserQuotaSummary: {e}"
