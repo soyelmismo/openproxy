@@ -459,7 +459,7 @@ pub fn get_or_assign_provider_proxy(
     if let Some(ref proxy_id) = current_proxy_id
         && !is_provider_proxy_in_cooldown(provider_id.as_str(), proxy_id)
     {
-        let exists_and_alive: Option<(String, i64, String, Option<String>, Option<String>)> = conn
+        let exists_and_alive = conn
             .query_row(
                 "SELECT host, port, type, username, password FROM free_proxies WHERE id = ?1 AND status = 'alive'",
                 rusqlite::params![proxy_id],

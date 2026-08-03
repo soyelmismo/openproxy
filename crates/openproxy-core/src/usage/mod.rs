@@ -1562,7 +1562,7 @@ pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAtt
         .iter()
         .map(|r| r.value().clone())
         .collect();
-    list.sort_by(|a, b| b.started_at_ms.cmp(&a.started_at_ms));
+    list.sort_by_key(|b| std::cmp::Reverse(b.started_at_ms));
     list
 }
 
