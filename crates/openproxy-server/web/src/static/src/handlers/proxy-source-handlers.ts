@@ -303,7 +303,7 @@ export async function testProxySource(id: string): Promise<void> {
   const name = src ? src.name : id;
   try {
     const res = await api(`/proxy-sources/${id}/test`, { method: "POST" });
-    const count = (res as any).proxy_count || 0;
+    const count = (res as { proxy_count?: number }).proxy_count || 0;
     showToast(`Source '${name}' tested: found ${count} proxies`, "success");
   } catch (err: unknown) {
     showApiError(err, `Failed to test proxy source '${name}'`);
