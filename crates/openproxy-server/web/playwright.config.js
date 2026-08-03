@@ -18,7 +18,7 @@ export default defineConfig({
   // Single worker to avoid fighting the WebSocket / shared DB.
   workers: 1,
   webServer: {
-    command: 'cargo run --release -p openproxy-server',
+    command: 'cargo run -p openproxy-server',
     port: 8790,
     reuseExistingServer: !process.env.CI,
     cwd: '../../..',
