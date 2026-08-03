@@ -953,7 +953,7 @@ impl UpstreamDispatcher {
                 unreachable!("Responses format is handled natively before dispatcher")
             }
             openproxy_types::TargetFormat::Openai => {
-                match serde_json::from_value::<OpenAIResponse>(response_body_raw.clone()) {
+                match serde_json::from_value::<OpenAIResponse>(response_body_raw) {
                     Ok(r) => r,
                     Err(e) => {
                         let err = CoreError::Parse(format!("parse openai response: {e}"));

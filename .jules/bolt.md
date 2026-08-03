@@ -100,3 +100,7 @@
 ## 2026-08-02 - Async Locking Clones in State Adapters
 **Learning:** Returning `adapters.read().clone()` or `self.adapters.read().clone()` inside getter methods for `AppState` forces the system to deeply clone large internal structures every single time an adapter lookup is requested. Because it returns `Arc<Vec<ProviderAdapterEnum>>`, you can directly `Arc::clone(&adapters.read())` to safely copy the outer reference rather than making a deep clone of the vector itself.
 **Action:** When working with nested Arcs like `Arc<RwLock<Arc<Vec<T>>>>`, use `Arc::clone(&lock.read())` instead of `.clone()` on the lock guard to execute an O(1) reference count increment rather than an expensive O(N) heap allocation.
+
+## 2026-08-03 - Optimizing memory allocation in upstream dispatcher
+**Learning:** Found unnecessary `.clone()` on large JSON `response_body_raw` strings just before dropping them, causing memory spikes on high-throughput proxy responses.
+**Action:** Removed redundant `.clone()` in `match serde_json::from_value::<OpenAIResponse>(response_body_raw.clone())` allowing serde to consume the struct without cloning, which saves an entire response-sized allocation in the Openai formatting block of `upstream_dispatcher.rs`.
