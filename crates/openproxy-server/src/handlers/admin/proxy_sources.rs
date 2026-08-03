@@ -27,9 +27,10 @@ pub async fn create_source(
     let pool = state.db_pool().clone();
     tokio::spawn(async move {
         if let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(pool.clone()).await
-            && (summary.added > 0 || summary.fetched > 0) {
-                openproxy_core::free_proxies::test_all_proxies_background(pool);
-            }
+            && (summary.added > 0 || summary.fetched > 0)
+        {
+            openproxy_core::free_proxies::test_all_proxies_background(pool);
+        }
     });
 
     Ok(Json(src))

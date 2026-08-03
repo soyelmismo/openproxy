@@ -247,9 +247,10 @@ impl OAuthProvider for ClineOAuthProvider {
 
         if let Some(ref id_jwt) = token.id_token
             && let Some(claims) = decode_jwt_payload(id_jwt)
-                && let Some(val) = extract(&claims) {
-                    return Some(val);
-                }
+            && let Some(val) = extract(&claims)
+        {
+            return Some(val);
+        }
 
         let jwt = token
             .access_token
@@ -288,12 +289,13 @@ fn parse_expires_in(data: &ClineAuthResponseData) -> Option<u64> {
         return Some(secs);
     }
     if let Some(ref ts) = data.expires_at
-        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
-            let diff = dt
-                .with_timezone(&chrono::Utc)
-                .signed_duration_since(chrono::Utc::now());
-            return Some(diff.num_seconds().max(0) as u64);
-        }
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
+    {
+        let diff = dt
+            .with_timezone(&chrono::Utc)
+            .signed_duration_since(chrono::Utc::now());
+        return Some(diff.num_seconds().max(0) as u64);
+    }
     None
 }
 

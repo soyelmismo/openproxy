@@ -92,30 +92,30 @@ pub fn process_job(
             };
 
             if let Some(op) = cooldown_op
-                && combo_id.0 != -1 {
-                    match op {
-                        "clear" => {
-                            if let Err(e) = repo.clear_cooldown(target_id) {
-                                tracing::warn!("cooldown::clear failed in background: {}", e);
-                            }
+                && combo_id.0 != -1
+            {
+                match op {
+                    "clear" => {
+                        if let Err(e) = repo.clear_cooldown(target_id) {
+                            tracing::warn!("cooldown::clear failed in background: {}", e);
                         }
-                        "record" => {
-                            let reason =
-                                error_msg.unwrap_or_else(|| "retryable failure".to_string());
-                            if let Err(e) = repo.record_cooldown(
-                                target_id,
-                                &reason,
-                                cooldown_mode,
-                                cooldown_base_secs,
-                                cooldown_max_secs,
-                                cooldown_factor,
-                            ) {
-                                tracing::warn!("cooldown::record failed in background: {}", e);
-                            }
-                        }
-                        _ => {}
                     }
+                    "record" => {
+                        let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
+                        if let Err(e) = repo.record_cooldown(
+                            target_id,
+                            &reason,
+                            cooldown_mode,
+                            cooldown_base_secs,
+                            cooldown_max_secs,
+                            cooldown_factor,
+                        ) {
+                            tracing::warn!("cooldown::record failed in background: {}", e);
+                        }
+                    }
+                    _ => {}
                 }
+            }
         }
         BackgroundJob::MarkClientResponse {
             request_id,
