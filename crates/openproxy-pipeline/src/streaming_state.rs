@@ -512,7 +512,7 @@ impl<'a> ChunkProcessor<'a> {
                 message: Option<&'a str>,
             }
             if let Ok(ec) = serde_json::from_str::<ErrorChunk>(json_payload) {
-                let has_empty_choices = ec.choices.as_ref().map_or(true, |arr| arr.is_empty());
+                let has_empty_choices = ec.choices.as_ref().is_none_or(|arr| arr.is_empty());
                 if has_empty_choices && let Some(error_obj) = ec.error {
                     let code = error_obj.code.unwrap_or(502) as u16;
                     let message = error_obj
