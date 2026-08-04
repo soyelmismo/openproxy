@@ -221,3 +221,20 @@ impl ProviderAdapter for ClineAdapter {
         Ok(bytes::Bytes::from(new_body))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderValue;
+
+    #[test]
+    fn test_apply_cline_spoofing_headers() {
+        let mut req = UpstreamRequest::post_json("http://dummy.com", bytes::Bytes::new());
+        apply_cline_spoofing_headers(&mut req);
+
+        for &(k, v) in CLINE_SPOOFING_HEADERS {
+            let header_value = req.headers.get(k).expect("header missing");
+            assert_eq!(header_value, HeaderValue::from_str(v).unwrap());
+        }
+    }
+}
