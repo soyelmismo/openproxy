@@ -357,7 +357,7 @@ impl ResponseAccumulator {
                 let has_empty_choices = v
                     .get("choices")
                     .and_then(|c| c.as_array())
-                    .map_or(true, |arr| arr.is_empty());
+                    .is_none_or(|arr| arr.is_empty());
                 if !has_empty_choices {
                     continue;
                 }
