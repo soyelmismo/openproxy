@@ -121,8 +121,9 @@ impl ProviderAdapter for GeminiAdapter {
         _target_format: TargetFormat,
         response_body: serde_json::Value,
     ) -> std::result::Result<openproxy_types::OpenAIResponse, CoreError> {
-        let gemini_resp: GeminiResponse = serde_json::from_value(response_body)
-            .map_err(|e| CoreError::Parse(format!("parse gemini response: {e}")))?;
+        let gemini_resp: GeminiResponse =
+            <GeminiResponse as serde::Deserialize>::deserialize(&response_body)
+                .map_err(|e| CoreError::Parse(format!("parse gemini response: {e}")))?;
         Ok(gemini_to_openai(&gemini_resp))
     }
 }
