@@ -198,7 +198,7 @@ pub async fn auth_middleware(
         }
     };
 
-    let mut parsed: openproxy_types::OpenAIRequest =
+    let parsed: openproxy_types::OpenAIRequest =
         serde_json::from_slice(&bytes).map_err(|e| {
             let raw_err = e.to_string();
             let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
