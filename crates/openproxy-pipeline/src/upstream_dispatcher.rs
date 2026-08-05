@@ -953,7 +953,7 @@ impl UpstreamDispatcher {
                 unreachable!("Responses format is handled natively before dispatcher")
             }
             openproxy_types::TargetFormat::Openai => {
-                match serde_json::from_value::<OpenAIResponse>(response_body_raw.clone()) {
+                match <OpenAIResponse as serde::Deserialize>::deserialize(&response_body_raw) {
                     Ok(r) => r,
                     Err(e) => {
                         let err = CoreError::Parse(format!("parse openai response: {e}"));
@@ -973,7 +973,9 @@ impl UpstreamDispatcher {
             }
             openproxy_types::TargetFormat::Anthropic => {
                 let anthropic_resp: crate::translation::AnthropicResponse =
-                    match serde_json::from_value(response_body_raw) {
+                    match <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(
+                        &response_body_raw,
+                    ) {
                         Ok(r) => r,
                         Err(e) => {
                             let err = CoreError::Parse(format!("parse anthropic response: {e}"));

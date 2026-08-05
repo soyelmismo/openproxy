@@ -208,4 +208,35 @@ mod tests {
         assert_eq!(normalize_model_id("gpt-oss:120b:free"), "gpt-oss-120b");
         assert_eq!(normalize_model_id("llama3:8b"), "llama3-8b");
     }
+
+    #[test]
+    fn strip_compact_yyyymmdd_edge_cases() {
+        // Valid compact form with 19xx or 20xx
+        assert_eq!(
+            strip_compact_yyyymmdd("claude-3-5-sonnet-20241022"),
+            Some("claude-3-5-sonnet".to_string())
+        );
+        assert_eq!(
+            strip_compact_yyyymmdd("model-19991231"),
+            Some("model".to_string())
+        );
+
+        // Too short (len <= 9)
+        assert_eq!(strip_compact_yyyymmdd("m-202410"), None);
+
+        // Does not start with dash in the suffix
+        assert_eq!(strip_compact_yyyymmdd("model_20241022"), None);
+        assert_eq!(strip_compact_yyyymmdd("model20241022"), None);
+
+        // Digits len != 8
+        assert_eq!(strip_compact_yyyymmdd("model-2024102"), None);
+        assert_eq!(strip_compact_yyyymmdd("model-202410223"), None);
+
+        // Non-digit characters
+        assert_eq!(strip_compact_yyyymmdd("model-2024102a"), None);
+
+        // Invalid year (doesn't start with 19 or 20)
+        assert_eq!(strip_compact_yyyymmdd("model-21241022"), None);
+        assert_eq!(strip_compact_yyyymmdd("model-18991231"), None);
+    }
 }

@@ -329,9 +329,10 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError>
     {
         let _ = target_format;
-        serde_json::from_value(response_body).map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
-        })
+        <openproxy_types::OpenAIResponse as serde::Deserialize>::deserialize(&response_body)
+            .map_err(|e| {
+                openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
+            })
     }
 }
 

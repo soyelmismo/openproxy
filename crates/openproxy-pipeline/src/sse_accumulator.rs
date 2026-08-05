@@ -335,9 +335,7 @@ impl ResponseAccumulator {
         // Fast guard: skip JSON parsing unless the raw body looks like
         // it contains an inline error. This keeps the cost at ~100ns
         // on the normal path (no error).
-        if !self.raw_response_body.contains("\"error\":")
-            || !self.raw_response_body.contains("\"choices\":[]")
-        {
+        if !self.raw_response_body.contains("\"error\":") {
             return None;
         }
 
@@ -355,11 +353,11 @@ impl ResponseAccumulator {
                 continue;
             }
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                // Check for empty choices + error object.
+                // Check for empty choices (or absent choices) + error object.
                 let has_empty_choices = v
                     .get("choices")
                     .and_then(|c| c.as_array())
-                    .is_some_and(|arr| arr.is_empty());
+                    .is_none_or(|arr| arr.is_empty());
                 if !has_empty_choices {
                     continue;
                 }
