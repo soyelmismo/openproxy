@@ -973,7 +973,9 @@ impl UpstreamDispatcher {
             }
             openproxy_types::TargetFormat::Anthropic => {
                 let anthropic_resp: crate::translation::AnthropicResponse =
-                    match <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(&response_body_raw) {
+                    match <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(
+                        &response_body_raw,
+                    ) {
                         Ok(r) => r,
                         Err(e) => {
                             let err = CoreError::Parse(format!("parse anthropic response: {e}"));

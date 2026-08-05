@@ -198,12 +198,13 @@ pub async fn auth_middleware(
         }
     };
 
-    let mut parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes).map_err(|e| {
-        let raw_err = e.to_string();
-        let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-        let message = crate::error::truncate_error_message(&redacted.0);
-        crate::error::ApiError(openproxy_types::CoreError::Parse(message))
-    })?;
+    let mut parsed: openproxy_types::OpenAIRequest =
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let raw_err = e.to_string();
+            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+            let message = crate::error::truncate_error_message(&redacted.0);
+            crate::error::ApiError(openproxy_types::CoreError::Parse(message))
+        })?;
 
     // Sanitize orphaned tool calls to avoid upstream 400 Bad Request errors.
     // DeepSeek and other strict OpenAI-compatible providers require that every

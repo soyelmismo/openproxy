@@ -495,7 +495,9 @@ impl<'a> ChunkProcessor<'a> {
         // PERF: two fast `contains()` guards (~100ns each)
         // skip JSON parsing on the normal path. Only chunks
         // containing BOTH markers are parsed.
-        if json_payload.contains("\"error\":") && (!json_payload.contains("\"choices\":") || json_payload.contains("\"choices\":[]")) {
+        if json_payload.contains("\"error\":")
+            && (!json_payload.contains("\"choices\":") || json_payload.contains("\"choices\":[]"))
+        {
             #[derive(serde::Deserialize)]
             struct ErrorChunk<'a> {
                 #[serde(borrow)]
