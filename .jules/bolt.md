@@ -100,3 +100,6 @@
 ## 2026-08-02 - Async Locking Clones in State Adapters
 **Learning:** Returning `adapters.read().clone()` or `self.adapters.read().clone()` inside getter methods for `AppState` forces the system to deeply clone large internal structures every single time an adapter lookup is requested. Because it returns `Arc<Vec<ProviderAdapterEnum>>`, you can directly `Arc::clone(&adapters.read())` to safely copy the outer reference rather than making a deep clone of the vector itself.
 **Action:** When working with nested Arcs like `Arc<RwLock<Arc<Vec<T>>>>`, use `Arc::clone(&lock.read())` instead of `.clone()` on the lock guard to execute an O(1) reference count increment rather than an expensive O(N) heap allocation.
+## 2026-08-05 - Avoid serde_json::from_value clone overhead
+**Learning:** Calling `serde_json::from_value(value.clone())` deeply clones the entire JSON AST just to immediately deserialize it into a struct, causing heavy allocation overhead. `Deserialize` traits can usually deserialize directly from `&serde_json::Value` avoiding this clone altogether.
+**Action:** Replace `serde_json::from_value::<T>(val.clone())` with `<T as serde::Deserialize>::deserialize(val)` to avoid the expensive `.clone()` on the JSON AST.
