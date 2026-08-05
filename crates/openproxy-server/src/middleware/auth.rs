@@ -198,12 +198,13 @@ pub async fn auth_middleware(
         }
     };
 
-    let mut parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes).map_err(|e| {
-        let raw_err = e.to_string();
-        let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-        let message = crate::error::truncate_error_message(&redacted.0);
-        crate::error::ApiError(openproxy_types::CoreError::Parse(message))
-    })?;
+    let mut parsed: openproxy_types::OpenAIRequest =
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let raw_err = e.to_string();
+            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+            let message = crate::error::truncate_error_message(&redacted.0);
+            crate::error::ApiError(openproxy_types::CoreError::Parse(message))
+        })?;
 
     // Sanitize orphaned tool calls to avoid upstream 400 Bad Request errors.
     // DeepSeek and other strict OpenAI-compatible providers require that every
@@ -215,7 +216,7 @@ pub async fn auth_middleware(
             if let Some(calls) = &parsed.messages[i].tool_calls {
                 for call in calls {
                     let call_id = call.get("id").and_then(|v| v.as_str());
-                    let has_response = call_id.map_or(true, |id| {
+                    let has_response = call_id.is_none_or(|id| {
                         parsed.messages[i + 1..]
                             .iter()
                             .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some(id))
