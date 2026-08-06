@@ -653,7 +653,7 @@ pub async fn resolve_oauth_token(
         let master_key = master_key.clone();
         let acc_id = account.id;
         tokio::task::spawn_blocking(move || {
-            let conn = db_pool.writer();
+            let conn = db_pool.reader();
             decrypt_access_token(&conn, acc_id, &master_key)
         })
         .await
@@ -671,7 +671,7 @@ pub async fn resolve_oauth_token(
         let master_key = master_key.clone();
         let acc_id = account.id;
         tokio::task::spawn_blocking(move || {
-            let conn = db_pool.writer();
+            let conn = db_pool.reader();
             decrypt_refresh_token(&conn, acc_id, &master_key)
         })
         .await
@@ -829,7 +829,7 @@ pub async fn start_refresh_scheduler(
             let db_pool = db_pool.clone();
             let master_key = master_key.clone();
             tokio::task::spawn_blocking(move || {
-                let conn = db_pool.writer();
+                let conn = db_pool.reader();
                 crate::accounts::list_expiring_oauth_accounts(
                     &conn,
                     MAX_REFRESH_LEAD_SECS,
@@ -878,7 +878,7 @@ pub async fn start_refresh_scheduler(
             let master_key = master_key.clone();
             let ids = account_ids.clone();
             tokio::task::spawn_blocking(move || {
-                let conn = db_pool.writer();
+                let conn = db_pool.reader();
                 crate::accounts::decrypt_refresh_tokens(&conn, &ids, &master_key)
             })
             .await
@@ -1090,7 +1090,7 @@ pub async fn start_refresh_scheduler(
         // tracking entries in memory forever (~80 bytes each).
         {
             let live_account_ids: std::collections::HashSet<i64> = {
-                let conn = db_pool.writer();
+                let conn = db_pool.reader();
                 match crate::accounts::list_oauth_account_ids(&conn) {
                     Ok(ids) => ids.into_iter().collect(),
                     Err(e) => {
