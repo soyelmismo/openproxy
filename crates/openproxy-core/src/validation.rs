@@ -27,3 +27,32 @@ pub fn validate_base_url(url: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_base_url_valid() {
+        assert!(validate_base_url("http://example.com").is_ok());
+        assert!(validate_base_url("https://example.com").is_ok());
+        assert!(validate_base_url("https://example.com:8080").is_ok());
+        assert!(validate_base_url("https://example.com/path").is_ok());
+        assert!(validate_base_url("https://example.com:8080/path").is_ok());
+    }
+
+    #[test]
+    fn test_validate_base_url_invalid_scheme() {
+        assert!(validate_base_url("ftp://example.com").is_err());
+        assert!(validate_base_url("example.com").is_err());
+        assert!(validate_base_url("").is_err());
+    }
+
+    #[test]
+    fn test_validate_base_url_empty_host() {
+        assert!(validate_base_url("https://").is_err());
+        assert!(validate_base_url("http://").is_err());
+        assert!(validate_base_url("https:///path").is_err());
+        assert!(validate_base_url("https://:8080").is_err());
+    }
+}
