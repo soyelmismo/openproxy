@@ -1,6 +1,6 @@
 use super::*;
 
-const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.142.0";
+const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.0";
 
 fn safe_env_value(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
