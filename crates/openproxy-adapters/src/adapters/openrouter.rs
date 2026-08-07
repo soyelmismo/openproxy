@@ -585,7 +585,6 @@ fn derive_family_from_id(id: &str) -> Option<String> {
     None
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,12 +592,30 @@ mod tests {
 
     #[test]
     fn test_format_rate_limit_suffix() {
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": 10, "interval": "1s"})), Some("10 req/sec".to_string()));
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": 100, "interval": "1m"})), Some("100 req/min".to_string()));
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": 1000, "interval": "1h"})), Some("1000 req/hr".to_string()));
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": 10000, "interval": "1d"})), Some("10000 req/day".to_string()));
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": -1, "interval": "1d"})), None);
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": 10, "interval": "1w"})), None);
+        assert_eq!(
+            format_rate_limit_suffix(&json!({"requests": 10, "interval": "1s"})),
+            Some("10 req/sec".to_string())
+        );
+        assert_eq!(
+            format_rate_limit_suffix(&json!({"requests": 100, "interval": "1m"})),
+            Some("100 req/min".to_string())
+        );
+        assert_eq!(
+            format_rate_limit_suffix(&json!({"requests": 1000, "interval": "1h"})),
+            Some("1000 req/hr".to_string())
+        );
+        assert_eq!(
+            format_rate_limit_suffix(&json!({"requests": 10000, "interval": "1d"})),
+            Some("10000 req/day".to_string())
+        );
+        assert_eq!(
+            format_rate_limit_suffix(&json!({"requests": -1, "interval": "1d"})),
+            None
+        );
+        assert_eq!(
+            format_rate_limit_suffix(&json!({"requests": 10, "interval": "1w"})),
+            None
+        );
         assert_eq!(format_rate_limit_suffix(&json!({"interval": "1s"})), None);
         assert_eq!(format_rate_limit_suffix(&json!({"requests": 10})), None);
     }
