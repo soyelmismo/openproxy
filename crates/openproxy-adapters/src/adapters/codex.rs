@@ -44,34 +44,35 @@ impl CodexAdapter {
     }
 
     fn hardcoded_models(&self) -> Vec<DiscoveredModel> {
+        // Models from codex-rs/models-manager/models.json (official Codex bundled catalog)
+        // Updated from https://github.com/openai/codex
         [
-            ("gpt-5.5", "GPT-5.5"),
-            ("gpt-5.5-xhigh", "GPT-5.5 (xhigh)"),
-            ("gpt-5.5-high", "GPT-5.5 (high)"),
-            ("gpt-5.5-medium", "GPT-5.5 (medium)"),
-            ("gpt-5.5-low", "GPT-5.5 (low)"),
-            ("gpt-5.4", "GPT-5.4"),
-            ("gpt-5.4-xhigh", "GPT-5.4 (xhigh)"),
-            ("gpt-5.4-high", "GPT-5.4 (high)"),
-            ("gpt-5.4-medium", "GPT-5.4 (medium)"),
-            ("gpt-5.4-low", "GPT-5.4 (low)"),
-            ("gpt-5.4-mini", "GPT-5.4 Mini"),
-            ("gpt-5.3-codex", "GPT-5.3 Codex"),
-            ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
+            ("gpt-5.6-sol", "GPT-5.6 Sol", 272_000, 272_000, true),
+            ("gpt-5.6-terra", "GPT-5.6 Terra", 272_000, 272_000, true),
+            ("gpt-5.6-luna", "GPT-5.6 Luna", 272_000, 272_000, true),
+            ("gpt-5.5", "GPT-5.5", 272_000, 272_000, true),
+            ("gpt-5.4", "GPT-5.4", 272_000, 1_000_000, true),
+            ("gpt-5.4-mini", "GPT-5.4 Mini", 272_000, 272_000, true),
+            ("gpt-5.2", "GPT-5.2", 272_000, 272_000, true),
+            // codex-auto-review is internal (visibility: hide), excluded from user-facing list
         ]
         .into_iter()
-        .map(|(id, name)| DiscoveredModel {
+        .map(|(id, name, ctx, _max_ctx, vision)| DiscoveredModel {
             model_id: ModelId::new(id),
             display_name: Some(name.to_string()),
             target_format: TargetFormat::Responses,
-            context_length: Some(400_000),
+            context_length: Some(ctx),
             max_output_tokens: Some(32_768),
-            input_modalities: None,
-            output_modalities: None,
+            input_modalities: if vision {
+                Some(vec!["text".to_string(), "image".to_string()])
+            } else {
+                Some(vec!["text".to_string()])
+            },
+            output_modalities: Some(vec!["text".to_string()]),
             model_type: Some("chat".to_string()),
             family: Some("gpt".to_string()),
             capabilities: Some(openproxy_types::ModelCapabilities {
-                vision: Some(false),
+                vision: Some(vision),
                 tool_calling: Some(true),
                 reasoning: Some(true),
                 thinking: Some(true),

@@ -234,6 +234,19 @@ pub async fn auth_middleware(
         }
     }
 
+    // DeepSeek thinking mode requires `reasoning_content` to be passed back in assistant messages.
+    // If a client strips it, we inject an empty string to prevent 400 errors.
+    if parsed.model.to_lowercase().contains("deepseek") {
+        for msg in &mut parsed.messages {
+            if msg.role == "assistant" && !msg.extra.contains_key("reasoning_content") {
+                msg.extra.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String("".to_string()),
+                );
+            }
+        }
+    }
+
     let requested_model = &parsed.model;
 
     let auth_result = authenticate(&state, &parts.headers, requested_model)?;
