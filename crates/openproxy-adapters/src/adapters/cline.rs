@@ -238,8 +238,6 @@ mod tests {
         }
     }
 
-
-
     #[test]
     fn test_wrap_request_body_modifies_model_and_stream() {
         let adapter = ClineAdapter::new();
@@ -288,15 +286,20 @@ mod tests {
             custom_meta: None,
         };
 
-        let result = adapter.wrap_request_body(
-            body_bytes,
-            openproxy_types::TargetFormat::Openai,
-            &openproxy_types::ModelId::new("somemodel:free"),
-            &resolved_target,
-        ).expect("should wrap body successfully");
+        let result = adapter
+            .wrap_request_body(
+                body_bytes,
+                openproxy_types::TargetFormat::Openai,
+                &openproxy_types::ModelId::new("somemodel:free"),
+                &resolved_target,
+            )
+            .expect("should wrap body successfully");
 
         let wrapped_json: serde_json::Value = serde_json::from_slice(&result).unwrap();
-        assert_eq!(wrapped_json.get("model").unwrap().as_str().unwrap(), "somemodel");
+        assert_eq!(
+            wrapped_json.get("model").unwrap().as_str().unwrap(),
+            "somemodel"
+        );
         assert!(wrapped_json.get("stream").unwrap().as_bool().unwrap());
     }
 }
