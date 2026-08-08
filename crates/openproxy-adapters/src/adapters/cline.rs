@@ -237,4 +237,69 @@ mod tests {
             assert_eq!(header_value, HeaderValue::from_str(v).unwrap());
         }
     }
+
+    #[test]
+    fn test_wrap_request_body_modifies_model_and_stream() {
+        let adapter = ClineAdapter::new();
+        let json_body = serde_json::json!({
+            "model": "somemodel:free",
+            "messages": [],
+            "stream": false
+        });
+        let body_bytes = bytes::Bytes::from(serde_json::to_vec(&json_body).unwrap());
+
+        let resolved_target = openproxy_types::context::ResolvedTarget {
+            target: openproxy_types::combos::ComboTarget {
+                id: openproxy_types::ComboTargetId(1),
+                combo_id: openproxy_types::ComboId(1),
+                provider_id: openproxy_types::ProviderId::new("cline"),
+                account_id: None,
+                model_row_id: Some(openproxy_types::ModelRowId(1)),
+                sub_combo_id: None,
+                priority_order: 0,
+                weight: 100,
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            },
+            model: openproxy_types::Model {
+                row_id: openproxy_types::ModelRowId(1),
+                provider_id: openproxy_types::ProviderId::new("cline"),
+                target_format: openproxy_types::TargetFormat::Openai,
+                discovered_at: openproxy_types::now_unix_secs_str(),
+                expires_at: None,
+                model_id: openproxy_types::ModelId::new("somemodel"),
+                display_name: None,
+                context_length: None,
+                max_output_tokens: None,
+                model_type: "chat".to_string(),
+                family: None,
+                input_modalities_json: None,
+                output_modalities_json: None,
+                capabilities_json: None,
+                timeout_overrides_json: None,
+                active: true,
+                last_test_status: None,
+                last_test_at: None,
+                custom: false,
+            },
+            api_key: "dummy".to_string(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
+        let result = adapter
+            .wrap_request_body(
+                body_bytes,
+                openproxy_types::TargetFormat::Openai,
+                &openproxy_types::ModelId::new("somemodel:free"),
+                &resolved_target,
+            )
+            .expect("should wrap body successfully");
+
+        let wrapped_json: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(
+            wrapped_json.get("model").unwrap().as_str().unwrap(),
+            "somemodel"
+        );
+        assert!(wrapped_json.get("stream").unwrap().as_bool().unwrap());
+    }
 }
