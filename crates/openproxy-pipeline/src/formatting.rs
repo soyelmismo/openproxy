@@ -233,17 +233,23 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
             continue;
         }
 
+        let text_type = if msg.role == "assistant" {
+            "output_text"
+        } else {
+            "input_text"
+        };
+
         let mut parts = Vec::new();
         match &msg.content {
             Some(Value::String(text)) => {
-                parts.push(json!({ "type": "input_text", "text": text }));
+                parts.push(json!({ "type": text_type, "text": text }));
             }
             Some(Value::Array(arr)) => {
                 for item in arr {
                     let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-                    if item_type == "text" {
+                    if item_type == "text" || item_type == "input_text" || item_type == "output_text" {
                         let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                        parts.push(json!({ "type": "input_text", "text": text }));
+                        parts.push(json!({ "type": text_type, "text": text }));
                     } else if item_type == "image_url" {
                         if let Some(url_obj) = item.get("image_url").and_then(|v| v.as_object()) {
                             let url = url_obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
@@ -284,10 +290,10 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                 }
             }
             Some(value) => {
-                parts.push(json!({ "type": "input_text", "text": value.to_string() }));
+                parts.push(json!({ "type": text_type, "text": value.to_string() }));
             }
             None => {
-                parts.push(json!({ "type": "input_text", "text": "" }));
+                parts.push(json!({ "type": text_type, "text": "" }));
             }
         }
 
