@@ -426,7 +426,7 @@ async function onUpdateProxyRotationErrors(providerId: string, e: Event): Promis
   const target = e.target instanceof HTMLInputElement ? e.target : null;
   if (!target) return;
   const value = target.value.trim();
-  const body = { proxy_rotation_errors: value ? value : "429,connect_error,timeout" };
+  const body = { proxy_rotation_errors: value || "429,connect_error,timeout" };
   try {
     await api(`/providers/${encodeURIComponent(providerId)}`, {
       method: "PATCH",
