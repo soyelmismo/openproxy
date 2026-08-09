@@ -146,10 +146,45 @@ impl TargetFormatter for ResponsesFormatter {
             obj.insert("top_p".to_string(), json!(top_p));
         }
         if let Some(tools) = &req.openai_request.tools {
-            obj.insert("tools".to_string(), Value::Array(tools.clone()));
+            let mut flat_tools = Vec::new();
+            for tool in tools {
+                let mut flat_tool = tool.clone();
+                if let Some(obj) = flat_tool.as_object_mut() {
+                    let is_function = obj.get("type").and_then(|v| v.as_str()) == Some("function");
+                    if is_function {
+                        if let Some(func) = obj.remove("function") {
+                            if let Some(func_obj) = func.as_object() {
+                                if let Some(name) = func_obj.get("name") {
+                                    obj.insert("name".to_string(), name.clone());
+                                }
+                                if let Some(desc) = func_obj.get("description") {
+                                    obj.insert("description".to_string(), desc.clone());
+                                }
+                                if let Some(params) = func_obj.get("parameters") {
+                                    obj.insert("parameters".to_string(), params.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                flat_tools.push(flat_tool);
+            }
+            obj.insert("tools".to_string(), Value::Array(flat_tools));
         }
         if let Some(tool_choice) = &req.openai_request.tool_choice {
-            obj.insert("tool_choice".to_string(), tool_choice.clone());
+            let mut flat_choice = tool_choice.clone();
+            if let Some(obj) = flat_choice.as_object_mut() {
+                if obj.get("type").and_then(|v| v.as_str()) == Some("function") {
+                    if let Some(func) = obj.remove("function") {
+                        if let Some(func_obj) = func.as_object() {
+                            if let Some(name) = func_obj.get("name") {
+                                obj.insert("name".to_string(), name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            obj.insert("tool_choice".to_string(), flat_choice);
         }
 
         // Codex Responses API strict schema: strip Chat Completions parameters that cause 400s
