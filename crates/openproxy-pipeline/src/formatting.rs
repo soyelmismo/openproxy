@@ -297,6 +297,11 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
             }
         }
 
+        input_items.push(json!({
+            "role": msg.role,
+            "content": parts
+        }));
+
         if let Some(tool_calls) = &msg.tool_calls {
             for call in tool_calls {
                 let call_id = call
@@ -317,19 +322,14 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                     .unwrap_or("{}")
                     .to_string();
 
-                parts.push(json!({
+                input_items.push(json!({
                     "type": "function_call",
-                    "id": call_id,
+                    "call_id": call_id,
                     "name": func_name,
                     "arguments": func_args
                 }));
             }
         }
-
-        input_items.push(json!({
-            "role": msg.role,
-            "content": parts
-        }));
     }
 
     Value::Array(input_items)
