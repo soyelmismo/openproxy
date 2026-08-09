@@ -206,9 +206,36 @@ pub async fn auth_middleware(
             crate::error::ApiError(openproxy_types::CoreError::Parse(message))
         })?;
 
-    // Sanitize orphaned tool calls to avoid upstream 400 Bad Request errors.
+    // Sanitize orphaned tool calls and tool messages to avoid upstream 400 Bad Request errors.
     // DeepSeek and other strict OpenAI-compatible providers require that every
     // tool_call in an assistant message is followed by a matching tool response.
+    let mut valid_messages = Vec::with_capacity(parsed.messages.len());
+    let mut last_assistant_tool_calls: Vec<String> = Vec::new();
+    
+    for msg in std::mem::take(&mut parsed.messages) {
+        if msg.role == "assistant" {
+            last_assistant_tool_calls.clear();
+            if let Some(calls) = &msg.tool_calls {
+                for call in calls {
+                    if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
+                        last_assistant_tool_calls.push(id.to_string());
+                    }
+                }
+            }
+            valid_messages.push(msg);
+        } else if msg.role == "tool" {
+            if let Some(id) = msg.tool_call_id.as_deref() {
+                if last_assistant_tool_calls.iter().any(|c| c == id) {
+                    valid_messages.push(msg);
+                }
+            }
+        } else {
+            last_assistant_tool_calls.clear();
+            valid_messages.push(msg);
+        }
+    }
+    parsed.messages = valid_messages;
+
     let msgs_len = parsed.messages.len();
     for i in 0..msgs_len {
         if parsed.messages[i].role == "assistant" && parsed.messages[i].tool_calls.is_some() {
@@ -216,10 +243,11 @@ pub async fn auth_middleware(
             if let Some(calls) = &parsed.messages[i].tool_calls {
                 for call in calls {
                     let call_id = call.get("id").and_then(|v| v.as_str());
-                    let has_response = call_id.is_none_or(|id| {
+                    let has_response = call_id.is_some_and(|id| {
                         parsed.messages[i + 1..]
                             .iter()
-                            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some(id))
+                            .take_while(|m| m.role == "tool")
+                            .any(|m| m.tool_call_id.as_deref() == Some(id))
                     });
                     if has_response {
                         valid_tool_calls.push(call.clone());
