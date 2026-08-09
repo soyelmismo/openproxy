@@ -139,9 +139,7 @@ impl TargetFormatter for ResponsesFormatter {
         obj.entry("instructions".to_string())
             .or_insert_with(|| Value::String(system_instructions.unwrap_or(default_instructions)));
 
-        if let Some(max_tokens) = req.openai_request.max_tokens {
-            obj.insert("max_tokens".to_string(), json!(max_tokens));
-        }
+
         if let Some(temperature) = req.openai_request.temperature {
             obj.insert("temperature".to_string(), json!(temperature));
         }
