@@ -1565,6 +1565,41 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_all_of() {
+        let mut schema = json!({
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "base_prop": { "type": "string" }
+                    },
+                    "required": ["base_prop"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "extended_prop": { "type": "number" }
+                    },
+                    "required": ["extended_prop"]
+                }
+            ]
+        });
+
+        clean_json_schema(&mut schema);
+
+        assert!(schema.get("allOf").is_none());
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"].get("base_prop").is_some());
+        assert_eq!(schema["properties"]["base_prop"]["type"], "string");
+        assert!(schema["properties"].get("extended_prop").is_some());
+        assert_eq!(schema["properties"]["extended_prop"]["type"], "number");
+
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "base_prop"));
+        assert!(required.iter().any(|v| v == "extended_prop"));
+    }
+
+    #[test]
     fn test_circular_ref_flattening() {
         // 模拟循环引用：A -> B, B -> A
         let mut schema = json!({
