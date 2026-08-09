@@ -2268,7 +2268,7 @@ mod tests {
     }
 }
 
-pub const MAX_SSE_LINE_BYTES: usize = 65_536;
+pub const MAX_SSE_LINE_BYTES: usize = 4_194_304; // 4 MiB
 /// Maximum allowed bytes for an SSE event type string (e.g., "message_start", "content_block_delta").
 /// Prevents unbounded memory allocation from malformed upstream event: lines.
 pub const MAX_SSE_EVENT_TYPE_BYTES: usize = 1024;
