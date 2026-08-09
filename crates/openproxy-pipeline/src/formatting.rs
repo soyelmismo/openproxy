@@ -195,6 +195,7 @@ impl TargetFormatter for ResponsesFormatter {
         obj.remove("prompt_cache_retention");
         obj.remove("safety_identifier");
         obj.remove("user");
+        obj.remove("stream_options");
 
         let effort_val = obj.remove("reasoning_effort");
         let effort = effort_val
