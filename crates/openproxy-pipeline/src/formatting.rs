@@ -139,7 +139,6 @@ impl TargetFormatter for ResponsesFormatter {
         obj.entry("instructions".to_string())
             .or_insert_with(|| Value::String(system_instructions.unwrap_or(default_instructions)));
 
-
         if let Some(temperature) = req.openai_request.temperature {
             obj.insert("temperature".to_string(), json!(temperature));
         }
@@ -153,10 +152,18 @@ impl TargetFormatter for ResponsesFormatter {
             obj.insert("tool_choice".to_string(), tool_choice.clone());
         }
 
-        let effort = req
-            .openai_request
-            .extra
-            .get("reasoning_effort")
+        // Codex Responses API strict schema: strip Chat Completions parameters that cause 400s
+        obj.remove("max_tokens");
+        obj.remove("max_output_tokens");
+        obj.remove("truncation");
+        obj.remove("background");
+        obj.remove("prompt_cache_retention");
+        obj.remove("safety_identifier");
+        obj.remove("user");
+
+        let effort_val = obj.remove("reasoning_effort");
+        let effort = effort_val
+            .as_ref()
             .and_then(|v| v.as_str())
             .map(normalize_effort)
             .or(effort_from_model);
