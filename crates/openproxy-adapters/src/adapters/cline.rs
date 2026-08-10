@@ -132,7 +132,7 @@ impl ProviderAdapter for ClineAdapter {
             .await
             .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
 
-        let payload: ClineRecommendedModels = serde_json::from_value(body).map_err(|e| {
+        let payload = <ClineRecommendedModels as serde::Deserialize>::deserialize(&body).map_err(|e| {
             openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e))
         })?;
 

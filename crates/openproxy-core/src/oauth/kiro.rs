@@ -558,7 +558,7 @@ impl OAuthProvider for KiroOAuthProvider {
                 obj.insert("expires_in".to_string(), serde_json::json!(3600));
             }
 
-            return serde_json::from_value::<TokenResponse>(data)
+            return <TokenResponse as serde::Deserialize>::deserialize(&data)
                 .map_err(|e| CoreError::Parse(format!("kiro social token refresh map: {e}")));
         }
 
@@ -697,7 +697,7 @@ impl OAuthProvider for KiroOAuthProvider {
             obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
         }
 
-        serde_json::from_value::<TokenResponse>(data)
+        <TokenResponse as serde::Deserialize>::deserialize(&data)
             .map_err(|e| CoreError::Parse(format!("kiro token refresh map: {e}")))
     }
 

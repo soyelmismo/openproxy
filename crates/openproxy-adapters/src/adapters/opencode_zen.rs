@@ -115,7 +115,7 @@ impl ProviderAdapter for OpenCodeZenAdapter {
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("opencode-zen /models: {e}")))?;
 
-        let payload: OpenAIModelsResponse = serde_json::from_value(body)
+        let payload = <OpenAIModelsResponse as serde::Deserialize>::deserialize(&body)
             .map_err(|e| CoreError::Validation(format!("opencode-zen /models parse: {e}")))?;
 
         let out = payload

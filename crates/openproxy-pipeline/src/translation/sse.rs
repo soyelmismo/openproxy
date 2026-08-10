@@ -185,7 +185,7 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
         return Ok(None);
     }
 
-    let event: AnthropicSseEvent = serde_json::from_value(probe)
+    let event = <AnthropicSseEvent as serde::Deserialize>::deserialize(&probe)
         .map_err(|e| CoreError::Parse(format!("invalid Anthropic SSE event: {e}")))?;
 
     Ok(Some(event))
