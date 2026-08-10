@@ -85,7 +85,7 @@ impl ProviderAdapter for OllamaCloudAdapter {
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {e}")))?;
 
-        let payload: OllamaTagsResponse = serde_json::from_value(body)
+        let payload: OllamaTagsResponse = <OllamaTagsResponse as serde::Deserialize>::deserialize(&body)
             .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {e}")))?;
 
         let out = payload
