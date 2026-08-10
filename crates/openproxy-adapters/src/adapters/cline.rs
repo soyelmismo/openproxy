@@ -132,9 +132,10 @@ impl ProviderAdapter for ClineAdapter {
             .await
             .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
 
-        let payload = <ClineRecommendedModels as serde::Deserialize>::deserialize(&body).map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e))
-        })?;
+        let payload =
+            <ClineRecommendedModels as serde::Deserialize>::deserialize(&body).map_err(|e| {
+                openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e))
+            })?;
 
         let mut discovered = Vec::new();
 
