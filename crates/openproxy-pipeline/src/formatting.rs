@@ -151,19 +151,18 @@ impl TargetFormatter for ResponsesFormatter {
                 let mut flat_tool = tool.clone();
                 if let Some(obj) = flat_tool.as_object_mut() {
                     let is_function = obj.get("type").and_then(|v| v.as_str()) == Some("function");
-                    if is_function {
-                        if let Some(func) = obj.remove("function") {
-                            if let Some(func_obj) = func.as_object() {
-                                if let Some(name) = func_obj.get("name") {
-                                    obj.insert("name".to_string(), name.clone());
-                                }
-                                if let Some(desc) = func_obj.get("description") {
-                                    obj.insert("description".to_string(), desc.clone());
-                                }
-                                if let Some(params) = func_obj.get("parameters") {
-                                    obj.insert("parameters".to_string(), params.clone());
-                                }
-                            }
+                    if is_function
+                        && let Some(func) = obj.remove("function")
+                        && let Some(func_obj) = func.as_object()
+                    {
+                        if let Some(name) = func_obj.get("name") {
+                            obj.insert("name".to_string(), name.clone());
+                        }
+                        if let Some(desc) = func_obj.get("description") {
+                            obj.insert("description".to_string(), desc.clone());
+                        }
+                        if let Some(params) = func_obj.get("parameters") {
+                            obj.insert("parameters".to_string(), params.clone());
                         }
                     }
                 }
@@ -173,16 +172,13 @@ impl TargetFormatter for ResponsesFormatter {
         }
         if let Some(tool_choice) = &req.openai_request.tool_choice {
             let mut flat_choice = tool_choice.clone();
-            if let Some(obj) = flat_choice.as_object_mut() {
-                if obj.get("type").and_then(|v| v.as_str()) == Some("function") {
-                    if let Some(func) = obj.remove("function") {
-                        if let Some(func_obj) = func.as_object() {
-                            if let Some(name) = func_obj.get("name") {
-                                obj.insert("name".to_string(), name.clone());
-                            }
-                        }
-                    }
-                }
+            if let Some(obj) = flat_choice.as_object_mut()
+                && obj.get("type").and_then(|v| v.as_str()) == Some("function")
+                && let Some(func) = obj.remove("function")
+                && let Some(func_obj) = func.as_object()
+                && let Some(name) = func_obj.get("name")
+            {
+                obj.insert("name".to_string(), name.clone());
             }
             obj.insert("tool_choice".to_string(), flat_choice);
         }

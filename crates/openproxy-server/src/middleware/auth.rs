@@ -224,10 +224,10 @@ pub async fn auth_middleware(
             }
             valid_messages.push(msg);
         } else if msg.role == "tool" {
-            if let Some(id) = msg.tool_call_id.as_deref() {
-                if last_assistant_tool_calls.iter().any(|c| c == id) {
-                    valid_messages.push(msg);
-                }
+            if let Some(id) = msg.tool_call_id.as_deref()
+                && last_assistant_tool_calls.iter().any(|c| c == id)
+            {
+                valid_messages.push(msg);
             }
         } else {
             last_assistant_tool_calls.clear();
