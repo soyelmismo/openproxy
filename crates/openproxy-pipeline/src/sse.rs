@@ -61,8 +61,9 @@ impl UpstreamSseChunk {
     /// Get the forwardable JSON string. Returns the raw payload if
     /// available (zero allocation), otherwise serializes the parsed payload.
     pub fn into_json_string(self) -> String {
-        self.raw_payload
-            .unwrap_or_else(|| serde_json::to_string(&self.payload).unwrap_or_else(|_| "{}".to_string()))
+        self.raw_payload.unwrap_or_else(|| {
+            serde_json::to_string(&self.payload).unwrap_or_else(|_| "{}".to_string())
+        })
     }
 
     /// Get the SSE frame as pre-formatted `data: {json}\n\n` `Bytes`,
