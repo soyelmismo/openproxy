@@ -194,10 +194,14 @@ pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<&'static str> {
     while i < msgs.len() {
         let prev = &msgs[i - 1];
         let curr = &msgs[i];
-        
+
         // Never remove messages that contain tool calls or are tool responses,
         // because their presence is structurally required by the API.
-        if prev.tool_calls.is_some() || curr.tool_calls.is_some() || prev.tool_call_id.is_some() || curr.tool_call_id.is_some() {
+        if prev.tool_calls.is_some()
+            || curr.tool_calls.is_some()
+            || prev.tool_call_id.is_some()
+            || curr.tool_call_id.is_some()
+        {
             i += 1;
             continue;
         }
