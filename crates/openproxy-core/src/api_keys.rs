@@ -272,7 +272,8 @@ pub fn list(conn: &Connection) -> Result<Vec<ApiKey>> {
     let rows = stmt
         .query_map([], row_to_api_key)
         .map_err(openproxy_db::error::map_db_error)?;
-    rows.map(|r| r.map_err(openproxy_db::error::map_db_error)).collect()
+    rows.map(|r| r.map_err(openproxy_db::error::map_db_error))
+        .collect()
 }
 
 /// Soft-revoke: mark the key as inactive and stamp `revoked_at`.

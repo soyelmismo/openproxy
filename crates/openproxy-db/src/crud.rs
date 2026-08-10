@@ -55,7 +55,8 @@ pub fn query_all_with<T, P: Params>(
     let rows = stmt
         .query_map(params, f)
         .map_err(map_db_error_ctx(ctx.as_ref()))?;
-    rows.map(|r| r.map_err(map_db_error_ctx(ctx.as_ref()))).collect()
+    rows.map(|r| r.map_err(map_db_error_ctx(ctx.as_ref())))
+        .collect()
 }
 
 /// Executes an SQL modification statement (`INSERT`, `UPDATE`, `DELETE`) with mapped error context.

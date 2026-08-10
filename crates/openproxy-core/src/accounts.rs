@@ -666,7 +666,8 @@ pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
     let rows = stmt
         .query_map([], |r| r.get::<_, i64>(0))
         .map_err(openproxy_db::error::map_db_error)?;
-    rows.map(|r| r.map_err(openproxy_db::error::map_db_error)).collect()
+    rows.map(|r| r.map_err(openproxy_db::error::map_db_error))
+        .collect()
 }
 
 /// List the distinct provider ids that currently have at least one
@@ -679,7 +680,8 @@ pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(openproxy_db::error::map_db_error)?;
-    rows.map(|r| r.map_err(openproxy_db::error::map_db_error)).collect()
+    rows.map(|r| r.map_err(openproxy_db::error::map_db_error))
+        .collect()
 }
 
 /// Map a single SELECT row into an `Account`. Shared by `get` and `list`.
