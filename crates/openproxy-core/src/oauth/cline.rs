@@ -311,7 +311,8 @@ mod tests {
             "expiresAt": (chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339()
         });
         let data: ClineAuthResponseData =
-            serde_json::from_value(json_data).expect("deserialize valid json");
+            <ClineAuthResponseData as serde::Deserialize>::deserialize(&json_data)
+                .expect("deserialize valid json");
         assert_eq!(data.access_token, "test_acc");
         assert_eq!(data.refresh_token.as_deref(), Some("test_ref"));
         let expires_in = parse_expires_in(&data).expect("expires_in parsed");
@@ -323,7 +324,8 @@ mod tests {
             "expires_in": 1800u64
         });
         let data_snake: ClineAuthResponseData =
-            serde_json::from_value(snake_json).expect("deserialize snake case");
+            <ClineAuthResponseData as serde::Deserialize>::deserialize(&snake_json)
+                .expect("deserialize snake case");
         assert_eq!(data_snake.access_token, "acc2");
         assert_eq!(data_snake.refresh_token.as_deref(), Some("ref2"));
         assert_eq!(parse_expires_in(&data_snake), Some(1800));

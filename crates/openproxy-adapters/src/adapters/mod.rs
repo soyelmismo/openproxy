@@ -813,8 +813,9 @@ pub(crate) async fn fetch_openai_models(
     .await
     .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;
 
-    let payload: OpenAIModelsResponse = serde_json::from_value(body)
-        .map_err(|e| CoreError::Parse(format!("{provider_name} /models parse: {e}")))?;
+    let payload: OpenAIModelsResponse =
+        <OpenAIModelsResponse as serde::Deserialize>::deserialize(&body)
+            .map_err(|e| CoreError::Parse(format!("{provider_name} /models parse: {e}")))?;
 
     let out = payload
         .data
