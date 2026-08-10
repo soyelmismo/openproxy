@@ -129,11 +129,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
             row_to_provider,
         )
         .map_err(openproxy_db::error::map_db_error)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(openproxy_db::error::map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(openproxy_db::error::map_db_error)).collect()
 }
 
 /// List only providers with `active = 1`. Used by code paths that
@@ -160,11 +156,7 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
             row_to_provider,
         )
         .map_err(openproxy_db::error::map_db_error)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(openproxy_db::error::map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(openproxy_db::error::map_db_error)).collect()
 }
 
 /// Flip the `active` flag on a single provider. A missing id is a

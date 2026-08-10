@@ -78,11 +78,7 @@ pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
     let rows = stmt
         .query_map([], row_to_combo)
         .map_err(crate::error::map_db_error)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(crate::error::map_db_error)).collect()
 }
 
 /// Look up a combo by its exact (case-sensitive) name. Returns `Ok(None)`
@@ -527,11 +523,7 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
     let rows = stmt
         .query_map(params![combo_id.0], row_to_target)
         .map_err(crate::error::map_db_error)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(crate::error::map_db_error)).collect()
 }
 
 /// Like [`list_targets`], but joins against the `models` table so the
@@ -602,11 +594,7 @@ pub fn list_targets_with_model(
     let rows = stmt
         .query_map(params![combo_id.0], row_to_target_with_model)
         .map_err(crate::error::map_db_error)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(crate::error::map_db_error)).collect()
 }
 
 pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTarget>> {
