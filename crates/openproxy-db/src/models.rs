@@ -106,11 +106,7 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
         .query_map([provider.as_str()], map_row)
         .map_err(map_db_error)?;
 
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(map_db_error)).collect()
 }
 
 pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
@@ -129,11 +125,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
 
     let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
 
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(map_db_error)).collect()
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
@@ -151,11 +143,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
 
     let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
 
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(map_db_error)?);
-    }
-    Ok(out)
+    rows.map(|r| r.map_err(map_db_error)).collect()
 }
 
 pub fn mark_expired(conn: &Connection) -> Result<usize> {
