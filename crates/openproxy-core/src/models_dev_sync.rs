@@ -173,12 +173,12 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
                     .modalities
                     .as_ref()
                     .and_then(|m| m.input.as_ref())
-                    .map(|v| serde_json::to_string(v).unwrap_or_default());
+                    .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
                 let mod_out = model
                     .modalities
                     .as_ref()
                     .and_then(|m| m.output.as_ref())
-                    .map(|v| serde_json::to_string(v).unwrap_or_default());
+                    .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
 
                 let normalized = crate::model_normalize::normalize_model_id(&model.id);
 

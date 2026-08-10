@@ -723,7 +723,7 @@ impl PipelineRepository for SqlitePipelineRepository {
             );
         }
 
-        let new_json_str = serde_json::to_string(&meta).unwrap_or_default();
+        let new_json_str = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
 
         conn.execute(
             "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",

@@ -37,7 +37,7 @@ impl AntigravityAdapter {
     fn parse_models_response(&self, body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         tracing::info!(
             "Antigravity fetchAvailableModels response: {}",
-            serde_json::to_string(body).unwrap_or_default()
+            serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string())
         );
         let models_obj = body.get("models")?.as_object()?;
 
@@ -217,7 +217,7 @@ impl ProviderAdapter for AntigravityAdapter {
             })?);
             tracing::info!(
                 "Antigravity test payload: {}",
-                serde_json::to_string(&wrapped).unwrap_or_default()
+                serde_json::to_string(&wrapped).unwrap_or_else(|_| "{}".to_string())
             );
             return Ok(wrapped_bytes);
         }
