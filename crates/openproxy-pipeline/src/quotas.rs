@@ -25,7 +25,9 @@ pub(crate) fn evaluate_account_quota(
     }
 
     if let Some(ref details_val) = account.quota_model_details
-        && let Ok(details) = <Vec<openproxy_types::quota::ModelQuotaDetail> as serde::Deserialize<'_>>::deserialize(details_val)
+        && let Ok(details) = <Vec<openproxy_types::quota::ModelQuotaDetail> as serde::Deserialize>::deserialize(
+            details_val,
+        )
     {
         let norm_req = openproxy_types::model_normalize::normalize_model_id(requested_model);
 
@@ -60,7 +62,9 @@ pub(crate) fn get_account_remaining_fraction(
 ) -> f64 {
     #[allow(clippy::ptr_arg)]
     if let Some(ref details_val) = account.quota_model_details
-        && let Ok(details) = <Vec<openproxy_types::quota::ModelQuotaDetail> as serde::Deserialize<'_>>::deserialize(details_val)
+        && let Ok(details) = <Vec<openproxy_types::quota::ModelQuotaDetail> as serde::Deserialize>::deserialize(
+            details_val,
+        )
     {
         let norm_req = openproxy_types::model_normalize::normalize_model_id(requested_model);
 
