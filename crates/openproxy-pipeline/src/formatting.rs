@@ -279,7 +279,10 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
             Some(Value::Array(arr)) => {
                 for item in arr {
                     let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-                    if item_type == "text" || item_type == "input_text" || item_type == "output_text" {
+                    if item_type == "text"
+                        || item_type == "input_text"
+                        || item_type == "output_text"
+                    {
                         let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
                         parts.push(json!({ "type": text_type, "text": text }));
                     } else if item_type == "image_url" {

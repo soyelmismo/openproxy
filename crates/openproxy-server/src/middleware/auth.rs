@@ -211,7 +211,7 @@ pub async fn auth_middleware(
     // tool_call in an assistant message is followed by a matching tool response.
     let mut valid_messages = Vec::with_capacity(parsed.messages.len());
     let mut last_assistant_tool_calls: Vec<String> = Vec::new();
-    
+
     for msg in std::mem::take(&mut parsed.messages) {
         if msg.role == "assistant" {
             last_assistant_tool_calls.clear();
