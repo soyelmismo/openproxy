@@ -1019,7 +1019,7 @@ fn spawn_memory_cleanup(
         loop {
             fast_tick.tick().await;
             unsafe {
-                libmimalloc_sys::mi_collect(false);
+                libmimalloc_sys::mi_collect(true);
             }
             slow_counter = slow_counter.wrapping_add(1);
             if slow_counter.is_multiple_of(10) {

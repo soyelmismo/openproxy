@@ -30,7 +30,7 @@ use std::env;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
     // 0. Install rustls crypto provider. `ring` is pure-Rust and
     // transitively available; `aws-lc-rs` is also pulled in by
