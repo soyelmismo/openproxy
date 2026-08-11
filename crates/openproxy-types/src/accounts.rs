@@ -66,7 +66,10 @@ mod tests {
     fn test_health_status_parse() {
         assert_eq!(HealthStatus::parse("healthy"), Ok(HealthStatus::Healthy));
         assert_eq!(HealthStatus::parse("degraded"), Ok(HealthStatus::Degraded));
-        assert_eq!(HealthStatus::parse("unhealthy"), Ok(HealthStatus::Unhealthy));
+        assert_eq!(
+            HealthStatus::parse("unhealthy"),
+            Ok(HealthStatus::Unhealthy)
+        );
         assert_eq!(
             HealthStatus::parse("unknown"),
             Err("invalid health: unknown".to_string())

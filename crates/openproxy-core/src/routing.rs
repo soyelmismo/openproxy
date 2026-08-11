@@ -48,10 +48,10 @@ pub fn expand_account_rotation(
             .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
         {
             let mut ct = t.clone();
-            ct.account_id = Some(AccountId(
-                r.get::<_, i64>(0)
-                    .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?,
-            ));
+            ct.account_id =
+                Some(AccountId(r.get::<_, i64>(0).map_err(|e| {
+                    openproxy_types::error::CoreError::Internal(e.to_string())
+                })?));
             out.push(ct);
             count += 1;
         }
@@ -62,10 +62,7 @@ pub fn expand_account_rotation(
     Ok(out)
 }
 
-pub fn flatten_targets(
-    conn: &Connection,
-    targets: Vec<ComboTarget>,
-) -> Result<Vec<ComboTarget>> {
+pub fn flatten_targets(conn: &Connection, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {
     if !targets.iter().any(|t| t.sub_combo_id.is_some()) {
         return Ok(targets);
     }
@@ -468,13 +465,13 @@ mod tests {
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
         match plan {
-            RoutingPlan::Combo {
-                targets,
-                ..
-            } => {
+            RoutingPlan::Combo { targets, .. } => {
                 assert_eq!(targets[0].provider_id, ProviderId::new("openrouter"));
                 assert_eq!(targets[0].model_row_id, Some(model_row));
-                assert!(targets[0].account_id.is_none(), "resolver always uses auto-rotation");
+                assert!(
+                    targets[0].account_id.is_none(),
+                    "resolver always uses auto-rotation"
+                );
             }
             other => panic!("expected Combo, got {:?}", other),
         }
