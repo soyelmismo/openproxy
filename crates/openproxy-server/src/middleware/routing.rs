@@ -4,7 +4,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use openproxy_core::routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID, build_synthetic_combo};
+use openproxy_core::routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::{
     CoreError, OpenAIRequest,
@@ -121,26 +121,28 @@ fn translate_plan_to_targets(
     ApiError,
 > {
     match plan {
-        RoutingPlan::Direct {
-            provider_id,
-            account_id,
-            model_row_id,
-            rate_limit_scope,
-            ..
-        } => {
-            let (synthetic_combo, synthetic_targets) = build_synthetic_combo(
-                provider_id.clone(),
-                *account_id,
-                *model_row_id,
-                *rate_limit_scope,
-            );
-            Ok((
-                ComboId(SYNTHETIC_COMBO_ID),
-                Some(synthetic_combo),
-                Some(synthetic_targets),
-            ))
+        RoutingPlan::Combo { combo_id, combo_name, strategy, race_size, targets } => {
+            if combo_id.0 == SYNTHETIC_COMBO_ID {
+                let synthetic_combo = openproxy_types::combos::Combo {
+                    id: *combo_id,
+                    name: combo_name.clone(),
+                    strategy: *strategy,
+                    race_size: *race_size,
+                    created_at: String::new(),
+                    context_window: None,
+                    priority_mode: openproxy_types::combos::PriorityMode::Strict,
+                    cooldown_mode: openproxy_types::config::CooldownMode::Flat,
+                    cooldown_base_secs: None,
+                    cooldown_max_secs: None,
+                    cooldown_factor: None,
+                    lkgp_exploration_rate: None,
+                    selection_window_secs: None,
+                };
+                Ok((*combo_id, Some(synthetic_combo), Some(targets.clone())))
+            } else {
+                Ok((*combo_id, None, None))
+            }
         }
-        RoutingPlan::Combo { combo_id, .. } => Ok((*combo_id, None, None)),
         RoutingPlan::NotFound { model, hint } => {
             let _ = record_model_not_found_usage_row(state, RequestId::new(), api_key_id, model);
             let mut msg = format!("model not found: {}", model);

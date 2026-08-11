@@ -252,22 +252,15 @@ fn translate_audio_routing_plan(
     started: Instant,
 ) -> Result<Option<AudioTargets>, ApiError> {
     match routing_plan {
-        RoutingPlan::Direct {
-            provider_id,
-            account_id,
-            model_row_id,
-            model_id,
-            ..
-        } => Ok(Some(AudioTargets {
-            provider_id,
-            account_id,
-            model_row_id: Some(model_row_id),
-            upstream_model_id: model_id,
-            combo_id: None,
-        })),
         RoutingPlan::Combo {
             combo_id, targets, ..
         } => {
+            let r = state.db_pool().reader();
+            let targets = openproxy_core::routing::flatten_targets(&r, targets)
+                .map_err(|e| ApiError(CoreError::Validation(format!("flatten_targets failed: {}", e))))?;
+            let targets = openproxy_core::routing::expand_account_rotation(&r, targets)
+                .map_err(|e| ApiError(CoreError::Validation(format!("expand_account_rotation failed: {}", e))))?;
+
             let target = targets
                 .into_iter()
                 .find(|t| t.model_row_id.is_some())
@@ -278,7 +271,6 @@ fn translate_audio_routing_plan(
                 })?;
             let model_row_id = target.model_row_id.expect("checked above");
             let (provider_id, upstream_model_id) = {
-                let r = state.db_pool().reader();
                 let model = models::get_by_row_id(&r, model_row_id)
                     .map_err(ApiError)?
                     .ok_or_else(|| {

@@ -26,6 +26,97 @@ use openproxy_db::combos;
 use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use rusqlite::{Connection, OptionalExtension};
 
+pub fn expand_account_rotation(
+    conn: &Connection,
+    targets: Vec<ComboTarget>,
+) -> Result<Vec<ComboTarget>> {
+    let mut out = Vec::new();
+    for t in targets {
+        if t.account_id.is_some() || t.sub_combo_id.is_some() {
+            out.push(t);
+            continue;
+        }
+        let mut stmt = conn
+            .prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC")
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let mut rows = stmt
+            .query(rusqlite::params![t.provider_id.as_str()])
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let mut count = 0;
+        while let Some(r) = rows
+            .next()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
+        {
+            let mut ct = t.clone();
+            ct.account_id = Some(AccountId(
+                r.get::<_, i64>(0)
+                    .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?,
+            ));
+            out.push(ct);
+            count += 1;
+        }
+        if count == 0 {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
+pub fn flatten_targets(
+    conn: &Connection,
+    targets: Vec<ComboTarget>,
+) -> Result<Vec<ComboTarget>> {
+    if !targets.iter().any(|t| t.sub_combo_id.is_some()) {
+        return Ok(targets);
+    }
+    let mut out = Vec::with_capacity(targets.len());
+    let mut visited = Vec::new();
+    for t in targets {
+        if let Some(sub_id) = t.sub_combo_id {
+            let sub_flat = resolve_combo_to_targets(conn, sub_id, &mut visited, 0)?;
+            out.extend(sub_flat);
+        } else {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
+fn resolve_combo_to_targets(
+    conn: &Connection,
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Vec<ComboTarget>> {
+    if depth > 5 {
+        return Err(openproxy_types::error::CoreError::Validation(format!(
+            "max sub-combo depth ({}) exceeded",
+            5
+        )));
+    }
+    if visited.contains(&combo_id) {
+        return Err(openproxy_types::error::CoreError::Validation(format!(
+            "cyclic combo detected at id {}",
+            combo_id.0
+        )));
+    }
+    visited.push(combo_id);
+
+    // Usa list_targets base (sin cooldown filter para audio/chat pre-flight)
+    let targets = combos::list_targets(conn, combo_id)?;
+    let mut flat = Vec::new();
+    for t in targets {
+        if let Some(sub_id) = t.sub_combo_id {
+            let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
+            flat.extend(sub);
+        } else {
+            flat.push(t);
+        }
+    }
+    visited.pop();
+    Ok(flat)
+}
+
 /// Sentinel combo id used for synthetic, in-memory combos. The id is
 /// negative so it can never collide with a real `combos.id` (which is
 /// always a positive SQLite rowid) and so the usage row's `combo_id`
@@ -40,18 +131,6 @@ pub const SYNTHETIC_COMBO_NAME: &str = "__direct__";
 /// The result of resolving a model string into a routing plan.
 #[derive(Debug, Clone)]
 pub enum RoutingPlan {
-    /// Direct hit on a model. The chat handler must wrap the target in
-    /// a synthetic `Combo` and dispatch through the pipeline.
-    Direct {
-        provider_id: ProviderId,
-        account_id: Option<AccountId>,
-        model_row_id: ModelRowId,
-        /// Upstream model id (the `models.model_id` value). The
-        /// `upstream_model_id` column in `usage` carries this string
-        /// for analytics.
-        model_id: String,
-        rate_limit_scope: crate::providers::RateLimitScope,
-    },
     /// A combo. The chat handler dispatches through the normal
     /// pipeline path keyed on `combo_id`.
     Combo {
@@ -153,12 +232,19 @@ fn try_resolve_direct_model(
     // behaviour for a provider with no pinned account.
     let account_id = None;
 
-    Ok(Some(RoutingPlan::Direct {
-        provider_id: model.provider_id.clone(),
+    let (combo, targets) = build_synthetic_combo(
+        model.provider_id.clone(),
         account_id,
-        model_row_id: model.row_id,
-        model_id: model.model_id.as_str().to_string(),
+        model.row_id,
         rate_limit_scope,
+    );
+
+    Ok(Some(RoutingPlan::Combo {
+        combo_id: combo.id,
+        combo_name: combo.name,
+        strategy: combo.strategy,
+        race_size: combo.race_size,
+        targets,
     }))
 }
 
@@ -382,19 +468,15 @@ mod tests {
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
         match plan {
-            RoutingPlan::Direct {
-                provider_id,
-                account_id,
-                model_row_id,
-                model_id,
+            RoutingPlan::Combo {
+                targets,
                 ..
             } => {
-                assert_eq!(provider_id, ProviderId::new("openrouter"));
-                assert_eq!(model_row_id, model_row);
-                assert_eq!(model_id, "anthropic/claude-3.5");
-                assert!(account_id.is_none(), "resolver always uses auto-rotation");
+                assert_eq!(targets[0].provider_id, ProviderId::new("openrouter"));
+                assert_eq!(targets[0].model_row_id, Some(model_row));
+                assert!(targets[0].account_id.is_none(), "resolver always uses auto-rotation");
             }
-            other => panic!("expected Direct, got {:?}", other),
+            other => panic!("expected Combo, got {:?}", other),
         }
     }
 
@@ -504,13 +586,13 @@ mod tests {
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
         match plan {
-            RoutingPlan::Direct { account_id, .. } => {
+            RoutingPlan::Combo { targets, .. } => {
                 assert!(
-                    account_id.is_none(),
+                    targets[0].account_id.is_none(),
                     "no healthy account → account_id is None for auto-rotation"
                 );
             }
-            other => panic!("expected Direct, got {:?}", other),
+            other => panic!("expected Combo, got {:?}", other),
         }
     }
 
@@ -531,10 +613,8 @@ mod tests {
 
         let plan = resolve(&conn, "openrouter/foo/bar").expect("resolve");
         match plan {
-            RoutingPlan::Direct { model_id, .. } => {
-                assert_eq!(model_id, "foo/bar");
-            }
-            other => panic!("expected Direct, got {:?}", other),
+            RoutingPlan::Combo { .. } => {}
+            other => panic!("expected Combo, got {:?}", other),
         }
     }
 
@@ -555,10 +635,8 @@ mod tests {
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
         match plan {
-            RoutingPlan::Direct { model_id, .. } => {
-                assert_eq!(model_id, "anthropic/claude-3.5");
-            }
-            other => panic!("expected Direct, got {:?}", other),
+            RoutingPlan::Combo { .. } => {}
+            other => panic!("expected Combo, got {:?}", other),
         }
     }
 
