@@ -121,7 +121,13 @@ fn translate_plan_to_targets(
     ApiError,
 > {
     match plan {
-        RoutingPlan::Combo { combo_id, combo_name, strategy, race_size, targets } => {
+        RoutingPlan::Combo {
+            combo_id,
+            combo_name,
+            strategy,
+            race_size,
+            targets,
+        } => {
             if combo_id.0 == SYNTHETIC_COMBO_ID {
                 let synthetic_combo = openproxy_types::combos::Combo {
                     id: *combo_id,
