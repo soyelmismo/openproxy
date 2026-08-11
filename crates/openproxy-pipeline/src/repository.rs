@@ -510,7 +510,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "UPDATE usage SET was_winner = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
+            "UPDATE usage SET was_winner = 1, client_response = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
             rusqlite::params![request_id, attempt, target_id.0]
         ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
