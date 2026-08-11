@@ -48,6 +48,7 @@ use openproxy_core::{
     accounts, cost, models, providers,
     routing::{self, RoutingPlan},
 };
+use openproxy_pipeline::circuit_breaker::CircuitBreakerKey;
 use openproxy_types::{
     CoreError,
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
@@ -97,84 +98,121 @@ pub async fn transcribe(
         )));
     }
 
-    // 4. Translate routing plan.
-    let targets = match translate_audio_routing_plan(&state, routing_plan, api_key_id, started)? {
-        Some(t) => t,
-        None => {
-            // Already handled by error or 404 in translate helper.
-            unreachable!()
-        }
-    };
+    // 4. Resolve audio targets.
+    let targets = resolve_audio_targets(&state, routing_plan, api_key_id, started)?;
 
-    // 5. Look up the adapter and build URL.
     let adapters = state.adapters();
-    let adapter = adapters
-        .iter()
-        .find(|a| a.id() == &targets.provider_id)
-        .cloned()
-        .ok_or_else(|| {
-            ApiError(CoreError::Internal(format!(
-                "no adapter registered for provider '{}'",
-                targets.provider_id
-            )))
-        })?;
-    let upstream_url = adapter.build_transcription_url();
+    let mut last_error = None;
+    let mut attempt = 0;
 
-    // 6. Resolve the API key.
-    let api_key = resolve_api_key(&state, targets.account_id, &targets.provider_id)?;
+    // 5. Multi-target dispatch loop
+    for target in targets {
+        attempt += 1;
+        let adapter = match adapters.iter().find(|a| a.id() == &target.provider_id).cloned() {
+            Some(a) => a,
+            None => {
+                last_error = Some(ApiError(CoreError::Internal(format!(
+                    "no adapter registered for provider '{}'",
+                    target.provider_id
+                ))));
+                continue;
+            }
+        };
+        let upstream_url = adapter.build_transcription_url();
 
-    // 7. Build and dispatch.
-    let response = dispatch_audio_request(
-        &state,
-        adapter.clone(),
-        &upstream_url,
-        &api_key,
-        &targets.upstream_model_id,
-        parsed_body,
-    )
-    .await?;
+        let api_key = match resolve_api_key(&state, target.account_id, &target.provider_id) {
+            Ok(k) => k,
+            Err(e) => {
+                last_error = Some(e);
+                continue;
+            }
+        };
 
-    let status_code = response.status;
-    let content_type = response
-        .headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-    let body_bytes = response
-        .collect()
-        .await
-        .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("read body: {:?}", e))))?;
+        // Clone the body for this attempt
+        let body_clone = ParsedAudioBody {
+            model_name: parsed_body.model_name.clone(),
+            file_bytes: parsed_body.file_bytes.clone(),
+            file_name: parsed_body.file_name.clone(),
+            file_content_type: parsed_body.file_content_type.clone(),
+            form_fields: parsed_body.form_fields.clone(),
+        };
 
-    let total_ms = started.elapsed().as_millis() as u64;
-    let error_msg = if status_code.as_u16() < 400 {
-        None
-    } else {
-        Some(format!("upstream status {}", status_code))
-    };
+        // Dispatch
+        let response = match dispatch_audio_request(
+            &state,
+            adapter.clone(),
+            &upstream_url,
+            &api_key,
+            &target.upstream_model_id,
+            body_clone,
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(account_id) = target.account_id {
+                    state.circuit_breaker().record_failure(CircuitBreakerKey::Account(account_id));
+                }
+                tracing::warn!("Audio target failed (connection error): provider={}, error={:?}", target.provider_id, e);
+                last_error = Some(e);
+                continue;
+            }
+        };
 
-    // 9. Record usage.
-    let _ = record_audio_usage_row(AudioUsageArgs {
-        state: &state,
-        request_id: RequestId::new(),
-        api_key_id,
-        provider_id: &targets.provider_id,
-        account_id: targets.account_id,
-        combo_id: targets.combo_id,
-        model_row_id: targets.model_row_id,
-        upstream_model_id: &targets.upstream_model_id,
-        status_code: status_code.as_u16(),
-        error_msg,
-        total_ms,
-    });
+        let status_code = response.status;
+        let content_type = response
+            .headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/json")
+            .to_string();
+        
+        let body_bytes = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                let err = ApiError(CoreError::UpstreamConnection(format!("read body: {:?}", e)));
+                if let Some(account_id) = target.account_id {
+                    state.circuit_breaker().record_failure(CircuitBreakerKey::Account(account_id));
+                }
+                tracing::warn!("Audio target body read failed: provider={}, error={:?}", target.provider_id, err);
+                last_error = Some(err);
+                continue;
+            }
+        };
 
-    // 10. Return response.
-    build_audio_response(status_code.as_u16(), &content_type, body_bytes)
+        if status_code.as_u16() >= 400 {
+            if let Some(account_id) = target.account_id {
+                state.circuit_breaker().record_failure(CircuitBreakerKey::Account(account_id));
+            }
+            tracing::warn!("Audio target returned error status: provider={}, status={}", target.provider_id, status_code);
+            last_error = Some(ApiError(CoreError::UpstreamConnection(format!("upstream status {}", status_code))));
+            continue;
+        }
+
+        // Success! Record usage and return.
+        let total_ms = started.elapsed().as_millis() as u64;
+        let _ = record_audio_usage_row(AudioUsageArgs {
+            state: &state,
+            request_id: RequestId::new(),
+            api_key_id,
+            provider_id: &target.provider_id,
+            account_id: target.account_id,
+            combo_id: target.combo_id,
+            model_row_id: target.model_row_id,
+            upstream_model_id: &target.upstream_model_id,
+            status_code: status_code.as_u16(),
+            error_msg: None,
+            total_ms,
+        });
+
+        tracing::info!("Audio request succeeded after {} attempts", attempt);
+        return build_audio_response(status_code.as_u16(), &content_type, body_bytes);
+    }
+
+    Err(last_error.unwrap_or_else(|| ApiError(CoreError::Internal("No valid targets found".into()))))
 }
 
 struct ParsedAudioBody {
     model_name: String,
-    file_bytes: Vec<u8>,
+    file_bytes: bytes::Bytes,
     file_name: String,
     file_content_type: String,
     form_fields: Vec<(String, String)>,
@@ -182,7 +220,7 @@ struct ParsedAudioBody {
 
 async fn parse_multipart_body(mut multipart: Multipart) -> Result<ParsedAudioBody, ApiError> {
     let mut model_name = String::new();
-    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_bytes: Option<bytes::Bytes> = None;
     let mut file_name = String::from("audio");
     let mut file_content_type = String::from("application/octet-stream");
     let mut form_fields: Vec<(String, String)> = Vec::new();
@@ -203,7 +241,7 @@ async fn parse_multipart_body(mut multipart: Multipart) -> Result<ParsedAudioBod
                     .content_type()
                     .unwrap_or("application/octet-stream")
                     .to_string();
-                file_bytes = Some(field.bytes().await.unwrap_or_default().to_vec());
+                file_bytes = Some(field.bytes().await.unwrap_or_default());
             }
             _ => {
                 let value = field.text().await.unwrap_or_default();
@@ -245,12 +283,12 @@ struct AudioTargets {
     combo_id: Option<ComboId>,
 }
 
-fn translate_audio_routing_plan(
+fn resolve_audio_targets(
     state: &AppState,
     routing_plan: RoutingPlan,
     api_key_id: Option<ApiKeyId>,
     started: Instant,
-) -> Result<Option<AudioTargets>, ApiError> {
+) -> Result<Vec<AudioTargets>, ApiError> {
     match routing_plan {
         RoutingPlan::Combo {
             combo_id, targets, ..
@@ -261,33 +299,31 @@ fn translate_audio_routing_plan(
             let targets = openproxy_core::routing::expand_account_rotation(&r, targets)
                 .map_err(|e| ApiError(CoreError::Validation(format!("expand_account_rotation failed: {}", e))))?;
 
-            let target = targets
-                .into_iter()
-                .find(|t| t.model_row_id.is_some())
-                .ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "combo has no model target suitable for transcription".into(),
-                    ))
-                })?;
-            let model_row_id = target.model_row_id.expect("checked above");
-            let (provider_id, upstream_model_id) = {
-                let model = models::get_by_row_id(&r, model_row_id)
-                    .map_err(ApiError)?
-                    .ok_or_else(|| {
-                        ApiError(CoreError::ModelNotFound {
-                            provider: target.provider_id.to_string(),
-                            model: format!("row_id={}", model_row_id.0),
-                        })
-                    })?;
-                (model.provider_id, model.model_id.as_str().to_string())
-            };
-            Ok(Some(AudioTargets {
-                provider_id,
-                account_id: target.account_id,
-                model_row_id: Some(model_row_id),
-                upstream_model_id,
-                combo_id: Some(combo_id),
-            }))
+            let mut audio_targets = Vec::with_capacity(targets.len());
+            for target in targets {
+                if let Some(model_row_id) = target.model_row_id {
+                    let (provider_id, upstream_model_id) = {
+                        let model = match models::get_by_row_id(&r, model_row_id) {
+                            Ok(Some(m)) => m,
+                            _ => continue, // skip invalid models
+                        };
+                        (model.provider_id, model.model_id.as_str().to_string())
+                    };
+                    audio_targets.push(AudioTargets {
+                        provider_id,
+                        account_id: target.account_id,
+                        model_row_id: Some(model_row_id),
+                        upstream_model_id,
+                        combo_id: Some(combo_id),
+                    });
+                }
+            }
+            if audio_targets.is_empty() {
+                return Err(ApiError(CoreError::Validation(
+                    "combo has no model target suitable for transcription".into(),
+                )));
+            }
+            Ok(audio_targets)
         }
         RoutingPlan::NotFound { model, hint } => {
             let _ = record_audio_usage_row(AudioUsageArgs {
