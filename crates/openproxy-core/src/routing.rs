@@ -347,6 +347,7 @@ pub fn build_synthetic_combo(
         sub_combo_id: None,
         priority_order: 0,
         weight: 1,
+        active: true,
         rate_limit_scope,
     };
     let combo = Combo {

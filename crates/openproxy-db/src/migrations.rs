@@ -272,6 +272,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000052_backfill_account_labels",
         sql: include_str!("../migrations/000052_backfill_account_labels.sql"),
     },
+    Migration {
+        version: 53,
+        name: "000053_add_active_to_combo_targets",
+        sql: include_str!("../migrations/000053_add_active_to_combo_targets.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

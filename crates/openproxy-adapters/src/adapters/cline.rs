@@ -259,6 +259,7 @@ mod tests {
                 sub_combo_id: None,
                 priority_order: 0,
                 weight: 100,
+                active: true,
                 rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
             },
             model: openproxy_types::Model {

@@ -421,13 +421,26 @@ pub async fn update_combo_target(
         let w = s.db_pool().writer();
         core_combos::update_target_weight(&w, ComboTargetId(target_id), weight_i64 as i32)?;
     }
+    // Optional `active` flag.
+    let active: Option<bool> = match body.get("active") {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| {
+            ApiError(CoreError::Validation(
+                "active must be a boolean when present".into(),
+            ))
+        })?),
+    };
+    if let Some(active_val) = active {
+        let w = s.db_pool().writer();
+        core_combos::update_target_active(&w, ComboTargetId(target_id), active_val)?;
+    }
     // Backwards-compat: if neither field was present, surface
     // the historical "missing 'priority_order'" error so a
     // legacy caller still gets a useful 400 instead of a silent
     // 200 with no work done.
-    if priority_order.is_none() && body.get("weight").is_none() {
+    if priority_order.is_none() && body.get("weight").is_none() && active.is_none() {
         return Err(ApiError(CoreError::Validation(
-            "missing 'priority_order' or 'weight'".into(),
+            "missing 'priority_order', 'weight', or 'active'".into(),
         )));
     }
     Ok(Json(serde_json::json!({
@@ -435,6 +448,7 @@ pub async fn update_combo_target(
         "id": target_id,
         "priority_order": priority_order,
         "weight": body.get("weight").and_then(|v| v.as_i64()),
+        "active": active,
     })))
 }
 

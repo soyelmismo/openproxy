@@ -513,10 +513,10 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
-             WHERE ct.combo_id = ?1 AND p.active = 1 \
+             WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
                  AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL) \
              ORDER BY ct.priority_order ASC, ct.id ASC",
         )
@@ -583,7 +583,8 @@ pub fn list_targets_with_model(
                     m.context_length, \
                     m.max_output_tokens, \
                     ct.weight, \
-                    COALESCE(p.active, 0) as provider_active \
+                    COALESCE(p.active, 0) as provider_active, \
+                    ct.active \
              FROM combo_targets ct \
              LEFT JOIN providers p ON p.id = ct.provider_id \
              LEFT JOIN models m ON m.id = ct.model_row_id \
@@ -604,7 +605,7 @@ pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTa
     let row = conn
         .query_row(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.id = ?1",
@@ -677,6 +678,22 @@ pub fn update_target_weight(
     )
     .map_err(crate::error::map_db_error_ctx(format!(
         "update weight for combo_target {}",
+        target_id.0
+    )))?;
+    Ok(())
+}
+
+pub fn update_target_active(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    active: bool,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE combo_targets SET active = ?1 WHERE id = ?2",
+        params![if active { 1_i64 } else { 0_i64 }, target_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update active for combo_target {}",
         target_id.0
     )))?;
     Ok(())
@@ -1157,6 +1174,7 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
     // backfilled defaults) does not poison the routing layer.
     let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
     let rate_limit_scope: String = row.get(8)?;
+    let active: i64 = row.get::<_, Option<i64>>(9)?.unwrap_or(1);
 
     Ok(ComboTarget {
         id: ComboTargetId(id),
@@ -1167,6 +1185,7 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         sub_combo_id: sub_combo_id.map(ComboId),
         priority_order,
         weight,
+        active: active != 0,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
             .unwrap_or_default(),
     })
@@ -1205,6 +1224,7 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
     // didn't match — which shouldn't happen because `provider_id` is
     // NOT NULL, but COALESCE defends against it anyway).
     let provider_active: i64 = row.get(16)?;
+    let active: i64 = row.get::<_, Option<i64>>(17)?.unwrap_or(1);
 
     Ok(ComboTargetWithModel {
         id: ComboTargetId(id),
@@ -1218,6 +1238,7 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
         model_display_name,
         priority_order,
         weight,
+        active: active != 0,
         in_cooldown: in_cooldown != 0,
         cooldown_until,
         cooldown_reason,

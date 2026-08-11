@@ -642,6 +642,7 @@ pub(crate) async fn run_test_for_model(
             sub_combo_id: None,
             priority_order: 0,
             weight: 1,
+            active: true,
             rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
         },
         model: model.clone(),

@@ -119,6 +119,15 @@ async function onDeleteCombo(): Promise<void> {
     location.hash = "#/combos";
   } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
 }
+
+async function onToggleTargetActive(targetId: number, currentActive: boolean): Promise<void> {
+  try {
+    await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "PATCH", body: JSON.stringify({ active: !currentActive }) });
+    const t = detailTargets.find((t) => t.id === targetId);
+    if (t) t.active = !currentActive;
+    requestUpdate();
+  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+}
 async function onDeleteTarget(targetId: number): Promise<void> {
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "DELETE" });
@@ -273,7 +282,10 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   const inactiveBadge = (t.provider_active === false)
     ? html` <span class="badge badge-inactive" title="Provider is inactive — this target is not used for routing. Reactivate the provider in the Providers page to enable it.">⚠ inactive</span>`
     : html``;
-  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${t.sub_combo_name ?? "#" + t.sub_combo_id}</span>` : html`${t.model_display_name || t.model_id || "row #" + t.model_row_id}${cdBadge}${inactiveBadge}`;
+  const targetInactiveBadge = (t.active === false)
+    ? html` <span class="badge badge-inactive" title="Target is inactive — not used for routing.">⏸ inactive</span>`
+    : html``;
+  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${t.sub_combo_name ?? "#" + t.sub_combo_id}</span>` : html`${t.model_display_name || t.model_id || "row #" + t.model_row_id}${cdBadge}${inactiveBadge}${targetInactiveBadge}`;
   const providerCell = isSub ? html`<span class="virtual-provider">${t.provider_id}</span>` : html`<a href="#/providers/${encodeURIComponent(t.provider_id)}">${t.provider_id}</a>`;
   const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
   const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);
@@ -344,7 +356,14 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
     }}
   >
     <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}<td class="last-test-cell">${lastTestCell}</td>
-    <td>${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}<button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button><button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}<button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button></td>
+    <td>
+      ${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}
+      <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸" : "▶"}</button>
+      <button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button>
+      <button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>
+      ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}
+      <button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button>
+    </td>
   </tr>`;
 }
 

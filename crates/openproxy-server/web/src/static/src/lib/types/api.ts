@@ -331,6 +331,7 @@ export interface ComboTarget {
    *  optional in the TS type so older API responses that omit it
    *  still parse — the dashboard treats `undefined` as `1`. */
   weight?: number;
+  active: boolean;
 }
 
 /** `ComboTarget` enriquecido con metadata del model (display name, etc.)

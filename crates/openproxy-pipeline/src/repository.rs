@@ -1044,10 +1044,10 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
-             WHERE ct.combo_id = ?1 AND p.active = 1 \
+             WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
                  AND (SELECT count(*) FROM target_cooldowns tc \
                       WHERE tc.combo_target_id = ct.id \
                         AND datetime(tc.cooldown_until) > datetime('now')) = 0 \
@@ -1065,6 +1065,7 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
             let priority_order: i32 = row.get(6)?;
             let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
             let rate_limit_scope: String = row.get(8)?;
+            let active: i64 = row.get::<_, Option<i64>>(9)?.unwrap_or(1);
 
             Ok(ComboTarget {
                 id: openproxy_types::ids::ComboTargetId(id),
@@ -1075,6 +1076,7 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
                 sub_combo_id: sub_combo_id.map(ComboId),
                 priority_order,
                 weight,
+                active: active != 0,
                 rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(
                     &rate_limit_scope,
                 )

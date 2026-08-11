@@ -116,6 +116,8 @@ pub struct ComboTarget {
     pub priority_order: i32,
     #[serde(default = "default_target_weight")]
     pub weight: i32,
+    #[serde(default = "default_true")]
+    pub active: bool,
     #[serde(default)]
     pub rate_limit_scope: crate::providers::RateLimitScope,
 }
@@ -144,6 +146,8 @@ pub struct ComboTargetWithModel {
     pub context_length: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<i64>,
+    #[serde(default = "default_true")]
+    pub active: bool,
     #[serde(default = "default_true")]
     pub provider_active: bool,
 }

@@ -5584,6 +5584,7 @@ fn test_quota_routing_and_protection() {
         sub_combo_id: None,
         priority_order: id as i32,
         weight: 1,
+        active: true,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
     };
 
@@ -5764,6 +5765,7 @@ fn test_opencode_zen_no_account_proxy_rotation() {
         sub_combo_id: None,
         priority_order: 1,
         weight: 1,
+        active: true,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
     };
 
