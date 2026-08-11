@@ -108,7 +108,11 @@ pub async fn transcribe(
     // 5. Multi-target dispatch loop
     for target in targets {
         attempt += 1;
-        let adapter = match adapters.iter().find(|a| a.id() == &target.provider_id).cloned() {
+        let adapter = match adapters
+            .iter()
+            .find(|a| a.id() == &target.provider_id)
+            .cloned()
+        {
             Some(a) => a,
             None => {
                 last_error = Some(ApiError(CoreError::Internal(format!(
@@ -145,13 +149,21 @@ pub async fn transcribe(
             &api_key,
             &target.upstream_model_id,
             body_clone,
-        ).await {
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 if let Some(account_id) = target.account_id {
-                    state.circuit_breaker().record_failure(CircuitBreakerKey::Account(account_id));
+                    state
+                        .circuit_breaker()
+                        .record_failure(CircuitBreakerKey::Account(account_id));
                 }
-                tracing::warn!("Audio target failed (connection error): provider={}, error={:?}", target.provider_id, e);
+                tracing::warn!(
+                    "Audio target failed (connection error): provider={}, error={:?}",
+                    target.provider_id,
+                    e
+                );
                 last_error = Some(e);
                 continue;
             }
@@ -164,15 +176,21 @@ pub async fn transcribe(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("application/json")
             .to_string();
-        
+
         let body_bytes = match response.collect().await {
             Ok(b) => b,
             Err(e) => {
                 let err = ApiError(CoreError::UpstreamConnection(format!("read body: {:?}", e)));
                 if let Some(account_id) = target.account_id {
-                    state.circuit_breaker().record_failure(CircuitBreakerKey::Account(account_id));
+                    state
+                        .circuit_breaker()
+                        .record_failure(CircuitBreakerKey::Account(account_id));
                 }
-                tracing::warn!("Audio target body read failed: provider={}, error={:?}", target.provider_id, err);
+                tracing::warn!(
+                    "Audio target body read failed: provider={}, error={:?}",
+                    target.provider_id,
+                    err
+                );
                 last_error = Some(err);
                 continue;
             }
@@ -180,10 +198,19 @@ pub async fn transcribe(
 
         if status_code.as_u16() >= 400 {
             if let Some(account_id) = target.account_id {
-                state.circuit_breaker().record_failure(CircuitBreakerKey::Account(account_id));
+                state
+                    .circuit_breaker()
+                    .record_failure(CircuitBreakerKey::Account(account_id));
             }
-            tracing::warn!("Audio target returned error status: provider={}, status={}", target.provider_id, status_code);
-            last_error = Some(ApiError(CoreError::UpstreamConnection(format!("upstream status {}", status_code))));
+            tracing::warn!(
+                "Audio target returned error status: provider={}, status={}",
+                target.provider_id,
+                status_code
+            );
+            last_error = Some(ApiError(CoreError::UpstreamConnection(format!(
+                "upstream status {}",
+                status_code
+            ))));
             continue;
         }
 
@@ -207,7 +234,8 @@ pub async fn transcribe(
         return build_audio_response(status_code.as_u16(), &content_type, body_bytes);
     }
 
-    Err(last_error.unwrap_or_else(|| ApiError(CoreError::Internal("No valid targets found".into()))))
+    Err(last_error
+        .unwrap_or_else(|| ApiError(CoreError::Internal("No valid targets found".into()))))
 }
 
 struct ParsedAudioBody {
@@ -294,10 +322,19 @@ fn resolve_audio_targets(
             combo_id, targets, ..
         } => {
             let r = state.db_pool().reader();
-            let targets = openproxy_core::routing::flatten_targets(&r, targets)
-                .map_err(|e| ApiError(CoreError::Validation(format!("flatten_targets failed: {}", e))))?;
-            let targets = openproxy_core::routing::expand_account_rotation(&r, targets)
-                .map_err(|e| ApiError(CoreError::Validation(format!("expand_account_rotation failed: {}", e))))?;
+            let targets = openproxy_core::routing::flatten_targets(&r, targets).map_err(|e| {
+                ApiError(CoreError::Validation(format!(
+                    "flatten_targets failed: {}",
+                    e
+                )))
+            })?;
+            let targets =
+                openproxy_core::routing::expand_account_rotation(&r, targets).map_err(|e| {
+                    ApiError(CoreError::Validation(format!(
+                        "expand_account_rotation failed: {}",
+                        e
+                    )))
+                })?;
 
             let mut audio_targets = Vec::with_capacity(targets.len());
             for target in targets {

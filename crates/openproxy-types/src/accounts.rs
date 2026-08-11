@@ -57,3 +57,29 @@ pub struct Account {
     pub created_at: String,
     pub current_proxy_id: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_health_status_parse() {
+        assert_eq!(HealthStatus::parse("healthy"), Ok(HealthStatus::Healthy));
+        assert_eq!(HealthStatus::parse("degraded"), Ok(HealthStatus::Degraded));
+        assert_eq!(
+            HealthStatus::parse("unhealthy"),
+            Ok(HealthStatus::Unhealthy)
+        );
+        assert_eq!(
+            HealthStatus::parse("unknown"),
+            Err("invalid health: unknown".to_string())
+        );
+    }
+
+    #[test]
+    fn test_health_status_as_str() {
+        assert_eq!(HealthStatus::Healthy.as_str(), "healthy");
+        assert_eq!(HealthStatus::Degraded.as_str(), "degraded");
+        assert_eq!(HealthStatus::Unhealthy.as_str(), "unhealthy");
+    }
+}
