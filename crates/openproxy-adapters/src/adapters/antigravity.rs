@@ -176,8 +176,10 @@ impl ProviderAdapter for AntigravityAdapter {
         response_body: serde_json::Value,
     ) -> std::result::Result<openproxy_types::OpenAIResponse, CoreError> {
         let gemini_resp: crate::adapters::gemini::GeminiResponse =
-            <crate::adapters::gemini::GeminiResponse as serde::Deserialize>::deserialize(&response_body)
-                .map_err(|e| CoreError::Parse(format!("parse antigravity gemini response: {e}")))?;
+            <crate::adapters::gemini::GeminiResponse as serde::Deserialize>::deserialize(
+                &response_body,
+            )
+            .map_err(|e| CoreError::Parse(format!("parse antigravity gemini response: {e}")))?;
         Ok(crate::adapters::gemini::gemini_to_openai(&gemini_resp))
     }
 
