@@ -30,7 +30,7 @@ pub fn expand_account_rotation(
     conn: &Connection,
     targets: Vec<ComboTarget>,
 ) -> Result<Vec<ComboTarget>> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(targets.len());
     for t in targets {
         if t.account_id.is_some() || t.sub_combo_id.is_some() {
             out.push(t);
@@ -101,7 +101,7 @@ fn resolve_combo_to_targets(
 
     // Usa list_targets base (sin cooldown filter para audio/chat pre-flight)
     let targets = combos::list_targets(conn, combo_id)?;
-    let mut flat = Vec::new();
+    let mut flat = Vec::with_capacity(targets.len());
     for t in targets {
         if let Some(sub_id) = t.sub_combo_id {
             let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
