@@ -38,11 +38,8 @@ pub fn compute_diff<'a>(
                 ))
             })
             .map_err(openproxy_db::error::map_db_error)?;
-        let mut out = Vec::new();
-        for id in rows {
-            out.push(id.map_err(openproxy_db::error::map_db_error)?);
-        }
-        out
+        rows.map(|r| r.map_err(openproxy_db::error::map_db_error))
+            .collect::<Result<Vec<_>>>()?
     };
 
     let existing: std::collections::HashSet<&str> =
@@ -178,10 +175,9 @@ pub fn execute_sync_transaction(
                 Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
             })
             .map_err(openproxy_db::error::map_db_error)?;
-        let mut new_rows: Vec<(i64, String)> = Vec::new();
-        for row in rows {
-            new_rows.push(row.map_err(openproxy_db::error::map_db_error)?);
-        }
+        let new_rows: Vec<(i64, String)> = rows
+            .map(|r| r.map_err(openproxy_db::error::map_db_error))
+            .collect::<Result<Vec<_>>>()?;
         drop(stmt);
 
         let combo_targets_present: bool = tx

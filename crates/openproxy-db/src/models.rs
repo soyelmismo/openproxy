@@ -396,11 +396,8 @@ pub fn apply_auto_activation(
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
                 .map_err(map_db_error)?;
-            let mut out = Vec::new();
-            for r in rows {
-                out.push(r.map_err(map_db_error)?);
-            }
-            out
+            rows.map(|r| r.map_err(map_db_error))
+                .collect::<Result<Vec<_>>>()?
         }
         None => {
             let mut stmt = tx
@@ -416,11 +413,8 @@ pub fn apply_auto_activation(
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
                 .map_err(map_db_error)?;
-            let mut out = Vec::new();
-            for r in rows {
-                out.push(r.map_err(map_db_error)?);
-            }
-            out
+            rows.map(|r| r.map_err(map_db_error))
+                .collect::<Result<Vec<_>>>()?
         }
     };
 
@@ -524,11 +518,8 @@ pub fn upsert_many(
                 ))
             })
             .map_err(map_db_error)?;
-        let mut out = Vec::new();
-        for id in rows {
-            out.push(id.map_err(map_db_error)?);
-        }
-        out
+        rows.map(|r| r.map_err(map_db_error))
+            .collect::<Result<Vec<_>>>()?
     };
 
     let existing: std::collections::HashSet<&str> =
@@ -630,10 +621,9 @@ pub fn upsert_many(
                 Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
             })
             .map_err(map_db_error)?;
-        let mut new_rows: Vec<(i64, String)> = Vec::new();
-        for row in rows {
-            new_rows.push(row.map_err(map_db_error)?);
-        }
+        let new_rows: Vec<(i64, String)> = rows
+            .map(|r| r.map_err(map_db_error))
+            .collect::<Result<Vec<_>>>()?;
         drop(stmt);
 
         let combo_targets_present: bool = tx
