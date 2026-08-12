@@ -592,6 +592,7 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
         // audio-seconds rate.
         prompt_tokens: None,
         completion_tokens: None,
+        cached_tokens: None,
         connect_ms: None,
         ttft_ms: None,
         total_ms,

@@ -534,6 +534,7 @@ function renderMetrics(): TemplateResult {
     ${metric(t("analytics.summary.unique_requests"), fmtNumber(summary.unique_requests), `${fmtNumber(summary.total_attempts)} ${t("analytics.metric.attempts")}`)}
     ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(buckets.s4xx + buckets.s5xx)} ${t("analytics.metric.failed_responses")}`, successTone)}
     ${metric(t("analytics.metric.tokens"), fmtNumber(totalTokens), `${fmtNumber(summary.total_prompt_tokens)} in · ${fmtNumber(summary.total_completion_tokens)} out`)}
+    ${metric("API Cache", fmtPercent(summary.total_prompt_tokens > 0 ? summary.total_cached_tokens / summary.total_prompt_tokens : 0), `${fmtNumber(summary.total_cached_tokens)} prompt tokens cached`, summary.total_cached_tokens > 0 ? "is-good" : "")}
     ${metric("Local Compression", fmtPercent((summary.avg_compression_savings_pct ?? 0) / 100), "Avg token savings when active", "is-good")}
     ${metric(t("analytics.summary.total_cost"), fmtCost(summary.total_cost_usd), `${fmtCost(costPerRequest)} ${t("analytics.metric.per_request")}`)}
     ${metric(t("analytics.metric.avg_success_total"), fmtDuration(summary.avg_success_total_ms), t("analytics.metric.avg_success_phases", { connect: fmtDuration(summary.avg_success_connect_ms), ttft: fmtDuration(summary.avg_success_ttft_ms) }))}

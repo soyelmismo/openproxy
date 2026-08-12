@@ -512,6 +512,7 @@ export interface UsageSummary {
   errors: number;
   total_prompt_tokens: number;
   total_completion_tokens: number;
+  total_cached_tokens: number;
   total_cost_usd: number;
   /** `null` cuando ningún row del filtro tiene `ttft_ms`. */
   avg_ttft_ms: number | null;
@@ -541,6 +542,7 @@ export interface RecentUsageRow {
   total_ms: number;
   prompt_tokens: number | null;
   completion_tokens: number | null;
+  cached_tokens: number | null;
   cost_usd: number | null;
   connect_ms: number | null;
   ttft_ms: number | null;

@@ -62,6 +62,7 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { key: "tokens",   label: "Tokens"   },
   { key: "latency",  label: "Latency"  },
   { key: "cost",     label: "Cost"     },
+  { key: "cache",    label: "API Cache"},
   { key: "compression", label: "Compress" },
 ];
 

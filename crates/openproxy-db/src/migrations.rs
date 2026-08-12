@@ -277,6 +277,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000053_add_active_to_combo_targets",
         sql: include_str!("../migrations/000053_add_active_to_combo_targets.sql"),
     },
+    Migration {
+        version: 54,
+        name: "000054_add_cached_tokens",
+        sql: include_str!("../migrations/000054_add_cached_tokens.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

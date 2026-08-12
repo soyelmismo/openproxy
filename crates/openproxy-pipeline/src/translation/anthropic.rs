@@ -345,6 +345,9 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
             prompt_tokens,
             completion_tokens,
             total_tokens,
+            prompt_tokens_details: resp.usage.cache_read_input_tokens.map(|c| openproxy_types::message::PromptTokensDetails {
+                cached_tokens: Some(c),
+            }),
         }),
     }
 }
@@ -594,6 +597,7 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0,
+        prompt_tokens_details: None,
     });
 
     AnthropicResponse {
@@ -606,6 +610,8 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
         usage: AnthropicUsage {
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: usage.prompt_tokens_details.and_then(|d| d.cached_tokens),
         },
     }
 }

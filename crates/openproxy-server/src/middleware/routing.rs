@@ -186,6 +186,7 @@ fn record_model_not_found_usage_row(
         upstream_model_id: upstream_model.to_string(),
         prompt_tokens: None,
         completion_tokens: None,
+        cached_tokens: None,
         connect_ms: None,
         ttft_ms: None,
         total_ms: 0,

@@ -87,12 +87,12 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated\
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-            ?37, ?38, ?39, ?40\
+            ?37, ?38, ?39, ?40, ?41\
          )",
         params![
             request_id,
@@ -147,6 +147,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
             input.proxy_url,
             input.proxy_status,
             input.is_proxy_rotated as i64,
+            input.cached_tokens.map(|c| c as i64),
         ],
     )
     .map_err(crate::error::map_db_error)?;
@@ -163,6 +164,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         total_ms: input.total_ms,
         prompt_tokens: input.prompt_tokens,
         completion_tokens: input.completion_tokens,
+        cached_tokens: input.cached_tokens,
         cost_usd: Some(cost_usd),
         race_lost: input.race_lost,
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),

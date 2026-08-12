@@ -197,6 +197,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         total_ms: input.total_ms,
         prompt_tokens: input.prompt_tokens,
         completion_tokens: input.completion_tokens,
+        cached_tokens: None,
         cost_usd: Some(cost_usd),
         race_lost: input.race_lost,
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),

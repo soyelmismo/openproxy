@@ -15,6 +15,7 @@ pub struct UsageInput {
     pub upstream_model_id: String,
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
     pub connect_ms: Option<u64>,
     pub ttft_ms: Option<u64>,
     pub total_ms: u64,
@@ -115,6 +116,8 @@ pub struct RecentUsageRow {
     pub prompt_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

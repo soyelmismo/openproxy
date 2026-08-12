@@ -54,6 +54,7 @@ pub struct UsageSummary {
     pub errors: u64,
     pub total_prompt_tokens: i64,
     pub total_completion_tokens: i64,
+    pub total_cached_tokens: i64,
     pub total_cost_usd: f64,
     /// `AVG(ttft_ms)` over rows where `ttft_ms IS NOT NULL`. `None` when no
     /// such row exists in the filter.
@@ -85,6 +86,7 @@ pub struct ByModelRow {
     pub winners: u64,
     pub total_prompt_tokens: i64,
     pub total_completion_tokens: i64,
+    pub total_cached_tokens: i64,
     pub total_cost_usd: f64,
     pub avg_compression_savings_pct: Option<f64>,
 }
@@ -102,6 +104,7 @@ pub struct ByProviderRow {
     pub winners: u64,
     pub total_prompt_tokens: u64,
     pub total_completion_tokens: u64,
+    pub total_cached_tokens: u64,
     pub total_cost_usd: f64,
     pub avg_compression_savings_pct: Option<f64>,
 }
@@ -272,6 +275,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)            AS errors, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
              AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
              COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms, \
@@ -303,13 +307,14 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
             let errors: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
             let total_prompt_tokens: i64 = row.get(6)?;
             let total_completion_tokens: i64 = row.get(7)?;
-            let total_cost_usd: f64 = row.get(8)?;
-            let avg_ttft_ms: Option<f64> = row.get(9)?;
-            let avg_total_ms: f64 = row.get(10)?;
-            let rows_with_null_pricing: i64 = row.get::<_, Option<i64>>(11)?.unwrap_or(0);
-            let avg_success_connect_ms: Option<f64> = row.get(12)?;
-            let avg_success_ttft_ms: Option<f64> = row.get(13)?;
-            let avg_success_total_ms: Option<f64> = row.get(14)?;
+            let total_cached_tokens: i64 = row.get(8)?;
+            let total_cost_usd: f64 = row.get(9)?;
+            let avg_ttft_ms: Option<f64> = row.get(10)?;
+            let avg_total_ms: f64 = row.get(11)?;
+            let rows_with_null_pricing: i64 = row.get::<_, Option<i64>>(12)?.unwrap_or(0);
+            let avg_success_connect_ms: Option<f64> = row.get(13)?;
+            let avg_success_ttft_ms: Option<f64> = row.get(14)?;
+            let avg_success_total_ms: Option<f64> = row.get(15)?;
 
             Ok(UsageSummary {
                 unique_requests: as_u64(unique_requests, "unique_requests")?,
@@ -320,6 +325,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
                 errors: as_u64(errors, "errors")?,
                 total_prompt_tokens,
                 total_completion_tokens,
+                total_cached_tokens,
                 total_cost_usd,
                 avg_ttft_ms,
                 avg_total_ms,
@@ -327,7 +333,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
                 avg_success_ttft_ms,
                 avg_success_total_ms,
                 rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
-                avg_compression_savings_pct: row.get(15)?,
+                avg_compression_savings_pct: row.get(16)?,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -347,6 +353,7 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd, \
              AVG(compression_savings_pct)                     AS avg_compression_savings_pct \
          FROM usage {} \
@@ -369,7 +376,8 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
             let winners: i64 = row.get(4)?;
             let total_prompt_tokens: i64 = row.get(5)?;
             let total_completion_tokens: i64 = row.get(6)?;
-            let total_cost_usd: f64 = row.get(7)?;
+            let total_cached_tokens: i64 = row.get(7)?;
+            let total_cost_usd: f64 = row.get(8)?;
 
             Ok(ByModelRow {
                 provider_id: ProviderId::new(provider_id),
@@ -379,8 +387,9 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
                 winners: as_u64(winners, "winners")?,
                 total_prompt_tokens,
                 total_completion_tokens,
+                total_cached_tokens,
                 total_cost_usd,
-                avg_compression_savings_pct: row.get(8)?,
+                avg_compression_savings_pct: row.get(9)?,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -405,6 +414,7 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd, \
              AVG(compression_savings_pct)                     AS avg_compression_savings_pct \
          FROM usage {} \
@@ -426,7 +436,8 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
             let winners: i64 = row.get(3)?;
             let total_prompt_tokens: i64 = row.get(4)?;
             let total_completion_tokens: i64 = row.get(5)?;
-            let total_cost_usd: f64 = row.get(6)?;
+            let total_cached_tokens: i64 = row.get(6)?;
+            let total_cost_usd: f64 = row.get(7)?;
 
             Ok(ByProviderRow {
                 provider_id,
@@ -438,8 +449,9 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
                     total_completion_tokens,
                     "total_completion_tokens",
                 )?,
+                total_cached_tokens: as_u64(total_cached_tokens, "total_cached_tokens")?,
                 total_cost_usd,
-                avg_compression_savings_pct: row.get(7)?,
+                avg_compression_savings_pct: row.get(8)?,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -844,7 +856,7 @@ pub fn recent(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
              FROM usage \
              WHERE id > ?1 \
              ORDER BY id ASC \
@@ -926,6 +938,8 @@ pub fn recent(
             let proxy_status: Option<String> = row.get(col_idx)?;
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let cached_tokens: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -957,6 +971,7 @@ pub fn recent(
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
+            let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
@@ -967,6 +982,7 @@ pub fn recent(
                 total_ms: total_ms as u64,
                 prompt_tokens,
                 completion_tokens,
+                cached_tokens,
                 cost_usd,
                 connect_ms: connect_ms.map(|v| v as u64),
                 ttft_ms: ttft_ms.map(|v| v as u64),
@@ -1028,7 +1044,7 @@ pub fn recent_desc(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
              FROM usage \
              ORDER BY id DESC \
              LIMIT ?1",
@@ -1109,6 +1125,8 @@ pub fn recent_desc(
             let proxy_status: Option<String> = row.get(col_idx)?;
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let cached_tokens: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1140,6 +1158,7 @@ pub fn recent_desc(
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
+            let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
 
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
@@ -1151,6 +1170,7 @@ pub fn recent_desc(
                 total_ms: total_ms as u64,
                 prompt_tokens,
                 completion_tokens,
+                cached_tokens,
                 cost_usd,
                 connect_ms: connect_ms.map(|v| v as u64),
                 ttft_ms: ttft_ms.map(|v| v as u64),
@@ -1207,7 +1227,7 @@ pub fn row_for_broadcast_by_id(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1287,6 +1307,8 @@ pub fn row_for_broadcast_by_id(
             let proxy_status: Option<String> = row.get(col_idx)?;
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let cached_tokens: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1308,6 +1330,7 @@ pub fn row_for_broadcast_by_id(
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
+            let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
@@ -1318,6 +1341,7 @@ pub fn row_for_broadcast_by_id(
                 total_ms: total_ms as u64,
                 prompt_tokens,
                 completion_tokens,
+                cached_tokens,
                 cost_usd,
                 connect_ms: connect_ms.map(|v| v as u64),
                 ttft_ms: ttft_ms.map(|v| v as u64),

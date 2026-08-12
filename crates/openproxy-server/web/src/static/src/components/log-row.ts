@@ -95,6 +95,14 @@ function buildLogRowCells(
     }
   }
   
+  if (has("cache")) {
+    if (row && row.cached_tokens != null && row.cached_tokens > 0) {
+      cells.push(html`<span class="log-cache" style="color: var(--color-success);" title="${formatContext(row.cached_tokens)} tokens cached by upstream API">🎯 ${formatContext(row.cached_tokens)}</span>`);
+    } else {
+      cells.push(html`<span class="log-cache">—</span>`);
+    }
+  }
+  
   if (has("compression")) {
     const savings = row ? row.compression_savings_pct : null;
     if (savings != null && savings > 0) {

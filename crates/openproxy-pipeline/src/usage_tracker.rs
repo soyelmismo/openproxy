@@ -100,6 +100,7 @@ impl UsageTracker {
             upstream_model_id: req.openai_request.model.clone(),
             prompt_tokens: None,
             completion_tokens: None,
+            cached_tokens: None,
             connect_ms: None,
             ttft_ms: None,
             total_ms: started.elapsed().as_millis() as u64,
@@ -220,6 +221,7 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) trace_id: String,
     pub(crate) prompt_tokens: Option<u32>,
     pub(crate) completion_tokens: Option<u32>,
+    pub(crate) cached_tokens: Option<u32>,
     pub(crate) response_body_json: Option<serde_json::Value>,
     pub(crate) request_headers: Option<std::collections::BTreeMap<String, String>>,
     pub(crate) response_headers: Option<std::collections::BTreeMap<String, String>>,
@@ -255,6 +257,7 @@ impl<'a> UsageRecordBuilder<'a> {
             trace_id: req.trace_id.to_string(),
             prompt_tokens: None,
             completion_tokens: None,
+            cached_tokens: None,
             response_body_json: None,
             request_headers: None,
             response_headers: None,
@@ -314,6 +317,11 @@ impl<'a> UsageRecordBuilder<'a> {
     }
     pub fn prompt_tokens_opt(mut self, prompt_tokens: Option<u32>) -> Self {
         self.prompt_tokens = prompt_tokens;
+        self
+    }
+    
+    pub fn cached_tokens(mut self, cached_tokens: Option<u32>) -> Self {
+        self.cached_tokens = cached_tokens;
         self
     }
     pub fn completion_tokens_opt(mut self, completion_tokens: Option<u32>) -> Self {
@@ -437,6 +445,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 .unwrap_or_default(),
             prompt_tokens,
             completion_tokens,
+            cached_tokens: self.cached_tokens,
             connect_ms: self.connect_ms,
             ttft_ms: self.ttft_ms,
             total_ms: self.total_ms,

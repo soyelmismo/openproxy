@@ -1056,6 +1056,7 @@ impl UpstreamDispatcher {
 
         let prompt_tokens = openai_response.usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = openai_response.usage.as_ref().map(|u| u.completion_tokens);
+        let cached_tokens = openai_response.usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref()).and_then(|d| d.cached_tokens);
 
         // Record the successful attempt and return.
         let total_ms_now = started.elapsed().as_millis() as u64;
@@ -1085,9 +1086,10 @@ impl UpstreamDispatcher {
         .status_code(status_code)
         .attempt(attempt)
         .race_size(race_size)
-        .trace_id(trace_id)
+        .trace_id(trace_id.to_string())
         .prompt_tokens_opt(prompt_tokens)
         .completion_tokens_opt(completion_tokens)
+        .cached_tokens(cached_tokens)
         .response_body_json(Some(response_body_value))
         .request_headers(Some(request_headers_btm))
         .response_headers(response_headers)
@@ -1889,6 +1891,7 @@ impl UpstreamDispatcher {
         // closed.
         let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = usage.as_ref().map(|u| u.completion_tokens);
+        let cached_tokens = usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref()).and_then(|d| d.cached_tokens);
         // G1 fix: assemble the persisted response body. The accumulator
         // is `Some(_)` only when `is_recording() == true` at function
         // entry, so when recording is OFF the only cost is a single
@@ -1923,9 +1926,10 @@ impl UpstreamDispatcher {
         .status_code(status_code)
         .attempt(attempt)
         .race_size(race_size)
-        .trace_id(trace_id)
+        .trace_id(trace_id.to_string())
         .prompt_tokens_opt(prompt_tokens)
         .completion_tokens_opt(completion_tokens)
+        .cached_tokens(cached_tokens)
         .response_body_json(response_body_json.clone())
         .request_headers(None)
         .response_headers(None)

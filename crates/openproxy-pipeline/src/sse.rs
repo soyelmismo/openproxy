@@ -231,6 +231,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
             .try_into()
             .unwrap_or(u32::MAX),
         total_tokens: u.total_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+        prompt_tokens_details: None,
     });
     // o1-style reasoning models (o1, o3, deepseek-r1) emit
     // `delta.reasoning_content` on chunks that also carry `usage`
@@ -479,6 +480,7 @@ pub fn parse_gemini_sse_line(
             prompt_tokens: u.prompt_tokens?.try_into().unwrap_or(u32::MAX),
             completion_tokens: u.completion_tokens?.try_into().unwrap_or(u32::MAX),
             total_tokens: u.total_tokens?.try_into().unwrap_or(u32::MAX),
+            prompt_tokens_details: None,
         })
     });
 
@@ -709,6 +711,7 @@ pub fn translate_anthropic_sse_payload(
                         .try_into()
                         .unwrap_or(u32::MAX),
                     total_tokens: 0, // Will be computed
+                    prompt_tokens_details: None,
                 }
             });
 
