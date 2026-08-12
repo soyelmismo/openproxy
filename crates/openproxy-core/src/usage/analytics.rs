@@ -60,6 +60,12 @@ pub struct UsageSummary {
     pub avg_ttft_ms: Option<f64>,
     /// `AVG(total_ms)` over all rows in the filter.
     pub avg_total_ms: f64,
+    /// `AVG(connect_ms)` for successful requests (status_code < 400).
+    pub avg_success_connect_ms: Option<f64>,
+    /// `AVG(ttft_ms)` for successful requests (status_code < 400).
+    pub avg_success_ttft_ms: Option<f64>,
+    /// `AVG(total_ms)` for successful requests (status_code < 400).
+    pub avg_success_total_ms: Option<f64>,
     /// Rows where `cost_usd = 0.0 AND prompt_tokens > 0` — i.e. the row
     /// consumed tokens (so pricing should have applied) but the cost column
     /// is zero, meaning pricing was missing at record time. Surfaces
@@ -265,7 +271,10 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
              AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
              COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms, \
-             SUM(CASE WHEN cost_usd = 0.0 AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing \
+             SUM(CASE WHEN cost_usd = 0.0 AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing, \
+             AVG(connect_ms) FILTER (WHERE status_code < 400 AND connect_ms IS NOT NULL) AS avg_success_connect_ms, \
+             AVG(ttft_ms) FILTER (WHERE status_code < 400 AND ttft_ms IS NOT NULL) AS avg_success_ttft_ms, \
+             AVG(total_ms) FILTER (WHERE status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms \
          FROM usage {}",
         w.sql,
     );
@@ -293,6 +302,9 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
             let avg_ttft_ms: Option<f64> = row.get(9)?;
             let avg_total_ms: f64 = row.get(10)?;
             let rows_with_null_pricing: i64 = row.get::<_, Option<i64>>(11)?.unwrap_or(0);
+            let avg_success_connect_ms: Option<f64> = row.get(12)?;
+            let avg_success_ttft_ms: Option<f64> = row.get(13)?;
+            let avg_success_total_ms: Option<f64> = row.get(14)?;
 
             Ok(UsageSummary {
                 unique_requests: as_u64(unique_requests, "unique_requests")?,
@@ -306,6 +318,9 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
                 total_cost_usd,
                 avg_ttft_ms,
                 avg_total_ms,
+                avg_success_connect_ms,
+                avg_success_ttft_ms,
+                avg_success_total_ms,
                 rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
             })
         })

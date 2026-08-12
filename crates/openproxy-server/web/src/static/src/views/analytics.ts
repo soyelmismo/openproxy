@@ -535,6 +535,7 @@ function renderMetrics(): TemplateResult {
     ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(buckets.s4xx + buckets.s5xx)} ${t("analytics.metric.failed_responses")}`, successTone)}
     ${metric(t("analytics.metric.tokens"), fmtNumber(totalTokens), `${fmtNumber(summary.total_prompt_tokens)} in · ${fmtNumber(summary.total_completion_tokens)} out`)}
     ${metric(t("analytics.summary.total_cost"), fmtCost(summary.total_cost_usd), `${fmtCost(costPerRequest)} ${t("analytics.metric.per_request")}`)}
+    ${metric(t("analytics.metric.avg_success_total"), fmtDuration(summary.avg_success_total_ms), t("analytics.metric.avg_success_phases", { connect: fmtDuration(summary.avg_success_connect_ms), ttft: fmtDuration(summary.avg_success_ttft_ms) }))}
     ${metric(t("analytics.metric.avg_ttft"), fmtDuration(summary.avg_ttft_ms), `${fmtDuration(summary.avg_total_ms)} ${t("analytics.metric.avg_total")}`)}
     ${metric(t("analytics.metric.p95_latency"), fmtDuration(p95Total), `${fmtNumber(latency?.samples ?? 0)} ${t("analytics.metric.successful_samples")}`)}
   </div>`;

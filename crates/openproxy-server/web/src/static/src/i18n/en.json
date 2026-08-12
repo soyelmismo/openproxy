@@ -178,6 +178,8 @@
   "analytics.metric.per_request": "per request",
   "analytics.metric.avg_ttft": "Average TTFT",
   "analytics.metric.avg_total": "average total",
+  "analytics.metric.avg_success_total": "Average success total",
+  "analytics.metric.avg_success_phases": "conn: {{connect}} · ttft: {{ttft}}",
   "analytics.metric.p95_latency": "p95 total latency",
   "analytics.metric.successful_samples": "successful samples",
   "analytics.metric.generation_speed": "Generation speed",

@@ -514,6 +514,9 @@ export interface UsageSummary {
   /** `null` cuando ningún row del filtro tiene `ttft_ms`. */
   avg_ttft_ms: number | null;
   avg_total_ms: number;
+  avg_success_connect_ms: number | null;
+  avg_success_ttft_ms: number | null;
+  avg_success_total_ms: number | null;
   /** Rows where `cost_usd = 0.0 AND prompt_tokens > 0` — consumieron
    *  tokens (el pricing debería haber aplicado) pero cost quedó en 0,
    *  indicando pricing faltante al grabar. El dashboard lo surfacea

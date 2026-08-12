@@ -156,6 +156,31 @@ impl ProviderAdapter for AntigravityAdapter {
         None
     }
 
+    fn format_request(
+        &self,
+        _target_format: TargetFormat,
+        req: &openproxy_types::OpenAIRequest,
+        _model: &ModelId,
+        messages: &[openproxy_types::OpenAIMessage],
+        _stream: bool,
+    ) -> std::result::Result<bytes::Bytes, CoreError> {
+        let gemini_req = crate::adapters::gemini::openai_to_gemini(req, messages);
+        serde_json::to_vec(&gemini_req)
+            .map(bytes::Bytes::from)
+            .map_err(|e| CoreError::Parse(format!("serialize antigravity gemini request: {}", e)))
+    }
+
+    fn translate_non_streaming_response(
+        &self,
+        _target_format: TargetFormat,
+        response_body: serde_json::Value,
+    ) -> std::result::Result<openproxy_types::OpenAIResponse, CoreError> {
+        let gemini_resp: crate::adapters::gemini::GeminiResponse =
+            <crate::adapters::gemini::GeminiResponse as serde::Deserialize>::deserialize(&response_body)
+                .map_err(|e| CoreError::Parse(format!("parse antigravity gemini response: {e}")))?;
+        Ok(crate::adapters::gemini::gemini_to_openai(&gemini_resp))
+    }
+
     fn build_headers(
         &self,
         api_key: &str,
