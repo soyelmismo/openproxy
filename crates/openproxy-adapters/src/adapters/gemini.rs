@@ -458,4 +458,43 @@ mod tests {
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.data, "iVBORw0KGgo=");
     }
+
+    #[test]
+    fn test_gemini_to_openai_standard() {
+        let resp = GeminiResponse {
+            candidates: vec![GeminiCandidate {
+                content: Some(GeminiContent {
+                    role: "model".to_string(),
+                    parts: vec![GeminiPart {
+                        text: Some("Hello from Gemini".to_string()),
+                        inline_data: None,
+                    }],
+                }),
+                finish_reason: Some("STOP".to_string()),
+            }],
+            usage_metadata: Some(GeminiUsageMetadata {
+                prompt_token_count: 10,
+                candidates_token_count: 20,
+                total_token_count: 30,
+            }),
+            response: None,
+        };
+
+        let openai_resp = gemini_to_openai(&resp);
+        assert_eq!(openai_resp.object, "chat.completion");
+        assert_eq!(openai_resp.choices.len(), 1);
+
+        let choice = &openai_resp.choices[0];
+        assert_eq!(choice.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(choice.message.role, "assistant");
+        assert_eq!(
+            choice.message.content.as_ref().unwrap().as_str().unwrap(),
+            "Hello from Gemini"
+        );
+
+        let usage = openai_resp.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.total_tokens, 30);
+    }
 }
