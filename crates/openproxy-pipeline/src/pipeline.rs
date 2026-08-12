@@ -207,7 +207,7 @@ pub fn is_upstream_health_issue(err: &CoreError) -> bool {
         CoreError::UpstreamTimeout { phase, .. } => phase != "idle_chunk",
         CoreError::UpstreamConnection(_) => true,
         CoreError::RateLimited { .. } => true,
-        CoreError::UpstreamError { status, .. } => *status >= 500,
+        CoreError::UpstreamError { status, .. } => *status >= 500 || *status == 429,
         _ => false,
     }
 }

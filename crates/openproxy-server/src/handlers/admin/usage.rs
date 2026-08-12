@@ -149,7 +149,12 @@ pub async fn usage_recent(
     // from the WS/REST surface — they can be multi-MB and would
     // fan out PII to every dashboard subscriber. The detail
     // endpoint reads them straight from the database on demand.
-    let rows = core_usage::recent(&r, since_id, limit)?
+    let rows = if since_id == 0 {
+        core_usage::recent_desc(&r, limit)?
+    } else {
+        core_usage::recent(&r, since_id, limit)?
+    };
+    let rows: Vec<_> = rows
         .into_iter()
         .map(openproxy_types::usage::redact_for_broadcast)
         .collect();

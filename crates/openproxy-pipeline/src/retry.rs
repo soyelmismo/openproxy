@@ -63,8 +63,12 @@ impl RetryPolicy {
                 let msg = err.to_string();
                 !msg.starts_with("client disconnected")
             }
-            RateLimited { .. } => true,
-            UpstreamError { .. } => true,
+            RateLimited { is_proxy_rotated, .. } => *is_proxy_rotated,
+            UpstreamError { status, .. } => {
+                // 429 is not retryable locally unless the proxy rotates (which is handled by RateLimited).
+                // If it slips through as UpstreamError, we don't want to retry the same target.
+                *status != 429
+            }
             Cancelled(_) => false,
             RaceLost => false,
             _ => true,
