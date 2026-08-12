@@ -253,6 +253,7 @@ mod tests {
             upstream_model_id: "openai/gpt-4o".to_string(),
             prompt_tokens: Some(1000),
             completion_tokens: Some(500),
+            cached_tokens: None,
             connect_ms: Some(100),
             ttft_ms: Some(200),
             total_ms: 1200,

@@ -31,11 +31,24 @@ pub fn normalize_model_id(id: &str) -> String {
     // 1. Strip provider prefix — take the last segment after any '/'.
     let s: &str = id.rsplit('/').next().unwrap_or(id);
 
-    // 2. Strip free suffixes (order matters: longest first).
+    // 2. Strip free and tier/preset suffixes.
     let s: &str = s
         .trim_end_matches("-free-trial")
         .trim_end_matches("-free")
-        .trim_end_matches(":free");
+        .trim_end_matches(":free")
+        .trim_end_matches("-low")
+        .trim_end_matches("-high")
+        .trim_end_matches("-medium")
+        .trim_end_matches("-tiered")
+        .trim_end_matches("-thinking")
+        .trim_end_matches("-agent")
+        .trim_end_matches("-preset")
+        .trim_end_matches("-fast")
+        .trim_end_matches("-turbo")
+        .trim_end_matches(":thinking")
+        .trim_end_matches(":online")
+        .trim_end_matches(":extended")
+        .trim_end_matches(":nitro");
 
     // Replace colon with dash (converts tags/versions to canonical model id form)
     let s = s.replace(":", "-");

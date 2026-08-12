@@ -280,8 +280,9 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
     if let Some(p) = lookup_exact_in_db(conn, provider, model) {
         return Some(p);
     }
-    for stripped in strip_free_suffixes(model) {
-        if let Some(p) = lookup_exact_in_db(conn, provider, &stripped) {
+    let candidates = strip_model_suffixes(model);
+    for stripped in &candidates {
+        if let Some(p) = lookup_exact_in_db(conn, provider, stripped) {
             return Some(p);
         }
     }
@@ -297,7 +298,21 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
     if let Some(p) = lookup_by_normalized(conn, &normalized) {
         return Some(p);
     }
-    lookup(provider, model)
+    for stripped in &candidates {
+        let norm = normalize_model_id(stripped);
+        if let Some(p) = lookup_by_normalized(conn, &norm) {
+            return Some(p);
+        }
+    }
+    if let Some(p) = lookup(provider, model) {
+        return Some(p);
+    }
+    for stripped in &candidates {
+        if let Some(p) = lookup(provider, stripped) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
@@ -341,34 +356,56 @@ pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price
     })
 }
 
-fn strip_free_suffixes(model: &str) -> Vec<String> {
-    let suffixes = ["-free-trial", "-free", ":free"];
-    suffixes
-        .iter()
-        .filter_map(|s| {
-            model
-                .strip_suffix(s)
-                .filter(|stripped| !stripped.is_empty())
-                .map(|stripped| stripped.to_string())
-        })
-        .collect()
+fn strip_model_suffixes(model: &str) -> Vec<String> {
+    let suffixes = [
+        "-free-trial",
+        "-free",
+        ":free",
+        "-low",
+        "-high",
+        "-medium",
+        "-tiered",
+        "-thinking",
+        "-agent",
+        "-preset",
+        "-fast",
+        "-turbo",
+        ":thinking",
+        ":online",
+        ":extended",
+        ":nitro",
+    ];
+    let mut results = Vec::new();
+    let mut current = model;
+
+    while let Some(stripped) = suffixes.iter().find_map(|s| {
+        current
+            .strip_suffix(s)
+            .filter(|rem| !rem.is_empty() && *rem != current)
+    }) {
+        results.push(stripped.to_string());
+        current = stripped;
+    }
+
+    results
 }
 
-pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {
-    let price = match price {
-        Some(p) => p,
-        None => return 0.0,
-    };
+pub fn compute_cost_opt(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> Option<f64> {
+    let price = price?;
     match price.kind.as_str() {
         "audio" => {
             let seconds = prompt_tokens as f64 / 1000.0;
-            price.input_per_1m * seconds / 1_000_000.0
+            Some(price.input_per_1m * seconds / 1_000_000.0)
         }
-        "image" => price.input_per_1m * prompt_tokens as f64 / 1_000_000.0,
+        "image" => Some(price.input_per_1m * prompt_tokens as f64 / 1_000_000.0),
         _ => {
             let input_cost = price.input_per_1m * (prompt_tokens as f64) / 1_000_000.0;
             let output_cost = price.output_per_1m * (completion_tokens as f64) / 1_000_000.0;
-            input_cost + output_cost
+            Some(input_cost + output_cost)
         }
     }
+}
+
+pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {
+    compute_cost_opt(price, prompt_tokens, completion_tokens).unwrap_or(0.0)
 }

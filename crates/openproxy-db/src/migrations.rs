@@ -282,6 +282,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000054_add_cached_tokens",
         sql: include_str!("../migrations/000054_add_cached_tokens.sql"),
     },
+    Migration {
+        version: 55,
+        name: "000055_fix_null_pricing",
+        sql: include_str!("../migrations/000055_fix_null_pricing.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.
@@ -349,6 +354,8 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         version: 0,
         message: format!("commit: {}", e),
     })?;
+
+    let _ = crate::cost::backfill_usage_pricing(conn);
 
     if needs_fk_off {
         conn.execute_batch("PRAGMA foreign_keys = ON")

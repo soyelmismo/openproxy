@@ -279,7 +279,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
              AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
              COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms, \
-             SUM(CASE WHEN cost_usd = 0.0 AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing, \
+             SUM(CASE WHEN cost_usd IS NULL AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing, \
              AVG(connect_ms) FILTER (WHERE status_code < 400 AND connect_ms IS NOT NULL) AS avg_success_connect_ms, \
              AVG(ttft_ms) FILTER (WHERE status_code < 400 AND ttft_ms IS NOT NULL) AS avg_success_ttft_ms, \
              AVG(total_ms) FILTER (WHERE status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms, \

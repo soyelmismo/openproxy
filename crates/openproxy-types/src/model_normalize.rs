@@ -10,7 +10,20 @@ pub fn normalize_model_id(id: &str) -> String {
     let s: &str = s
         .trim_end_matches("-free-trial")
         .trim_end_matches("-free")
-        .trim_end_matches(":free");
+        .trim_end_matches(":free")
+        .trim_end_matches("-low")
+        .trim_end_matches("-high")
+        .trim_end_matches("-medium")
+        .trim_end_matches("-tiered")
+        .trim_end_matches("-thinking")
+        .trim_end_matches("-agent")
+        .trim_end_matches("-preset")
+        .trim_end_matches("-fast")
+        .trim_end_matches("-turbo")
+        .trim_end_matches(":thinking")
+        .trim_end_matches(":online")
+        .trim_end_matches(":extended")
+        .trim_end_matches(":nitro");
 
     let s = s.replace(":", "-");
 

@@ -4,8 +4,8 @@ use openproxy_types::ids::UsageId;
 use openproxy_types::usage::{RecentUsageRow, UsageInput, publish_usage_row};
 use rusqlite::{Connection, params};
 
-pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Option<f64>) {
-    let cost = pricing::compute_cost(
+pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64>, Option<f64>) {
+    let cost = pricing::compute_cost_opt(
         price,
         input.prompt_tokens.unwrap_or(0),
         input.completion_tokens.unwrap_or(0),
@@ -61,14 +61,14 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         tracing::warn!(
             provider_id = %input.provider_id,
             upstream_model_id = %input.upstream_model_id,
-            "no pricing data found; recording cost_usd = 0 (run models.dev sync or set pricing manually)"
+            "no pricing data found; recording cost_usd = NULL (run models.dev sync or set pricing manually)"
         );
     }
     let (cost_usd, tps) = compute(price, input);
     let (error_msg_for_db, error_msg_redacted_for_db) = match &input.error_msg {
         Some(msg) => {
             let (sanitized, _redacted) = redact_error_msg(msg);
-            (Some(sanitized.clone()), Some(sanitized))
+            (Some(sanitized), Some(_redacted))
         }
         None => (None, None),
     };
@@ -126,15 +126,13 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
                 .response_body_json
                 .as_ref()
                 .and_then(|j| serde_json::to_string(j).ok()),
-            input
-                .request_headers
-                .as_ref()
-                .and_then(|h| serde_json::to_string(h).ok()),
-            input
-                .response_headers
-                .as_ref()
-                .and_then(|h| serde_json::to_string(h).ok()),
-            error_msg_redacted_for_db.clone(),
+            input.request_headers.as_ref().and_then(|h| {
+                serde_json::to_string(h).ok()
+            }),
+            input.response_headers.as_ref().and_then(|h| {
+                serde_json::to_string(h).ok()
+            }),
+            input.error_message,
             input.is_streaming as i64,
             input.stream_complete as i64,
             input.stop_reason,
@@ -165,7 +163,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         prompt_tokens: input.prompt_tokens,
         completion_tokens: input.completion_tokens,
         cached_tokens: input.cached_tokens,
-        cost_usd: Some(cost_usd),
+        cost_usd,
         race_lost: input.race_lost,
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         connect_ms: input.connect_ms,
@@ -174,7 +172,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         response_body_json: None,
         request_headers: None,
         response_headers: None,
-        error_message: error_msg_redacted_for_db.clone(),
+        error_message: error_msg_redacted_for_db,
         race_total: Some(input.race_total),
         race_attempts: Some(input.race_attempts),
         is_streaming: input.is_streaming,
@@ -193,6 +191,56 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     publish_usage_row(row);
 
     Ok(UsageId(rowid))
+}
+
+pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usize> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT provider_id, upstream_model_id \
+             FROM usage \
+             WHERE prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+        )
+        .map_err(crate::error::map_db_error)?;
+
+    let pairs: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(crate::error::map_db_error)?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut total_updated = 0;
+    for (provider_id, upstream_model_id) in pairs {
+        let price = pricing::lookup_with_db(conn, &provider_id, &upstream_model_id);
+        match price {
+            Some(p) => {
+                let count = conn
+                    .execute(
+                        "UPDATE usage \
+                         SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
+                                        (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
+                         WHERE provider_id = ?3 AND upstream_model_id = ?4 \
+                           AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                        params![p.input_per_1m, p.output_per_1m, provider_id, upstream_model_id],
+                    )
+                    .map_err(crate::error::map_db_error)?;
+                total_updated += count;
+            }
+            None => {
+                let count = conn
+                    .execute(
+                        "UPDATE usage \
+                         SET cost_usd = NULL \
+                         WHERE provider_id = ?1 AND upstream_model_id = ?2 \
+                           AND prompt_tokens > 0 AND cost_usd = 0.0",
+                        params![provider_id, upstream_model_id],
+                    )
+                    .map_err(crate::error::map_db_error)?;
+                total_updated += count;
+            }
+        }
+    }
+
+    Ok(total_updated)
 }
 #[cfg(test)]
 mod tests {
@@ -262,10 +310,11 @@ mod tests {
             proxy_url: None,
             proxy_status: None,
             is_proxy_rotated: false,
+            cached_tokens: None,
         };
 
         let (cost, tps) = compute(Some(price), &input);
-        assert_eq!(cost, 0.0005); // 100 * 1.0/1M + 200 * 2.0/1M = 0.0001 + 0.0004 = 0.0005
+        assert_eq!(cost, Some(0.0005)); // 100 * 1.0/1M + 200 * 2.0/1M = 0.0001 + 0.0004 = 0.0005
         assert_eq!(tps, Some(200.0)); // 200 tokens / (1100ms - 100ms) * 1000 = 200.0
 
         // Test with None TTFT
@@ -350,6 +399,7 @@ mod tests {
             proxy_url: None,
             proxy_status: None,
             is_proxy_rotated: false,
+            cached_tokens: None,
         };
 
         let result = record(&conn, &input);
