@@ -534,7 +534,7 @@ function renderMetrics(): TemplateResult {
     ${metric(t("analytics.summary.unique_requests"), fmtNumber(summary.unique_requests), `${fmtNumber(summary.total_attempts)} ${t("analytics.metric.attempts")}`)}
     ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(buckets.s4xx + buckets.s5xx)} ${t("analytics.metric.failed_responses")}`, successTone)}
     ${metric(t("analytics.metric.tokens"), fmtNumber(totalTokens), `${fmtNumber(summary.total_prompt_tokens)} in · ${fmtNumber(summary.total_completion_tokens)} out`)}
-    ${metric("Cache Hit Rate", fmtPercent((summary.avg_compression_savings_pct ?? 0) / 100), "Avg token savings when active", "is-good")}
+    ${metric("Local Compression", fmtPercent((summary.avg_compression_savings_pct ?? 0) / 100), "Avg token savings when active", "is-good")}
     ${metric(t("analytics.summary.total_cost"), fmtCost(summary.total_cost_usd), `${fmtCost(costPerRequest)} ${t("analytics.metric.per_request")}`)}
     ${metric(t("analytics.metric.avg_success_total"), fmtDuration(summary.avg_success_total_ms), t("analytics.metric.avg_success_phases", { connect: fmtDuration(summary.avg_success_connect_ms), ttft: fmtDuration(summary.avg_success_ttft_ms) }))}
     ${metric(t("analytics.metric.avg_ttft"), fmtDuration(summary.avg_ttft_ms), `${fmtDuration(summary.avg_total_ms)} ${t("analytics.metric.avg_total")}`)}
@@ -651,7 +651,7 @@ function renderRaceBlock(): TemplateResult {
 function renderByModelTable(): TemplateResult {
   const body = byModel.length
     ? html`<div class="analytics-table-wrap"><table>
-        <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.metric.tokens")}</th><th class="num">Cache Hit</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
+        <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.metric.tokens")}</th><th class="num">Local Compress</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
         <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td class="analytics-model-cell" title=${r.upstream_model_id}>${r.upstream_model_id}</td><td class="num">${fmtNumber(r.unique_requests)}</td><td class="num">${fmtNumber(r.total_prompt_tokens + r.total_completion_tokens)}</td><td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${Math.round(r.avg_compression_savings_pct)}%` : "—"}</td><td class="num">${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
       </table></div>`
     : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
@@ -661,7 +661,7 @@ function renderByModelTable(): TemplateResult {
 function renderByProviderTable(): TemplateResult {
   const body = byProvider.length
     ? html`<div class="analytics-table-wrap"><table>
-        <thead><tr><th>${t("analytics.table.col_provider")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.table.col_total")}</th><th class="num">${t("analytics.table.col_winners")}</th><th class="num">${t("analytics.table.col_prompt_tok")}</th><th class="num">${t("analytics.table.col_completion_tok")}</th><th class="num">Cache Hit</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
+        <thead><tr><th>${t("analytics.table.col_provider")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.table.col_total")}</th><th class="num">${t("analytics.table.col_winners")}</th><th class="num">${t("analytics.table.col_prompt_tok")}</th><th class="num">${t("analytics.table.col_completion_tok")}</th><th class="num">Local Compress</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
         <tbody>${byProvider.map((r) => html`<tr>
           <td>${r.provider_id}</td>
           <td class="num">${fmtNumber(r.unique_requests)}</td>
