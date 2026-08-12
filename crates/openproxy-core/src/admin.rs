@@ -589,9 +589,6 @@ pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboI
     // change it without revisiting `pipeline.rs` step 5.
     let race_size = input.race_size.unwrap_or(1);
     let combo_id = combos::create_combo(conn, &input.name, strategy, race_size)?;
-    // Best-effort auto-fill. Errors are non-fatal: the combo exists
-    // already, and a later pipeline run can re-attempt the fill.
-    let _ = openproxy_pipeline::repository::auto_populate_empty_combo(conn, combo_id);
 
     // Apply the migration-000035 per-combo overrides. Each helper
     // validates its inputs (e.g. `priority_mode` must be a known

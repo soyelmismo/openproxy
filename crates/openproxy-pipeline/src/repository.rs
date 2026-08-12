@@ -1091,55 +1091,8 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
     Ok(res)
 }
 
-pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<usize> {
-    let provider_id: Option<String> = conn.query_row(
-            "SELECT p.id FROM providers p \
-             WHERE p.active = 1 AND p.id != 'virtual' \
-             AND EXISTS (SELECT 1 FROM accounts a WHERE a.provider_id = p.id AND a.health_status = 'healthy') \
-             AND EXISTS (SELECT 1 FROM models m WHERE m.provider_id = p.id AND m.active = 1) \
-             ORDER BY p.id ASC LIMIT 1",
-            [],
-            |row| row.get(0)
-        ).unwrap_or(None);
-
-    if let Some(pid) = provider_id {
-        let mut added = 0;
-        let mut stmt = conn
-            .prepare("SELECT id FROM models WHERE provider_id = ?1 AND active = 1")
-            .map_err(|e| openproxy_types::error::CoreError::Database {
-                message: "prepare models".into(),
-                source: Some(Box::new(e)),
-            })?;
-        let mut rows = stmt.query(rusqlite::params![pid]).map_err(|e| {
-            openproxy_types::error::CoreError::Database {
-                message: "query models".into(),
-                source: Some(Box::new(e)),
-            }
-        })?;
-        while let Some(r) =
-            rows.next()
-                .map_err(|e| openproxy_types::error::CoreError::Database {
-                    message: "next model".into(),
-                    source: Some(Box::new(e)),
-                })?
-        {
-            let mid =
-                r.get::<_, i64>(0)
-                    .map_err(|e| openproxy_types::error::CoreError::Database {
-                        message: "get mid".into(),
-                        source: Some(Box::new(e)),
-                    })?;
-            let res = conn.execute(
-                    "INSERT OR IGNORE INTO combo_targets(combo_id, provider_id, model_row_id, priority_order, weight) \
-                     VALUES (?1, ?2, ?3, ?4, 100)",
-                    rusqlite::params![combo_id.0, pid, mid, mid]
-                ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert combo_targets".into(), source: Some(Box::new(e)) })?;
-            added += res;
-        }
-        Ok(added)
-    } else {
-        Ok(0)
-    }
+pub fn auto_populate_empty_combo(_conn: &rusqlite::Connection, _combo_id: ComboId) -> Result<usize> {
+    Ok(0)
 }
 
 pub fn expand_account_rotation(

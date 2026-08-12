@@ -430,52 +430,9 @@ async fn auto_populate_fills_combo_then_runs() {
     let (req, _dis_tx) = make_request(combo_id);
     let result = p.run(req).await;
 
-    // The combo was auto-populated. The pipeline's `execute_single`
-    // would normally dispatch to a real adapter; with an empty
-    // adapter registry it falls through to a 500-ish failure
-    // (no adapter). The key invariant is: NOT NoHealthyTargets.
-    if let Some(CoreError::NoHealthyTargets(_)) = &result.error {
-        let writer = pool.writer();
-        let combo_targets: Vec<(i64, String, Option<i64>, Option<i64>)> = writer
-            .prepare("SELECT id, provider_id, account_id, model_row_id FROM combo_targets")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect();
-        let providers: Vec<(String, i64)> = writer
-            .prepare("SELECT id, active FROM providers")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect();
-        let accounts: Vec<(i64, String, String)> = writer
-            .prepare("SELECT id, provider_id, health_status FROM accounts")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect();
-        let models: Vec<(i64, String, String)> = writer
-            .prepare("SELECT id, provider_id, model_id FROM models")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect();
-        panic!(
-            "auto-populate should have prevented NoHealthyTargets.\n\
-             result: {:?}\n\
-             combo_targets in DB: {:?}\n\
-             providers in DB: {:?}\n\
-             accounts in DB: {:?}\n\
-             models in DB: {:?}",
-            result, combo_targets, providers, accounts, models
-        );
-    }
+    // Auto-population of empty combos is disabled so manual combos are not invaded.
+    assert!(matches!(&result.error, Some(CoreError::NoHealthyTargets(_))));
 
-    // And the combo now has 2 targets in the DB.
     let writer = pool.writer();
     let count: i64 = writer
         .query_row(
@@ -484,7 +441,7 @@ async fn auto_populate_fills_combo_then_runs() {
             |r| r.get(0),
         )
         .expect("count targets");
-    assert_eq!(count, 2, "auto-populate added one target per active model");
+    assert_eq!(count, 0, "auto-populate is disabled");
 }
 
 // -------------------------------------------------------------------

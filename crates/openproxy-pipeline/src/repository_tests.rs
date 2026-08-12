@@ -27,12 +27,12 @@ mod tests {
         .unwrap();
         let combo_id = ComboId(1);
 
-        // Auto-populate
+        // Auto-populate is disabled (returns 0)
         let added = auto_populate_empty_combo(&w, combo_id).unwrap();
-        assert_eq!(added, 2);
+        assert_eq!(added, 0);
 
         let targets = list_targets(&w, combo_id).unwrap();
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 0);
     }
 
     #[test]
