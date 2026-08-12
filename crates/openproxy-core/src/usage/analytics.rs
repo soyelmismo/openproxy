@@ -71,6 +71,8 @@ pub struct UsageSummary {
     /// is zero, meaning pricing was missing at record time. Surfaces
     /// under-reporting in the dashboard.
     pub rows_with_null_pricing: u64,
+    /// `AVG(compression_savings_pct)` over rows where it is not null.
+    pub avg_compression_savings_pct: Option<f64>,
 }
 
 /// One row of the `by_model` aggregation.
@@ -84,6 +86,7 @@ pub struct ByModelRow {
     pub total_prompt_tokens: i64,
     pub total_completion_tokens: i64,
     pub total_cost_usd: f64,
+    pub avg_compression_savings_pct: Option<f64>,
 }
 
 /// One row of the `by_provider` aggregation.
@@ -100,6 +103,7 @@ pub struct ByProviderRow {
     pub total_prompt_tokens: u64,
     pub total_completion_tokens: u64,
     pub total_cost_usd: f64,
+    pub avg_compression_savings_pct: Option<f64>,
 }
 
 /// One row of the `monthly_by_provider` aggregation.
@@ -274,7 +278,8 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              SUM(CASE WHEN cost_usd = 0.0 AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing, \
              AVG(connect_ms) FILTER (WHERE status_code < 400 AND connect_ms IS NOT NULL) AS avg_success_connect_ms, \
              AVG(ttft_ms) FILTER (WHERE status_code < 400 AND ttft_ms IS NOT NULL) AS avg_success_ttft_ms, \
-             AVG(total_ms) FILTER (WHERE status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms \
+             AVG(total_ms) FILTER (WHERE status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms, \
+             AVG(compression_savings_pct) AS avg_compression_savings_pct \
          FROM usage {}",
         w.sql,
     );
@@ -322,6 +327,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
                 avg_success_ttft_ms,
                 avg_success_total_ms,
                 rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
+                avg_compression_savings_pct: row.get(15)?,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -341,7 +347,8 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
+             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd, \
+             AVG(compression_savings_pct)                     AS avg_compression_savings_pct \
          FROM usage {} \
          GROUP BY provider_id, upstream_model_id \
          ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC",
@@ -373,6 +380,7 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
                 total_prompt_tokens,
                 total_completion_tokens,
                 total_cost_usd,
+                avg_compression_savings_pct: row.get(8)?,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -397,7 +405,8 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
+             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd, \
+             AVG(compression_savings_pct)                     AS avg_compression_savings_pct \
          FROM usage {} \
          GROUP BY provider_id \
          ORDER BY total_cost_usd DESC, provider_id ASC",
@@ -430,6 +439,7 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
                     "total_completion_tokens",
                 )?,
                 total_cost_usd,
+                avg_compression_savings_pct: row.get(7)?,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;

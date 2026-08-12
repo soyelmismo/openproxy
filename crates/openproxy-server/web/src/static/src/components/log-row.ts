@@ -100,7 +100,7 @@ function buildLogRowCells(
     if (savings != null && savings > 0) {
       const pct = Math.round(savings);
       const tech = row ? row.compression_techniques : "";
-      cells.push(html`<span class="log-compression" title="Token savings: ${pct}% (BPE cl100k_base) — ${tech}">-${pct}%</span>`);
+      cells.push(html`<span class="log-compression" style="background: rgba(34, 197, 94, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: 500;" title="Cache Hit: ${pct}% savings (BPE cl100k_base) — ${tech}">⚡ ${pct}%</span>`);
     } else {
       cells.push(html`<span class="log-compression log-compression--none" title="No compression applied (or mode is Off)">—</span>`);
     }

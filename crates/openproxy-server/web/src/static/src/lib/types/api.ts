@@ -413,6 +413,7 @@ export interface ByModelRow {
   total_prompt_tokens: number;
   total_completion_tokens: number;
   total_cost_usd: number;
+  avg_compression_savings_pct: number | null;
 }
 
 /** Fila de la agregación `by_account`.
@@ -438,6 +439,7 @@ export interface ByProviderRow {
   total_prompt_tokens: number;
   total_completion_tokens: number;
   total_cost_usd: number;
+  avg_compression_savings_pct: number | null;
 }
 
 /** Fila de la agregación `monthly_by_provider` — `provider_id` × mes.
@@ -523,6 +525,8 @@ export interface UsageSummary {
    *  como un banner amarillo.
    *  @see crates/openproxy-core/src/usage.rs:283 */
   rows_with_null_pricing: number;
+  /** `AVG(compression_savings_pct)` over rows where it is not null. */
+  avg_compression_savings_pct: number | null;
 }
 
 /** Fila devuelta por el long-polling feed del dashboard.
