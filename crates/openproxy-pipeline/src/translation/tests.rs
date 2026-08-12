@@ -91,6 +91,8 @@ fn anthropic_to_openai_concat_text_blocks() {
         usage: AnthropicUsage {
             input_tokens: 10,
             output_tokens: 5,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         },
     };
 
@@ -127,6 +129,8 @@ fn anthropic_to_openai_maps_usage() {
         usage: AnthropicUsage {
             input_tokens: 7,
             output_tokens: 11,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         },
     };
 
@@ -298,6 +302,7 @@ fn gemini_to_openai_extracts_content() {
             prompt_token_count: 10,
             candidates_token_count: 5,
             total_token_count: 15,
+            cached_content_token_count: None,
         }),
         response: None,
     };

@@ -734,6 +734,7 @@ mod tests {
             prompt_tokens: 10,
             completion_tokens: 20,
             total_tokens: 30,
+            prompt_tokens_details: None,
         });
         acc.set_stop_reason("stop".to_string());
         let v = acc.finish("id", 0, "m");
