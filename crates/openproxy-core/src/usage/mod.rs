@@ -69,12 +69,13 @@ mod tests {
         status: u16,
         prompt: i64,
         completion: i64,
-        cost: f64,
+        cost: impl Into<Option<f64>>,
         ttft: Option<i64>,
         total: i64,
         race_lost: bool,
         err: Option<&str>,
     ) {
+        let cost: Option<f64> = cost.into();
         conn.execute(
             "INSERT INTO usage (\
                 request_id, trace_id, attempt, provider_id, account_id, \
@@ -1408,7 +1409,7 @@ mod tests {
             false,
             None,
         );
-        // Row 2: NULL pricing — prompt_tokens > 0 but cost_usd = 0.
+        // Row 2: NULL pricing — prompt_tokens > 0 but cost_usd is NULL.
         insert(
             &conn,
             &RequestId::new().to_string(),
@@ -1419,7 +1420,7 @@ mod tests {
             200,
             200,
             50,
-            0.00,
+            None,
             Some(100),
             600,
             false,
@@ -1436,7 +1437,7 @@ mod tests {
             200,
             300,
             0,
-            0.00,
+            None,
             Some(100),
             600,
             false,
