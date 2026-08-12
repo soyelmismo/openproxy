@@ -343,15 +343,15 @@ pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price
 
 fn strip_free_suffixes(model: &str) -> Vec<String> {
     let suffixes = ["-free-trial", "-free", ":free"];
-    let mut out = Vec::new();
-    for suffix in &suffixes {
-        if let Some(stripped) = model.strip_suffix(suffix)
-            && !stripped.is_empty()
-        {
-            out.push(stripped.to_string());
-        }
-    }
-    out
+    suffixes
+        .iter()
+        .filter_map(|s| {
+            model
+                .strip_suffix(s)
+                .filter(|stripped| !stripped.is_empty())
+                .map(|stripped| stripped.to_string())
+        })
+        .collect()
 }
 
 pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {
