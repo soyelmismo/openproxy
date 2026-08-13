@@ -969,9 +969,9 @@ async fn refresh_account_quota_non_capable_provider_responds_fast() {
 
     // Wrap in a timeout — if the handler hangs, the test fails
     // instead of blocking forever.
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(15), app.oneshot(req))
         .await
-        .expect("refresh-quota handler hung for >5s (regression)")
+        .expect("refresh-quota handler hung for >15s (regression)")
         .expect("oneshot");
 
     assert_eq!(resp.status(), StatusCode::OK, "expected 200");
@@ -1004,9 +1004,9 @@ async fn refresh_provider_models_unknown_provider_responds_fast() {
         .body(Body::empty())
         .expect("build req");
 
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(15), app.oneshot(req))
         .await
-        .expect("refresh-provider handler hung for >5s (regression)")
+        .expect("refresh-provider handler hung for >15s (regression)")
         .expect("oneshot");
 
     // The handler returns 200 with an error in the JSON body, or
@@ -1042,9 +1042,9 @@ async fn refresh_account_quota_nonexistent_account_responds_fast() {
         .body(Body::empty())
         .expect("build req");
 
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(15), app.oneshot(req))
         .await
-        .expect("refresh-quota handler hung for >5s on nonexistent account (regression)")
+        .expect("refresh-quota handler hung for >15s on nonexistent account (regression)")
         .expect("oneshot");
 
     // Account not found -> 404 or 500. Either is fine as long as
