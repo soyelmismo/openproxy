@@ -35,6 +35,8 @@ interface LogDetailLog {
   prompt_tokens_estimated?: boolean;
   completion_tokens_estimated?: boolean;
   tokens_per_sec?: number | null;
+  avg_chunk_gap_ms?: number | null;
+  max_chunk_gap_ms?: number | null;
   cost_usd?: number | null;
   is_streaming?: boolean;
   stream_complete?: boolean;
@@ -1160,6 +1162,8 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             <div><strong>Prompt tokens:</strong> ${log.prompt_tokens_estimated ? "≈" : ""}${log.prompt_tokens ?? "—"}</div>
             <div><strong>Completion tokens:</strong> ${log.completion_tokens_estimated ? "≈" : ""}${log.completion_tokens ?? "—"}</div>
             <div><strong>Tokens/sec:</strong> ${log.tokens_per_sec != null ? log.tokens_per_sec.toFixed(1) : "—"}</div>
+            <div><strong>Avg chunk gap:</strong> ${log.avg_chunk_gap_ms != null ? `${log.avg_chunk_gap_ms}ms` : "—"}</div>
+            <div><strong>Worst chunk gap:</strong> ${log.max_chunk_gap_ms != null ? `${log.max_chunk_gap_ms}ms` : "—"}</div>
             <div><strong>Cost:</strong> ${costText}</div>
             ${renderCompressionSummary(log)}
             <div><strong>Created:</strong> ${String(createdAt)}</div>

@@ -184,6 +184,10 @@ pub(crate) struct StreamingState {
     pub done_sent: bool,
     pub acc: Option<ResponseAccumulator>,
     pub responses_sse_state: crate::sse::ResponsesSseState,
+    pub last_content_chunk_at: Option<Instant>,
+    pub total_chunk_gap_ms: u64,
+    pub chunk_count: u32,
+    pub max_chunk_gap_ms: u32,
 }
 
 pub(crate) struct StreamContext<'a> {
@@ -232,6 +236,32 @@ impl StreamingState {
                 None
             },
             responses_sse_state: crate::sse::ResponsesSseState::default(),
+            last_content_chunk_at: None,
+            total_chunk_gap_ms: 0,
+            chunk_count: 0,
+            max_chunk_gap_ms: 0,
+        }
+    }
+
+    pub fn note_content_chunk(&mut self) {
+        let now = Instant::now();
+        if let Some(prev) = self.last_content_chunk_at {
+            let gap = now.duration_since(prev).as_millis() as u32;
+            self.total_chunk_gap_ms = self.total_chunk_gap_ms.saturating_add(gap as u64);
+            self.chunk_count = self.chunk_count.saturating_add(1);
+            if gap > self.max_chunk_gap_ms {
+                self.max_chunk_gap_ms = gap;
+            }
+        }
+        self.last_content_chunk_at = Some(now);
+    }
+
+    pub fn chunk_gap_metrics(&self) -> (Option<u32>, Option<u32>) {
+        if self.chunk_count > 0 {
+            let avg = (self.total_chunk_gap_ms / self.chunk_count as u64) as u32;
+            (Some(avg), Some(self.max_chunk_gap_ms))
+        } else {
+            (None, None)
         }
     }
 
@@ -705,6 +735,7 @@ impl<'a> ChunkProcessor<'a> {
                     // still generating.
                     if chunk.has_content {
                         stream.note_content_chunk();
+                        state.note_content_chunk();
                     }
                     if let Err(e) = sink.send(sse_bytes).await {
                         return Ok(crate::streaming::ChunkEvent::Return(
@@ -882,6 +913,7 @@ impl<'a> ChunkProcessor<'a> {
             // See the slow path above for the `has_content`
             // gate that metadata-only chunks must NOT reset.
             stream.note_content_chunk();
+            state.note_content_chunk();
             if let Err(e) = sink.send(sse_bytes).await {
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_on_sink_send_error(
@@ -1136,6 +1168,7 @@ impl<'a> ChunkProcessor<'a> {
                     // fragment.
                     if chunk_has_content {
                         stream.note_content_chunk();
+                        state.note_content_chunk();
                     }
                     if let Err(e) = sink.send(sse_frame).await {
                         // C4 fix: a real client disconnect
@@ -1225,5 +1258,42 @@ impl<'a> ChunkProcessor<'a> {
 
         // Fallback catch-all for unknown formats or unhandled branches
         Ok(crate::streaming::ChunkEvent::Skip)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunk_gap_metrics_empty() {
+        let state = StreamingState::new(false);
+        assert_eq!(state.chunk_gap_metrics(), (None, None));
+    }
+
+    #[test]
+    fn test_chunk_gap_metrics_single_chunk() {
+        let mut state = StreamingState::new(false);
+        state.note_content_chunk();
+        assert_eq!(state.chunk_gap_metrics(), (None, None));
+    }
+
+    #[test]
+    fn test_chunk_gap_metrics_multiple_chunks() {
+        let mut state = StreamingState::new(false);
+        state.note_content_chunk();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        state.note_content_chunk();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        state.note_content_chunk();
+
+        let (avg, max) = state.chunk_gap_metrics();
+        assert!(avg.is_some());
+        assert!(max.is_some());
+        let avg = avg.unwrap();
+        let max = max.unwrap();
+        assert!(avg >= 10);
+        assert!(max >= 20);
+        assert!(max >= avg);
     }
 }

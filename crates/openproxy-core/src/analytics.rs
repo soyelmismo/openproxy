@@ -39,6 +39,14 @@ pub struct LatencyPercentiles {
     pub p95_total_ms: Option<f64>,
     pub p50_tokens_per_sec: Option<f64>,
     pub p95_tokens_per_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p50_avg_chunk_gap_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p95_avg_chunk_gap_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p50_max_chunk_gap_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p95_max_chunk_gap_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,7 +225,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     let mut sql = String::new();
     write!(
         &mut sql,
-        "SELECT connect_ms, ttft_ms, total_ms, tokens_per_sec \
+        "SELECT connect_ms, ttft_ms, total_ms, tokens_per_sec, avg_chunk_gap_ms, max_chunk_gap_ms \
          FROM usage {}",
         where_clause,
     )
@@ -233,6 +241,8 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     let mut ttft = StreamingDigest::new();
     let mut total = StreamingDigest::new();
     let mut tps = StreamingDigest::new();
+    let mut avg_chunk_gap = StreamingDigest::new();
+    let mut max_chunk_gap = StreamingDigest::new();
     let mut rows_seen: u64 = 0;
 
     let mut rows = stmt
@@ -269,6 +279,18 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
         {
             tps.push(v);
         }
+        if let Some(v) = row
+            .get::<_, Option<i64>>(4)
+            .map_err(|e| map_row_err(e, "avg_chunk_gap_ms"))?
+        {
+            avg_chunk_gap.push(v as f64);
+        }
+        if let Some(v) = row
+            .get::<_, Option<i64>>(5)
+            .map_err(|e| map_row_err(e, "max_chunk_gap_ms"))?
+        {
+            max_chunk_gap.push(v as f64);
+        }
     }
 
     // `samples` is the count of raw rows that matched the WHERE clause (i.e.
@@ -287,6 +309,10 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
         p95_total_ms: total.quantile(0.95),
         p50_tokens_per_sec: tps.quantile(0.50),
         p95_tokens_per_sec: tps.quantile(0.95),
+        p50_avg_chunk_gap_ms: avg_chunk_gap.quantile(0.50),
+        p95_avg_chunk_gap_ms: avg_chunk_gap.quantile(0.95),
+        p50_max_chunk_gap_ms: max_chunk_gap.quantile(0.50),
+        p95_max_chunk_gap_ms: max_chunk_gap.quantile(0.95),
     })
 }
 

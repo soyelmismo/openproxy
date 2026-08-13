@@ -616,6 +616,8 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
         client_response: true,
         prompt_tokens_estimated: false,
         completion_tokens_estimated: false,
+        avg_chunk_gap_ms: None,
+        max_chunk_gap_ms: None,
         endpoint_kind: openproxy_types::EndpointKind::Audio,
     };
     let w = match state

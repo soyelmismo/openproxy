@@ -209,6 +209,8 @@ fn record_model_not_found_usage_row(
         client_response: true,
         prompt_tokens_estimated: false,
         completion_tokens_estimated: false,
+        avg_chunk_gap_ms: None,
+        max_chunk_gap_ms: None,
         endpoint_kind: openproxy_types::EndpointKind::Chat,
     };
     let w = match state

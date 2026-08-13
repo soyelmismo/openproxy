@@ -123,6 +123,8 @@ impl UsageTracker {
             client_response: true,
             prompt_tokens_estimated: false,
             completion_tokens_estimated: false,
+            avg_chunk_gap_ms: None,
+            max_chunk_gap_ms: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         };
         let conn = self.conn.clone();
@@ -231,6 +233,8 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) proxy_url: Option<String>,
     pub(crate) proxy_status: Option<String>,
     pub(crate) is_proxy_rotated: bool,
+    pub(crate) avg_chunk_gap_ms: Option<u32>,
+    pub(crate) max_chunk_gap_ms: Option<u32>,
 }
 
 impl<'a> UsageRecordBuilder<'a> {
@@ -267,6 +271,8 @@ impl<'a> UsageRecordBuilder<'a> {
             proxy_url: None,
             proxy_status: None,
             is_proxy_rotated: false,
+            avg_chunk_gap_ms: None,
+            max_chunk_gap_ms: None,
         }
     }
 
@@ -370,6 +376,14 @@ impl<'a> UsageRecordBuilder<'a> {
         self.is_proxy_rotated = is_proxy_rotated;
         self
     }
+    pub fn avg_chunk_gap_ms_opt(mut self, avg: Option<u32>) -> Self {
+        self.avg_chunk_gap_ms = avg;
+        self
+    }
+    pub fn max_chunk_gap_ms_opt(mut self, max: Option<u32>) -> Self {
+        self.max_chunk_gap_ms = max;
+        self
+    }
 
     pub fn record(self) -> Result<Option<(String, u8, openproxy_types::ids::ComboTargetId)>> {
         let recording = self.tracker.is_recording();
@@ -413,15 +427,13 @@ impl<'a> UsageRecordBuilder<'a> {
                             .and_then(|m| m.get("content"))
                             .and_then(|c| c.as_str())
                     })
-                    .unwrap_or("");
-                if !completion_text.is_empty() {
-                    let est = openproxy_types::token_estimate::estimate_completion_tokens(
-                        completion_text,
-                    );
+                    .unwrap_or_default();
+                let est = openproxy_types::token_estimate::estimate_completion_tokens(completion_text);
+                if est > 0 {
                     tracing::debug!(
                         request_id = %self.req.request_id,
                         estimated_completion_tokens = est,
-                        "upstream did not report usage; estimated completion tokens from response body"
+                        "upstream did not report usage; estimated completion tokens from response content"
                     );
                     (Some(est), true)
                 } else {
@@ -431,7 +443,7 @@ impl<'a> UsageRecordBuilder<'a> {
         };
 
         let input = UsageInput {
-            request_id: self.req.request_id,
+            request_id: self.req.request_id.clone(),
             trace_id: self.trace_id.clone(),
             attempt: self.attempt,
             provider_id: self.target.provider_id.clone(),
@@ -492,6 +504,8 @@ impl<'a> UsageRecordBuilder<'a> {
             proxy_url: self.proxy_url.clone(),
             proxy_status: self.proxy_status.clone(),
             is_proxy_rotated: self.is_proxy_rotated,
+            avg_chunk_gap_ms: self.avg_chunk_gap_ms,
+            max_chunk_gap_ms: self.max_chunk_gap_ms,
         };
 
         {
