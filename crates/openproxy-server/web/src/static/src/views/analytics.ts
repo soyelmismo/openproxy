@@ -71,10 +71,6 @@ interface LatencyPayload {
   p95_total_ms?: number | null;
   p50_tokens_per_sec?: number | null;
   p95_tokens_per_sec?: number | null;
-  p50_avg_chunk_gap_ms?: number | null;
-  p95_avg_chunk_gap_ms?: number | null;
-  p50_max_chunk_gap_ms?: number | null;
-  p95_max_chunk_gap_ms?: number | null;
 }
 interface RaceStatsPayload {
   total_races?: number;
@@ -615,8 +611,6 @@ function renderLatencyBlock(): TemplateResult {
   const rows = [
     { label: t("analytics.latency.connect"), p50: latency?.p50_connect_ms, p95: latency?.p95_connect_ms },
     { label: t("analytics.latency.ttft"), p50: latency?.p50_ttft_ms, p95: latency?.p95_ttft_ms },
-    { label: t("analytics.latency.avg_chunk_gap"), p50: latency?.p50_avg_chunk_gap_ms, p95: latency?.p95_avg_chunk_gap_ms },
-    { label: t("analytics.latency.max_chunk_gap"), p50: latency?.p50_max_chunk_gap_ms, p95: latency?.p95_max_chunk_gap_ms },
     { label: t("analytics.latency.total"), p50: latency?.p50_total_ms, p95: latency?.p95_total_ms },
   ];
   const max = Math.max(1, ...rows.map((row) => row.p95 ?? 0));

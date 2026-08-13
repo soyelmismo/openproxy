@@ -225,8 +225,6 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         proxy_url: input.proxy_url.clone(),
         proxy_status: input.proxy_status.clone(),
         is_proxy_rotated: input.is_proxy_rotated,
-        avg_chunk_gap_ms: input.avg_chunk_gap_ms,
-        max_chunk_gap_ms: input.max_chunk_gap_ms,
         endpoint_kind: input.endpoint_kind,
     };
     openproxy_types::usage::publish_usage_row(row);
@@ -278,8 +276,6 @@ mod tests {
             client_response: false,
             prompt_tokens_estimated: false,
             completion_tokens_estimated: false,
-            avg_chunk_gap_ms: None,
-            max_chunk_gap_ms: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         }
     }

@@ -42,8 +42,6 @@ pub struct UsageInput {
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
-    pub avg_chunk_gap_ms: Option<u32>,
-    pub max_chunk_gap_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,10 +155,6 @@ pub struct RecentUsageRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avg_chunk_gap_ms: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_chunk_gap_ms: Option<u32>,
     pub endpoint_kind: EndpointKind,
     pub created_at: String,
 }

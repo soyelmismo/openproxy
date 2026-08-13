@@ -207,8 +207,6 @@
   "analytics.latency.p95_total": "p95 total",
   "analytics.latency.connect": "Connection",
   "analytics.latency.ttft": "Time to first token",
-  "analytics.latency.avg_chunk_gap": "Avg inter-chunk gap",
-  "analytics.latency.max_chunk_gap": "Worst chunk gap",
   "analytics.latency.total": "Total response",
   "analytics.status.other": "Other",
   "analytics.status.no_data": "No data",

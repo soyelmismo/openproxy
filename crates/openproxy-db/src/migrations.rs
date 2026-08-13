@@ -287,11 +287,6 @@ const MIGRATIONS: &[Migration] = &[
         name: "000055_fix_null_pricing",
         sql: include_str!("../migrations/000055_fix_null_pricing.sql"),
     },
-    Migration {
-        version: 56,
-        name: "000056_add_chunk_gap_metrics_to_usage",
-        sql: include_str!("../migrations/000056_add_chunk_gap_metrics_to_usage.sql"),
-    },
 ];
 
 /// Apply pending migrations on `conn`.

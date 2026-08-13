@@ -575,8 +575,6 @@ export interface RecentUsageRow {
   proxy_url: string | null;
   proxy_status: string | null;
   is_proxy_rotated: boolean;
-  avg_chunk_gap_ms?: number | null;
-  max_chunk_gap_ms?: number | null;
   created_at: string;
 }
 

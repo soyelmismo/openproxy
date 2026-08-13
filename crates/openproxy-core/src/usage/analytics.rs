@@ -801,8 +801,6 @@ pub struct UsageDetailRow {
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
-    pub avg_chunk_gap_ms: Option<u32>,
-    pub max_chunk_gap_ms: Option<u32>,
     /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
     pub created_at: String,
@@ -858,8 +856,7 @@ pub fn recent(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, \
-                    avg_chunk_gap_ms, max_chunk_gap_ms \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
              FROM usage \
              WHERE id > ?1 \
              ORDER BY id ASC \
@@ -943,10 +940,6 @@ pub fn recent(
             let is_proxy_rotated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let cached_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let avg_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let max_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -979,8 +972,6 @@ pub fn recent(
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
-            let avg_chunk_gap_ms = avg_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
-            let max_chunk_gap_ms = max_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
@@ -1014,8 +1005,6 @@ pub fn recent(
                 proxy_url,
                 proxy_status,
                 is_proxy_rotated: is_proxy_rotated != 0,
-                avg_chunk_gap_ms,
-                max_chunk_gap_ms,
                 endpoint_kind,
                 created_at,
             })
@@ -1055,8 +1044,7 @@ pub fn recent_desc(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, \
-                    avg_chunk_gap_ms, max_chunk_gap_ms \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
              FROM usage \
              ORDER BY id DESC \
              LIMIT ?1",
@@ -1139,10 +1127,6 @@ pub fn recent_desc(
             let is_proxy_rotated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let cached_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let avg_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let max_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1175,8 +1159,6 @@ pub fn recent_desc(
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
-            let avg_chunk_gap_ms = avg_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
-            let max_chunk_gap_ms = max_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
 
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
@@ -1211,8 +1193,6 @@ pub fn recent_desc(
                 proxy_url,
                 proxy_status,
                 is_proxy_rotated: is_proxy_rotated != 0,
-                avg_chunk_gap_ms,
-                max_chunk_gap_ms,
                 endpoint_kind,
                 created_at,
             })
@@ -1247,8 +1227,7 @@ pub fn row_for_broadcast_by_id(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, \
-                    avg_chunk_gap_ms, max_chunk_gap_ms \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1330,10 +1309,6 @@ pub fn row_for_broadcast_by_id(
             let is_proxy_rotated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let cached_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let avg_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let max_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1356,8 +1331,6 @@ pub fn row_for_broadcast_by_id(
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
-            let avg_chunk_gap_ms = avg_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
-            let max_chunk_gap_ms = max_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
@@ -1391,8 +1364,6 @@ pub fn row_for_broadcast_by_id(
                 proxy_url,
                 proxy_status,
                 is_proxy_rotated: is_proxy_rotated != 0,
-                avg_chunk_gap_ms,
-                max_chunk_gap_ms,
                 endpoint_kind,
                 created_at,
             })
@@ -1421,8 +1392,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     request_body_json, response_body_json, request_headers, \
                     response_headers, error_message, client_response, \
                     prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, \
-                    avg_chunk_gap_ms, max_chunk_gap_ms \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1484,10 +1454,6 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let proxy_status: Option<String> = row.get(col_idx)?;
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let avg_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let max_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1512,8 +1478,6 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
             let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-            let avg_chunk_gap_ms = avg_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
-            let max_chunk_gap_ms = max_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
 
             Ok(UsageDetailRow {
                 id: UsageId(id),
@@ -1553,8 +1517,6 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                 proxy_url,
                 proxy_status,
                 is_proxy_rotated: is_proxy_rotated != 0,
-                avg_chunk_gap_ms,
-                max_chunk_gap_ms,
                 endpoint_kind,
             })
         })
@@ -1577,8 +1539,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     request_body_json, response_body_json, request_headers, \
                     response_headers, error_message, client_response, \
                     prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, \
-                    avg_chunk_gap_ms, max_chunk_gap_ms \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              WHERE trace_id = ?1 \
              ORDER BY client_response DESC, id DESC \
@@ -1642,10 +1603,6 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             let proxy_status: Option<String> = row.get(col_idx)?;
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let avg_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let max_chunk_gap_ms: Option<i64> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1670,8 +1627,6 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
             let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-            let avg_chunk_gap_ms = avg_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
-            let max_chunk_gap_ms = max_chunk_gap_ms.and_then(|v| u32::try_from(v).ok());
 
             Ok(UsageDetailRow {
                 id: UsageId(id),
@@ -1711,8 +1666,6 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                 proxy_url,
                 proxy_status,
                 is_proxy_rotated: is_proxy_rotated != 0,
-                avg_chunk_gap_ms,
-                max_chunk_gap_ms,
                 endpoint_kind,
             })
         })

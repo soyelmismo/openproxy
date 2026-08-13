@@ -1844,7 +1844,6 @@ impl UpstreamDispatcher {
             });
         }
 
-        let (avg_chunk_gap_ms, max_chunk_gap_ms) = state.chunk_gap_metrics();
         let usage = state.usage;
         let mut acc = state.acc;
         let ttft_ms = state.ttft_ms;
@@ -1918,7 +1917,6 @@ impl UpstreamDispatcher {
         // re-serializing the typed struct when the raw body wasn't
         // captured (e.g., requests constructed internally without
         // going through the HTTP handler).
-
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
             req.clone(),
@@ -1945,8 +1943,6 @@ impl UpstreamDispatcher {
         .is_streaming(true)
         .stream_complete(done_sent)
         .stop_reason(stop_reason)
-        .avg_chunk_gap_ms_opt(avg_chunk_gap_ms)
-        .max_chunk_gap_ms_opt(max_chunk_gap_ms)
         .record()
         {
             Ok(id) => id,
