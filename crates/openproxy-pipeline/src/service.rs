@@ -640,12 +640,6 @@ impl tower::Service<PipelineState> for RoutingService {
                                 result.error,
                                 Some(openproxy_types::error::CoreError::RateLimited { .. })
                             );
-                            let retry_after_secs_opt = match result.error.as_ref() {
-                                Some(openproxy_types::error::CoreError::RateLimited { retry_after_ms, .. }) => {
-                                    Some((retry_after_ms + 999) / 1000)
-                                }
-                                _ => None,
-                            };
                             let repo = pipeline.repo().clone();
                             let target_id = target.target.id;
                             let account_id_opt = target.target.account_id;
@@ -653,11 +647,6 @@ impl tower::Service<PipelineState> for RoutingService {
                             let combo_id = combo.id.0;
                             let _ = tokio::task::spawn_blocking(move || {
                                 let mut final_base_secs = base_secs;
-                                if let Some(secs) = retry_after_secs_opt
-                                    && secs > final_base_secs
-                                {
-                                    final_base_secs = secs;
-                                }
                                 if is_rate_limited && let Some(account_id) = account_id_opt {
                                     let override_secs = (|| -> Option<u64> {
                                         let (accounts, _, _) =

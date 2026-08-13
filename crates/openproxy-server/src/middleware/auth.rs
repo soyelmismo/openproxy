@@ -206,9 +206,6 @@ pub async fn auth_middleware(
             crate::error::ApiError(openproxy_types::CoreError::Parse(message))
         })?;
 
-    // Sanitize tool schemas (e.g. normalize properties/required placed directly under function)
-    parsed.sanitize_tools();
-
     // Sanitize orphaned tool calls and tool messages to avoid upstream 400 Bad Request errors.
     // DeepSeek and other strict OpenAI-compatible providers require that every
     // tool_call in an assistant message is followed by a matching tool response.

@@ -182,29 +182,13 @@ fn parse_minimax_quota(
     body: &serde_json::Value,
     url: &str,
 ) -> Result<openproxy_types::AccountQuota> {
-    if let Some(base_resp) = body.get("base_resp")
-        && let Some(code) = base_resp.get("status_code").and_then(|c| c.as_i64())
-        && code != 0
-    {
-        let msg = base_resp
-            .get("status_msg")
-            .and_then(|m| m.as_str())
-            .unwrap_or("upstream error");
-        return Err(CoreError::UpstreamConnection(format!(
-            "{}: {} (code {})",
-            url, msg, code
-        )));
-    }
-
     let plan_name = body
         .get("plan_name")
-        .or_else(|| body.get("data").and_then(|d| d.get("plan_name")))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
     let entries = body
         .get("model_remains")
-        .or_else(|| body.get("data").and_then(|d| d.get("model_remains")))
         .and_then(|v| v.as_array())
         .ok_or_else(|| CoreError::Parse(format!("{}: missing 'model_remains' array", url)))?;
 

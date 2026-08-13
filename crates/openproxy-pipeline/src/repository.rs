@@ -561,11 +561,10 @@ impl PipelineRepository for SqlitePipelineRepository {
         let cooldown_secs = match mode {
             CooldownMode::Flat => base_secs,
             CooldownMode::Exponential => {
-                let max = max_secs.max(base_secs);
                 let mut exp_secs =
                     base_secs.saturating_mul((factor as u64).saturating_pow(current_count));
-                if exp_secs > max {
-                    exp_secs = max;
+                if exp_secs > max_secs {
+                    exp_secs = max_secs;
                 }
                 exp_secs
             }
