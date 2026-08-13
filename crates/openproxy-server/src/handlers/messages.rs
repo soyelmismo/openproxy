@@ -32,7 +32,7 @@ pub async fn anthropic_messages(
         })?;
 
     let openai_req = Arc::new(anthropic_request_to_openai(anthropic_req));
-    resolved_route.openai_req = openai_req.clone();
+    resolved_route.openai_req = Arc::clone(&openai_req);
 
     let cancel = cancel_watch
         .map(|axum::Extension(cw)| cw)
@@ -49,12 +49,12 @@ pub async fn anthropic_messages(
         racing: state.config().racing.clone(),
         retries: state.config().retries,
         max_attempts: state.config().retries.max_attempts,
-        master_key: state.master_key().clone(),
+        master_key: Arc::clone(state.master_key()),
         adapters: state.adapters(),
         cooldown_secs: state.config().cooldown.cooldown_secs,
         cooldown_max_secs: state.config().cooldown.max_secs,
         cooldown_factor: state.config().cooldown.factor,
-        upstream_client: state.upstream_client().clone(),
+        upstream_client: Arc::clone(state.upstream_client()),
         oauth_provider_registry: Some(state.oauth_provider_registry()),
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),
@@ -108,7 +108,7 @@ pub async fn anthropic_messages(
         request_id,
         trace_id,
         combo_id,
-        openai_request: openai_req.clone(),
+        openai_request: Arc::clone(&openai_req),
         client_disconnected,
         stream_sink,
         api_key_id,
@@ -338,7 +338,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                 let name = tc
                                                     .function
                                                     .as_ref()
-                                                    .and_then(|f| f.name.clone())
+                                                    .and_then(|f| f.name.as_deref())
                                                     .unwrap_or_default();
                                                 let start = serde_json::json!({
                                                     "type": "content_block_start",

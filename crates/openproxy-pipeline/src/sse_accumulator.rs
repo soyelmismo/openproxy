@@ -551,7 +551,7 @@ impl ResponseAccumulator {
         let mut message = Map::new();
         message.insert("role".to_string(), Value::String("assistant".to_string()));
         if !content.is_empty() {
-            message.insert("content".to_string(), Value::String(content.clone()));
+            message.insert("content".to_string(), Value::String(content.to_owned()));
         } else {
             message.insert("content".to_string(), Value::Null);
         }
@@ -559,7 +559,7 @@ impl ResponseAccumulator {
         if let Some(reasoning) = &self.reasoning {
             extra.insert(
                 "reasoning_content".to_string(),
-                Value::String(reasoning.clone()),
+                Value::String(reasoning.to_owned()),
             );
         }
         if !self.tool_calls.is_empty() {
@@ -593,7 +593,7 @@ impl ResponseAccumulator {
         if !self.raw_response_body.is_empty() {
             extra.insert(
                 "raw_response_body".to_string(),
-                Value::String(self.raw_response_body.clone()),
+                Value::String(self.raw_response_body.to_owned()),
             );
         }
 
@@ -608,7 +608,7 @@ impl ResponseAccumulator {
             "finish_reason".to_string(),
             self.stop_reason
                 .as_ref()
-                .map(|s| Value::String(s.clone()))
+                .map(|s| Value::String(s.to_owned()))
                 .unwrap_or(Value::Null),
         );
 

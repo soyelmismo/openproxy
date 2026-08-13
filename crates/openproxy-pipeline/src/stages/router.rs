@@ -33,7 +33,7 @@ impl PipelineStage for RouterStage {
 
         let flat_targets = match ctx
             .pipeline
-            .flatten_targets(&combo.id, targets.clone())
+            .flatten_targets(&combo.id, targets)
             .await
         {
             Ok(t) => t,
@@ -67,7 +67,7 @@ impl PipelineStage for RouterStage {
                 parked = pre_cb_snapshot.len(),
                 "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
             );
-            eligible = pre_cb_snapshot.clone();
+            eligible = pre_cb_snapshot;
         }
 
         if eligible.is_empty() {

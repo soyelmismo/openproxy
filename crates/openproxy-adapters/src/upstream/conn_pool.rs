@@ -124,9 +124,17 @@ impl PoolEntry {
 /// `hyper_util::client::legacy::Client` owns the real sockets, the
 /// sweep only affects the observability map; the legacy client will
 /// re-dial on the next request to that host.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct UpstreamConnectionPool {
     inner: Arc<Mutex<HashMap<HostKey, PoolEntry>>>,
+}
+
+impl Clone for UpstreamConnectionPool {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl UpstreamConnectionPool {

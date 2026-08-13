@@ -284,10 +284,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
 /// `tokenrouter`) matching the `minimax/MiniMax-M3` entry.
 pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     // 1. Exact (provider, model) match.
-    if let Some((_, price)) = PRICING_TABLE
-        .iter()
-        .find(|((p, m), _)| *p == provider && *m == model)
-    {
+    if let Some(price) = PRICING_TABLE.get(&(provider, model)) {
         return Some(price.clone());
     }
     // 2. Cross-provider fallback: match by model_id only. This lets a

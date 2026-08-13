@@ -4,7 +4,6 @@ use crate::stage::{PipelineNext, PipelineStage};
 use crate::timeouts;
 use crate::timeouts::ModelTimeoutOverrides;
 use crate::{FailureContext, PipelineResult};
-use openproxy_adapters::adapters::AdapterFormat;
 use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
@@ -138,7 +137,7 @@ impl PipelineStage for FormattingStage {
             .iter()
             .find(|a| a.id() == &current.target.provider_id)
         {
-            Some(a) => a.clone(),
+            Some(a) => a,
             None => {
                 let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
                 let combo = ctx
@@ -165,26 +164,15 @@ impl PipelineStage for FormattingStage {
             }
         };
 
-        let target_format = match adapter.format() {
-            AdapterFormat::Openai => openproxy_types::TargetFormat::Openai,
-            AdapterFormat::Anthropic => openproxy_types::TargetFormat::Anthropic,
-            AdapterFormat::Mixed => current.model.target_format,
-            AdapterFormat::Gemini => openproxy_types::TargetFormat::Gemini,
-            AdapterFormat::Responses => openproxy_types::TargetFormat::Responses,
-        };
-
-        let stream = if !ctx.req.openai_request.stream && ctx.req.stream_sink.is_some() {
-            true
-        } else {
-            ctx.req.openai_request.stream
-        };
+        let target_format = current.model.target_format;
+        let stream = ctx.req.openai_request.stream;
 
         let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
             if openproxy_compression::would_compress(
                 &ctx.req.openai_request.messages,
                 ctx.pipeline.config.compression_mode,
             ) {
-                let mut msgs = ctx.req.openai_request.messages.clone();
+                let mut msgs = ctx.req.openai_request.messages.to_vec();
                 let stats = openproxy_compression::apply_compression(
                     &mut msgs,
                     ctx.pipeline.config.compression_mode,
@@ -204,7 +192,7 @@ impl PipelineStage for FormattingStage {
 
         let formatter = crate::formatting::get_formatter(target_format);
         let body_bytes = match formatter
-            .format_request(&ctx.req, &current.model, messages_ref, stream, &adapter)
+            .format_request(&ctx.req, &current.model, messages_ref, stream, adapter)
             .and_then(|body| {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             }) {
@@ -249,22 +237,20 @@ impl PipelineStage for DispatchStage {
         ctx: &mut PipelineContext,
         _next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let mut current = ctx
+        let current = ctx
             .current_target
-            .as_ref()
-            .ok_or_else(|| CoreError::Internal("missing current_target in pipeline context".into()))?
-            .clone();
+            .as_mut()
+            .ok_or_else(|| CoreError::Internal("missing current_target in pipeline context".into()))?;
         let target = &current.target;
         let model = &current.model;
         let attempt = ctx.current_target_attempt;
         let race_size = ctx.race_size;
         let started = ctx.started.unwrap_or_else(std::time::Instant::now);
-        let trace_id = ctx.trace_id.clone();
+        let trace_id = ctx.req.trace_id.to_string();
         let combo = ctx
             .combo
             .as_ref()
-            .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?
-            .clone();
+            .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
 
         let adapter = match ctx
             .pipeline
@@ -273,12 +259,12 @@ impl PipelineStage for DispatchStage {
             .iter()
             .find(|a| a.id() == &target.provider_id)
         {
-            Some(a) => a.clone(),
+            Some(a) => a,
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
                 return Ok(ctx.pipeline.record_and_fail(
                     ctx.req.clone(),
-                    &combo,
+                    combo,
                     target,
                     FailureContext {
                         proxy_url: None,
@@ -301,7 +287,7 @@ impl PipelineStage for DispatchStage {
         {
             return Ok(ctx.pipeline.record_and_fail_with_trace_id(
                 ctx.req.clone(),
-                &combo,
+                combo,
                 target,
                 FailureContext {
                     proxy_url: None,
@@ -354,23 +340,19 @@ impl PipelineStage for DispatchStage {
             }
         }
 
-        // We update the context so the changes to `current` (e.g. antigravity_project) are passed along.
-        ctx.current_target = Some(current.clone());
-
         let api_key = current
             .custom_meta
             .as_ref()
-            .map(|m| m.access_token.clone())
-            .unwrap_or_else(|| current.api_key.clone());
-        let account_label = current.api_key_label.clone();
+            .map(|m| m.access_token.as_str())
+            .unwrap_or(current.api_key.as_str());
+        let account_label_str = current.api_key_label.as_deref().unwrap_or("");
 
         let target_format = ctx
             .target_format
             .ok_or_else(|| CoreError::Internal("missing target_format in pipeline context".into()))?;
-        let account_label_str = account_label.as_deref().unwrap_or("");
         let url =
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
-        let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
+        let headers = adapter.build_headers(api_key, target_format, &model.model_id);
 
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
@@ -390,7 +372,7 @@ impl PipelineStage for DispatchStage {
 
         let body_bytes = ctx
             .body_bytes
-            .clone()
+            .take()
             .ok_or_else(|| CoreError::Internal("missing body_bytes in pipeline context".into()))?;
         let resolved_timeouts = ctx
             .resolved_timeouts
@@ -401,7 +383,7 @@ impl PipelineStage for DispatchStage {
             .dispatcher
             .dispatch_upstream(
                 target,
-                &combo,
+                combo,
                 ctx.req.clone(),
                 model,
                 target_format,
@@ -514,7 +496,7 @@ impl PipelineStage for CustomAdapterStage {
             .iter()
             .find(|a| a.id() == &target.provider_id)
         {
-            Some(a) => a.clone(),
+            Some(a) => a,
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
                 let combo = ctx
@@ -537,7 +519,7 @@ impl PipelineStage for CustomAdapterStage {
                         ttft_ms: None,
                         status_code: 0,
                     },
-                    ctx.trace_id.clone(),
+                    ctx.req.trace_id.to_string(),
                 ));
             }
         };

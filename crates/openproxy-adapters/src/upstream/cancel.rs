@@ -132,7 +132,7 @@ impl CancellationToken {
             token.cancel();
             return token;
         }
-        let inner = token.clone();
+        let inner = CancellationToken::clone(&token);
         tokio::spawn(async move {
             // `changed()` returns Err when the sender is dropped; treat
             // that as a no-op (the upstream call will finish or hit its
@@ -166,7 +166,7 @@ impl CancellationToken {
             token.cancel();
             return token;
         }
-        let inner = token.clone();
+        let inner = CancellationToken::clone(&token);
         let mut cancel_rx = race_token.inner.cancel_tx.subscribe();
         // Close TOCTOU: if cancelled between is_cancelled() above and
         // subscribe(), the initial value is already true but changed()
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn clone_shares_state() {
         let t = CancellationToken::new();
-        let t2 = t.clone();
+        let t2 = CancellationToken::clone(&t);
         t2.cancel();
         assert!(t.is_cancelled());
         assert_eq!(t.cancel_count(), 1);
@@ -298,7 +298,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_awaits_cancel() {
         let t = CancellationToken::new();
-        let t2 = t.clone();
+        let t2 = CancellationToken::clone(&t);
 
         let handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -316,7 +316,7 @@ mod tests {
         let t = CancellationToken::new();
         let mut handles = Vec::new();
         for _ in 0..10 {
-            let t2 = t.clone();
+            let t2 = CancellationToken::clone(&t);
             handles.push(tokio::spawn(async move {
                 t2.cancelled().await;
                 assert!(t2.is_cancelled());
@@ -366,7 +366,7 @@ mod tests {
     async fn from_watch_and_token_fires_on_race_token() {
         let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
-        let token = CancellationToken::from_watch_and_token(rx, race_token.clone());
+        let token = CancellationToken::from_watch_and_token(rx, CancellationToken::clone(&race_token));
         assert!(!token.is_cancelled());
 
         race_token.cancel();

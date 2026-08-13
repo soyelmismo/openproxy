@@ -146,23 +146,23 @@ impl TargetFormatter for ResponsesFormatter {
             obj.insert("top_p".to_string(), json!(top_p));
         }
         if let Some(tools) = &req.openai_request.tools {
-            let mut flat_tools = Vec::new();
+            let mut flat_tools = Vec::with_capacity(tools.len());
             for tool in tools {
                 let mut flat_tool = tool.clone();
                 if let Some(obj) = flat_tool.as_object_mut() {
                     let is_function = obj.get("type").and_then(|v| v.as_str()) == Some("function");
                     if is_function
-                        && let Some(func) = obj.remove("function")
-                        && let Some(func_obj) = func.as_object()
+                        && let Some(mut func) = obj.remove("function")
+                        && let Some(func_obj) = func.as_object_mut()
                     {
-                        if let Some(name) = func_obj.get("name") {
-                            obj.insert("name".to_string(), name.clone());
+                        if let Some(name) = func_obj.remove("name") {
+                            obj.insert("name".to_string(), name);
                         }
-                        if let Some(desc) = func_obj.get("description") {
-                            obj.insert("description".to_string(), desc.clone());
+                        if let Some(desc) = func_obj.remove("description") {
+                            obj.insert("description".to_string(), desc);
                         }
-                        if let Some(params) = func_obj.get("parameters") {
-                            obj.insert("parameters".to_string(), params.clone());
+                        if let Some(params) = func_obj.remove("parameters") {
+                            obj.insert("parameters".to_string(), params);
                         }
                     }
                 }
@@ -174,11 +174,11 @@ impl TargetFormatter for ResponsesFormatter {
             let mut flat_choice = tool_choice.clone();
             if let Some(obj) = flat_choice.as_object_mut()
                 && obj.get("type").and_then(|v| v.as_str()) == Some("function")
-                && let Some(func) = obj.remove("function")
-                && let Some(func_obj) = func.as_object()
-                && let Some(name) = func_obj.get("name")
+                && let Some(mut func) = obj.remove("function")
+                && let Some(func_obj) = func.as_object_mut()
+                && let Some(name) = func_obj.remove("name")
             {
-                obj.insert("name".to_string(), name.clone());
+                obj.insert("name".to_string(), name);
             }
             obj.insert("tool_choice".to_string(), flat_choice);
         }
@@ -254,8 +254,8 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
         if msg.role == "tool" {
             let call_id = msg
                 .tool_call_id
-                .clone()
-                .unwrap_or_else(|| "call_xyz".to_string());
+                .as_deref()
+                .unwrap_or("call_xyz");
             let content_str = content_to_text(msg.content.as_ref());
             input_items.push(json!({
                 "type": "function_call_output",

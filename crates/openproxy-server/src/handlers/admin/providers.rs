@@ -95,7 +95,7 @@ pub async fn delete_provider(
     // rebuild_adapters re-acquires the same non-reentrant
     // parking_lot::Mutex. Holding the guard across
     // rebuild_adapters deadlocks the Tokio worker thread.
-    let pid = ProviderId::new(id.clone());
+    let pid = ProviderId::new(&id);
     {
         let w = s.db_pool().writer();
         core_admin::delete_provider(&w, &pid)?;
@@ -132,7 +132,7 @@ pub async fn set_provider_active(
         .and_then(|v| v.as_bool())
         .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
     let w = s.db_pool().writer();
-    let provider_id = ProviderId::new(id.clone());
+    let provider_id = ProviderId::new(&id);
     core_admin::set_provider_active(&w, &provider_id, active)?;
     Ok(Json(serde_json::json!({ "id": id, "active": active })))
 }
@@ -146,7 +146,7 @@ pub async fn update_provider(
     // rebuild_adapters re-acquires the same non-reentrant
     // parking_lot::Mutex. Holding the guard across
     // rebuild_adapters deadlocks the Tokio worker thread.
-    let provider_id = ProviderId::new(id.clone());
+    let provider_id = ProviderId::new(&id);
     {
         let w = s.db_pool().writer();
         core_admin::update_provider(&w, &provider_id, body)?;
@@ -176,13 +176,13 @@ async fn run_provider_refresh(
     provider_id_str: String,
     q: ProviderRefreshQuery,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let provider = ProviderId::new(provider_id_str.clone());
+    let provider = ProviderId::new(&provider_id_str);
     let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
 
     // 1. Find the adapter. Check built-in adapters first, then
     //    fall back to constructing a CustomAdapter from the DB row.
     let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
-        Ok(a) => a.clone(),
+        Ok(a) => a,
         Err(e) => return Err(ApiError(e)),
     };
 

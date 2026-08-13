@@ -28,7 +28,7 @@ pub fn normalize_model_id(id: &str) -> String {
     let s = s.replace(":", "-");
 
     let s: String = DATE_SUFFIX_RE.replace_all(&s, "").into_owned();
-    let s: String = strip_compact_yyyymmdd(&s).unwrap_or_else(|| s.clone());
+    let s: String = strip_compact_yyyymmdd(&s).unwrap_or(s);
 
     let s: String = YYYYMM_SUFFIX_RE.replace_all(&s, "").into_owned();
 

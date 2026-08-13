@@ -272,7 +272,7 @@ fn pipeline_request_clone_shares_large_payloads() {
     let (mut req, _) = make_request(ComboId(1));
     req.request_body_json = Some(bytes::Bytes::from(vec![b'x'; 1024 * 1024]));
 
-    let cloned = req.clone();
+    let cloned = req.to_owned();
 
     assert!(Arc::ptr_eq(&req.openai_request, &cloned.openai_request));
     assert!(Arc::ptr_eq(
@@ -465,9 +465,9 @@ fn strip_provider_prefix(
     let stripped = if let Some(rest) = req.model.strip_prefix(&prefix) {
         rest.to_string()
     } else {
-        req.model.clone()
+        req.model.to_owned()
     };
-    let mut out = req.clone();
+    let mut out = req.to_owned();
     out.model = stripped;
     out
 }
@@ -628,7 +628,7 @@ async fn pipeline_probes_parked_target_when_only_option() {
     // error (e.g. `UpstreamConnection`) rather than a misleading
     // "no healthy targets" 502.
     let (pool, conn, _path) = fresh_pool();
-    let repo = SqlitePipelineRepository::new(conn.clone());
+    let repo = SqlitePipelineRepository::new(Arc::clone(&conn));
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, target_id, _account_id, _model_id) = {
         let w = pool.writer();
@@ -720,7 +720,7 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
     use crate::test_utils::combos::AddTargetInput;
 
     let (pool, conn, _path) = fresh_pool();
-    let repo = SqlitePipelineRepository::new(conn.clone());
+    let repo = SqlitePipelineRepository::new(Arc::clone(&conn));
     let mk = Arc::new(MasterKey::generate());
 
     // Seed one provider, one model, three accounts (distinct
@@ -920,7 +920,7 @@ async fn priority_combo_walks_row_after_first_5xx() {
     let upstream_url = format!("http://{local_addr}");
 
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -1063,7 +1063,7 @@ async fn priority_combo_walks_row_after_first_5xx() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "prio-mock",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -1201,7 +1201,7 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -1300,7 +1300,7 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "adv-mock",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -1407,7 +1407,7 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -1507,7 +1507,7 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "adv-mock",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -1597,7 +1597,7 @@ async fn round_robin_combo_walks_past_non_retryable_400() {
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -1700,7 +1700,7 @@ data: [DONE]
     // 3. Wire the mock + run.
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock =
-        crate::test_utils::MockAdapter::new("rr-mock", upstream_url.clone(), AdapterFormat::Openai);
+        crate::test_utils::MockAdapter::new("rr-mock", upstream_url.to_owned(), AdapterFormat::Openai);
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -1769,7 +1769,7 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -1909,7 +1909,7 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "nested-mock",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -1974,7 +1974,7 @@ async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
     use std::sync::atomic::Ordering;
     use std::time::Instant;
     let (pool, conn, _path) = fresh_pool();
-    let repo = SqlitePipelineRepository::new(conn.clone());
+    let repo = SqlitePipelineRepository::new(Arc::clone(&conn));
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, target_ids, _account_id, _model_id) = {
         let w = pool.writer();
@@ -2100,7 +2100,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -2185,7 +2185,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "adv-mock",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -2277,7 +2277,7 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
     let call_count = Arc::new(AtomicU32::new(0));
-    let server_call_count = call_count.clone();
+    let server_call_count = Arc::clone(&call_count);
     let server_handle = tokio::spawn(async move {
         loop {
             let (mut sock, _peer) = match listener.accept().await {
@@ -2385,7 +2385,7 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "adv-mock",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -2517,7 +2517,7 @@ async fn pipeline_clears_cooldown_on_success_path() {
     // test would need a real HTTP mock — but it covers the
     // contract that "on success the row goes away".
     let (pool, conn, _path) = fresh_pool();
-    let repo = SqlitePipelineRepository::new(conn.clone());
+    let repo = SqlitePipelineRepository::new(Arc::clone(&conn));
     let (combo_id, target_id, _account_id, _model_id) = {
         let w = pool.writer();
         seed_target_with_account(&w, &MasterKey::generate())
@@ -2932,7 +2932,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
     let (combo_id, account_id) =
         seed_solo_combo_at_url(&pool.writer(), "openrouter", "http://127.0.0.1:1", &mk);
     let cfg = test_config_with_adapters(mk);
-    let p = Pipeline::new(conn.clone(), cfg);
+    let p = Pipeline::new(conn, cfg);
 
     let (req, cancel_tx) = make_request(combo_id);
     // Cancel BEFORE the run starts so the per-target boundary
@@ -3085,7 +3085,7 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "non-streaming-test",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -3165,7 +3165,7 @@ async fn bug_a_body_reaches_upstream() {
     // round-trips intact (i.e. we're not getting a default /
     // empty body).
     let bytes_received = Arc::new(AtomicUsize::new(0));
-    let bytes_received_clone = bytes_received.clone();
+    let bytes_received_clone = Arc::clone(&bytes_received);
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
         let mut buf = vec![0u8; 64 * 1024];
@@ -3234,7 +3234,7 @@ async fn bug_a_body_reaches_upstream() {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         "body-bug-test",
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let cfg = PipelineConfig {
@@ -3424,7 +3424,7 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     let mock = crate::test_utils::MockAdapter {
         config: ProviderAdapterConfig {
             id: ProviderId::new("streaming-test"),
-            base_url: upstream_url.clone(),
+            base_url: upstream_url.to_owned(),
             auth_type: AdapterAuthType::Bearer,
             format: AdapterFormat::Openai,
             extra_headers: Vec::new(),
@@ -3627,7 +3627,7 @@ async fn cancellation_mid_stream_select_aborts() {
     let (combo_id, _account_id) =
         seed_solo_combo_at_url(&pool.writer(), "openrouter", &format!("http://{}", addr), &mk);
 
-    let mut cfg = test_config_with_adapters(mk.clone());
+    let mut cfg = test_config_with_adapters(mk);
     // The built-in openrouter adapter hardcodes its base_url in build_chat_url.
     // To make it hit our local server, we extract test_config_with_mock's logic, but inline:
     let mock = crate::test_utils::MockAdapter {
@@ -3796,9 +3796,9 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     let accepted = Arc::new(AtomicBool::new(false));
     let bytes_after_headers = Arc::new(AtomicU64::new(0));
 
-    let server_client_closed = client_closed.clone();
-    let server_accepted = accepted.clone();
-    let server_bytes = bytes_after_headers.clone();
+    let server_client_closed = Arc::clone(&client_closed);
+    let server_accepted = Arc::clone(&accepted);
+    let server_bytes = Arc::clone(&bytes_after_headers);
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
         server_accepted.store(true, Ordering::SeqCst);
@@ -3955,7 +3955,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     //    `idle_chunk_ms` instead, the run would still be
     //    pending at the 3s timeout below.
     // -----------------------------------------------------------------
-    let cfg = test_config_with_mock(mk, upstream_url.clone());
+    let cfg = test_config_with_mock(mk, upstream_url.to_owned());
     let p = Pipeline::new(conn, cfg);
 
     let (mut req, cancel_tx) = make_request(combo_id);
@@ -3965,10 +3965,9 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     // enough time for UpstreamClient to finish the POST, get the
     // 200 OK, parse the first chunk, and start blocking on
     // the second `bytes_stream().next()`.
-    let cancel_tx_clone = cancel_tx.clone();
     let cancel_task = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let _ = cancel_tx_clone.send(true);
+        let _ = cancel_tx.send(true);
     });
 
     let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
@@ -4169,7 +4168,7 @@ async fn run_with_fake_upstream_and_capture_stages(
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = crate::test_utils::MockAdapter::new(
         provider_id,
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Openai,
     );
     let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -4727,7 +4726,7 @@ async fn run_streaming_and_get_response_body(
     // to pick the SSE parser branch.
     let mock = crate::test_utils::MockAdapter::new(
         provider_id,
-        upstream_url.clone(),
+        upstream_url.to_owned(),
         AdapterFormat::Mixed,
     );
     let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(recording));
@@ -5371,7 +5370,7 @@ fn test_quota_routing_and_protection() {
     let (_pool, conn, _db_path) = fresh_pool();
     let master_key = Arc::new(MasterKey::generate());
     let config = test_config(Arc::clone(&master_key));
-    let pipeline = Pipeline::new(conn.clone(), config);
+    let pipeline = Pipeline::new(Arc::clone(&conn), config);
 
     seed_provider(&conn.lock(), "antigravity", AuthType::Bearer);
 
@@ -5589,7 +5588,7 @@ fn test_quota_routing_and_protection() {
         pipeline.config.quota_protection.threshold_percentage,
         pipeline.repo().as_ref(),
         &master_key,
-        targets.clone(),
+        targets.to_vec(),
         "gemini-3-flash",
     );
     assert_eq!(resolved.len(), 1);
@@ -5701,7 +5700,7 @@ fn test_opencode_zen_no_account_proxy_rotation() {
     .unwrap();
 
     let conn_arc = Arc::new(parking_lot::Mutex::new(conn));
-    let repo = SqlitePipelineRepository::new(conn_arc.clone());
+    let repo = SqlitePipelineRepository::new(Arc::clone(&conn_arc));
 
     // 1. Insert opencode-zen provider
     {

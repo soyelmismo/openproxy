@@ -163,7 +163,7 @@ async fn register_oidc_client(
 
     let cancel = CancellationToken::new();
     let register_response = upstream_client
-        .call(register_req, TimeoutProfile::OAuth, cancel.clone())
+        .call(register_req, TimeoutProfile::OAuth, cancel)
         .await
         .map_err(|e| match e {
             UpstreamError::Cancel => {
@@ -262,7 +262,7 @@ impl OAuthProvider for KiroOAuthProvider {
 
         let cancel = CancellationToken::new();
         let register_response = upstream_client
-            .call(register_req, TimeoutProfile::OAuth, cancel.clone())
+            .call(register_req, TimeoutProfile::OAuth, cancel)
             .await;
         let register_response = register_response.map_err(|e| match e {
             UpstreamError::Cancel => {
@@ -305,7 +305,7 @@ impl OAuthProvider for KiroOAuthProvider {
             UpstreamRequest::post_json(DEVICE_AUTH_URL, bytes::Bytes::from(auth_body_bytes));
 
         let device_auth_response = upstream_client
-            .call(device_auth_req, TimeoutProfile::OAuth, cancel)
+            .call(device_auth_req, TimeoutProfile::OAuth, CancellationToken::new())
             .await;
         let device_auth_response = device_auth_response.map_err(|e| match e {
             UpstreamError::Cancel => {
@@ -425,12 +425,11 @@ impl OAuthProvider for KiroOAuthProvider {
             .with_conn(|conn| self::read_profile_meta(conn, account_id))?
             .unwrap_or_else(KiroProviderMeta::default);
 
-        let region_str = if meta.region.is_empty() {
-            DEFAULT_REGION.to_string()
+        let region = if meta.region.is_empty() {
+            DEFAULT_REGION
         } else {
-            meta.region.clone()
+            meta.region.as_str()
         };
-        let region = region_str.as_str();
         let token_url = format!("https://oidc.{region}.amazonaws.com/token");
 
         if meta.auth_method.as_deref() == Some("imported")
@@ -548,7 +547,7 @@ impl OAuthProvider for KiroOAuthProvider {
 
         let mut success_body = None;
         if status.is_success() {
-            success_body = Some(body_bytes.clone());
+            success_body = Some(bytes::Bytes::clone(&body_bytes));
         } else {
             // Client credentials may be expired or invalid. Attempt dynamic client re-registration fallback!
             tracing::warn!(
@@ -579,7 +578,7 @@ impl OAuthProvider for KiroOAuthProvider {
                         && retry_status.is_success()
                     {
                         // Update dynamic client credentials back to the database!
-                        let mut updated_meta = meta.clone();
+                        let mut updated_meta = meta;
                         updated_meta.client_id = new_cid;
                         updated_meta.client_secret = new_csec;
                         let meta_json = serde_json::to_string(&updated_meta).map_err(|e| {
@@ -654,7 +653,7 @@ impl OAuthProvider for KiroOAuthProvider {
         //    next `.await` (the listAvailableProfiles HTTP call)
         //    is `Send`.
         let (access_token, mut meta) = {
-            let db_pool = db_pool.clone();
+            let db_pool = Arc::clone(db_pool);
             let master_key = master_key.clone();
 
             tokio::task::spawn_blocking(move || {
@@ -723,7 +722,7 @@ impl OAuthProvider for KiroOAuthProvider {
         //    executor can read them later.
         let meta_json = serde_json::to_string(&meta)
             .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
-        let db_pool = db_pool.clone();
+        let db_pool = Arc::clone(db_pool);
         let res = tokio::task::spawn_blocking(move || {
             let conn = db_pool.writer();
             conn.execute(

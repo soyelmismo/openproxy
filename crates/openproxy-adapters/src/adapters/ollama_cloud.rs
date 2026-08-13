@@ -93,11 +93,12 @@ impl ProviderAdapter for OllamaCloudAdapter {
             .models
             .into_iter()
             .map(|m| {
-                let id = m.name.clone().unwrap_or_default();
+                let id = m.name.unwrap_or_default();
                 let family = derive_ollama_family(&id);
+                let display_name = m.display_name.or_else(|| Some(id.clone()));
                 DiscoveredModel {
-                    model_id: ModelId::new(id.clone()),
-                    display_name: m.display_name.or(Some(id)),
+                    model_id: ModelId::new(id),
+                    display_name,
                     target_format: TargetFormat::Openai,
                     context_length: None,
                     max_output_tokens: None,

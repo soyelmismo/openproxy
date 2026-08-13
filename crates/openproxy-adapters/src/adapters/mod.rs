@@ -823,8 +823,8 @@ pub(crate) async fn fetch_openai_models(
         .map(|m| {
             let id = m.id;
             DiscoveredModel {
-                model_id: ModelId::new(id.clone()),
-                display_name: Some(id),
+                display_name: Some(id.clone()),
+                model_id: ModelId::new(id),
                 target_format,
                 context_length: None,
                 max_output_tokens: None,

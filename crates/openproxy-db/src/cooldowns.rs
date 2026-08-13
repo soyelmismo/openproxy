@@ -98,7 +98,9 @@ pub fn add_provider_proxy_cooldown(
 
 pub fn is_provider_proxy_in_cooldown(provider_id: &str, proxy_id: &str) -> bool {
     if let Ok(map) = PROVIDER_PROXY_COOLDOWNS.read()
-        && let Some(until) = map.get(&(provider_id.to_string(), proxy_id.to_string()))
+        && let Some((_, until)) = map
+            .iter()
+            .find(|((p, px), _)| p == provider_id && px == proxy_id)
     {
         return Instant::now() < *until;
     }

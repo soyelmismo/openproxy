@@ -204,23 +204,13 @@ impl UpstreamTransport for ProductionTransport {
     }
 }
 
-struct TestTransport<C, T>
-where
-    C: tower_service::Service<
-            Uri,
-            Response = T,
-            Error = Box<dyn std::error::Error + Send + Sync>,
-            Future: Send + Unpin + 'static,
-        > + Send
-        + Sync
-        + 'static,
-    T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
-{
+#[cfg(feature = "upstream-hyper")]
+struct TestTransport<C> {
     hyper: HyperClient<C, Full<Bytes>>,
     phase_hint: Option<UpstreamPhase>,
 }
 
-impl<C, T> std::fmt::Debug for TestTransport<C, T>
+impl<C, T> std::fmt::Debug for TestTransport<C>
 where
     C: tower_service::Service<
             Uri,
@@ -239,7 +229,7 @@ where
     }
 }
 
-impl<C, T> UpstreamTransport for TestTransport<C, T>
+impl<C, T> UpstreamTransport for TestTransport<C>
 where
     C: tower_service::Service<
             Uri,
@@ -304,7 +294,7 @@ impl UpstreamClient {
                     .pool_idle_timeout(std::time::Duration::from_secs(20))
                     .build(connector);
             let pool = Pool::new();
-            spawn_eviction_loop(pool.clone());
+            spawn_eviction_loop(Pool::clone(&pool));
             Arc::new(Self {
                 pool,
                 transport: Arc::new(ProductionTransport { hyper }),
@@ -313,7 +303,7 @@ impl UpstreamClient {
         #[cfg(not(feature = "upstream-hyper"))]
         {
             let pool = Pool::new();
-            spawn_eviction_loop(pool.clone());
+            spawn_eviction_loop(Pool::clone(&pool));
             Arc::new(Self { pool })
         }
     }
@@ -407,51 +397,29 @@ impl UpstreamClient {
             } else {
                 80
             });
-        let host_key = HostKey::new(scheme, host.clone(), port);
+        let host_key = HostKey::new(scheme, &host, port);
 
         // Build the hyper::Request<Full<Bytes>> for the legacy client.
-        //
-        // HIGH-6 fix: we build `Full<Bytes>` directly instead of going
-        // through `Pin<Box<dyn Body>>`. The production dispatch takes
-        // `Request<Full<Bytes>>` and hands it straight to hyper —
-        // eliminating the `body.collect().await` + `HeaderMap::clone()`
-        // round-trip that the dyn-Body trait forced on us.
-        let body_bytes = spec.body.clone();
-        let body: Full<Bytes> = match &body_bytes {
-            Some(bytes) => Full::new(bytes.clone()),
+        let body_bytes = spec.body;
+        let body_len = body_bytes.as_ref().map(|b| b.len());
+        let body: Full<Bytes> = match body_bytes {
+            Some(bytes) => Full::new(bytes),
             None => Full::new(Bytes::new()),
         };
         let mut builder = Request::builder()
-            .method(spec.method.clone())
+            .method(spec.method)
             .uri(&spec.url);
         {
             let headers = builder.headers_mut().ok_or_else(|| {
                 UpstreamError::Invalid("failed to build request headers".to_string())
             })?;
-            for (k, v) in spec.headers.iter() {
-                headers.append(k.clone(), v.clone());
-            }
+            *headers = spec.headers;
             // Set `Content-Length` when the body is a known-size
             // buffer. hyper-util's legacy client does NOT auto-set
-            // `Content-Length` (verified against hyper 1.10
-            // `src/proto/h1/dispatch.rs` and
-            // `hyper-util 0.1.20/src/client/legacy/client.rs`:
-            // `set_content_length_if_missing` is only called from
-            // the h2 client, NOT the h1 client used by the legacy
-            // builder). With chunked encoding as the only fallback,
-            // strict upstreams (Google's `oauth2.googleapis.com`
-            // returns `411 Length Required`, OpenRouter returns
-            // `400 JSON parsing failed` on the chunked body)
-            // reject the request.
-            //
-            // ponytail: only emit when the caller did NOT set the
-            // header themselves (i.e. the adapter didn't ask for a
-            // specific value). For `UpstreamRequest::post_json` the
-            // caller sets `Content-Type` but not `Content-Length`,
-            // so we always add it. For `get` we skip it (no body).
-            if let Some(ref bytes) = body_bytes
+            // `Content-Length`.
+            if let Some(len) = body_len
                 && !headers.contains_key(http::header::CONTENT_LENGTH)
-                && let Ok(v) = http::HeaderValue::from_str(&bytes.len().to_string())
+                && let Ok(v) = http::HeaderValue::from_str(&len.to_string())
             {
                 headers.insert(http::header::CONTENT_LENGTH, v);
             }
@@ -460,44 +428,14 @@ impl UpstreamClient {
             .body(body)
             .map_err(|e| UpstreamError::Invalid(e.to_string()))?;
 
-        // Bug 2b/2c fix: hyper's legacy client performs dial + TLS +
-        // write + wait-for-headers as a SINGLE `Service::call` future.
-        // The old code "soft-accumulated" the per-step deadlines by
-        // racing that single future against
-        // `min(headers, write, dial, tls, total)` and labelling every
-        // timeout as `Headers`. That violated the contract: a tight
-        // `write_ms` would never surface as `Timeout(Write)`.
-        //
-        // The new design is real per-phase enforcement, with the
-        // phases split across two layers:
-        //
-        //   - DNS / Dial / TLS: enforced INSIDE the connector
-        //     (`PhasedConnector` in `connector.rs`) with their own
-        //     `tokio::time::timeout` calls. A stalled DNS lookup
-        //     surfaces as a `PhasedConnectorError` with phase `Dns`,
-        //     and we downcast the boxed error to recover the phase
-        //     below.
-        //
-        //   - Write vs Headers: enforced HERE with NESTED
-        //     `tokio::time::timeout` calls. The OUTER race has
-        //     `write_ms` and labels the timeout `Write`; the INNER
-        //     race has `headers_ms` and labels the timeout `Headers`.
-        //     Whichever ceiling fires first wins.
-        //
-        //   - Total: the outermost ceiling.
-        //
-        // With this structure, `write_ms = 200ms` and
-        // `headers_ms = 30_000ms` produces `Timeout(Write)` at ~200ms
-        // even if the server eventually responds — which is what the
-        // contract requires.
-        let pool = self.pool.clone();
-        let cancel_for_send = cancel.clone();
-        let host_key_for_send = host_key.clone();
-        let host_for_log = host.clone();
-        let transport = self.transport.clone();
+        let pool = Pool::clone(&self.pool);
+        let cancel_for_send = CancellationToken::clone(&cancel);
+        let host_key_for_send = host_key;
+        let host_for_log = host;
+        let transport = Arc::clone(&self.transport);
         let phase_hint = transport.phase_hint();
         let connector_timeouts = PhasedTimeouts::from_resolved(&timeouts);
-        let proxy_url = spec.proxy.clone();
+        let proxy_url = spec.proxy;
         let send_fut = async move {
             let res = transport
                 .send_request(request, connector_timeouts, proxy_url)
@@ -509,9 +447,9 @@ impl UpstreamClient {
             if res.is_ok() {
                 let count = pool.total();
                 if count == 0 {
-                    pool.record_dial(host_key_for_send.clone());
+                    pool.record_dial(host_key_for_send);
                 } else {
-                    pool.record_reuse(host_key_for_send.clone());
+                    pool.record_reuse(host_key_for_send);
                 }
                 tracing::debug!(host = %host_for_log, "upstream request completed");
             }
@@ -628,7 +566,7 @@ impl UpstreamClient {
         // budget in ms and the total ceiling.
         let body_stream = UpstreamBodyStream::from_hyper(
             body,
-            cancel.clone(),
+            cancel,
             timeouts.body_chunk_ms,
             deadlines.total_deadline,
             // 8 MiB hard cap per body (was 32 MiB). LLM responses

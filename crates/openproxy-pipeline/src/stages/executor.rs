@@ -17,7 +17,7 @@ impl PipelineStage for UpstreamExecutorStage {
             Some(c) => c,
             None => return Err(CoreError::Validation("No combo resolved".to_string())),
         };
-        let to_run = ctx.targets.clone();
+        let to_run = std::mem::take(&mut ctx.targets);
 
         if to_run.is_empty() {
             return Err(CoreError::NoHealthyTargets(combo.id.0));
@@ -63,7 +63,7 @@ impl PipelineStage for UpstreamExecutorStage {
 
         for target in to_run.iter() {
             let client_disconnected = {
-                let mut rx = ctx.req.client_disconnected.clone();
+                let mut rx = tokio::sync::watch::Receiver::clone(&ctx.req.client_disconnected);
                 ctx.pipeline.is_client_disconnected(&mut rx)
             };
             if let Some(reason) = client_disconnected {
@@ -105,7 +105,7 @@ impl PipelineStage for UpstreamExecutorStage {
                     break;
                 }
                 let client_disconnected = {
-                    let mut rx = ctx.req.client_disconnected.clone();
+                    let mut rx = tokio::sync::watch::Receiver::clone(&ctx.req.client_disconnected);
                     ctx.pipeline.is_client_disconnected(&mut rx)
                 };
                 if let Some(reason) = client_disconnected {

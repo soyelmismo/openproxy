@@ -110,8 +110,7 @@ pub async fn admin_auth_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let headers = req.headers().clone();
-    if let Err(e) = authenticate_admin_ws(&state, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&state, req.headers(), None) {
         return e.into_response();
     }
     next.run(req).await

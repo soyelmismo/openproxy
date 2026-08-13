@@ -111,12 +111,11 @@ impl PipelineChain {
     > {
         Box::pin(async move {
             if index < self.stages.len() {
-                let stage = self.stages[index].clone();
                 let next = PipelineNext {
                     chain: self,
                     next_index: index + 1,
                 };
-                stage.execute(ctx, next).await
+                self.stages[index].execute(ctx, next).await
             } else {
                 Err(CoreError::Validation(
                     "Pipeline chain reached end without a result".to_string(),

@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let state = openproxy_server::state::AppState::new(config).await?;
 
     // 4. Build router (state is moved into the router).
-    let bind_addr = state.config().server.bind.clone();
+    let bind_addr = state.config().server.bind.to_owned();
     let app = openproxy_server::router::build_router(state);
 
     // 5. Bind and serve

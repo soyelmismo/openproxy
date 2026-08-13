@@ -110,12 +110,8 @@ impl ProviderAdapter for OpenRouterAdapter {
         let models: Vec<DiscoveredModel> = arr
             .iter()
             .filter_map(|raw| {
-                let entry: OpenRouterModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-                // Borrow the id first so the rest of the closure can
-                // keep `&entry` borrowable; only clone the String when
-                // we need to move it into the `DiscoveredModel`.
-                let id_ref = entry.id.as_ref()?;
-                let id_string = id_ref.clone();
+                let mut entry: OpenRouterModelEntry = serde::Deserialize::deserialize(raw).ok()?;
+                let id_string = entry.id.take()?;
 
                 // Derive capabilities from supported_parameters.
                 let caps = derive_capabilities(&entry);
@@ -128,14 +124,12 @@ impl ProviderAdapter for OpenRouterAdapter {
                 // as NULL rather than `[]`).
                 let input_modalities = entry
                     .architecture
-                    .as_ref()
-                    .map(|a| a.input_modalities.clone())
-                    .filter(|v| !v.is_empty());
+                    .as_mut()
+                    .and_then(|a| if a.input_modalities.is_empty() { None } else { Some(std::mem::take(&mut a.input_modalities)) });
                 let output_modalities = entry
                     .architecture
-                    .as_ref()
-                    .map(|a| a.output_modalities.clone())
-                    .filter(|v| !v.is_empty());
+                    .as_mut()
+                    .and_then(|a| if a.output_modalities.is_empty() { None } else { Some(std::mem::take(&mut a.output_modalities)) });
 
                 // Context: prefer top-level, fallback to top_provider.
                 let context_length = entry
@@ -151,13 +145,13 @@ impl ProviderAdapter for OpenRouterAdapter {
                 // Family: derive from canonical_slug or hugging_face_id or id.
                 let family = entry
                     .canonical_slug
-                    .clone()
-                    .or_else(|| entry.hugging_face_id.clone())
+                    .or(entry.hugging_face_id)
                     .or_else(|| derive_family_from_id(&id_string));
 
+                let display_name = entry.name.or_else(|| Some(id_string.clone()));
                 Some(DiscoveredModel {
-                    model_id: ModelId::new(id_string.clone()),
-                    display_name: entry.name.or(Some(id_string)),
+                    model_id: ModelId::new(id_string),
+                    display_name,
                     // OpenRouter is OpenAI-only on the wire for chat completions.
                     target_format: TargetFormat::Openai,
                     context_length,

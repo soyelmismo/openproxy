@@ -98,11 +98,10 @@ pub async fn refresh_account_quota(
     Path(account_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     tracing::info!(account_id = account_id, "refresh_account_quota: start");
-    let s_clone = s.clone();
     let result: Result<Json<serde_json::Value>, ApiError> = async move {
         let account_id = AccountId::new(account_id);
 
-        let supported_providers: Vec<String> = s_clone
+        let supported_providers: Vec<String> = s
             .adapters()
             .iter()
             .filter(|a| a.metadata().quota_refresh_supported)
@@ -111,11 +110,11 @@ pub async fn refresh_account_quota(
 
         let q_opt = openproxy_core::quota_sync::refresh_single_account_quota(
             account_id,
-            s_clone.db_pool(),
-            s_clone.master_key(),
+            s.db_pool(),
+            s.master_key(),
             &supported_providers,
-            s_clone.upstream_client(),
-            &s_clone.oauth_provider_registry(),
+            s.upstream_client(),
+            &s.oauth_provider_registry(),
         )
         .await?;
 

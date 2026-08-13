@@ -154,7 +154,7 @@ pub fn get_builtin_filter(detected_id: &str) -> Option<Arc<CompiledFilter>> {
 /// Returns a cheaply-cloned `Arc<CompiledFilter>` pointing at the single
 /// process-wide `GENERIC_FILTER` instance.
 pub fn get_generic_filter() -> Arc<CompiledFilter> {
-    GENERIC_FILTER.clone()
+    Arc::clone(&GENERIC_FILTER)
 }
 
 // ─── Builtin filter constructors ─────────────────────────────────────────────

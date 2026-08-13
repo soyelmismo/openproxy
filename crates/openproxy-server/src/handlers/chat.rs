@@ -171,12 +171,14 @@ async fn run_pipeline(
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
     spawn_watchdog(done_rx, watchdog_tx, watchdog_budget_ms);
 
+    let is_stream = openai_req.stream;
+
     // 8. Build request and run.
     let req = PipelineRequest {
         request_id,
         trace_id,
         combo_id,
-        openai_request: openai_req.clone(),
+        openai_request: openai_req,
         client_disconnected,
         stream_sink,
         api_key_id,
@@ -190,7 +192,7 @@ async fn run_pipeline(
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
     };
 
-    if openai_req.stream {
+    if is_stream {
         return handle_streaming_response(pipeline, req, done_tx, rx).await;
     }
 
@@ -203,12 +205,12 @@ fn build_pipeline(state: &AppState) -> Pipeline {
         racing: state.config().racing.clone(),
         retries: state.config().retries,
         max_attempts: state.config().retries.max_attempts,
-        master_key: state.master_key().clone(),
+        master_key: Arc::clone(state.master_key()),
         adapters: state.adapters(),
         cooldown_secs: state.config().cooldown.cooldown_secs,
         cooldown_max_secs: state.config().cooldown.max_secs,
         cooldown_factor: state.config().cooldown.factor,
-        upstream_client: state.upstream_client().clone(),
+        upstream_client: Arc::clone(state.upstream_client()),
         oauth_provider_registry: Some(state.oauth_provider_registry()),
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),

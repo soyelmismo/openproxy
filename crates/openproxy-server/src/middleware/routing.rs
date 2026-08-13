@@ -47,7 +47,7 @@ pub async fn routing_middleware(
     let openai_req = parsed_chat_req.parsed;
     let plan = resolve_routing_plan(&state, req.headers(), &openai_req, &auth_token)?;
     let (combo_id, combo_override, targets_override) =
-        translate_plan_to_targets(&state, &plan, api_key_id)?;
+        translate_plan_to_targets(&state, plan, api_key_id)?;
 
     let resolved = ResolvedRoute {
         openai_req,
@@ -69,12 +69,11 @@ fn resolve_routing_plan(
 ) -> Result<RoutingPlan, ApiError> {
     let legacy_combo_name = headers
         .get("x-openproxy-combo")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+        .and_then(|v| v.to_str().ok());
 
     let plan = {
         let w = state.db_pool().writer();
-        if let Some(name) = legacy_combo_name.as_deref() {
+        if let Some(name) = legacy_combo_name {
             match openproxy_db::combos::get_combo_by_name(&w, name)? {
                 Some(combo) => {
                     let targets = openproxy_db::combos::list_targets(&w, combo.id)?;
@@ -110,7 +109,7 @@ fn resolve_routing_plan(
 #[allow(clippy::type_complexity)]
 fn translate_plan_to_targets(
     state: &AppState,
-    plan: &RoutingPlan,
+    plan: RoutingPlan,
     api_key_id: Option<ApiKeyId>,
 ) -> Result<
     (
@@ -130,10 +129,10 @@ fn translate_plan_to_targets(
         } => {
             if combo_id.0 == SYNTHETIC_COMBO_ID {
                 let synthetic_combo = openproxy_types::combos::Combo {
-                    id: *combo_id,
-                    name: combo_name.clone(),
-                    strategy: *strategy,
-                    race_size: *race_size,
+                    id: combo_id,
+                    name: combo_name,
+                    strategy,
+                    race_size,
                     created_at: String::new(),
                     context_window: None,
                     priority_mode: openproxy_types::combos::PriorityMode::Strict,
@@ -144,13 +143,13 @@ fn translate_plan_to_targets(
                     lkgp_exploration_rate: None,
                     selection_window_secs: None,
                 };
-                Ok((*combo_id, Some(synthetic_combo), Some(targets.clone())))
+                Ok((combo_id, Some(synthetic_combo), Some(targets)))
             } else {
-                Ok((*combo_id, None, None))
+                Ok((combo_id, None, None))
             }
         }
         RoutingPlan::NotFound { model, hint } => {
-            let _ = record_model_not_found_usage_row(state, RequestId::new(), api_key_id, model);
+            let _ = record_model_not_found_usage_row(state, RequestId::new(), api_key_id, &model);
             let mut msg = format!("model not found: {}", model);
             if let Some(h) = hint {
                 msg.push_str(&format!(" (hint: {})", h));

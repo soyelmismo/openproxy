@@ -53,14 +53,14 @@ impl RaceSink {
         let sink = Arc::new(Self {
             inner,
             winner: AtomicUsize::new(0),
-            worker_tokens: worker_tokens.clone(),
+            worker_tokens: worker_tokens.to_vec(),
         });
         (sink, worker_tokens)
     }
 
     pub fn handle(self: &Arc<Self>, worker_id: usize) -> RaceSinkHandle {
         RaceSinkHandle {
-            sink: self.clone(),
+            sink: Arc::clone(self),
             worker_id,
         }
     }

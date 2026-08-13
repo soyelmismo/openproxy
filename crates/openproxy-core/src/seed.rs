@@ -22,7 +22,7 @@ use rusqlite::{Connection, params};
 pub fn builtin_provider_ids() -> Vec<String> {
     openproxy_adapters::adapters::builtin_adapters()
         .iter()
-        .map(|a| a.config().id.0.clone())
+        .map(|a| a.config().id.0.to_owned())
         .collect()
 }
 
@@ -66,12 +66,11 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
     let adapters = openproxy_adapters::adapters::builtin_adapters();
     for adapter in adapters {
         let conf = adapter.config();
-        let id_typed = conf.id.clone();
 
         // Skip if the row already exists. `providers::get` returns
         // `Ok(None)` for a missing id, so the `?` only fires on a real
         // database error.
-        if providers::get(conn, &id_typed)?.is_some() {
+        if providers::get(conn, &conf.id)?.is_some() {
             continue;
         }
 
@@ -81,14 +80,14 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
         let extra_headers = if conf.extra_headers.is_empty() {
             None
         } else {
-            let map: std::collections::HashMap<_, _> = conf.extra_headers.iter().cloned().collect();
+            let map: std::collections::HashMap<&str, &str> = conf.extra_headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
             serde_json::to_string(&map).ok()
         };
 
         providers::create(
             conn,
             providers::NewProvider {
-                id: &id_typed,
+                id: &conf.id,
                 name: &conf.name,
                 base_url: &conf.base_url,
                 auth_type: auth,
@@ -178,9 +177,9 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
         // model_type: COALESCE(NULL, heuristic) — never clobber an
         // operator-set value.
         let model_type = if m.model_type.is_empty() {
-            capabilities::infer_model_type(model_id).to_string()
+            capabilities::infer_model_type(model_id)
         } else {
-            m.model_type.clone()
+            m.model_type.as_str()
         };
         let family = capabilities::infer_family(model_id);
 

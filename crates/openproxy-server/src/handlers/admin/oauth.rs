@@ -86,7 +86,6 @@ pub async fn oauth_exchange(
                 provider
             )))
         })?;
-
         let upstream_client = s.upstream_client();
         let token = provider_impl
             .exchange_code(code, code_verifier, upstream_client, redirect_uri)
@@ -95,28 +94,19 @@ pub async fn oauth_exchange(
         // If no account_id provided, create a new account for this OAuth provider.
         let account_id = match account_id_input {
             Some(id) => AccountId(id),
-            None => {
-                let pool = s.db_pool().clone();
-                let master_key = s.master_key().clone();
-                let provider_name = provider.clone();
-                tokio::task::spawn_blocking(move || {
-                    let w = pool.writer();
-                    let provider_id = ProviderId::new(&provider_name);
-                    core_accounts::create(
-                        &w,
-                        &provider_id,
-                        None, // no API key — OAuth account
-                        &master_key,
-                        None, // label
-                        10,   // default priority
-                        None, // extra_config_json
-                    )
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    Err(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
-                })?
-            }
+            None => tokio::task::block_in_place(|| {
+                let w = s.db_pool().writer();
+                let provider_id = ProviderId::new(&provider);
+                core_accounts::create(
+                    &w,
+                    &provider_id,
+                    None, // no API key — OAuth account
+                    s.master_key(),
+                    None, // label
+                    10,   // default priority
+                    None, // extra_config_json
+                )
+            })?,
         };
         let expires_at = token.expires_in.map(|secs| {
             (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
@@ -124,60 +114,48 @@ pub async fn oauth_exchange(
                 .to_string()
         });
         {
-            let pool = s.db_pool().clone();
             let provider_specific = provider_impl.provider_specific_from_token(&token);
             let email = provider_impl.email_from_token(&token);
-            let master_key = s.master_key().clone();
 
-            // Clone token fields since they'll move into the closure
-            let access_token = token.access_token.clone();
-            let refresh_token = token.refresh_token.clone();
-            let token_type = token.token_type.clone();
-            let scope = token.scope.clone();
-
-            tokio::task::spawn_blocking(move || {
-                let w = pool.writer();
+            tokio::task::block_in_place(|| {
+                let w = s.db_pool().writer();
                 openproxy_core::accounts::store_oauth_tokens(
                     &w,
                     account_id,
-                    &access_token,
-                    refresh_token.as_deref(),
-                    &master_key,
-                    &token_type,
+                    &token.access_token,
+                    token.refresh_token.as_deref(),
+                    s.master_key(),
+                    &token.token_type,
                     expires_at.as_deref(),
-                    scope.as_deref(),
+                    token.scope.as_deref(),
                     provider_specific.as_deref(),
                     email.as_deref(),
                 )
-            })
-            .await
-            .unwrap_or_else(|e| {
-                Err(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
             })?;
         }
 
-        // Post-exchange hook. For Antigravity this calls
-        // loadCodeAssist / onboardUser to recover the user's
-        // projectId; for other PKCE providers it's a no-op.
-        // Errors are logged but do not abort the request — the
-        // account is still usable for token refresh; the project
-        // bootstrap can be retried later.
+        // LOW fix (#11): fire the post-exchange hook if the
+        // provider supports one. For KiRO (and future providers)
+        // this auto-creates an initial catalog model and probes
+        // the upstream for its region / profile ARN. Errors are
+        // non-fatal — the operator already has the account row
+        // so we log at WARN and return a normal JSON response.
         if let Err(e) = provider_impl
             .post_exchange(account_id, s.db_pool(), s.master_key(), s.upstream_client())
             .await
         {
             tracing::warn!(
-                account = account_id.0,
                 provider = %provider,
+                account_id = account_id.0,
                 error = %e,
-                "oauth post_exchange hook failed; account usable without it"
+                "post-exchange hook failed",
             );
         }
 
         Ok(Json(serde_json::json!({
-            "status": "ok",
             "account_id": account_id.0,
-            "token_type": token.token_type,
+            "provider": provider,
+            "status": "connected",
         })))
     }
     .await;
@@ -192,7 +170,7 @@ pub async fn oauth_device_code(
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
-                "provider '{}' does not support device code flow",
+                "provider '{}' does not support device code authorization",
                 provider
             )))
         })?;
@@ -207,17 +185,10 @@ pub async fn oauth_device_code(
         // payload — a reload / state eviction / server restart
         // would force the user to restart the whole flow. See
         // `openproxy_core::oauth::tickets` for the storage shape.
-        tokio::task::spawn_blocking({
-            let pool = s.db_pool().clone();
-            let provider = provider.clone();
-            let dar = dar.clone();
-            move || {
-                let w = pool.writer();
-                openproxy_core::oauth::tickets::create_ticket(&w, &provider, &dar)
-            }
-        })
-        .await
-        .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn_blocking failed: {}", e))))?;
+        tokio::task::block_in_place(|| {
+            let w = s.db_pool().writer();
+            openproxy_core::oauth::tickets::create_ticket(&w, &provider, &dar)
+        })?;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
@@ -254,11 +225,9 @@ pub async fn oauth_device_poll(
         // not mutate state, so a stalled poll never burns the
         // ticket — only `mark_consumed` on success.
         {
-            let pool = s.db_pool().clone();
-            let device_code_clone = device_code.to_string();
-            tokio::task::spawn_blocking(move || {
-                let w = pool.writer();
-                match openproxy_core::oauth::tickets::lookup_active(&w, &device_code_clone)? {
+            tokio::task::block_in_place(|| {
+                let w = s.db_pool().writer();
+                match openproxy_core::oauth::tickets::lookup_active(&w, device_code)? {
                     openproxy_core::oauth::tickets::TicketStatus::Active(_) => Ok(()),
                     openproxy_core::oauth::tickets::TicketStatus::Expired => {
                         Err(ApiError(CoreError::Validation(
@@ -268,17 +237,17 @@ pub async fn oauth_device_poll(
                     openproxy_core::oauth::tickets::TicketStatus::Consumed => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
-                            id: device_code_clone,
+                            id: device_code.to_string(),
                         }))
                     }
                     openproxy_core::oauth::tickets::TicketStatus::Unknown => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
-                            id: device_code_clone,
+                            id: device_code.to_string(),
                         }))
                     }
                 }
-            }).await.map_err(ApiError::from)??;
+            })?;
         }
 
         let registry = s.oauth_provider_registry();
@@ -298,24 +267,19 @@ pub async fn oauth_device_poll(
                 // If no account_id provided, create a new account for this OAuth provider.
                 let account_id = match account_id_input {
                     Some(id) => AccountId(id),
-                    None => {
-                        let pool = s.db_pool().clone();
-                        let master_key = s.master_key().clone();
-                        let provider_name = provider.clone();
-                        tokio::task::spawn_blocking(move || {
-                            let w = pool.writer();
-                            let provider_id = ProviderId::new(&provider_name);
-                            core_accounts::create(
-                                &w,
-                                &provider_id,
-                                None, // no API key — OAuth account
-                                &master_key,
-                                None,   // label
-                                10,     // default priority
-                                None,   // extra_config_json
-                            )
-                        }).await.map_err(ApiError::from)??
-                    }
+                    None => tokio::task::block_in_place(|| {
+                        let w = s.db_pool().writer();
+                        let provider_id = ProviderId::new(&provider);
+                        core_accounts::create(
+                            &w,
+                            &provider_id,
+                            None, // no API key — OAuth account
+                            s.master_key(),
+                            None,   // label
+                            10,     // default priority
+                            None,   // extra_config_json
+                        )
+                    })?,
                 };
                 let expires_at = token.expires_in.map(|secs| {
                     (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
@@ -345,28 +309,21 @@ pub async fn oauth_device_poll(
                 let email = provider_impl.email_from_token(&token);
 
                 {
-                    let pool = s.db_pool().clone();
-                    let master_key = s.master_key().clone();
-                    let access_token = token.access_token.clone();
-                    let refresh_token = token.refresh_token.clone();
-                    let token_type = token.token_type.clone();
-                    let scope = token.scope.clone();
-                    let expires_at_clone = expires_at.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let w = pool.writer();
+                    tokio::task::block_in_place(|| {
+                        let w = s.db_pool().writer();
                         openproxy_core::accounts::store_oauth_tokens(
                             &w,
                             account_id,
-                            &access_token,
-                            refresh_token.as_deref(),
-                            &master_key,
-                            &token_type,
-                            expires_at_clone.as_deref(),
-                            scope.as_deref(),
+                            &token.access_token,
+                            token.refresh_token.as_deref(),
+                            s.master_key(),
+                            &token.token_type,
+                            expires_at.as_deref(),
+                            token.scope.as_deref(),
                             provider_specific.as_deref(),
                             email.as_deref(),
                         )
-                    }).await.map_err(ApiError::from)??;
+                    })?;
                 }
 
                 // LOW fix (#12): single-use enforcement. After a
@@ -376,20 +333,19 @@ pub async fn oauth_device_poll(
                 // `mark_consumed` is atomic, so a racing second
                 // poll will see the first redeem as Consumed and
                 // fail here too.
-                let pool2 = s.db_pool().clone();
-                let device_code_clone2 = device_code.to_string();
-                if let Err(e) = tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-                    let w = pool2.writer();
-                    openproxy_core::oauth::tickets::mark_consumed(&w, &device_code_clone2)
+                if let Err(e) = tokio::task::block_in_place(|| -> Result<(), ApiError> {
+                    let w = s.db_pool().writer();
+                    openproxy_core::oauth::tickets::mark_consumed(&w, device_code)
                         .map_err(ApiError)?;
                     Ok(())
-                }).await.map_err(ApiError::from).and_then(|r| r) {
+                }) {
                     tracing::warn!(
                         device_code = %device_code,
                         error = %e.0,
                         "mark_consumed failed; downstream was already wired — \
-                         a replay may now succeed before the next cleanup sweep"
+                         skipping post-exchange hook for this duplicate exchange",
                     );
+                    return Err(e);
                 }
 
                 // Post-exchange hook. For Kiro this hits
@@ -423,10 +379,10 @@ pub async fn oauth_device_poll(
 }
 
 pub async fn oauth_callback(
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(mut params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
-    let code = params.get("code").cloned().unwrap_or_default();
-    let state = params.get("state").cloned();
+    let code = params.remove("code").unwrap_or_default();
+    let state = params.remove("state");
     // Sanitize: never return raw error details from upstream providers —
     // they may contain URLs with tokens, internal error codes, or
     // other sensitive information. Map known error types to generic
@@ -475,12 +431,11 @@ pub(crate) async fn refresh_oauth_if_needed(
         return access_token;
     }
 
-    let stored_access_token = access_token.clone();
     let refresh_token = {
         let conn = s.db_pool().writer();
         match core_accounts::decrypt_refresh_token(&conn, account.id, s.master_key().as_ref()) {
             Ok(Some(rt)) => rt,
-            Ok(None) => return stored_access_token,
+            Ok(None) => return access_token,
             Err(e) => {
                 tracing::warn!(
                     account = account.id.0,
@@ -488,7 +443,7 @@ pub(crate) async fn refresh_oauth_if_needed(
                     error = %e,
                     "oauth refresh-on-demand: failed to decrypt refresh token"
                 );
-                return stored_access_token;
+                return access_token;
             }
         }
     };

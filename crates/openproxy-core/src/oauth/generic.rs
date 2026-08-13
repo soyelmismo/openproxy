@@ -93,11 +93,11 @@ impl GenericOAuthProvider {
         &self,
         upstream_client: &Arc<UpstreamClient>,
         purpose: &str,
-        params: Vec<(&str, String)>,
+        params: &[(&str, &str)],
     ) -> Result<TokenResponse> {
         let body = match self.spec.request_encoding {
-            OAuthRequestEncoding::FormUrlEncoded => urlencoded_body_owned(&params),
-            OAuthRequestEncoding::Json => json_body(&params)?,
+            OAuthRequestEncoding::FormUrlEncoded => urlencoded_body(params),
+            OAuthRequestEncoding::Json => json_body(params)?,
         };
 
         let mut req = UpstreamRequest::post_json(self.spec.token_url, body);
@@ -163,26 +163,31 @@ impl OAuthProvider for GenericOAuthProvider {
             code_challenge_s256(&code_verifier)
         };
         let client_id = self.spec.client_id()?;
+        let scopes = if !self.spec.scopes.is_empty() {
+            self.spec.scopes.join(" ")
+        } else {
+            String::new()
+        };
 
         let mut params = vec![
-            ("response_type", "code".to_string()),
-            ("client_id", client_id),
-            ("redirect_uri", redirect_uri.to_string()),
+            ("response_type", "code"),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", redirect_uri),
         ];
         if !self.spec.scopes.is_empty() {
-            params.push(("scope", self.spec.scopes.join(" ")));
+            params.push(("scope", scopes.as_str()));
         }
         if !code_challenge.is_empty() {
-            params.push(("code_challenge", code_challenge.clone()));
-            params.push(("code_challenge_method", "S256".to_string()));
+            params.push(("code_challenge", code_challenge.as_str()));
+            params.push(("code_challenge_method", "S256"));
         }
         for (key, value) in self.spec.auth_extra_params {
-            params.push((*key, (*value).to_string()));
+            params.push((*key, *value));
         }
 
         // Generate a random state value to prevent CSRF on the callback.
         let state = Uuid::new_v4().to_string();
-        params.push(("state", state.clone()));
+        params.push(("state", state.as_str()));
 
         Ok((
             format!("{authorize_url}?{}", urlencoded_string(&params)),
@@ -201,18 +206,19 @@ impl OAuthProvider for GenericOAuthProvider {
     ) -> Result<TokenResponse> {
         let client_id = self.spec.client_id()?;
         let mut params = vec![
-            ("grant_type", "authorization_code".to_string()),
-            ("code", code.to_string()),
-            ("client_id", client_id),
-            ("redirect_uri", redirect_uri.to_string()),
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", redirect_uri),
         ];
         if !code_verifier.is_empty() {
-            params.push(("code_verifier", code_verifier.to_string()));
+            params.push(("code_verifier", code_verifier));
         }
-        if let Some(secret) = self.spec.client_secret() {
-            params.push(("client_secret", secret));
+        let secret = self.spec.client_secret();
+        if let Some(ref secret) = secret {
+            params.push(("client_secret", secret.as_str()));
         }
-        self.token_request(upstream_client, "token exchange", params)
+        self.token_request(upstream_client, "token exchange", &params)
             .await
     }
 
@@ -233,16 +239,23 @@ impl OAuthProvider for GenericOAuthProvider {
             )));
         }
 
-        let mut params = vec![("client_id", self.spec.client_id()?)];
+        let client_id = self.spec.client_id()?;
+        let scopes = if !self.spec.scopes.is_empty() {
+            self.spec.scopes.join(" ")
+        } else {
+            String::new()
+        };
+        let mut params = vec![("client_id", client_id.as_str())];
         if !self.spec.scopes.is_empty() {
-            params.push(("scope", self.spec.scopes.join(" ")));
+            params.push(("scope", scopes.as_str()));
         }
-        if let Some(secret) = self.spec.client_secret() {
-            params.push(("client_secret", secret));
+        let secret = self.spec.client_secret();
+        if let Some(ref secret) = secret {
+            params.push(("client_secret", secret.as_str()));
         }
 
         let body = match self.spec.request_encoding {
-            OAuthRequestEncoding::FormUrlEncoded => urlencoded_body_owned(&params),
+            OAuthRequestEncoding::FormUrlEncoded => urlencoded_body(&params),
             OAuthRequestEncoding::Json => json_body(&params)?,
         };
         let mut req = UpstreamRequest::post_json(url, body);
@@ -269,20 +282,22 @@ impl OAuthProvider for GenericOAuthProvider {
                 self.spec.id
             )));
         }
+        let client_id = self.spec.client_id()?;
         let mut params = vec![
             (
                 "grant_type",
-                "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code",
             ),
-            ("device_code", device_code.to_string()),
-            ("client_id", self.spec.client_id()?),
+            ("device_code", device_code),
+            ("client_id", client_id.as_str()),
         ];
-        if let Some(secret) = self.spec.client_secret() {
-            params.push(("client_secret", secret));
+        let secret = self.spec.client_secret();
+        if let Some(ref secret) = secret {
+            params.push(("client_secret", secret.as_str()));
         }
 
         match self
-            .token_request(upstream_client, "device token poll", params)
+            .token_request(upstream_client, "device token poll", &params)
             .await
         {
             Ok(token) => Ok(Some(token)),
@@ -300,15 +315,17 @@ impl OAuthProvider for GenericOAuthProvider {
         _account_id: AccountId,
         _db: DbRef<'_>,
     ) -> Result<TokenResponse> {
+        let client_id = self.spec.client_id()?;
         let mut params = vec![
-            ("grant_type", "refresh_token".to_string()),
-            ("client_id", self.spec.client_id()?),
-            ("refresh_token", refresh_token.to_string()),
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id.as_str()),
+            ("refresh_token", refresh_token),
         ];
-        if let Some(secret) = self.spec.client_secret() {
-            params.push(("client_secret", secret));
+        let secret = self.spec.client_secret();
+        if let Some(ref secret) = secret {
+            params.push(("client_secret", secret.as_str()));
         }
-        self.token_request(upstream_client, "token refresh", params)
+        self.token_request(upstream_client, "token refresh", &params)
             .await
     }
 }
@@ -435,18 +452,10 @@ pub fn code_challenge_s256(verifier: &str) -> String {
 }
 
 pub fn urlencoded_body(params: &[(&str, &str)]) -> bytes::Bytes {
-    let owned: Vec<(&str, String)> = params
-        .iter()
-        .map(|(key, value)| (*key, (*value).to_string()))
-        .collect();
-    urlencoded_body_owned(&owned)
-}
-
-fn urlencoded_body_owned(params: &[(&str, String)]) -> bytes::Bytes {
     bytes::Bytes::from(urlencoded_string(params))
 }
 
-pub(crate) fn urlencoded_string(params: &[(&str, String)]) -> String {
+pub(crate) fn urlencoded_string(params: &[(&str, &str)]) -> String {
     let mut s = String::new();
     for (i, (k, v)) in params.iter().enumerate() {
         if i > 0 {
@@ -459,10 +468,10 @@ pub(crate) fn urlencoded_string(params: &[(&str, String)]) -> String {
     s
 }
 
-fn json_body(params: &[(&str, String)]) -> Result<bytes::Bytes> {
+fn json_body(params: &[(&str, &str)]) -> Result<bytes::Bytes> {
     let mut obj = serde_json::Map::new();
     for (key, value) in params {
-        obj.insert((*key).to_string(), serde_json::Value::String(value.clone()));
+        obj.insert((*key).to_string(), serde_json::Value::String((*value).to_string()));
     }
     serde_json::to_vec(&serde_json::Value::Object(obj))
         .map(bytes::Bytes::from)

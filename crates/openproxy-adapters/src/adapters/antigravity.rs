@@ -43,8 +43,6 @@ impl AntigravityAdapter {
 
         let mut models = Vec::new();
         for (model_id, model_data) in models_obj {
-            let upstream_id = model_id.clone();
-            let client_id = upstream_id.clone();
 
             let display_name = model_data
                 .get("displayName")
@@ -96,7 +94,7 @@ impl AntigravityAdapter {
             };
 
             models.push(DiscoveredModel {
-                model_id: ModelId::new(client_id),
+                model_id: ModelId::new(model_id),
                 display_name,
                 target_format,
                 context_length,
@@ -222,7 +220,7 @@ impl ProviderAdapter for AntigravityAdapter {
             let project = resolved_target
                 .custom_meta
                 .as_ref()
-                .and_then(|m| m.antigravity_project.clone())
+                .and_then(|m| m.antigravity_project.as_deref())
                 .unwrap_or_default();
             let physical_model = match model.as_str() {
                 "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",

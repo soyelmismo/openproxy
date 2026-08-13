@@ -36,7 +36,7 @@ impl MockAdapter {
     ) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut adapter = Self::new(id, String::new(), AdapterFormat::Openai);
-        adapter.call_count = Some(counter.clone());
+        adapter.call_count = Some(std::sync::Arc::clone(&counter));
         adapter.models_to_return = Some(models);
         (adapter, counter)
     }

@@ -356,7 +356,7 @@ pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price
     })
 }
 
-fn strip_model_suffixes(model: &str) -> Vec<String> {
+fn strip_model_suffixes(model: &str) -> Vec<&str> {
     let suffixes = [
         "-free-trial",
         "-free",
@@ -383,7 +383,7 @@ fn strip_model_suffixes(model: &str) -> Vec<String> {
             .strip_suffix(s)
             .filter(|rem| !rem.is_empty() && *rem != current)
     }) {
-        results.push(stripped.to_string());
+        results.push(stripped);
         current = stripped;
     }
 

@@ -250,16 +250,11 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                         }
                     })
                     .unwrap_or_else(|| "unknown".to_string());
-                if let Some(obj) = part.as_object_mut() {
-                    *obj = serde_json::json!({
-                        "type": "text",
-                        "text": format!("[image: {}]", fmt)
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
-                    applied.push("lite::replace_image");
-                }
+                *part = serde_json::json!({
+                    "type": "text",
+                    "text": format!("[image: {}]", fmt)
+                });
+                applied.push("lite::replace_image");
             }
         }
     }

@@ -165,25 +165,25 @@ impl CoreError {
     /// provider, model, account) survive.
     pub fn clone_for_result(&self) -> CoreError {
         match self {
-            CoreError::Config(s) => CoreError::Config(s.clone()),
+            CoreError::Config(s) => CoreError::Config(s.to_owned()),
             CoreError::Database { message, source: _ } => CoreError::Database {
-                message: message.clone(),
+                message: message.to_owned(),
                 source: None,
             },
             CoreError::Migration { version, message } => CoreError::Migration {
                 version: *version,
-                message: message.clone(),
+                message: message.to_owned(),
             },
-            CoreError::ProviderNotFound(s) => CoreError::ProviderNotFound(s.clone()),
+            CoreError::ProviderNotFound(s) => CoreError::ProviderNotFound(s.to_owned()),
             CoreError::AccountNotFound(i) => CoreError::AccountNotFound(*i),
             CoreError::ComboNotFound(i) => CoreError::ComboNotFound(*i),
             CoreError::ModelNotFound { provider, model } => CoreError::ModelNotFound {
-                provider: provider.clone(),
-                model: model.clone(),
+                provider: provider.to_owned(),
+                model: model.to_owned(),
             },
             CoreError::NoHealthyTargets(i) => CoreError::NoHealthyTargets(*i),
             CoreError::UpstreamTimeout { phase, ms } => CoreError::UpstreamTimeout {
-                phase: phase.clone(),
+                phase: phase.to_owned(),
                 ms: *ms,
             },
             CoreError::UpstreamError {
@@ -194,31 +194,31 @@ impl CoreError {
                 is_proxy_rotated,
             } => CoreError::UpstreamError {
                 status: *status,
-                provider: provider.clone(),
-                model: model.clone(),
-                body: body.clone(),
+                provider: provider.to_owned(),
+                model: model.to_owned(),
+                body: body.to_owned(),
                 is_proxy_rotated: *is_proxy_rotated,
             },
-            CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.clone()),
+            CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.to_owned()),
             CoreError::RateLimited {
                 provider,
                 retry_after_ms,
                 is_proxy_rotated,
             } => CoreError::RateLimited {
-                provider: provider.clone(),
+                provider: provider.to_owned(),
                 retry_after_ms: *retry_after_ms,
                 is_proxy_rotated: *is_proxy_rotated,
             },
-            CoreError::Parse(s) => CoreError::Parse(s.clone()),
+            CoreError::Parse(s) => CoreError::Parse(s.to_owned()),
             CoreError::Cancelled(r) => CoreError::Cancelled(*r),
             CoreError::RaceLost => CoreError::RaceLost,
-            CoreError::Auth(s) => CoreError::Auth(s.clone()),
-            CoreError::Validation(s) => CoreError::Validation(s.clone()),
-            CoreError::Internal(s) => CoreError::Internal(s.clone()),
-            CoreError::ServiceUnavailable(s) => CoreError::ServiceUnavailable(s.clone()),
+            CoreError::Auth(s) => CoreError::Auth(s.to_owned()),
+            CoreError::Validation(s) => CoreError::Validation(s.to_owned()),
+            CoreError::Internal(s) => CoreError::Internal(s.to_owned()),
+            CoreError::ServiceUnavailable(s) => CoreError::ServiceUnavailable(s.to_owned()),
             CoreError::NotFound { what, id } => CoreError::NotFound {
-                what: what.clone(),
-                id: id.clone(),
+                what: what.to_owned(),
+                id: id.to_owned(),
             },
         }
     }

@@ -38,10 +38,10 @@ impl OAuthProvider for ClineOAuthProvider {
         let state = uuid::Uuid::new_v4().to_string();
 
         let params = vec![
-            ("client_type", "extension".to_string()),
-            ("callback_url", redirect_uri.to_string()),
-            ("redirect_uri", redirect_uri.to_string()),
-            ("state", state.clone()),
+            ("client_type", "extension"),
+            ("callback_url", redirect_uri),
+            ("redirect_uri", redirect_uri),
+            ("state", state.as_str()),
         ];
 
         let url = format!(

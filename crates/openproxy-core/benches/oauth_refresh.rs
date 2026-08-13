@@ -32,7 +32,7 @@ fn bench_oauth_refresh(c: &mut Criterion) {
 
             let mut join_set = tokio::task::JoinSet::new();
             for _ in 0..10 {
-                let lim = limiter.clone();
+                let lim = Arc::clone(&limiter);
                 join_set.spawn(async move {
                     lim.until_ready().await;
                     tokio::time::sleep(Duration::from_millis(5)).await;

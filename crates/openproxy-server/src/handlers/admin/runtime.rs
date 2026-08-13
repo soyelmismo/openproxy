@@ -17,8 +17,6 @@ pub async fn get_runtime_config(
         timeouts: s.timeouts(),
         retries: cfg.retries,
         circuit_breaker: cfg.circuit_breaker,
-        // `RacingConfig` is `Clone` but not `Copy` (the other
-        // three are); `.clone()` is fine, it's three `u*` fields.
         racing: cfg.racing.clone(),
         recording_ttl_secs: s.recording_ttl_secs(),
         compression: s.compression_mode(),
@@ -126,15 +124,17 @@ pub async fn put_runtime_quota_protection(
             let now = chrono::Utc::now().timestamp();
             openproxy_db::app_config::save_quota_protection_to_db(&w, &body, now)?;
         }
-        s.set_quota_protection(body.clone());
+        let enabled = body.enabled;
+        let threshold_percentage = body.threshold_percentage;
+        s.set_quota_protection(body);
         tracing::info!(
-            enabled = body.enabled,
-            threshold_percentage = body.threshold_percentage,
+            enabled,
+            threshold_percentage,
             "updated quota_protection via admin API"
         );
         Ok(Json(serde_json::json!({
-            "enabled": body.enabled,
-            "threshold_percentage": body.threshold_percentage,
+            "enabled": enabled,
+            "threshold_percentage": threshold_percentage,
             "applies_to": "next_requests",
         })))
     }
@@ -171,13 +171,16 @@ pub async fn put_maintenance_config(
     if let Some(v) = body.get("usage_retention_days").and_then(|v| v.as_u64()) {
         cfg.usage_retention_days = v as u32;
     }
-    s.set_maintenance_config(cfg.clone());
+    let auto_vacuum = cfg.auto_vacuum;
+    let vacuum_interval_hours = cfg.interval_secs / 3600;
+    let usage_retention_days = cfg.usage_retention_days;
+    s.set_maintenance_config(cfg);
     Ok(Json(serde_json::json!({
         "updated": true,
         "config": {
-            "auto_vacuum": cfg.auto_vacuum,
-            "vacuum_interval_hours": cfg.interval_secs / 3600,
-            "usage_retention_days": cfg.usage_retention_days,
+            "auto_vacuum": auto_vacuum,
+            "vacuum_interval_hours": vacuum_interval_hours,
+            "usage_retention_days": usage_retention_days,
         }
     })))
 }

@@ -13,7 +13,7 @@ use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 /// 4-hour cooldown (since Pro quota resets every 5h).
@@ -81,8 +81,8 @@ async fn run_warmup_cycle(
 ) {
     // Extract necessary data so we can drop the DB lock before the network call
     let account_list: Vec<(i64, String, String, String)> = {
-        let db_pool = db_pool.clone();
-        let master_key = master_key.clone();
+        let db_pool = Arc::clone(db_pool);
+        let master_key = Arc::clone(master_key);
         tokio::task::spawn_blocking(move || {
             let conn = db_pool.writer();
 
@@ -99,11 +99,13 @@ async fn run_warmup_cycle(
                 .into_iter()
                 .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
                 .filter_map(|a| {
+                    let acc_id = a.id.0;
                     let token = accounts::decrypt_access_token(&conn, a.id, &master_key).ok()?;
-                    let project_id = crate::oauth::antigravity::read_project_id(&conn, a.id)
-                        .ok()
-                        .flatten()?;
-                    Some((a.id.0, a.id.0.to_string(), token, project_id))
+                    let meta = a.oauth_provider_specific?;
+                    let v: serde_json::Value = serde_json::from_str(&meta).ok()?;
+                    let project_id = v.get("project_id")?.as_str()?.to_string();
+                    let account_id_str = acc_id.to_string();
+                    Some((acc_id, token, project_id, account_id_str))
                 })
                 .collect()
         })
@@ -111,18 +113,15 @@ async fn run_warmup_cycle(
         .unwrap_or_default()
     };
 
-    let now = chrono::Utc::now().timestamp();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let models_to_ping = &config.smart_warmup.models;
 
-    for (account_id_i64, account_id_str, access_token, project_id) in account_list {
+    for (account_id_i64, access_token, project_id, account_id_str) in account_list {
         // Fetch fresh quota
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(
-            openproxy_adapters::adapters::AntigravityAdapter::new(),
-        );
-        let quota = match adapter
-            .fetch_quota(upstream, "", Some(&access_token), None)
-            .await
-        {
+        let quota = match fetch_antigravity_quota(upstream, &access_token, &project_id).await {
             Some(Ok(q)) => q,
             Some(Err(e)) => {
                 tracing::debug!(
@@ -137,8 +136,8 @@ async fn run_warmup_cycle(
 
         // Persist the fresh quota so the UI / frontend sees it
         {
-            let db_pool = db_pool.clone();
-            let quota = quota.clone();
+            let db_pool = Arc::clone(db_pool);
+            let quota = quota.to_owned();
             let _ = tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
                 let _ = crate::accounts::set_quota(
@@ -162,8 +161,8 @@ async fn run_warmup_cycle(
 
         for model_alias in models_to_ping {
             let true_model_id = {
-                let db_pool = db_pool.clone();
-                let alias = model_alias.clone();
+                let db_pool = Arc::clone(db_pool);
+                let alias = model_alias.to_owned();
                 tokio::task::spawn_blocking(move || {
                     let conn = db_pool.reader();
                     resolve_model_alias(&conn, &alias)
@@ -181,13 +180,13 @@ async fn run_warmup_cycle(
 
             // Check cooldown
             let last_ts = {
-                let db_pool = db_pool.clone();
-                let history_key = history_key.clone();
+                let db_pool = Arc::clone(db_pool);
+                let history_key_check = history_key.to_owned();
                 tokio::task::spawn_blocking(move || {
                     let conn = db_pool.reader();
                     conn.query_row(
                         "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
-                        rusqlite::params![history_key],
+                        rusqlite::params![history_key_check],
                         |r| r.get::<_, i64>(0),
                     )
                     .ok()
@@ -219,8 +218,8 @@ async fn run_warmup_cycle(
             .await;
 
             if success {
-                let db_pool = db_pool.clone();
-                let history_key = history_key.clone();
+                let db_pool = Arc::clone(db_pool);
+                let history_key = history_key.to_owned();
                 let _ = tokio::task::spawn_blocking(move || {
                     let conn = db_pool.writer();
                     let _ = conn.execute(
@@ -243,7 +242,7 @@ async fn run_warmup_cycle(
     // Cleanup history older than 24h to prevent table growth
     let cutoff = now - 86_400;
     {
-        let db_pool = db_pool.clone();
+        let db_pool = Arc::clone(db_pool);
         let _ = tokio::task::spawn_blocking(move || {
             let conn = db_pool.writer();
             let _ = conn.execute(
@@ -253,6 +252,19 @@ async fn run_warmup_cycle(
         })
         .await;
     }
+}
+
+async fn fetch_antigravity_quota(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    project_id: &str,
+) -> Option<crate::error::Result<openproxy_types::AccountQuota>> {
+    let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(
+        openproxy_adapters::adapters::AntigravityAdapter::new(),
+    );
+    adapter
+        .fetch_quota(upstream, project_id, Some(access_token), None)
+        .await
 }
 
 async fn ping_antigravity_model(

@@ -201,7 +201,7 @@ async fn cancel_mid_body() {
     let cancel = CancellationToken::new();
     let profile = TimeoutProfile::OAuth; // tight timeouts so the test is fast
     let mut resp = client
-        .call(UpstreamRequest::get(url), profile, cancel.clone())
+        .call(UpstreamRequest::get(url), profile, CancellationToken::clone(&cancel))
         .await
         .expect("first request should succeed");
     assert_eq!(resp.status, StatusCode::OK);
@@ -254,14 +254,14 @@ async fn conn_pool_reuse() {
 
     // First request: dial.
     let r1 = client
-        .call(UpstreamRequest::get(&url), profile, cancel.clone())
+        .call(UpstreamRequest::get(&url), profile, CancellationToken::clone(&cancel))
         .await
         .expect("first call ok");
     let _ = r1.body.collect_all().await.expect("collect first");
 
     // Second request to the same host: should reuse.
     let r2 = client
-        .call(UpstreamRequest::get(&url), profile, cancel.clone())
+        .call(UpstreamRequest::get(&url), profile, cancel)
         .await
         .expect("second call ok");
     let _ = r2.body.collect_all().await.expect("collect second");

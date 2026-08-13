@@ -15,7 +15,7 @@ fn payload_value(chunk: &UpstreamSseChunk) -> serde_json::Value {
     if let Some(ref raw) = chunk.raw_payload {
         serde_json::from_str(raw).unwrap()
     } else {
-        chunk.payload.clone()
+        chunk.payload.to_owned()
     }
 }
 

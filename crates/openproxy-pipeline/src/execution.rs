@@ -3,6 +3,7 @@ use openproxy_adapters::upstream::CancellationToken;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::ids::ComboId;
+use std::sync::Arc;
 use tokio::sync::watch;
 
 impl Pipeline {
@@ -119,8 +120,8 @@ impl Pipeline {
         provider_ids_no_account.dedup_by(|a, b| a.0 == b.0);
 
         let repo = self.repo();
-        let master_key = self.config.master_key.clone();
-        let oauth_registry = self.config.oauth_provider_registry.clone();
+        let master_key = Arc::clone(&self.config.master_key);
+        let oauth_registry = self.config.oauth_provider_registry.as_ref().map(Arc::clone);
 
         tokio::task::spawn_blocking(move || {
             let models_map = repo
@@ -163,7 +164,7 @@ impl Pipeline {
         ctx.current_target_attempt = attempt;
         ctx.race_size = race_size;
         ctx.total_targets = total_targets;
-        ctx.race_cancel = Some(race_cancel.clone());
+        ctx.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(race_cancel));
         ctx.started = Some(std::time::Instant::now());
 
         if attempt > 1 {
@@ -248,8 +249,8 @@ impl Pipeline {
         let repo = self.repo();
         let combo_clone = combo.clone();
         let overrides = targets_override.map(|o| o.to_vec());
-        let rr_counters = self.rr_counters.clone();
-        let selection_registry = self.selection_registry.clone();
+        let rr_counters = Arc::clone(&self.rr_counters);
+        let selection_registry = Arc::clone(&self.selection_registry);
         tokio::task::spawn_blocking(move || {
             if let Some(overrides) = overrides {
                 return repo.expand_account_rotation(overrides);

@@ -50,7 +50,8 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
         sanitized.truncate(idx);
         sanitized.push_str("...[truncated]");
     }
-    (sanitized.clone(), sanitized)
+    let copy = sanitized.clone();
+    (copy, sanitized)
 }
 
 pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {
@@ -74,7 +75,6 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     };
 
     let request_id = input.request_id.to_string();
-    let trace_id = input.trace_id.clone();
 
     conn.execute(
         "INSERT INTO usage (\
@@ -89,14 +89,14 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
             endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens\
          ) VALUES (\
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+            ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-            ?37, ?38, ?39, ?40, ?41\
+            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
+            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41\
          )",
         params![
             request_id,
-            trace_id,
+            input.trace_id.as_str(),
             input.attempt as i64,
             input.provider_id.as_str(),
             input.account_id.map(|a| a.0),
@@ -155,7 +155,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     let row = RecentUsageRow {
         id: UsageId(rowid),
         request_id,
-        trace_id,
+        trace_id: input.trace_id.clone(),
         provider_id: input.provider_id.clone(),
         upstream_model_id: input.upstream_model_id.clone(),
         status_code: input.status_code,
@@ -177,14 +177,14 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         race_attempts: Some(input.race_attempts),
         is_streaming: input.is_streaming,
         stream_complete: input.stream_complete,
-        stop_reason: input.stop_reason.clone(),
+        stop_reason: input.stop_reason.as_deref().map(str::to_owned),
         compression_savings_pct: input.compression_savings_pct,
-        compression_techniques: input.compression_techniques.clone(),
+        compression_techniques: input.compression_techniques.as_deref().map(str::to_owned),
         client_response: input.client_response,
         prompt_tokens_estimated: input.prompt_tokens_estimated,
         completion_tokens_estimated: input.completion_tokens_estimated,
-        proxy_url: input.proxy_url.clone(),
-        proxy_status: input.proxy_status.clone(),
+        proxy_url: input.proxy_url.as_deref().map(str::to_owned),
+        proxy_status: input.proxy_status.as_deref().map(str::to_owned),
         is_proxy_rotated: input.is_proxy_rotated,
         endpoint_kind: input.endpoint_kind,
     };

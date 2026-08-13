@@ -133,18 +133,12 @@ pub async fn transcribe(
         };
 
         // Clone the body for this attempt
-        let body_clone = ParsedAudioBody {
-            model_name: parsed_body.model_name.clone(),
-            file_bytes: parsed_body.file_bytes.clone(),
-            file_name: parsed_body.file_name.clone(),
-            file_content_type: parsed_body.file_content_type.clone(),
-            form_fields: parsed_body.form_fields.clone(),
-        };
+        let body_clone = parsed_body.clone();
 
         // Dispatch
         let response = match dispatch_audio_request(
             &state,
-            adapter.clone(),
+            openproxy_adapters::adapters::ProviderAdapterEnum::clone(&adapter),
             &upstream_url,
             &api_key,
             &target.upstream_model_id,
@@ -238,6 +232,7 @@ pub async fn transcribe(
         .unwrap_or_else(|| ApiError(CoreError::Internal("No valid targets found".into()))))
 }
 
+#[derive(Clone)]
 struct ParsedAudioBody {
     model_name: String,
     file_bytes: bytes::Bytes,

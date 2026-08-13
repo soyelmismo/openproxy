@@ -122,8 +122,8 @@ pub async fn list_models_admin(
 pub async fn sync_models_dev(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let upstream = s.upstream_client().clone();
-    let db_pool = s.db_pool().clone();
+    let upstream = Arc::clone(s.upstream_client());
+    let db_pool = Arc::clone(s.db_pool());
     let result = openproxy_core::models_dev_sync::run_one_shot(db_pool, upstream).await;
     let msg = match result {
         Ok(m) => m,
@@ -139,6 +139,8 @@ pub async fn refresh_models(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     run_refresh(s, id, q).await
 }
+
+use super::TestOptions;
 
 pub(crate) async fn run_test_for_model(
     s: &AppState,
@@ -209,7 +211,7 @@ pub(crate) async fn run_test_for_model(
     //    first, then fall back to constructing a CustomAdapter from the
     //    DB row.
     let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
-        Ok(a) => a.clone(),
+        Ok(a) => a,
         Err(err) => {
             return (
                 TestResult {
@@ -250,16 +252,8 @@ pub(crate) async fn run_test_for_model(
     let (_account_id_opt, _account_label, api_key) = if is_anonymous {
         (None, String::new(), String::new()) // Anonymous: no account, empty key
     } else {
-        let selected = match account_id {
-            Some(id) => {
-                // Per-model path: look up the already-pinned account.
-                let w = s.db_pool().writer();
-                tokio::task::block_in_place(|| {
-                    core_accounts::get(&w, id, s.master_key().as_ref())
-                        .ok()
-                        .flatten()
-                })
-            }
+        let account_id = match account_id {
+            Some(id) => Some(id),
             None => {
                 let healthy = accounts_list
                     .iter()
@@ -272,16 +266,9 @@ pub(crate) async fn run_test_for_model(
                 healthy
                     .or_else(degraded)
                     .or_else(|| accounts_list.first())
-                    .cloned()
+                    .map(|a| a.id)
             }
         };
-
-        let account_id = selected.as_ref().map(|a| a.id);
-        let account_label = selected
-            .as_ref()
-            .and_then(|a| a.label.as_deref())
-            .unwrap_or("")
-            .to_string();
 
         // 4. Decrypt the API key. Drop the writer guard immediately.
         //    OAuth accounts store the token in access_token_encrypted,
@@ -295,8 +282,8 @@ pub(crate) async fn run_test_for_model(
                         .ok()
                         .flatten()
                 });
-                raw_account_opt = account.clone();
-                if let Some(ref acc) = account
+                raw_account_opt = account;
+                if let Some(ref acc) = raw_account_opt
                     && acc.auth_type == "oauth"
                 {
                     match core_oauth::resolve_oauth_token(
@@ -364,6 +351,11 @@ pub(crate) async fn run_test_for_model(
             }
             None => String::new(),
         };
+
+        let account_label = raw_account_opt
+            .as_ref()
+            .and_then(|a| a.label.clone())
+            .unwrap_or_default();
 
         (account_id, account_label, api_key)
     };
@@ -514,7 +506,7 @@ pub(crate) async fn run_test_for_model(
             &model.model_id,
             &_account_label,
         );
-        let mut responses_req = openai_req.clone();
+        let mut responses_req = openai_req;
         responses_req.max_tokens = None;
         let (_cancel_tx, client_disconnected) =
             tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
@@ -538,7 +530,13 @@ pub(crate) async fn run_test_for_model(
         let formatter = openproxy_pipeline::formatting::get_formatter(
             openproxy_core::models::TargetFormat::Responses,
         );
-        match formatter.format_request(&pipeline_req, &model, &openai_req.messages, true, &adapter)
+        match formatter.format_request(
+            &pipeline_req,
+            &model,
+            &pipeline_req.openai_request.messages,
+            true,
+            &adapter,
+        )
         {
             Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
                 Ok(v) => (url, v),
@@ -561,15 +559,15 @@ pub(crate) async fn run_test_for_model(
                     );
                 }
             },
-            Err(e) => {
+            Err(err) => {
                 return (
                     TestResult {
                         row_id: model_row_id,
                         status: 500,
                         elapsed_ms: 0,
-                        error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
+                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                         skipped: true,
-                        skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
+                        skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     },
                     None,
                 );
@@ -615,7 +613,10 @@ pub(crate) async fn run_test_for_model(
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|v| {
                 v.get("project_id")
+                    .or_else(|| v.get("project"))
                     .or_else(|| v.get("projectId"))
+                    .or_else(|| v.get("client_id"))
+                    .or_else(|| v.get("clientId"))
                     .and_then(|p| p.as_str().map(String::from))
             });
 
@@ -645,25 +646,24 @@ pub(crate) async fn run_test_for_model(
             active: true,
             rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
         },
-        model: model.clone(),
-        api_key: api_key.clone(),
-        api_key_label: Some(_account_label.clone()),
+        model,
+        api_key,
+        api_key_label: Some(_account_label),
         custom_meta,
     };
 
     let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
-        url,
+        &url,
         match serde_json::to_vec(&body_value) {
             Ok(b) => {
                 match adapter.wrap_request_body(
                     bytes::Bytes::from(b),
                     effective_target_format,
-                    &model.model_id,
+                    &dummy_target.model.model_id,
                     &dummy_target,
                 ) {
                     Ok(wrapped) => wrapped,
                     Err(e) => {
-                        let _ = cancel_rx;
                         return (
                             TestResult {
                                 row_id: model_row_id,
@@ -691,7 +691,6 @@ pub(crate) async fn run_test_for_model(
                 }
             }
             Err(e) => {
-                let _ = cancel_rx;
                 return (
                     TestResult {
                         row_id: model_row_id,
@@ -718,7 +717,7 @@ pub(crate) async fn run_test_for_model(
             }
         },
     );
-    req.proxy = proxy_url.clone();
+    req.proxy = proxy_url;
     for (k, v) in &headers {
         if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
             && let Ok(hv) = axum::http::HeaderValue::from_str(v)
@@ -734,8 +733,8 @@ pub(crate) async fn run_test_for_model(
     let client = s.upstream_client();
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
 
-    if let Some(mut rx) = cancel_rx.clone() {
-        let rx_cancel = cancel.clone();
+    if let Some(mut rx) = cancel_rx {
+        let rx_cancel = openproxy_adapters::upstream::CancellationToken::clone(&cancel);
         tokio::spawn(async move {
             if rx.borrow().is_some() {
                 rx_cancel.cancel();
@@ -762,14 +761,20 @@ pub(crate) async fn run_test_for_model(
         },
     );
 
-    let result = client.call(req.clone(), profile, cancel).await;
+    let request_headers_map = if !opts.in_combo_fanout {
+        Some(req.headers.iter().map(|(k,v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect::<std::collections::HashMap<_,_>>())
+    } else {
+        None
+    };
+
+    let result = client.call(req, profile, cancel).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let mut debug_payload = None;
-    if !opts.in_combo_fanout {
+    if let Some(req_headers) = request_headers_map {
         debug_payload = Some(serde_json::json!({
-            "request_headers": req.headers.iter().map(|(k,v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect::<std::collections::HashMap<_,_>>(),
-            "request_url": req.url.to_string(),
-            "request_body": serde_json::from_slice::<serde_json::Value>(req.body.as_deref().unwrap_or_default()).unwrap_or_else(|_| serde_json::json!(String::from_utf8_lossy(req.body.as_deref().unwrap_or_default()).to_string())),
+            "request_headers": req_headers,
+            "request_url": url,
+            "request_body": serde_json::from_slice::<serde_json::Value>(&body_value.to_string().into_bytes()).unwrap_or_else(|_| serde_json::json!(body_value.to_string())),
         }));
     }
 
@@ -866,7 +871,7 @@ pub(crate) async fn run_refresh(
     //    first, then fall back to constructing a CustomAdapter from the
     //    DB row.
     let adapter = match resolve_adapter(&s, &provider_id, s.adapters().as_slice()) {
-        Ok(a) => a.clone(),
+        Ok(a) => a,
         Err(e) => return Err(ApiError(e)),
     };
 
@@ -976,7 +981,7 @@ pub(crate) fn resolve_adapter(
 ) -> Result<adapters::ProviderAdapterEnum, CoreError> {
     // 1. Built-in adapter?
     if let Some(a) = builtin.iter().find(|a| a.id() == provider_id) {
-        return Ok(a.clone());
+        return Ok(adapters::ProviderAdapterEnum::clone(a));
     }
     // 2. Custom provider in DB → build adapter on-the-fly.
     // `core_providers::get` is a SELECT — use the READER so this lookup

@@ -2,7 +2,7 @@ use serde_json::Value;
 
 pub fn message_content_to_text(content: &Option<serde_json::Value>) -> String {
     match content {
-        Some(Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => s.to_owned(),
         Some(Value::Array(parts)) => parts
             .iter()
             .map(openai_content_part_to_text)
@@ -29,7 +29,7 @@ pub fn openai_content_part_to_text(part: &serde_json::Value) -> String {
     }
 
     match part {
-        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::String(s) => s.to_owned(),
         serde_json::Value::Null => String::new(),
         other => other.to_string(),
     }

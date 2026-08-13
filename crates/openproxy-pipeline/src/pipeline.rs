@@ -94,7 +94,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn repo(&self) -> Arc<dyn crate::repository::PipelineRepository> {
-        self.repo.clone()
+        Arc::clone(&self.repo)
     }
 
     pub fn new(conn: Arc<parking_lot::Mutex<Connection>>, config: PipelineConfig) -> Self {
@@ -127,25 +127,24 @@ impl Pipeline {
     ) -> Self {
         let compression_stats_cell = Arc::new(RwLock::new(None));
         let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
-            conn.clone(),
+            Arc::clone(&conn),
         ));
         let tracker = crate::usage_tracker::UsageTracker {
-            conn: conn.clone(),
+            conn: Arc::clone(&conn),
             background_tx: config.background_tx.clone(),
-            record_bodies_and_headers: record_bodies_and_headers.clone(),
-            compression_stats_cell: compression_stats_cell.clone(),
-            selection_registry: selection_registry.clone(),
+            record_bodies_and_headers: Arc::clone(&record_bodies_and_headers),
+            compression_stats_cell: Arc::clone(&compression_stats_cell),
+            selection_registry: Arc::clone(&selection_registry),
             cooldown_secs: config.cooldown_secs,
             cooldown_max_secs: config.cooldown_max_secs,
             cooldown_factor: config.cooldown_factor,
-            repo: repo.clone(),
+            repo: Arc::clone(&repo) as Arc<dyn crate::repository::PipelineRepository>,
         };
         let dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
-            conn.clone(),
+            Arc::clone(&conn),
             config.clone(),
-            compression_stats_cell.clone(),
             tracker.clone(),
-            record_bodies_and_headers.clone(),
+            Arc::clone(&record_bodies_and_headers),
         );
         Self {
             conn,

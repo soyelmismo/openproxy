@@ -742,7 +742,7 @@ pub fn reorder_targets(
     // ids, duplicate ids, and extra ids all at once. The
     // "not belonging to this combo" case falls out for free because
     // the SELECT above is scoped by `combo_id`.
-    let mut current_sorted = current.clone();
+    let mut current_sorted = current;
     current_sorted.sort();
     let mut incoming: Vec<i64> = ordered_ids.iter().map(|i| i.0).collect();
     incoming.sort();
@@ -871,14 +871,14 @@ pub fn update_context_window(
 /// cases so the operator can flip the strategy back to `Priority`
 /// later without losing the mode they configured.
 pub fn update_priority_mode(conn: &Connection, id: ComboId, mode: Option<&str>) -> Result<()> {
-    let value: Option<String> = match mode {
+    let value: Option<&str> = match mode {
         None => None,
         Some(s) => {
             // Validate the string before persisting so a typo doesn't
             // land in the DB only to surface as `Strict` on the next
             // read (silently masking the misconfiguration).
             let parsed = PriorityMode::parse(s).map_err(CoreError::Validation)?;
-            Some(parsed.as_str().to_string())
+            Some(parsed.as_str())
         }
     };
     let affected = conn
@@ -916,11 +916,11 @@ pub fn update_cooldown_settings(
     max: Option<u64>,
     factor: Option<u32>,
 ) -> Result<()> {
-    let mode_value: Option<String> = match mode {
+    let mode_value: Option<&str> = match mode {
         None => None,
         Some(s) => {
             let parsed = CooldownMode::parse(s).map_err(CoreError::Validation)?;
-            Some(parsed.as_str().to_string())
+            Some(parsed.as_str())
         }
     };
     let affected = conn
@@ -952,11 +952,11 @@ pub fn update_cooldown_settings(
 /// untouched. This is the per-field update used by the dashboard's
 /// individual cooldown setting inputs.
 pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) -> Result<()> {
-    let mode_value: Option<String> = match mode {
+    let mode_value: Option<&str> = match mode {
         None => None,
         Some(s) => {
             let parsed = CooldownMode::parse(s).map_err(CoreError::Validation)?;
-            Some(parsed.as_str().to_string())
+            Some(parsed.as_str())
         }
     };
     let affected = conn

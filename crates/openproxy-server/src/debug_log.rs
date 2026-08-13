@@ -302,7 +302,7 @@ where
         // Push into the global buffer.
         let file_entry = if let Some(buf) = DEBUG_LOG_BUFFER.get() {
             let mut guard = buf.lock();
-            let to_send = entry.clone();
+            let to_send = entry.to_owned();
             guard.push(entry);
             to_send
         } else {

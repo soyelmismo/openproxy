@@ -199,9 +199,9 @@ pub fn list_proxies(
                 " AND (host LIKE ? OR source LIKE ? OR type LIKE ? OR country_code LIKE ?)",
             );
             let pattern = format!("%{}%", trimmed);
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.to_owned()));
+            params.push(Box::new(pattern.to_owned()));
+            params.push(Box::new(pattern.to_owned()));
             params.push(Box::new(pattern));
         }
     }
@@ -452,7 +452,7 @@ pub fn get_or_assign_provider_proxy(
             (None, None)
         }
     } else {
-        (provider.current_proxy_id.clone(), None)
+        (provider.current_proxy_id.to_owned(), None)
     };
 
     // 2. If current_proxy_id is set, verify it is still alive/valid and NOT in cooldown for this provider
@@ -548,14 +548,13 @@ pub fn get_or_assign_provider_proxy(
     let mut fallback_proxy = None;
 
     for item in candidate_rows.flatten() {
-        if fallback_proxy.is_none() {
-            fallback_proxy = Some(item.clone());
-        }
         if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0)
             && !in_use_by_others.contains(&item.0)
         {
             selected_proxy = Some(item);
             break;
+        } else if fallback_proxy.is_none() {
+            fallback_proxy = Some(item);
         }
     }
 
@@ -639,25 +638,25 @@ pub fn upsert_scraped_proxies(
 
             let id = uuid::Uuid::new_v4().to_string();
             params.push(id.into());
-            params.push(p.source.clone().into());
-            params.push(p.host.clone().into());
+            params.push(p.source.to_owned().into());
+            params.push(p.host.to_owned().into());
             params.push(p.port.into());
-            params.push(p.r#type.clone().into());
+            params.push(p.r#type.to_owned().into());
             match &p.country_code {
-                Some(cc) => params.push(cc.clone().into()),
+                Some(cc) => params.push(cc.to_owned().into()),
                 None => params.push(rusqlite::types::Value::Null),
             }
             match &p.username {
-                Some(u) => params.push(u.clone().into()),
+                Some(u) => params.push(u.to_owned().into()),
                 None => params.push(rusqlite::types::Value::Null),
             }
             match &p.password {
-                Some(pass) => params.push(pass.clone().into()),
+                Some(pass) => params.push(pass.to_owned().into()),
                 None => params.push(rusqlite::types::Value::Null),
             }
             params.push(p.priority.into());
-            params.push(now.clone().into());
-            params.push(now.clone().into());
+            params.push(now.to_owned().into());
+            params.push(now.to_owned().into());
         }
 
         sql.push_str(" ON CONFLICT(host, port) DO UPDATE SET \
@@ -1003,8 +1002,8 @@ async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
         if let Ok(port) = item.port.parse::<u16>() {
             let proto = item
                 .protocols
-                .first()
-                .cloned()
+                .into_iter()
+                .next()
                 .unwrap_or_else(|| "http".to_string());
             list.push(ScrapedProxy {
                 source: "geonode".to_string(),
@@ -1537,7 +1536,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
     let mut fetched = 0;
     let mut scraped = Vec::new();
 
-    let pool_for_sources = db_pool.clone();
+    let pool_for_sources = Arc::clone(&db_pool);
     let sources_res = tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
         let w = pool_for_sources.open_connection().map_err(openproxy_db::error::map_db_error)?;
         // Ensure built-in sources exist
@@ -1638,8 +1637,6 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
     let mut added = 0;
     if !scraped.is_empty() {
-        let scraped_clone = scraped.clone();
-        let db_pool = db_pool.clone();
         let (before_count, after_count) =
             tokio::task::spawn_blocking(move || -> Result<(i64, i64), crate::error::CoreError> {
                 let mut w = db_pool.open_connection()?;
@@ -1647,7 +1644,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
                     .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
                     .unwrap_or(0);
 
-                upsert_scraped_proxies(&mut w, &scraped_clone)?;
+                upsert_scraped_proxies(&mut w, &scraped)?;
 
                 let after: i64 = w
                     .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
@@ -1822,7 +1819,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
         };
 
         use futures::StreamExt;
-        let pool_clone = db_pool.clone();
+        let pool_clone = Arc::clone(&db_pool);
 
         let test_url = {
             let r = db_pool.reader();
@@ -1832,8 +1829,8 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
 
         futures::stream::iter(proxies)
             .for_each_concurrent(20, move |(id, r#type, host, port, username, password)| {
-                let pool = pool_clone.clone();
-                let test_url = test_url.clone();
+                let pool = Arc::clone(&pool_clone);
+                let test_url = test_url.to_owned();
                 async move {
                     let test_res = test_proxy_connection(
                         &test_url,
@@ -1844,27 +1841,25 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                         password.as_deref(),
                     )
                     .await;
-                    let db_pool = pool.clone();
-                    let id_clone = id.clone();
                     let _ = tokio::task::spawn_blocking(
                         move || -> Result<(), crate::error::CoreError> {
-                            let w = db_pool.open_connection()?;
+                            let w = pool.open_connection()?;
                             match test_res {
                                 Ok(latency) => {
                                     let _ =
-                                        update_proxy_status(&w, &id_clone, "alive", Some(latency));
+                                        update_proxy_status(&w, &id, "alive", Some(latency));
                                 }
                                 Err(_) => {
                                     // Only mark dead if status was not already alive
                                     let current_status: Option<String> = w
                                         .query_row(
                                             "SELECT status FROM free_proxies WHERE id = ?1",
-                                            rusqlite::params![&id_clone],
+                                            rusqlite::params![&id],
                                             |r| r.get(0),
                                         )
                                         .ok();
                                     if current_status.as_deref() != Some("alive") {
-                                        let _ = update_proxy_status(&w, &id_clone, "dead", None);
+                                        let _ = update_proxy_status(&w, &id, "dead", None);
                                     }
                                 }
                             }
@@ -2080,7 +2075,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(bound_id, Some(p.id.clone()));
+        assert_eq!(bound_id.as_deref(), Some(p.id.as_str()));
 
         // Calling it again should return the same cached proxy
         let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();

@@ -161,7 +161,13 @@ pub struct Services {
 impl Services {
     pub fn new(db_pool: Arc<db::DbPool>) -> Self {
         let repo = Arc::new(SqliteRepository::new(db_pool));
-        Self::from_repositories(repo.clone(), repo.clone(), repo.clone(), repo.clone(), repo)
+        Self::from_repositories(
+            Arc::clone(&repo) as Arc<dyn Repository>,
+            Arc::clone(&repo) as Arc<dyn ApiKeyRepository>,
+            Arc::clone(&repo) as Arc<dyn AccountRepository>,
+            Arc::clone(&repo) as Arc<dyn ComboRepository>,
+            repo as Arc<dyn ModelRepository>,
+        )
     }
 
     pub fn from_repositories(

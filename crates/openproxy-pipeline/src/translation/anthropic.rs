@@ -192,7 +192,7 @@ pub fn openai_to_anthropic(
         temperature: req.temperature,
         top_p: req.top_p,
         top_k: req.top_k,
-        stop_sequences: req.stop.clone(),
+        stop_sequences: req.stop.to_owned(),
         // Translate OpenAI-shaped `tools` to Anthropic shape. MiniMax
         // (which exposes an Anthropic-compatible API) and real Anthropic
         // both expect `{name, description, input_schema}` — forwarding
@@ -336,10 +336,10 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     };
 
     OpenAIResponse {
-        id: resp.id.clone(),
+        id: resp.id.to_owned(),
         object: "chat.completion".to_string(),
         created: 0,
-        model: resp.model.clone(),
+        model: resp.model.to_owned(),
         choices: vec![choice],
         usage: Some(OpenAIUsage {
             prompt_tokens,
@@ -425,7 +425,7 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
                             if let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
                                 let res_content =
                                     block.get("content").unwrap_or(&serde_json::Value::Null);
-                                tool_results.push((id.to_string(), res_content.clone()));
+                                tool_results.push((id.to_string(), res_content.to_owned()));
                             }
                         }
                         _ => {}
@@ -449,7 +449,7 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
                 Some(serde_json::Value::String(text_blocks.join("\n\n")))
             };
             messages.push(OpenAIMessage {
-                role: m.role.clone(),
+                role: m.role,
                 content,
                 name: None,
                 tool_call_id: None,
@@ -480,7 +480,7 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
             }
             if !text_blocks.is_empty() {
                 messages.push(OpenAIMessage {
-                    role: m.role.clone(),
+                    role: m.role,
                     content: Some(serde_json::Value::String(text_blocks.join("\n\n"))),
                     name: None,
                     tool_call_id: None,
@@ -549,7 +549,7 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
 
 pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
     let mut content = Vec::new();
-    let mut finish_reason = None;
+    let finish_reason = resp.choices.first().and_then(|c| c.finish_reason.as_deref());
     if let Some(first_choice) = resp.choices.first() {
         if let Some(msg_content) = first_choice.message.content.as_ref()
             && let Some(s) = msg_content.as_str()
@@ -583,11 +583,9 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
                 }
             }
         }
-
-        finish_reason = first_choice.finish_reason.clone();
     }
 
-    let anthropic_stop = match finish_reason.as_deref() {
+    let anthropic_stop = match finish_reason {
         Some("length") => Some("max_tokens".to_string()),
         Some("tool_calls") | Some("function_call") => Some("tool_use".to_string()),
         Some("content_filter") => Some("stop_sequence".to_string()),
@@ -696,17 +694,17 @@ fn log_anthropic_translation_diagnostics(conversation: &[AnthropicMessage]) {
 
 fn translate_anthropic_tools_to_openai(ts: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
     ts.into_iter()
-        .map(|t| {
-            if let Some(obj) = t.as_object() {
+        .map(|mut t| {
+            if let Some(obj) = t.as_object_mut() {
                 let mut f = serde_json::Map::new();
-                if let Some(n) = obj.get("name") {
-                    f.insert("name".to_string(), n.clone());
+                if let Some(n) = obj.remove("name") {
+                    f.insert("name".to_string(), n);
                 }
-                if let Some(d) = obj.get("description") {
-                    f.insert("description".to_string(), d.clone());
+                if let Some(d) = obj.remove("description") {
+                    f.insert("description".to_string(), d);
                 }
-                if let Some(s) = obj.get("input_schema") {
-                    f.insert("parameters".to_string(), s.clone());
+                if let Some(s) = obj.remove("input_schema") {
+                    f.insert("parameters".to_string(), s);
                 }
                 serde_json::json!({
                     "type": "function",

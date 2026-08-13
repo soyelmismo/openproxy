@@ -62,23 +62,22 @@ pub(crate) async fn run_race(
         let mut req = req.clone();
         let handle = race_sink.handle(worker_idx);
         req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
-        req.race_cancel = Some(worker_tokens[worker_idx].clone());
+        req.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(&worker_tokens[worker_idx]));
 
         let combo = combo.clone();
         let p = pipeline.clone();
-        let queue = queue.clone();
-        let winner = winner.clone();
-        let last_err = last_err.clone();
-        let running = running.clone();
-        let all_done = all_done.clone();
+        let queue = Arc::clone(&queue);
+        let winner = Arc::clone(&winner);
+        let last_err = Arc::clone(&last_err);
+        let running = Arc::clone(&running);
+        let all_done = Arc::clone(&all_done);
 
         set.spawn(async move {
+            let worker_token = req
+                .race_cancel
+                .clone()
+                .expect("run_race: worker must have race_cancel");
             loop {
-                let worker_token = req
-                    .race_cancel
-                    .as_ref()
-                    .expect("run_race: worker must have race_cancel")
-                    .clone();
                 if worker_token.is_cancelled() {
                     if running.fetch_sub(1, Ordering::AcqRel) == 1 {
                         all_done.notify_one();

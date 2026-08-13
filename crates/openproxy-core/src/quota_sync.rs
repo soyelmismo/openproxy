@@ -88,14 +88,14 @@ async fn run_quota_sync_cycle(
 
     // 2. Fetch all healthy accounts for these providers
     let accounts_to_sync: Vec<AccountId> = {
-        let db_pool = db_pool.clone();
-        let master_key = master_key.clone();
-        let supported_providers = supported_providers.clone();
+        let db_pool = Arc::clone(db_pool);
+        let master_key = Arc::clone(master_key);
+        let supported_providers_list = supported_providers.to_vec();
         tokio::task::spawn_blocking(move || {
             let conn = db_pool.reader();
             let mut target_accounts = Vec::new();
-            for provider_str in &supported_providers {
-                let pid = crate::ids::ProviderId::new(provider_str.clone());
+            for provider_str in &supported_providers_list {
+                let pid = crate::ids::ProviderId::new(provider_str.as_str());
                 if let Ok(accs) = accounts::list(&conn, Some(&pid), &master_key) {
                     for acc in accs {
                         if acc.health_status != accounts::HealthStatus::Unhealthy {
@@ -154,8 +154,8 @@ pub async fn refresh_single_account_quota(
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) -> crate::error::Result<Option<AccountQuota>> {
     let (provider_id_str, api_key, access_token, provider_specific) = {
-        let db_pool = db_pool.clone();
-        let master_key = master_key.clone();
+        let db_pool = Arc::clone(db_pool);
+        let master_key = Arc::clone(master_key);
         // Extract the strings to avoid cloning the whole slice into the move closure
         let supported_providers: Vec<String> = supported_providers.to_vec();
         let res = tokio::task::spawn_blocking(move || {
@@ -172,7 +172,7 @@ pub async fn refresh_single_account_quota(
 
             let provider_str = acc.provider_id.to_string();
             let is_oauth = acc.auth_type == "oauth";
-            let provider_specific = acc.oauth_provider_specific.clone();
+            let provider_specific = acc.oauth_provider_specific.to_owned();
 
             let (k, token) = if is_oauth {
                 let t = accounts::decrypt_access_token(&r, account_id, &master_key)?;
@@ -204,8 +204,8 @@ pub async fn refresh_single_account_quota(
     let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some()
     {
         let refresh_result = {
-            let db_pool = db_pool.clone();
-            let master_key = master_key.clone();
+            let db_pool = Arc::clone(db_pool);
+            let master_key = Arc::clone(master_key);
             tokio::task::spawn_blocking(move || {
                 let r = db_pool.reader();
                 accounts::decrypt_refresh_token(&r, account_id, master_key.as_ref())
@@ -235,13 +235,13 @@ pub async fn refresh_single_account_quota(
                     });
                     // Store the refreshed tokens.
                     {
-                        let db_pool = db_pool.clone();
-                        let master_key = master_key.clone();
-                        let access_token = new_tokens.access_token.clone();
-                        let refresh_token = new_tokens.refresh_token.clone();
-                        let token_type = new_tokens.token_type.clone();
-                        let expires_at = expires_at.clone();
-                        let scope = new_tokens.scope.clone();
+                        let db_pool = Arc::clone(db_pool);
+                        let master_key = Arc::clone(master_key);
+                        let access_token = new_tokens.access_token.to_owned();
+                        let refresh_token = new_tokens.refresh_token.to_owned();
+                        let token_type = new_tokens.token_type.to_owned();
+                        let expires_at = expires_at.to_owned();
+                        let scope = new_tokens.scope.to_owned();
                         let _ = tokio::task::spawn_blocking(move || {
                             let w = db_pool.writer();
                             let _ = accounts::store_oauth_tokens(
@@ -259,7 +259,7 @@ pub async fn refresh_single_account_quota(
                         })
                         .await;
                     }
-                    // Retry the quota call with the new access token.
+                    // Retry quota fetch with the new access token
                     admin::fetch_account_quota(
                         &provider_id_str,
                         upstream_client,
@@ -271,9 +271,9 @@ pub async fn refresh_single_account_quota(
                 }
                 Err(e) => {
                     tracing::warn!(
-                        error = %e,
                         account_id = account_id.0,
-                        "on-demand token refresh failed"
+                        error = %e,
+                        "on-demand oauth refresh failed during quota sync"
                     );
                     q // return original error
                 }
@@ -290,8 +290,8 @@ pub async fn refresh_single_account_quota(
     };
 
     {
-        let db_pool = db_pool.clone();
-        let q = q.clone();
+        let db_pool = Arc::clone(db_pool);
+        let q = q.to_owned();
         let res = tokio::task::spawn_blocking(move || {
             let w = db_pool.writer();
             admin::persist_account_quota(&w, account_id, &q)
@@ -326,8 +326,8 @@ pub async fn refresh_single_account_quota(
                     "percent": percent,
                 },
             });
-            let db_pool = db_pool.clone();
-            let provider_id_str = provider_id_str.clone();
+            let db_pool = Arc::clone(db_pool);
+            let provider_id_str = provider_id_str.to_owned();
             let _ = tokio::task::spawn_blocking(move || {
                 let w = db_pool.writer();
                 let _ = notifications::insert_and_broadcast(

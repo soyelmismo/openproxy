@@ -264,9 +264,9 @@ impl StreamingState {
             return Ok(ChunkResult::Return(
                 dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
-                        proxy_url: ctx.proxy_url.clone(),
-                        proxy_status: ctx.proxy_status.clone(),
-                        req: ctx.req.clone(),
+                        proxy_url: ctx.proxy_url.to_owned(),
+                        proxy_status: ctx.proxy_status.to_owned(),
+                        req: ctx.req.to_owned(),
                         combo: ctx.combo,
                         target: ctx.target,
                         attempt: ctx.attempt,
@@ -351,9 +351,9 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             return Ok(crate::streaming::ChunkEvent::Return(
                 self.dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
-                        proxy_url: ctx.proxy_url.clone(),
-                        proxy_status: ctx.proxy_status.clone(),
-                        req: ctx.req.clone(),
+                        proxy_url: ctx.proxy_url.to_owned(),
+                        proxy_status: ctx.proxy_status.to_owned(),
+                        req: ctx.req.to_owned(),
                         combo: ctx.combo,
                         target: ctx.target,
                         attempt: ctx.attempt,
@@ -433,9 +433,9 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.clone(),
-                            proxy_status: ctx.proxy_status.clone(),
-                            req: req.clone(),
+                            proxy_url: ctx.proxy_url.to_owned(),
+                            proxy_status: ctx.proxy_status.to_owned(),
+                            req: req.to_owned(),
                             combo,
                             target,
                             attempt,
@@ -454,15 +454,15 @@ impl<'a> ChunkProcessor<'a> {
                 ));
             }
             if let Err(crate::race_sink::StreamSinkError::Lost) =
-                sink.send(SSE_DONE_BYTES.clone()).await
+                sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
             {
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_on_sink_send_error(
                         crate::race_sink::StreamSinkError::Lost,
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.clone(),
-                            proxy_status: ctx.proxy_status.clone(),
-                            req: req.clone(),
+                            proxy_url: ctx.proxy_url.to_owned(),
+                            proxy_status: ctx.proxy_status.to_owned(),
+                            req: req.to_owned(),
                             combo,
                             target,
                             attempt,
@@ -546,12 +546,12 @@ impl<'a> ChunkProcessor<'a> {
                         };
                     return Ok(crate::streaming::ChunkEvent::Return(
                         pipeline.record_and_fail_with_trace_id_and_partial(
-                            req.clone(),
+                            req.to_owned(),
                             combo,
                             target,
                             FailureContext {
-                                proxy_url: ctx.proxy_url.clone(),
-                                proxy_status: ctx.proxy_status.clone(),
+                                proxy_url: ctx.proxy_url.to_owned(),
+                                proxy_status: ctx.proxy_status.to_owned(),
                                 attempt,
                                 race_size,
                                 err: &err,
@@ -622,10 +622,10 @@ impl<'a> ChunkProcessor<'a> {
                     // payload.
                     if let Some(a) = state.acc.as_mut() {
                         if let Some(u) = &state.usage {
-                            a.set_usage(u.clone());
+                            a.set_usage(u.to_owned());
                         }
                         if let Some(sr) = &state.stop_reason {
-                            a.set_stop_reason(sr.clone());
+                            a.set_stop_reason(sr.to_owned());
                         }
                         a.append_openai_raw(payload_str);
                         // Extract reasoning_content from the
@@ -670,9 +670,9 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.clone(),
-                                    proxy_status: ctx.proxy_status.clone(),
-                                    req: req.clone(),
+                                    proxy_url: ctx.proxy_url.to_owned(),
+                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    req: req.to_owned(),
                                     combo,
                                     target,
                                     attempt,
@@ -711,9 +711,9 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.clone(),
-                                    proxy_status: ctx.proxy_status.clone(),
-                                    req: req.clone(),
+                                    proxy_url: ctx.proxy_url.to_owned(),
+                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    req: req.to_owned(),
                                     combo,
                                     target,
                                     attempt,
@@ -851,9 +851,9 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.clone(),
-                            proxy_status: ctx.proxy_status.clone(),
-                            req: req.clone(),
+                            proxy_url: ctx.proxy_url.to_owned(),
+                            proxy_status: ctx.proxy_status.to_owned(),
+                            req: req.to_owned(),
                             combo,
                             target,
                             attempt,
@@ -887,9 +887,9 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         e,
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.clone(),
-                            proxy_status: ctx.proxy_status.clone(),
-                            req: req.clone(),
+                            proxy_url: ctx.proxy_url.to_owned(),
+                            proxy_status: ctx.proxy_status.to_owned(),
+                            req: req.to_owned(),
                             combo,
                             target,
                             attempt,
@@ -1001,9 +1001,9 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.clone(),
-                                    proxy_status: ctx.proxy_status.clone(),
-                                    req: req.clone(),
+                                    proxy_url: ctx.proxy_url.to_owned(),
+                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    req: req.to_owned(),
                                     combo,
                                     target,
                                     attempt,
@@ -1022,15 +1022,15 @@ impl<'a> ChunkProcessor<'a> {
                         ));
                     }
                     if let Err(crate::race_sink::StreamSinkError::Lost) =
-                        sink.send(SSE_DONE_BYTES.clone()).await
+                        sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
                     {
                         return Ok(crate::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_on_sink_send_error(
                                 crate::race_sink::StreamSinkError::Lost,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.clone(),
-                                    proxy_status: ctx.proxy_status.clone(),
-                                    req: req.clone(),
+                                    proxy_url: ctx.proxy_url.to_owned(),
+                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    req: req.to_owned(),
                                     combo,
                                     target,
                                     attempt,
@@ -1094,10 +1094,10 @@ impl<'a> ChunkProcessor<'a> {
                     let json_str = chunk.into_json_string();
                     if let Some(a) = state.acc.as_mut() {
                         if let Some(u) = &state.usage {
-                            a.set_usage(u.clone());
+                            a.set_usage(u.to_owned());
                         }
                         if let Some(sr) = &state.stop_reason {
-                            a.set_stop_reason(sr.clone());
+                            a.set_stop_reason(sr.to_owned());
                         }
                         if let Some(dr) = &delta_reasoning
                             && !dr.is_empty()
@@ -1159,9 +1159,9 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.clone(),
-                                    proxy_status: ctx.proxy_status.clone(),
-                                    req: req.clone(),
+                                    proxy_url: ctx.proxy_url.to_owned(),
+                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    req: req.to_owned(),
                                     combo,
                                     target,
                                     attempt,
@@ -1198,12 +1198,12 @@ impl<'a> ChunkProcessor<'a> {
                     };
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.record_and_fail_with_trace_id_and_partial(
-                        req.clone(),
+                        req.to_owned(),
                         combo,
                         target,
                         crate::FailureContext {
-                            proxy_url: ctx.proxy_url.clone(),
-                            proxy_status: ctx.proxy_status.clone(),
+                            proxy_url: ctx.proxy_url.to_owned(),
+                            proxy_status: ctx.proxy_status.to_owned(),
                             attempt,
                             race_size,
                             err: &e,

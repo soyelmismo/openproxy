@@ -713,7 +713,7 @@ async fn get_recording_ttl_returns_default_value() {
 
     let app = Router::new()
         .route("/admin/config/recording-ttl", get(get_recording_ttl))
-        .with_state(state.clone());
+        .with_state(state);
 
     let req = Request::builder()
         .method("GET")
@@ -944,9 +944,43 @@ fn insert_test_account(state: &AppState, provider_id: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn refresh_account_quota_non_capable_provider_responds_fast() {
-    // Regression: the endpoint must NOT hang when called for a
-    // provider that doesn't have a quota fetcher (e.g.
+async fn quota_refresh_supported_matrix() {
+    // Regression: verify which providers are marked as supporting
+    // quota refresh in their metadata. Antigravity, OpenRouter,
+    // and Kiro support it.
+    let adapters = openproxy_adapters::adapters::builtin_adapters();
+    let supported: Vec<String> = adapters
+        .iter()
+        .filter(|a| a.metadata().quota_refresh_supported)
+        .map(|a| a.id().to_string())
+        .collect();
+
+    assert!(
+        supported.contains(&"antigravity".to_string()),
+        "antigravity must support quota refresh"
+    );
+    assert!(
+        supported.contains(&"openrouter".to_string()),
+        "openrouter must support quota refresh"
+    );
+    assert!(
+        supported.contains(&"kiro".to_string()),
+        "kiro must support quota refresh"
+    );
+    assert!(
+        !supported.contains(&"openai".to_string()),
+        "openai must NOT support quota refresh"
+    );
+    assert!(
+        !supported.contains(&"anthropic".to_string()),
+        "anthropic must NOT support quota refresh"
+    );
+}
+
+#[tokio::test]
+async fn refresh_account_quota_unsupported_provider_responds_fast() {
+    // Regression: verify that calling refresh_account_quota for an
+    // account on a provider that does NOT support quota refresh (e.g.
     // 'openai'). The handler short-circuits with
     // {"supported": false} — no upstream call, no deadlock.
     let dir = tempdir();
@@ -958,7 +992,7 @@ async fn refresh_account_quota_non_capable_provider_responds_fast() {
             "/admin/accounts/{id}/refresh-quota",
             post(refresh_account_quota),
         )
-        .with_state(state.clone());
+        .with_state(state);
 
     let req = Request::builder()
         .method("POST")
@@ -995,7 +1029,7 @@ async fn refresh_provider_models_unknown_provider_responds_fast() {
             "/admin/providers/{id}/refresh",
             post(refresh_provider_models),
         )
-        .with_state(state.clone());
+        .with_state(state);
 
     let req = Request::builder()
         .method("POST")
@@ -1033,7 +1067,7 @@ async fn refresh_account_quota_nonexistent_account_responds_fast() {
             "/admin/accounts/{id}/refresh-quota",
             post(refresh_account_quota),
         )
-        .with_state(state.clone());
+        .with_state(state);
 
     let req = Request::builder()
         .method("POST")

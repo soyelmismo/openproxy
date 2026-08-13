@@ -420,7 +420,7 @@ impl OAuthProviderRegistry {
 
         for provider in OAuthProviderEnum::builtin_providers() {
             // Register under its default name
-            reg.register_arc(provider.clone());
+            reg.register_arc(OAuthProviderEnum::clone(&provider));
 
             // Antigravity (Cloud Code) — also register under `antigravity-cli` alias
             if provider.name() == "antigravity" {
@@ -529,9 +529,10 @@ impl TokenRefreshCoordinator {
 
     async fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut map = self.provider_mutexes.lock().await;
-        map.entry(provider_id.to_string())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
+        Arc::clone(
+            map.entry(provider_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
     }
 
     pub async fn refresh_and_store(
@@ -558,31 +559,21 @@ impl TokenRefreshCoordinator {
                     )
                     .await?;
                 let expires_at = token_expires_at(token.expires_in);
-                let pool = pool.clone();
-                let master_key = master_key.clone();
-                let access_token = token.access_token.clone();
-                let refresh_token = token.refresh_token.clone();
-                let token_type = token.token_type.clone();
-                let scope = token.scope.clone();
-                let provider_specific = provider.provider_specific_from_token(&token);
-                let email = provider.email_from_token(&token);
-                tokio::task::spawn_blocking(move || {
+                tokio::task::block_in_place(|| {
                     let conn = pool.writer();
                     store_oauth_tokens(
                         &conn,
                         account_id,
-                        &access_token,
-                        refresh_token.as_deref(),
-                        &master_key,
-                        &token_type,
+                        &token.access_token,
+                        token.refresh_token.as_deref(),
+                        master_key,
+                        &token.token_type,
                         expires_at.as_deref(),
-                        scope.as_deref(),
-                        provider_specific.as_deref(),
-                        email.as_deref(),
+                        token.scope.as_deref(),
+                        provider.provider_specific_from_token(&token).as_deref(),
+                        provider.email_from_token(&token).as_deref(),
                     )
-                })
-                .await
-                .map_err(|e| CoreError::Internal(e.to_string()))??;
+                })?;
                 Ok(token)
             }
             DbRef::Connection(conn_mutex) => {
@@ -648,17 +639,10 @@ pub async fn resolve_oauth_token(
     use crate::accounts::{decrypt_access_token, decrypt_refresh_token};
 
     // 1. Decrypt current access token.
-    let access_token = {
-        let db_pool = db_pool.clone();
-        let master_key = master_key.clone();
-        let acc_id = account.id;
-        tokio::task::spawn_blocking(move || {
-            let conn = db_pool.reader();
-            decrypt_access_token(&conn, acc_id, &master_key)
-        })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))??
-    };
+    let access_token = tokio::task::block_in_place(|| {
+        let conn = db_pool.reader();
+        decrypt_access_token(&conn, account.id, master_key)
+    })?;
 
     // 2. Check expiry — if still fresh, return as-is.
     if !oauth_expires_soon(account, provider_id) {
@@ -666,23 +650,16 @@ pub async fn resolve_oauth_token(
     }
 
     // 3. Decrypt refresh token under a fresh connection.
-    let refresh_token = {
-        let db_pool = db_pool.clone();
-        let master_key = master_key.clone();
-        let acc_id = account.id;
-        tokio::task::spawn_blocking(move || {
-            let conn = db_pool.reader();
-            decrypt_refresh_token(&conn, acc_id, &master_key)
-        })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))??
-        .ok_or_else(|| {
-            CoreError::Auth(format!(
-                "account {} has no refresh token, cannot refresh",
-                account.id.0
-            ))
-        })?
-    };
+    let refresh_token = tokio::task::block_in_place(|| {
+        let conn = db_pool.reader();
+        decrypt_refresh_token(&conn, account.id, master_key)
+    })?
+    .ok_or_else(|| {
+        CoreError::Auth(format!(
+            "account {} has no refresh token, cannot refresh",
+            account.id.0
+        ))
+    })?;
 
     // 4. Find the provider implementation.
     let provider = registry.get(provider_id).ok_or_else(|| {
@@ -826,8 +803,8 @@ pub async fn start_refresh_scheduler(
         // Query with the maximum lead time (15 min) so we don't miss
         // any accounts; per-provider filtering happens in Rust below.
         let accounts = {
-            let db_pool = db_pool.clone();
-            let master_key = master_key.clone();
+            let db_pool = Arc::clone(&db_pool);
+            let master_key = Arc::clone(&master_key);
             tokio::task::spawn_blocking(move || {
                 let conn = db_pool.reader();
                 crate::accounts::list_expiring_oauth_accounts(
@@ -873,10 +850,10 @@ pub async fn start_refresh_scheduler(
         );
 
         let account_ids: Vec<_> = accounts.iter().map(|a| a.id).collect();
-        let refresh_tokens = {
-            let db_pool = db_pool.clone();
-            let master_key = master_key.clone();
-            let ids = account_ids.clone();
+        let mut refresh_tokens = {
+            let db_pool = Arc::clone(&db_pool);
+            let master_key = Arc::clone(&master_key);
+            let ids = account_ids;
             tokio::task::spawn_blocking(move || {
                 let conn = db_pool.reader();
                 crate::accounts::decrypt_refresh_tokens(&conn, &ids, &master_key)
@@ -901,7 +878,7 @@ pub async fn start_refresh_scheduler(
 
         for account in accounts {
             let provider = match registry.get(account.provider_id.as_str()) {
-                Some(p) => p.clone(),
+                Some(p) => p,
                 None => {
                     tracing::debug!(
                         provider = %account.provider_id,
@@ -921,28 +898,27 @@ pub async fn start_refresh_scheduler(
                 }
             }
 
-            let refresh_token = match refresh_tokens.get(&account.id) {
-                Some(Ok(Some(t))) => Ok(Some(t.clone())),
-                Some(Ok(None)) => Ok(None),
-                Some(Err(e)) => Err(crate::error::CoreError::Internal(e.to_string())),
-                None => Err(crate::error::CoreError::Internal(
-                    "refresh token not found in batch".to_string(),
-                )),
-            };
-            let refresh_token = match refresh_token {
-                Ok(Some(rt)) => rt,
-                Ok(None) => {
+            let refresh_token = match refresh_tokens.remove(&account.id) {
+                Some(Ok(Some(t))) => t,
+                Some(Ok(None)) => {
                     tracing::debug!(
                         account = account_id,
                         "oauth refresh: no refresh token stored, skipping"
                     );
                     continue;
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     tracing::warn!(
                         account = account_id,
                         error = %e,
                         "oauth refresh: failed to decrypt refresh token"
+                    );
+                    continue;
+                }
+                None => {
+                    tracing::warn!(
+                        account = account_id,
+                        "oauth refresh: refresh token not found in batch"
                     );
                     continue;
                 }
@@ -951,10 +927,10 @@ pub async fn start_refresh_scheduler(
             // We mark attempt locally first.
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
-            let lim = limiter.clone();
-            let upstream_client = upstream_client.clone();
-            let db_pool = db_pool.clone();
-            let master_key = master_key.clone();
+            let lim = Arc::clone(&limiter);
+            let upstream_client = Arc::clone(&upstream_client);
+            let db_pool = Arc::clone(&db_pool);
+            let master_key = Arc::clone(&master_key);
 
             join_set.spawn(async move {
                 lim.until_ready().await;
@@ -962,7 +938,7 @@ pub async fn start_refresh_scheduler(
                 let res = TokenRefreshCoordinator::global()
                     .refresh_and_store(
                         account.provider_id.as_str(),
-                        provider.clone(),
+                        provider,
                         &refresh_token,
                         &upstream_client,
                         account.id,
@@ -994,7 +970,7 @@ pub async fn start_refresh_scheduler(
                     failure_counts.remove(&account_id);
                     last_refresh_attempts.remove(&account_id);
 
-                    let db_pool = db_pool.clone();
+                    let db_pool = Arc::clone(&db_pool);
                     let acc_id = account.id;
                     let _ = tokio::task::spawn_blocking(move || {
                         let conn = db_pool.writer();
@@ -1027,7 +1003,7 @@ pub async fn start_refresh_scheduler(
                         HealthStatus::Degraded
                     };
 
-                    let db_pool = db_pool.clone();
+                    let db_pool = Arc::clone(&db_pool);
                     let acc_id = account.id;
                     let count_val = *count;
                     let provider_id_str = account.provider_id.as_str().to_string();

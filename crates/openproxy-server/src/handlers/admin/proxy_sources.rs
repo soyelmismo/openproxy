@@ -24,9 +24,9 @@ pub async fn create_source(
     }
     let src = create_proxy_source(&w, body)?;
 
-    let pool = state.db_pool().clone();
+    let pool = Arc::clone(state.db_pool());
     tokio::spawn(async move {
-        if let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(pool.clone()).await
+        if let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await
             && (summary.added > 0 || summary.fetched > 0)
         {
             openproxy_core::free_proxies::test_all_proxies_background(pool);

@@ -68,10 +68,10 @@ pub fn extract_think_from_response(
             continue;
         }
         let content_str = match &choice.message.content {
-            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::String(s)) => s.as_str(),
             _ => continue,
         };
-        let extracted = extract_think_from_content(&content_str);
+        let extracted = extract_think_from_content(content_str);
         // Capture booleans before any partial moves out of `extracted`.
         let has_reasoning = extracted.has_reasoning();
         // Nothing to do if there were no `<think>` tags AND content is
@@ -374,7 +374,7 @@ impl ThinkStreamExtractor {
             })
             .map(|s| s.to_string());
 
-        self.close_tag = close_tag.clone();
+        self.close_tag = close_tag;
         self.inside_think = true;
 
         // Skip past the opening tag.
@@ -398,8 +398,8 @@ impl ThinkStreamExtractor {
     }
 
     fn process_inside_think(&mut self, input: &str) -> (String, String) {
-        let close_tag = match &self.close_tag {
-            Some(ct) => ct.clone(),
+        let (close_tag_len, close_lower) = match &self.close_tag {
+            Some(ct) => (ct.len(), ct.to_ascii_lowercase()),
             None => {
                 // Shouldn't happen, but handle gracefully.
                 self.inside_think = false;
@@ -408,13 +408,12 @@ impl ThinkStreamExtractor {
         };
 
         let lower = input.to_ascii_lowercase();
-        let close_lower = close_tag.to_ascii_lowercase();
 
         match lower.find(&close_lower) {
             Some(pos) => {
                 // Found closing tag. Everything before it is reasoning.
                 let reasoning = input[..pos].to_string();
-                let after_close = &input[pos + close_tag.len()..];
+                let after_close = &input[pos + close_tag_len..];
                 self.inside_think = false;
                 self.close_tag = None;
 

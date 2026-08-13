@@ -665,7 +665,6 @@ fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> Kiro
             current_message: KiroCurrentMessage {
                 user_input_message: KiroUserInputMessage {
                     content: current_msg
-                        .as_ref()
                         .and_then(|m| m.content.as_ref())
                         .and_then(Value::as_str)
                         .unwrap_or_default()
@@ -689,7 +688,7 @@ fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> Kiro
 /// Split the OpenAI messages into the (history, current_user_message)
 /// pair. Kiro's `currentMessage` is always a single user turn, so
 /// we keep the most recent user message out of the history list.
-fn split_history(req: &OpenAIRequest) -> (Vec<&OpenAIMessage>, Option<OpenAIMessage>) {
+fn split_history(req: &OpenAIRequest) -> (Vec<&OpenAIMessage>, Option<&OpenAIMessage>) {
     if req.messages.is_empty() {
         return (Vec::new(), None);
     }
@@ -699,6 +698,6 @@ fn split_history(req: &OpenAIRequest) -> (Vec<&OpenAIMessage>, Option<OpenAIMess
         .rposition(|m| m.role == "user")
         .unwrap_or(req.messages.len() - 1);
     let history: Vec<&OpenAIMessage> = req.messages[..last_user_idx].iter().collect();
-    let current = req.messages[last_user_idx].clone();
+    let current = &req.messages[last_user_idx];
     (history, Some(current))
 }

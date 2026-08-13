@@ -58,7 +58,7 @@ pub fn normalize_model_id(id: &str) -> String {
     //    4-digit year prefix looks like a real year (19xx or 20xx) so
     //    that legitimate 8-digit version numbers are left alone.
     let s: String = DATE_SUFFIX_RE.replace_all(&s, "").into_owned();
-    let s: String = strip_compact_yyyymmdd(&s).unwrap_or_else(|| s.clone());
+    let s: String = strip_compact_yyyymmdd(&s).unwrap_or(s);
 
     // 4. Strip YYYYMM version suffixes: -2407
     let s: String = YYYYMM_SUFFIX_RE.replace_all(&s, "").into_owned();

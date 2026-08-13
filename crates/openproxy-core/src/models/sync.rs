@@ -80,6 +80,9 @@ pub fn execute_sync_transaction(
         .map_err(openproxy_db::error::map_db_error)?;
 
     {
+        let new_models_set: std::collections::HashSet<&str> =
+            diff.new_models.iter().map(|n| n.model_id.as_str()).collect();
+
         let mut stmt = tx
             .prepare(
                 "INSERT INTO models (\
@@ -116,7 +119,7 @@ pub fn execute_sync_transaction(
                 .as_ref()
                 .and_then(|v| serde_json::to_string(v).ok());
 
-            let is_new = diff.new_models.iter().any(|n| n.model_id == d.model_id);
+            let is_new = new_models_set.contains(d.model_id.as_str());
             if is_new {
                 new_model_ids.push(d.model_id.clone());
                 inserted_model_ids.push(d.model_id.as_str());

@@ -126,12 +126,12 @@ fn ceil_div_times(total: usize, num: usize, den: usize) -> usize {
 }
 
 /// Sorted union of all field names across all items.
-fn all_fields(arr: &[Value]) -> Vec<String> {
-    let mut fields: BTreeSet<String> = BTreeSet::new();
+fn all_fields<'a>(arr: &'a [Value]) -> Vec<&'a str> {
+    let mut fields: BTreeSet<&'a str> = BTreeSet::new();
     for item in arr {
         if let Some(obj) = item.as_object() {
             for k in obj.keys() {
-                fields.insert(k.clone());
+                fields.insert(k.as_str());
             }
         }
     }
@@ -139,14 +139,14 @@ fn all_fields(arr: &[Value]) -> Vec<String> {
 }
 
 /// ≥80% of items must contain ≥80% of `fields`.
-fn check_field_coverage(arr: &[Value], fields: &[String]) -> bool {
+fn check_field_coverage(arr: &[Value], fields: &[&str]) -> bool {
     if fields.is_empty() || arr.is_empty() {
         return false;
     }
     let mut items_passing = 0usize;
     for item in arr {
         if let Some(obj) = item.as_object() {
-            let present = fields.iter().filter(|f| obj.contains_key(*f)).count();
+            let present = fields.iter().filter(|f| obj.contains_key(**f)).count();
             if at_least(present, fields.len(), COVERAGE_NUM, COVERAGE_DEN) {
                 items_passing += 1;
             }
@@ -198,7 +198,7 @@ fn try_lossless_csv(arr: &[Value]) -> Option<String> {
             if i > 0 {
                 out.push(',');
             }
-            if let Some(v) = obj.get(field) {
+            if let Some(v) = obj.get(*field) {
                 out.push_str(&json_value_to_csv_cell(v));
             }
             // Missing field => empty cell.
@@ -264,7 +264,7 @@ fn try_lossy(arr: &[Value]) -> Option<String> {
     for &i in &kept_indices {
         let serialized = arr[i].to_string();
         if seen.insert(serialized) {
-            kept_items.push(arr[i].clone());
+            kept_items.push(arr[i].to_owned());
         }
     }
 
@@ -364,7 +364,7 @@ mod tests {
             json!({"id": 3, "name": "c"}),
         ];
         let content = serde_json::to_string(&Value::Array(items)).unwrap();
-        let original = content.clone();
+        let original = &content;
         let mut msgs = vec![msg("tool", &content)];
         let applied = smart_crush_tool_results(&mut msgs);
         assert!(applied.is_empty());
@@ -438,7 +438,7 @@ mod tests {
             json!({"i": "j"}),
         ];
         let content = serde_json::to_string(&Value::Array(items)).unwrap();
-        let original = content.clone();
+        let original = &content;
         let mut msgs = vec![msg("tool", &content)];
         let applied = smart_crush_tool_results(&mut msgs);
         assert!(

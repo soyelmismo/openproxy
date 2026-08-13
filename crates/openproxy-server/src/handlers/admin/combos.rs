@@ -64,13 +64,12 @@ pub async fn test_combo_targets(
     // observe the drop. The 180s `tokio::time::timeout` below
     // remains the upper bound for the happy path.
     let res: Result<Json<Vec<serde_json::Value>>, crate::error::ApiError> = async {
-        let cancel_rx = cancel_rx.clone();
         // Snapshot the targets up-front and drop the writer guard.
         // The per-target test below does its own short DB
         // transactions (writer lock + drop), so the long-running
         // HTTP calls don't block other handlers from writing.
         let targets = tokio::task::spawn_blocking({
-            let pool = s.db_pool().clone();
+            let pool = Arc::clone(s.db_pool());
             move || {
                 let w = pool.writer();
                 core_combos::list_targets_with_model(&w, ComboId(id))

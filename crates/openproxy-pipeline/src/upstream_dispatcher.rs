@@ -37,8 +37,8 @@ impl<'a> DispatchContext<'a> {
         'a: 'e,
     {
         crate::FailureContext {
-            proxy_url: self.proxy_url.clone(),
-            proxy_status: self.proxy_status.clone(),
+            proxy_url: self.proxy_url.to_owned(),
+            proxy_status: self.proxy_status.to_owned(),
             attempt: self.attempt,
             race_size: self.race_size,
             err,
@@ -57,17 +57,17 @@ pub(crate) struct StreamFailureContext<'a> {
     pub(crate) target: &'a ComboTarget,
     pub(crate) attempt: u8,
     pub(crate) race_size: u8,
-    pub(crate) started: Instant,
+    pub(crate) started: std::time::Instant,
     pub(crate) model: &'a Model,
     pub(crate) connect_ms: u64,
     pub(crate) ttft_ms: Option<u64>,
     pub(crate) trace_id: String,
-    pub(crate) proxy_url: Option<String>,
-    pub(crate) proxy_status: Option<String>,
     pub(crate) acc: Option<&'a mut crate::sse_accumulator::ResponseAccumulator>,
     pub(crate) chunk_id: &'a str,
     pub(crate) created: u64,
     pub(crate) model_name: &'a str,
+    pub(crate) proxy_url: Option<String>,
+    pub(crate) proxy_status: Option<String>,
 }
 
 pub trait Dispatcher: Send + Sync {
@@ -76,18 +76,16 @@ pub trait Dispatcher: Send + Sync {
 
 impl Dispatcher for UpstreamDispatcher {
     fn is_recording(&self) -> bool {
-        self.is_recording()
+        self.record_bodies_and_headers()
     }
 }
 
 #[derive(Clone)]
 pub struct UpstreamDispatcher {
-    pub conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
-    pub config: crate::PipelineConfig,
-    pub compression_stats_cell:
-        Arc<parking_lot::RwLock<Option<openproxy_compression::stats::CompressionStats>>>,
-    pub tracker: crate::usage_tracker::UsageTracker,
-    pub record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    pub(crate) config: crate::PipelineConfig,
+    pub(crate) tracker: crate::usage_tracker::UsageTracker,
+    pub(crate) record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -98,25 +96,21 @@ pub(crate) enum ProxyRotationTrigger {
 }
 
 impl UpstreamDispatcher {
-    pub fn new(
+    pub(crate) fn new(
         conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
         config: crate::PipelineConfig,
-        compression_stats_cell: Arc<
-            parking_lot::RwLock<Option<openproxy_compression::stats::CompressionStats>>,
-        >,
         tracker: crate::usage_tracker::UsageTracker,
         record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
             conn,
             config,
-            compression_stats_cell,
             tracker,
             record_bodies_and_headers,
         }
     }
 
-    pub fn is_recording(&self) -> bool {
+    pub(crate) fn record_bodies_and_headers(&self) -> bool {
         self.record_bodies_and_headers
             .load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -127,9 +121,9 @@ impl UpstreamDispatcher {
         trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
         cooldown_ms: Option<u64>,
     ) -> bool {
-        let conn_clone = self.conn.clone();
-        let provider_id = provider_id.clone();
-        let repo = self.tracker.repo.clone();
+        let conn_clone = Arc::clone(&self.conn);
+        let provider_id = provider_id.to_owned();
+        let repo = Arc::clone(&self.tracker.repo);
         tokio::task::spawn_blocking(move || {
             let provider = {
                 let conn = conn_clone.lock();
@@ -285,8 +279,8 @@ impl UpstreamDispatcher {
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
         // If the provider has proxy routing enabled, fetch/assign a proxy
         let proxy_result = {
-            let repo = self.tracker.repo.clone();
-            let provider_id = target.provider_id.clone();
+            let repo = Arc::clone(&self.tracker.repo);
+            let provider_id = target.provider_id.to_owned();
             let account_id = target.account_id;
             tokio::task::spawn_blocking(move || {
                 repo.get_or_assign_provider_proxy(&provider_id, account_id)
@@ -310,20 +304,20 @@ impl UpstreamDispatcher {
 
         let proxy_status = match upstream_request.proxy.as_ref() {
             Some(url) => {
-                let repo = self.tracker.repo.clone();
-                let u = url.clone();
+                let repo = Arc::clone(&self.tracker.repo);
+                let u = url.to_owned();
                 tokio::task::spawn_blocking(move || repo.get_proxy_status_by_url(&u))
                     .await
                     .unwrap_or(None)
             }
             None => None,
         };
-        upstream_request.proxy_status = proxy_status.clone();
-        dctx.proxy_url = upstream_request.proxy.clone();
-        dctx.proxy_status = upstream_request.proxy_status.clone();
+        upstream_request.proxy_status = proxy_status;
+        dctx.proxy_url = upstream_request.proxy.to_owned();
+        dctx.proxy_status = upstream_request.proxy_status.to_owned();
         tracing::info!(
             proxy_used = ?upstream_request.proxy,
-            proxy_status = %proxy_status.as_ref().unwrap_or(&"none".to_string()),
+            proxy_status = %upstream_request.proxy_status.as_ref().unwrap_or(&"none".to_string()),
             "assigned proxy for upstream request"
         );
 
@@ -333,51 +327,21 @@ impl UpstreamDispatcher {
         // the first chunk arrives (the initial deadline is
         // total_deadline, not start + body_chunk_ms).
         upstream_request.is_streaming = true;
-        // Caller-supplied headers (auth, content-type overrides from
-        // the adapter, etc.) — `post_json` already sets
-        // `Content-Type: application/json`, so `insert` overwrites if
-        // a caller header collides (matches the UpstreamClient chain's
-        // behavior with `.header(k, v)` which appends; we choose
-        // overwrite for determinism — the adapter layer is
-        // responsible for not setting conflicting headers).
-        for (k, v) in headers {
-            // HeaderMap's insert() requires HeaderName/HeaderValue;
-            // parse the strings. Skip headers that fail to parse —
-            // matches the previous `.header(k.as_str(), v.as_str())`
-            // which also silently dropped invalid values.
-            if let (Ok(name), Ok(value)) = (
-                http::HeaderName::from_bytes(k.as_bytes()),
-                http::HeaderValue::from_str(v),
-            ) {
-                upstream_request.headers.insert(name, value);
-            }
-        }
 
-        // ALWAYS use the streaming path to the upstream. This
-        // simplifies the code (one path instead of two) and fixes
-        // the timeout issues with non-streaming requests:
-        // - TTFT (first token) is properly measured for both modes
-        // - idle_chunk_ms only applies after the first token arrives
-        // - The upstream LLM starts generating immediately instead
-        //   of waiting for the full response before sending
-        // - Cancel propagation is faster (can cancel mid-generation)
-        //
-        // For non-streaming clients (stream: false), the stream_sink
-        // is a Direct channel that the chat handler reads from. The
-        // pipeline sends SSE chunks; the chat handler accumulates
-        // them and returns the full JSON when the stream completes.
-        // The `is_streaming` flag on the UpstreamRequest is set
+        // Streaming-first dispatch: all upstream requests go through
+        // `dispatch_upstream_streaming`, which drives the chunk-by-chunk
+        // SSE state machine. The decision of whether to return a stream
+        // response or aggregate into a non-streaming response is made
         // based on the client's preference, but the upstream call
         // always uses stream=true (set in the translation layer).
-        if let Some(sink) = &req.stream_sink {
+        if req.stream_sink.is_some() {
             return self
                 .dispatch_upstream_streaming(
                     target,
                     combo,
-                    req.clone(),
+                    req,
                     model,
                     target_format,
-                    sink,
                     resolved_timeouts,
                     started,
                     attempt,
@@ -418,9 +382,9 @@ impl UpstreamDispatcher {
                 ),
             );
         }
-        let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
-        let req_proxy_url = upstream_request.proxy.clone();
-        let req_proxy_status = upstream_request.proxy_status.clone();
+        let cancel_token = CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(&req.client_disconnected));
+        let req_proxy_url = upstream_request.proxy.to_owned();
+        let req_proxy_status = upstream_request.proxy_status.to_owned();
         let result = self
             .config
             .upstream_client
@@ -851,8 +815,8 @@ impl UpstreamDispatcher {
                         "status_code": status_code,
                     },
                 });
-                let repo = self.tracker.repo.clone();
-                let provider_id_str_clone = provider_id_str.clone();
+                let repo = Arc::clone(&self.tracker.repo);
+                let provider_id_str_clone = provider_id_str.to_owned();
                 tokio::task::spawn_blocking(move || {
                     let _ = repo.insert_and_broadcast_notification(
                         "system",
@@ -923,12 +887,11 @@ impl UpstreamDispatcher {
             endpoint_kind: None,
         });
 
-        // 2xx: parse into the native wire format, then translate to
-        // OpenAIResponse if needed.
+        // Parse format-specific response
         let response_body_raw: serde_json::Value = match serde_json::from_slice(&body_bytes) {
             Ok(v) => v,
             Err(e) => {
-                let err = CoreError::Parse(format!("upstream json: {e}"));
+                let err = CoreError::Parse(format!("invalid json in upstream response: {e}"));
                 return self.record_and_fail(
                     req,
                     combo,
@@ -947,7 +910,7 @@ impl UpstreamDispatcher {
         // format-specific parser below; we need it both as the
         // recorded response body and as a source for the request
         // body we are about to send.
-        let response_body_value = response_body_raw.clone();
+        let response_body_value = response_body_raw.to_owned();
 
         let openai_response = match target_format {
             openproxy_types::TargetFormat::Responses => {
@@ -1074,15 +1037,15 @@ impl UpstreamDispatcher {
         // apply the same scrubbing here for code paths
         // that don't go through `chat.rs`.
         let request_headers_btm: std::collections::BTreeMap<String, String> =
-            crate::redact::redact_btreemap_sensitive(headers.iter().cloned().collect());
+            crate::redact::redact_btreemap_sensitive(headers.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect());
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
-            req.clone(),
+            req,
             combo,
             target,
         )
-        .proxy_url(req_proxy_url.clone())
-        .proxy_status(req_proxy_status.clone())
+        .proxy_url(req_proxy_url)
+        .proxy_status(req_proxy_status)
         .model_opt(Some(model))
         .err_opt(None)
         .connect_ms_opt(Some(connect_and_send_ms))
@@ -1146,8 +1109,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
-            proxy_url: proxy_url.clone(),
-            proxy_status: proxy_status.clone(),
+            proxy_url: proxy_url.to_owned(),
+            proxy_status: proxy_status.to_owned(),
         };
 
         let has_partial_content = acc.as_ref().is_some_and(|a| !a.is_empty());
@@ -1248,8 +1211,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
-            proxy_url: proxy_url.clone(),
-            proxy_status: proxy_status.clone(),
+            proxy_url: proxy_url.to_owned(),
+            proxy_status: proxy_status.to_owned(),
         };
 
         let err = match e {
@@ -1367,7 +1330,6 @@ impl UpstreamDispatcher {
         req: PipelineRequest,
         model: &Model,
         target_format: openproxy_types::TargetFormat,
-        sink: &crate::race_sink::StreamSink,
         resolved_timeouts: &Timeouts,
         started: Instant,
         attempt: u8,
@@ -1380,8 +1342,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
-            proxy_url: upstream_request.proxy.clone(),
-            proxy_status: upstream_request.proxy_status.clone(),
+            proxy_url: upstream_request.proxy.to_owned(),
+            proxy_status: upstream_request.proxy_status.to_owned(),
         };
 
         // Cancellation: the `client_disconnected` watch is the
@@ -1427,12 +1389,12 @@ impl UpstreamDispatcher {
             );
         }
         let cancel_token = if let Some(rc) = req.race_cancel.as_ref() {
-            CancellationToken::from_watch_and_token(req.client_disconnected.clone(), rc.clone())
+            CancellationToken::from_watch_and_token(tokio::sync::watch::Receiver::clone(&req.client_disconnected), openproxy_adapters::upstream::CancellationToken::clone(rc))
         } else {
-            CancellationToken::from_watch(req.client_disconnected.clone())
+            CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(&req.client_disconnected))
         };
-        let req_proxy_url = upstream_request.proxy.clone();
-        let req_proxy_status = upstream_request.proxy_status.clone();
+        let req_proxy_url = upstream_request.proxy.to_owned();
+        let req_proxy_status = upstream_request.proxy_status.to_owned();
         let result = self
             .config
             .upstream_client
@@ -1636,8 +1598,8 @@ impl UpstreamDispatcher {
                         "status_code": status_code,
                     },
                 });
-                let repo = self.tracker.repo.clone();
-                let provider_id_str_clone = provider_id_str.clone();
+                let repo = Arc::clone(&self.tracker.repo);
+                let provider_id_str_clone = provider_id_str.to_owned();
                 tokio::task::spawn_blocking(move || {
                     let _ = repo.insert_and_broadcast_notification(
                         "system",
@@ -1781,7 +1743,7 @@ impl UpstreamDispatcher {
             target,
             model,
             target_format,
-            sink,
+            sink: req.stream_sink.as_ref().unwrap(),
             trace_id: &trace_id,
             chunk_id: &chunk_id,
             model_name: &model_name,
@@ -1791,8 +1753,8 @@ impl UpstreamDispatcher {
             created,
             connect_and_send_ms,
             resolved_timeouts,
-            proxy_url: dctx.proxy_url.clone(),
-            proxy_status: dctx.proxy_status.clone(),
+            proxy_url: dctx.proxy_url.to_owned(),
+            proxy_status: dctx.proxy_status.to_owned(),
         };
 
         match state.run_stream_loop(&ctx, self, &mut stream).await {
@@ -1802,7 +1764,7 @@ impl UpstreamDispatcher {
                 // If the stream loop failed with a CoreError (e.g. I/O error reading body),
                 // we treat it as an upstream error and fail.
                 return self.record_and_fail_with_trace_id(
-                    req.clone(),
+                    req.to_owned(),
                     combo,
                     target,
                     dctx.fail_ctx_code(&e, Some(connect_and_send_ms), state.ttft_ms, 502),
@@ -1814,7 +1776,7 @@ impl UpstreamDispatcher {
         let client_disconnected = if state.done_sent {
             None
         } else {
-            let mut rx = req.client_disconnected.clone();
+            let mut rx = tokio::sync::watch::Receiver::clone(&req.client_disconnected);
             self.is_client_disconnected(&mut rx)
         };
 
@@ -1826,9 +1788,9 @@ impl UpstreamDispatcher {
                 "client cancelled during SSE stream; aborting attempt"
             );
             return self.fail_stream_client_disconnected(StreamFailureContext {
-                proxy_url: req_proxy_url.clone(),
-                proxy_status: req_proxy_status.clone(),
-                req: req.clone(),
+                proxy_url: req_proxy_url.to_owned(),
+                proxy_status: req_proxy_status.to_owned(),
+                req: req.to_owned(),
                 combo,
                 target,
                 attempt,
@@ -1909,6 +1871,17 @@ impl UpstreamDispatcher {
         let response_body_json: Option<serde_json::Value> = acc
             .as_ref()
             .map(|a| a.finish(&chunk_id, created, &model_name));
+        let final_response = if matches!(
+            req.stream_sink.as_ref(),
+            Some(crate::race_sink::StreamSink::Discard)
+        ) {
+            response_body_json
+                .as_ref()
+                .and_then(|v| serde::Deserialize::deserialize(v).ok())
+        } else {
+            None
+        };
+
         // G1 fix: save the request body for streaming requests too.
         // Previously this was `None` ("out of scope per G1 spec") so
         // the detail modal always showed "No request body recorded"
@@ -1920,12 +1893,12 @@ impl UpstreamDispatcher {
         // going through the HTTP handler).
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
-            req.clone(),
+            req,
             combo,
             target,
         )
-        .proxy_url(req_proxy_url.clone())
-        .proxy_status(req_proxy_status.clone())
+        .proxy_url(req_proxy_url)
+        .proxy_status(req_proxy_status)
         .model_opt(Some(model))
         .err_opt(None)
         .connect_ms_opt(Some(connect_and_send_ms))
@@ -1938,7 +1911,7 @@ impl UpstreamDispatcher {
         .prompt_tokens_opt(prompt_tokens)
         .completion_tokens_opt(completion_tokens)
         .cached_tokens(cached_tokens)
-        .response_body_json(response_body_json.clone())
+        .response_body_json(response_body_json)
         .request_headers(None)
         .response_headers(None)
         .is_streaming(true)
@@ -1961,16 +1934,7 @@ impl UpstreamDispatcher {
             // it as JSON. For streaming clients, the chunks were already
             // forwarded via the sink — return None (the chat handler
             // doesn't need the full response, it already sent the SSE).
-            final_response: if matches!(
-                req.stream_sink.as_ref(),
-                Some(crate::race_sink::StreamSink::Discard)
-            ) {
-                response_body_json
-                    .as_ref()
-                    .and_then(|v| serde::Deserialize::deserialize(v).ok())
-            } else {
-                None
-            },
+            final_response,
             attempts: attempt,
             usage_tuple,
         }

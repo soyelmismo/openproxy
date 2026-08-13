@@ -213,7 +213,7 @@ impl OAuthProvider for CodexOAuthProvider {
 
         let cancel = CancellationToken::new();
         let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel.clone())
+            .call(req, TimeoutProfile::OAuth, cancel)
             .await
             .map_err(|e| match e {
                 UpstreamError::Cancel => {
@@ -269,7 +269,7 @@ impl OAuthProvider for CodexOAuthProvider {
         );
 
         let token_response = upstream_client
-            .call(token_req, TimeoutProfile::OAuth, cancel)
+            .call(token_req, TimeoutProfile::OAuth, CancellationToken::new())
             .await
             .map_err(|e| match e {
                 UpstreamError::Cancel => {

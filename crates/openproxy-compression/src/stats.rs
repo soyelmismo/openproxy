@@ -80,10 +80,10 @@ impl CompressionStats {
         if self.techniques.is_empty() {
             None
         } else {
-            let mut unique = Vec::new();
+            let mut unique: Vec<&str> = Vec::new();
             for t in &self.techniques {
-                if !unique.contains(t) {
-                    unique.push(t.clone());
+                if !unique.contains(&t.as_str()) {
+                    unique.push(t.as_str());
                 }
             }
             Some(unique.join(","))

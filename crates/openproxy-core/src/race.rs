@@ -102,7 +102,7 @@ async fn run_parallel<T: 'static>(config: &RaceConfig, lanes: Vec<Lane<T>>) -> R
     let mut slots: Vec<LaneSlot<T>> = Vec::with_capacity(lanes.len());
     for (idx, lane) in lanes.into_iter().enumerate() {
         let user_future = lane.future;
-        let mut my_winner_rx = winner_rx.clone();
+        let mut my_winner_rx = tokio::sync::watch::Receiver::clone(&winner_rx);
         let combined = async move {
             if my_winner_rx.borrow_and_update().is_some() {
                 return Err(CoreError::RaceLost);
@@ -446,7 +446,6 @@ mod tests {
         // We verify by wall-clock: if the runtime had waited for the (parked) handle to
         // finish naturally, the call would hang. We bound the call to grace + epsilon.
         let parked = Arc::new(tokio::sync::Notify::new());
-        let parked_clone = parked.clone();
         let (l0, _r0) = make_lane(async {
             tokio::time::sleep(Duration::from_millis(5)).await;
             Ok::<(), CoreError>(())
@@ -455,8 +454,9 @@ mod tests {
         // that we never call. This simulates a "non-compliant" lane that ignores the
         // abort signal and never cleans up.
         let (abort_tx, _abort_rx) = oneshot::channel::<AbortReason>();
+        let parked_in_task = Arc::clone(&parked);
         let handle = tokio::spawn(async move {
-            parked_clone.notified().await;
+            parked_in_task.notified().await;
         });
         let l1 = Lane {
             future: Box::pin(async {

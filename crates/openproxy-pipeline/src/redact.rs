@@ -163,27 +163,15 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
 /// [`REDACTED_PLACEHOLDER`] for sensitive entries. Keys
 /// are not deleted — the dashboard wants to see WHICH
 /// headers were sent, not just the non-sensitive values.
-pub fn redact_btreemap_sensitive(headers: BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let mut out = headers;
-    let keys: Vec<String> = out.keys().cloned().collect();
-    for k in keys {
-        if is_sensitive(&k) {
-            out.insert(k, REDACTED_PLACEHOLDER.to_string());
-        } else {
-            // Mirror the cap in `redact_sensitive_headers` so both
-            // entry points produce the same shape. Without this,
-            // the `dispatch_upstream` path (which builds the map
-            // upstream-side) could still write a megabyte value
-            // while the chat-handler path was capped.
-            if let Some(v) = out.get(&k).cloned() {
-                let capped = truncate_header_value(&v);
-                if capped != v {
-                    out.insert(k, capped);
-                }
-            }
+pub fn redact_btreemap_sensitive(mut headers: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    for (k, v) in headers.iter_mut() {
+        if is_sensitive(k) {
+            *v = REDACTED_PLACEHOLDER.to_string();
+        } else if v.len() > REDACTED_HEADER_VALUE_MAX {
+            *v = truncate_header_value(v);
         }
     }
-    out
+    headers
 }
 
 #[cfg(test)]

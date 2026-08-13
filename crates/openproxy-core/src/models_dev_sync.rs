@@ -353,12 +353,15 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
             sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
             sql.push_str(") UPDATE models SET model_id_normalized = updates.normalized FROM updates WHERE models.provider_id = updates.provider_id AND models.model_id = updates.model_id");
 
-            let mut params = Vec::new();
-            for (provider_id, model_id) in chunk {
-                let normalized = crate::model_normalize::normalize_model_id(model_id);
-                params.push(provider_id.clone());
-                params.push(model_id.clone());
-                params.push(normalized);
+            let mut norm_strings = Vec::with_capacity(chunk.len());
+            for (_, model_id) in chunk {
+                norm_strings.push(crate::model_normalize::normalize_model_id(model_id));
+            }
+            let mut params: Vec<&str> = Vec::with_capacity(chunk.len() * 3);
+            for ((provider_id, model_id), normalized) in chunk.iter().zip(&norm_strings) {
+                params.push(provider_id.as_str());
+                params.push(model_id.as_str());
+                params.push(normalized.as_str());
             }
             let count = conn
                 .execute(&sql, rusqlite::params_from_iter(params))
@@ -393,12 +396,15 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
             sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
             sql.push_str(") UPDATE model_capabilities_sync SET model_id_normalized = updates.normalized FROM updates WHERE model_capabilities_sync.provider_id = updates.provider_id AND model_capabilities_sync.model_id = updates.model_id");
 
-            let mut params = Vec::new();
-            for (provider_id, model_id) in chunk {
-                let normalized = crate::model_normalize::normalize_model_id(model_id);
-                params.push(provider_id.clone());
-                params.push(model_id.clone());
-                params.push(normalized);
+            let mut norm_strings = Vec::with_capacity(chunk.len());
+            for (_, model_id) in chunk {
+                norm_strings.push(crate::model_normalize::normalize_model_id(model_id));
+            }
+            let mut params: Vec<&str> = Vec::with_capacity(chunk.len() * 3);
+            for ((provider_id, model_id), normalized) in chunk.iter().zip(&norm_strings) {
+                params.push(provider_id.as_str());
+                params.push(model_id.as_str());
+                params.push(normalized.as_str());
             }
             let count = conn
                 .execute(&sql, rusqlite::params_from_iter(params))
@@ -698,7 +704,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     };
 
     // Filter combos to just those related to our normalized_ids
-    let combo_names: Vec<String> = normalized_ids
+    let combo_names: std::collections::HashSet<String> = normalized_ids
         .iter()
         .map(|id| format!("auto:{}", id))
         .collect();
@@ -715,7 +721,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
             })
             .map_err(openproxy_db::error::map_db_error)?
             .filter_map(|r| r.ok())
-            .filter(|(name, _)| combo_names.contains(name)) // only load what we care about
+            .filter(|(name, _)| combo_names.contains(name)) // O(1) set lookup
             .collect()
         }
     };
@@ -908,12 +914,11 @@ pub async fn start_sync_scheduler(
         };
 
         // Then upsert, enrich, and auto-create combos under the connection lock in a blocking task.
-        let db_pool_clone = db_pool.clone();
-        let body_clone = body.clone();
+        let db_pool_clone = Arc::clone(&db_pool);
         let count = tokio::task::spawn_blocking(move || {
             let count = {
                 let conn = db_pool_clone.writer();
-                match upsert_models_dev(&body_clone, &conn) {
+                match upsert_models_dev(&body, &conn) {
                     Ok(n) => {
                         tracing::info!("models.dev sync: {} rows upserted", n);
                         n

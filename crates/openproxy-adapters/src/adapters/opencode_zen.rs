@@ -126,8 +126,8 @@ impl ProviderAdapter for OpenCodeZenAdapter {
                 let id = m.id;
                 let target_format = classify_zen_target_format(&id);
                 DiscoveredModel {
-                    model_id: ModelId::new(id.clone()),
-                    display_name: Some(id),
+                    display_name: Some(id.clone()),
+                    model_id: ModelId::new(id),
                     target_format,
                     // OpenCode Zen's /models response only carries
                     // ids. The runtime fallback in `GET /v1/models`

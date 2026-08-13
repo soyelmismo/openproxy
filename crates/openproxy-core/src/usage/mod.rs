@@ -1561,7 +1561,7 @@ pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAtt
 
     let mut list: Vec<_> = INFLIGHT_REGISTRY
         .iter()
-        .map(|r| r.value().clone())
+        .map(|r| r.value().to_owned())
         .collect();
     list.sort_by_key(|b| std::cmp::Reverse(b.started_at_ms));
     list
@@ -1580,7 +1580,7 @@ fn stage_rank(stage: &str) -> u8 {
 
 pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow> {
     let (tx, _rx) = tokio::sync::broadcast::channel(1024);
-    let _ = USAGE_SENDER.set(tx.clone());
+    let _ = USAGE_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
     let _ = openproxy_types::usage::USAGE_ROW_PUBLISHER.set(publish_usage_global);
     tx
 }
@@ -1588,18 +1588,18 @@ pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types:
 pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>
 {
     let (tx, _rx) = tokio::sync::broadcast::channel(200);
-    let _ = STAGE_SENDER.set(tx.clone());
+    let _ = STAGE_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
     let _ = openproxy_types::usage::STAGE_EVENT_PUBLISHER.set(publish_stage_global);
     tx
 }
 
 fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
-    let attempt_key = if !row.trace_id.is_empty() {
-        row.trace_id.clone()
+    if !row.trace_id.is_empty() {
+        INFLIGHT_REGISTRY.remove(&row.trace_id);
     } else {
-        format!("{}:unknown", row.request_id)
-    };
-    INFLIGHT_REGISTRY.remove(&attempt_key);
+        let key = format!("{}:unknown", row.request_id);
+        INFLIGHT_REGISTRY.remove(&key);
+    }
 
     if let Some(tx) = USAGE_SENDER.get() {
         let _ = tx.send(openproxy_types::usage::redact_for_broadcast(row));
@@ -1608,7 +1608,7 @@ fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
 
 fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
     let attempt_key = if !event.trace_id.is_empty() {
-        event.trace_id.clone()
+        event.trace_id.to_owned()
     } else {
         format!("{}:unknown", event.request_id)
     };
@@ -1635,9 +1635,9 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
         let status_opt = event.status_code;
 
         INFLIGHT_REGISTRY
-            .entry(attempt_key.clone())
+            .entry(attempt_key.to_owned())
             .and_modify(|item| {
-                item.stage = event.stage.clone();
+                item.stage = event.stage.to_owned();
                 item.stage_rank = rank;
                 item.updated_at_ms = now_ms;
                 item.elapsed_ms_at_event = event.elapsed_ms;
@@ -1651,28 +1651,28 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                     item.status_code = status_opt;
                 }
                 if event.error.is_some() {
-                    item.error = event.error.clone();
+                    item.error = event.error.to_owned();
                 }
                 if let Some(p) = &event.provider_id
                     && !p.is_empty()
                 {
-                    item.provider_id = p.clone();
+                    item.provider_id = p.to_owned();
                 }
                 if let Some(m) = &event.upstream_model_id
                     && !m.is_empty()
                 {
-                    item.upstream_model_id = m.clone();
+                    item.upstream_model_id = m.to_owned();
                 }
             })
             .or_insert_with(|| openproxy_types::usage::InflightAttempt {
-                attempt_key: attempt_key.clone(),
-                request_id: event.request_id.clone(),
-                trace_id: event.trace_id.clone(),
-                provider_id: event.provider_id.clone().unwrap_or_default(),
-                upstream_model_id: event.upstream_model_id.clone().unwrap_or_default(),
+                attempt_key: attempt_key.to_owned(),
+                request_id: event.request_id.to_owned(),
+                trace_id: event.trace_id.to_owned(),
+                provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
+                upstream_model_id: event.upstream_model_id.as_deref().unwrap_or_default().to_string(),
                 started_at_ms: started_at,
                 updated_at_ms: now_ms,
-                stage: event.stage.clone(),
+                stage: event.stage.to_owned(),
                 stage_seq: event.elapsed_ms as u32,
                 stage_rank: rank,
                 elapsed_ms_at_event: event.elapsed_ms,
@@ -1681,7 +1681,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 status_code: status_opt,
                 terminal: false,
                 terminal_kind: None,
-                error: event.error.clone(),
+                error: event.error.to_owned(),
                 row_id: None,
                 source: "live".into(),
             });

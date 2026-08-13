@@ -196,7 +196,7 @@ fn tls_connector() -> TlsConnector {
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         Arc::new(config)
     });
-    TlsConnector::from(cfg.clone())
+    TlsConnector::from(Arc::clone(cfg))
 }
 
 /// Per-phase timeouts carried by a `PhasedConnector`. All values are
@@ -503,10 +503,10 @@ async fn run_phased_connect(
         }
     }
 
-    let dial_host = if let Some(ref proxy) = proxy_config_opt {
-        proxy.host.clone()
+    let dial_host: &str = if let Some(ref proxy) = proxy_config_opt {
+        &proxy.host
     } else {
-        host.clone()
+        &host
     };
     let dial_port = if let Some(ref proxy) = proxy_config_opt {
         proxy.port
@@ -517,7 +517,7 @@ async fn run_phased_connect(
     // ---- Phase 1: DNS ---------------------------------------------------
     // If `dial_host` is already a literal IP, skip DNS (and attribute any
     // later timeout to `Dial`, not `Dns`).
-    let addrs: Vec<SocketAddr> = if let Some(literal) = parse_literal_ip(&dial_host, dial_port) {
+    let addrs: Vec<SocketAddr> = if let Some(literal) = parse_literal_ip(dial_host, dial_port) {
         vec![literal]
     } else {
         let dns_remaining = connect_deadline
@@ -530,7 +530,7 @@ async fn run_phased_connect(
                 kind: PhasedErrorKind::Timeout,
             }));
         }
-        match tokio::time::timeout(dns_timeout, resolve_host(&dial_host, dial_port)).await {
+        match tokio::time::timeout(dns_timeout, resolve_host(dial_host, dial_port)).await {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {
@@ -701,7 +701,7 @@ async fn run_phased_connect(
     // a stalled or rejected TLS handshake surfaces as `Timeout(Tls)` or
     // `Io(Tls)`.
     if is_https {
-        let server_name = match ServerName::try_from(host.clone()) {
+        let server_name = match ServerName::try_from(host) {
             Ok(n) => n,
             Err(e) => {
                 return Err(Box::new(PhasedConnectorError {

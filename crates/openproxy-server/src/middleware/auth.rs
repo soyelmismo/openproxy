@@ -147,7 +147,7 @@ pub(crate) fn authenticate(
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
-        allowed_combos: key.allowed_combos.clone(),
+        allowed_combos: key.allowed_combos,
     }))
 }
 
@@ -239,25 +239,20 @@ pub async fn auth_middleware(
     let msgs_len = parsed.messages.len();
     for i in 0..msgs_len {
         if parsed.messages[i].role == "assistant" && parsed.messages[i].tool_calls.is_some() {
-            let mut valid_tool_calls = Vec::new();
-            if let Some(calls) = &parsed.messages[i].tool_calls {
-                for call in calls {
+            let (left, right) = parsed.messages.split_at_mut(i + 1);
+            if let Some(calls) = &mut left[i].tool_calls {
+                calls.retain(|call| {
                     let call_id = call.get("id").and_then(|v| v.as_str());
-                    let has_response = call_id.is_some_and(|id| {
-                        parsed.messages[i + 1..]
+                    call_id.is_some_and(|id| {
+                        right
                             .iter()
                             .take_while(|m| m.role == "tool")
                             .any(|m| m.tool_call_id.as_deref() == Some(id))
-                    });
-                    if has_response {
-                        valid_tool_calls.push(call.clone());
-                    }
+                    })
+                });
+                if calls.is_empty() {
+                    left[i].tool_calls = None;
                 }
-            }
-            if valid_tool_calls.is_empty() {
-                parsed.messages[i].tool_calls = None;
-            } else {
-                parsed.messages[i].tool_calls = Some(valid_tool_calls);
             }
         }
     }
@@ -281,7 +276,7 @@ pub async fn auth_middleware(
 
     parts.extensions.insert(ParsedChatRequest {
         parsed: Arc::new(parsed),
-        bytes: bytes.clone(),
+        bytes: bytes::Bytes::clone(&bytes),
     });
     if let Some(res) = auth_result {
         parts.extensions.insert(res);

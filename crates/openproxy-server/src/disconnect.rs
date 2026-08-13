@@ -133,7 +133,7 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
     //    it wants to merge (deadline watchdog) and threads `rx`
     //    into the pipeline.
     req.extensions_mut()
-        .insert(CancelWatch { tx: tx.clone(), rx });
+        .insert(CancelWatch { tx: tokio::sync::watch::Sender::clone(&tx), rx });
 
     // 2. Run the handler.
     let mut response = next.run(req).await;
@@ -401,7 +401,7 @@ mod tests {
     async fn error_on_poll_frame_fires_watch() {
         let (tx, rx) = new_cancel_pair();
         let fired = Arc::new(AtomicBool::new(false));
-        let mut body = DisconnectBody::new(AlwaysErrorBody, tx, fired.clone());
+        let mut body = DisconnectBody::new(AlwaysErrorBody, tx, Arc::clone(&fired));
 
         let result = poll_once(&mut body);
         match result {
@@ -471,7 +471,7 @@ mod tests {
     async fn repeated_errors_only_flip_watch_once() {
         let (tx, rx) = new_cancel_pair();
         let fired = Arc::new(AtomicBool::new(false));
-        let mut body = DisconnectBody::new(AlwaysErrorBody, tx, fired.clone());
+        let mut body = DisconnectBody::new(AlwaysErrorBody, tx, Arc::clone(&fired));
 
         // 5 error polls in a row.
         for _ in 0..5 {
@@ -496,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_watch_clone_is_independent() {
         let cw = CancelWatch::new();
-        let rx2 = cw.rx.clone();
+        let rx2 = tokio::sync::watch::Receiver::clone(&cw.rx);
 
         // Firing via the original `cw.tx` is visible on the clone.
         let _ = cw

@@ -54,13 +54,14 @@ fn version() -> String {
 /// the hostname + OS. This mimics the `machine_uid` crate used by the
 /// Antigravity-Manager — it produces a stable-per-machine identifier
 /// that the API uses for rate-limiting and session tracking.
-fn machine_id() -> String {
+fn machine_id() -> &'static str {
     static CACHE: OnceLock<String> = OnceLock::new();
     CACHE
         .get_or_init(|| {
             // Try to read a stable machine identifier from the OS.
             // Fallback: hostname + OS arch.
             let raw = hostname()
+                .map(String::from)
                 .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
             // Hash to a fixed-length hex string for a clean header value.
             use sha2::{Digest, Sha256};
@@ -76,12 +77,12 @@ fn machine_id() -> String {
                 .map(|b| format!("{:02x}", b))
                 .collect::<String>()
         })
-        .clone()
+        .as_str()
 }
 
 /// Best-effort hostname read. Returns `None` if the hostname can't be
 /// determined (e.g. in a container without hostname configured).
-fn hostname() -> Option<String> {
+fn hostname() -> Option<&'static str> {
     static CACHE: OnceLock<Option<String>> = OnceLock::new();
     CACHE
         .get_or_init(|| {
@@ -105,13 +106,13 @@ fn hostname() -> Option<String> {
             }
             None
         })
-        .clone()
+        .as_deref()
 }
 
 /// Per-launch session ID. Generated once per process lifetime.
-fn session_id() -> String {
+fn session_id() -> &'static str {
     static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE.get_or_init(|| Uuid::new_v4().to_string()).clone()
+    CACHE.get_or_init(|| Uuid::new_v4().to_string()).as_str()
 }
 
 /// The full User-Agent string:
@@ -154,12 +155,12 @@ pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Opt
     }
 
     // x-machine-id (persistent per-machine fingerprint)
-    if let Ok(v) = HeaderValue::from_str(&machine_id()) {
+    if let Ok(v) = HeaderValue::from_str(machine_id()) {
         headers.insert("x-machine-id", v);
     }
 
     // x-vscode-sessionid (per-launch session)
-    if let Ok(v) = HeaderValue::from_str(&session_id()) {
+    if let Ok(v) = HeaderValue::from_str(session_id()) {
         headers.insert("x-vscode-sessionid", v);
     }
 

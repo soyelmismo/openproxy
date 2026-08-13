@@ -239,20 +239,13 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     // it on `delta_reasoning` so the pipeline's accumulator
     // (sse_accumulator.rs) can persist it as
     // `choices[0].message.reasoning_content`. The probe does the
-    // parse work; we just extract one more field. Borrow via
-    // `as_ref()` so the subsequent `finish_reason` extraction
-    // (which consumes `probe.choices`) can still run.
-    let delta_reasoning = probe
-        .choices
-        .as_ref()
-        .and_then(|c| c.first())
-        .and_then(|c| c.delta.as_ref())
-        .and_then(|d| d.reasoning_content.as_ref())
-        .cloned();
-    let finish_reason = probe
-        .choices
-        .and_then(|mut c| c.pop())
-        .and_then(|c| c.finish_reason);
+    let (delta_reasoning, finish_reason) = match probe.choices.and_then(|mut c| c.pop()) {
+        Some(choice) => {
+            let reasoning = choice.delta.and_then(|d| d.reasoning_content);
+            (reasoning, choice.finish_reason)
+        }
+        None => (None, None),
+    };
 
     Ok(Some(UpstreamSseChunk {
         raw_payload: Some(payload.to_string()),
@@ -1010,8 +1003,8 @@ pub fn translate_anthropic_sse_event(
             *tool_call_index_counter += 1;
             *tool_use_acc = Some(AnthropicToolUseAccumulator::new_with_bounds(
                 index,
-                id.clone(),
-                name.clone(),
+                id.to_owned(),
+                name.to_owned(),
             )?);
             // Emit the initial OpenAI-style tool_call chunk with
             // id+type+name and empty arguments (the standard
@@ -1157,7 +1150,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!chunk.done);
-        let choice = chunk.payload["choices"][0].clone();
+        let choice = &chunk.payload["choices"][0];
         assert_eq!(choice["delta"]["content"].as_str().unwrap(), "Hello");
         assert_eq!(choice["finish_reason"].as_str().unwrap(), "stop");
         assert!(chunk.usage.is_some());
@@ -2192,7 +2185,7 @@ mod tests {
         let barrier = Arc::new(tokio::sync::Barrier::new(N));
 
         for i in 0..N {
-            let barrier = barrier.clone();
+            let barrier = Arc::clone(&barrier);
             joins.spawn(async move {
                 let chunk_id = format!("chatcmpl-{}", i);
                 let model = format!("claude-isolated-{}", i);
@@ -2239,12 +2232,12 @@ mod tests {
             // chunk_id must round-trip exactly, no cross-talk from peers.
             assert_eq!(chunk_id, format!("chatcmpl-{}", i));
             assert_eq!(model, format!("claude-isolated-{}", i));
-            assert!(seen_ids.insert(chunk_id.clone()), "duplicate chunk_id");
-            assert!(seen_models.insert(model.clone()), "duplicate model");
+            assert!(seen_ids.insert(chunk_id.to_owned()), "duplicate chunk_id");
+            assert!(seen_models.insert(model.to_owned()), "duplicate model");
 
             // First chunk must carry THIS task's tool id and name,
             // not any other task's.
-            let first_payload = outs[0].as_ref().expect("first chunk").payload.clone();
+            let first_payload = &outs[0].as_ref().expect("first chunk").payload;
             let tool_id = first_payload["choices"][0]["delta"]["tool_calls"][0]["id"]
                 .as_str()
                 .expect("tool id");
@@ -2466,9 +2459,9 @@ pub fn parse_responses_sse_stream_line(
                 .to_string();
 
             state.tool_calls.push(serde_json::json!({
-                "id": call_id,
+                "id": &call_id,
                 "type": "function",
-                "function": { "name": name.clone(), "arguments": "" }
+                "function": { "name": &name, "arguments": "" }
             }));
 
             return Ok(Some(UpstreamSseChunk {

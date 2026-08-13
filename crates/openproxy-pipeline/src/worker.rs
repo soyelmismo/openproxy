@@ -34,9 +34,9 @@ pub fn spawn_worker(
 ) {
     tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
-            let conn_clone = conn.clone();
-            let repo_clone = repo.clone();
-            let selection_registry_clone = selection_registry.clone();
+            let conn_clone = Arc::clone(&conn);
+            let repo_clone = Arc::clone(&repo);
+            let selection_registry_clone = Arc::clone(&selection_registry);
 
             // Usar spawn_blocking para las queries de SQLite
             let _ = tokio::task::spawn_blocking(move || {

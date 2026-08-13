@@ -370,7 +370,7 @@ impl PipelineRepository for SqlitePipelineRepository {
             openproxy_types::notifications::NotificationEvent {
                 id,
                 kind: kind.to_string(),
-                payload: payload.clone(),
+                payload: payload.to_owned(),
                 created_at,
             },
         );
@@ -634,19 +634,6 @@ impl PipelineRepository for SqlitePipelineRepository {
                 extra_json,
             )) = row
             {
-                raw_map.insert(
-                    id.0,
-                    RawAccount {
-                        api_key_encrypted: api_key,
-                        label,
-                        access_token_encrypted: access,
-                        refresh_token_encrypted: refresh,
-                        expires_at: expires,
-                        oauth_provider_specific: oauth_prov.clone(),
-                        quota_session_reset_at: None,
-                        quota_model_details: None,
-                    },
-                );
                 // Extract projectId from oauth_provider_specific JSON for antigravity accounts.
                 // Do NOT use the email column — the API needs a real GCP project ID.
                 if let Some(ref oauth_json) = oauth_prov
@@ -655,10 +642,26 @@ impl PipelineRepository for SqlitePipelineRepository {
                         .get("projectId")
                         .or_else(|| meta.get("project_id"))
                         .and_then(|v| v.as_str())
+                        .map(str::trim)
                         .filter(|v| !v.is_empty())
                 {
                     ag_map.insert(id.0, pid.to_string());
                 }
+
+                raw_map.insert(
+                    id.0,
+                    RawAccount {
+                        api_key_encrypted: api_key,
+                        label,
+                        access_token_encrypted: access,
+                        refresh_token_encrypted: refresh,
+                        expires_at: expires,
+                        oauth_provider_specific: oauth_prov,
+                        quota_session_reset_at: None,
+                        quota_model_details: None,
+                    },
+                );
+
                 if let Some(cfg_str) = extra_json
                     && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
                 {

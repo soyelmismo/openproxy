@@ -170,8 +170,8 @@ fn upsert_updates_existing() {
     let original = list_all(&conn).unwrap();
     assert_eq!(original.len(), 1);
     let original_row_id = original[0].row_id;
-    let original_discovered = original[0].discovered_at.clone();
-    let original_expires = original[0].expires_at.clone();
+    let original_discovered = original[0].discovered_at.to_owned();
+    let original_expires = original[0].expires_at.to_owned();
 
     // Second discovery: same model, now anthropic + new name.
     let n = upsert_many(
@@ -391,8 +391,8 @@ fn upsert_preserves_discovered_at_on_re_upsert() {
 
     // Capture the original timestamps.
     let original = list_all(&conn).unwrap().pop().unwrap();
-    let original_discovered = original.discovered_at.clone();
-    let original_expires = original.expires_at.clone();
+    let original_discovered = original.discovered_at;
+    let original_expires = original.expires_at;
 
     // Sleep just long enough for `datetime('now')` to tick to a
     // different value (sqlite's datetime() has 1-second
@@ -486,7 +486,7 @@ fn apply_auto_activation_does_not_affect_old_re_upserted_model() {
     )
     .expect("backdate discovered_at");
     let m_after_backdate = list_all(&conn).unwrap().pop().unwrap();
-    let pre_upsert_discovered = m_after_backdate.discovered_at.clone();
+    let pre_upsert_discovered = m_after_backdate.discovered_at;
     assert!(
         pre_upsert_discovered
             != conn

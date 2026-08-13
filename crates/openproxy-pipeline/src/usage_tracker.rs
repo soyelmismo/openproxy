@@ -64,9 +64,9 @@ impl UsageTracker {
         if let Err(e) = self.background_tx.try_send(job) {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
-                let conn = self.conn.clone();
-                let repo = self.repo.clone();
-                let selection_registry = self.selection_registry.clone();
+                let conn = Arc::clone(&self.conn);
+                let repo = Arc::clone(&self.repo);
+                let selection_registry = Arc::clone(&self.selection_registry);
                 drop(tokio::task::spawn_blocking(move || {
                     crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
                 }));
@@ -97,7 +97,7 @@ impl UsageTracker {
             combo_id: Some(combo.id),
             combo_target_id: None,
             model_row_id: None,
-            upstream_model_id: req.openai_request.model.clone(),
+            upstream_model_id: req.openai_request.model.to_owned(),
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
@@ -125,7 +125,7 @@ impl UsageTracker {
             completion_tokens_estimated: false,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         };
-        let conn = self.conn.clone();
+        let conn = Arc::clone(&self.conn);
         drop(tokio::task::spawn_blocking(move || {
             let lock = conn.lock();
             let _ = openproxy_db::cost::record(&lock, &input);
@@ -158,7 +158,7 @@ impl UsageTracker {
             proxy_status,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
-        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
+        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.to_owned());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
@@ -240,9 +240,10 @@ impl<'a> UsageRecordBuilder<'a> {
         combo: &'a Combo,
         target: &'a ComboTarget,
     ) -> Self {
+        let trace_id = req.trace_id.to_string();
         Self {
             tracker,
-            req: req.clone(),
+            req,
             combo,
             target,
             model: None,
@@ -254,7 +255,7 @@ impl<'a> UsageRecordBuilder<'a> {
             attempt: 1,
             race_size: 1,
             total_targets: 1,
-            trace_id: req.trace_id.to_string(),
+            trace_id,
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
@@ -373,13 +374,13 @@ impl<'a> UsageRecordBuilder<'a> {
 
     pub fn record(self) -> Result<Option<(String, u8, openproxy_types::ids::ComboTargetId)>> {
         let recording = self.tracker.is_recording();
-        let compression_stats_snapshot = self.tracker.compression_stats_cell.read().clone();
-        let compression_savings_pct = compression_stats_snapshot
-            .as_ref()
-            .and_then(|s| s.savings_pct_opt());
-        let compression_techniques = compression_stats_snapshot
-            .as_ref()
-            .and_then(|s| s.techniques_csv());
+        let (compression_savings_pct, compression_techniques) = {
+            let guard = self.tracker.compression_stats_cell.read();
+            (
+                guard.as_ref().and_then(|s| s.savings_pct_opt()),
+                guard.as_ref().and_then(|s| s.techniques_csv()),
+            )
+        };
 
         let (prompt_tokens, prompt_tokens_estimated) = match self.prompt_tokens {
             Some(t) if t > 0 => (Some(t), false),
@@ -432,9 +433,9 @@ impl<'a> UsageRecordBuilder<'a> {
 
         let input = UsageInput {
             request_id: self.req.request_id,
-            trace_id: self.trace_id.clone(),
+            trace_id: self.trace_id.to_owned(),
             attempt: self.attempt,
-            provider_id: self.target.provider_id.clone(),
+            provider_id: self.target.provider_id.to_owned(),
             account_id: self.target.account_id,
             combo_id: Some(self.combo.id),
             combo_target_id: Some(self.target.id),
@@ -455,7 +456,7 @@ impl<'a> UsageRecordBuilder<'a> {
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
-                self.req.request_body_json.clone().or_else(|| {
+                self.req.request_body_json.to_owned().or_else(|| {
                     serde_json::to_vec(&*self.req.openai_request)
                         .ok()
                         .map(bytes::Bytes::from)
@@ -482,15 +483,15 @@ impl<'a> UsageRecordBuilder<'a> {
             race_attempts: self.race_size,
             is_streaming: self.is_streaming,
             stream_complete: self.stream_complete,
-            stop_reason: self.stop_reason.clone(),
+            stop_reason: self.stop_reason.to_owned(),
             compression_savings_pct,
             compression_techniques,
             client_response: false,
             prompt_tokens_estimated,
             completion_tokens_estimated,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-            proxy_url: self.proxy_url.clone(),
-            proxy_status: self.proxy_status.clone(),
+            proxy_url: self.proxy_url.to_owned(),
+            proxy_status: self.proxy_status.to_owned(),
             is_proxy_rotated: self.is_proxy_rotated,
         };
 
@@ -517,7 +518,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 status_code: Some(self.status_code),
                 error: error_str,
 
-                stop_reason: self.stop_reason.clone(),
+                stop_reason: self.stop_reason.to_owned(),
                 timestamp: None,
                 endpoint_kind: None,
             });
@@ -554,9 +555,9 @@ impl<'a> UsageRecordBuilder<'a> {
         if let Err(e) = self.tracker.background_tx.try_send(job) {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
-                let conn = self.tracker.conn.clone();
-                let repo = self.tracker.repo.clone();
-                let selection_registry = self.tracker.selection_registry.clone();
+                let conn = Arc::clone(&self.tracker.conn);
+                let repo = Arc::clone(&self.tracker.repo);
+                let selection_registry = Arc::clone(&self.tracker.selection_registry);
                 drop(tokio::task::spawn_blocking(move || {
                     crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
                 }));

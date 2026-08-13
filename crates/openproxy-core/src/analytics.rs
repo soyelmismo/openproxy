@@ -72,39 +72,39 @@ pub struct RaceStats {
 // helpers of `crate::usage`. The shape of the filter is the same; we just
 // want a `(where_sql, params)` tuple we can splice into our own SELECTs.
 
-struct BuiltWhere {
+struct BuiltWhere<'a> {
     sql: String,
-    params: Vec<Box<dyn ToSql>>,
+    params: Vec<&'a dyn ToSql>,
 }
 
-impl BuiltWhere {
-    fn from_filter(f: &UsageFilter) -> Self {
+impl<'a> BuiltWhere<'a> {
+    fn from_filter(f: &'a UsageFilter) -> Self {
         let mut clauses: Vec<&'static str> = Vec::new();
-        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+        let mut params: Vec<&'a dyn ToSql> = Vec::new();
 
         if let Some(from) = &f.from {
             clauses.push("created_at >= ?");
-            params.push(Box::new(from.clone()));
+            params.push(from);
         }
         if let Some(to) = &f.to {
             clauses.push("created_at < ?");
-            params.push(Box::new(to.clone()));
+            params.push(to);
         }
         if let Some(pid) = &f.provider_id {
             clauses.push("provider_id = ?");
-            params.push(Box::new(pid.0.clone()));
+            params.push(&pid.0);
         }
         if let Some(mid) = &f.model_id {
             clauses.push("upstream_model_id = ?");
-            params.push(Box::new(mid.clone()));
+            params.push(mid);
         }
-        if let Some(aid) = f.account_id {
+        if let Some(aid) = &f.account_id {
             clauses.push("account_id = ?");
-            params.push(Box::new(aid.0));
+            params.push(&aid.0);
         }
-        if let Some(cid) = f.combo_id {
+        if let Some(cid) = &f.combo_id {
             clauses.push("combo_id = ?");
-            params.push(Box::new(cid.0));
+            params.push(&cid.0);
         }
 
         if clauses.is_empty() {
@@ -119,10 +119,6 @@ impl BuiltWhere {
         sql.push_str(&joined);
         Self { sql, params }
     }
-}
-
-fn to_params(v: &[Box<dyn ToSql>]) -> Vec<&dyn ToSql> {
-    v.iter().map(|b| b.as_ref() as &dyn ToSql).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +202,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     // fixed predicates.
     let mut clauses: Vec<String> = Vec::new();
     if !w.sql.is_empty() {
-        let bare = w.sql.trim_start_matches("WHERE ").to_string();
+        let bare = w.sql.trim_start_matches("WHERE ");
         clauses.push(format!("({})", bare));
     }
     clauses.push("race_lost = 0".to_string());
@@ -227,8 +223,6 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
         .prepare(&sql)
         .map_err(openproxy_db::error::map_db_error)?;
 
-    let params_slice = to_params(&w.params);
-
     let mut connect = StreamingDigest::new();
     let mut ttft = StreamingDigest::new();
     let mut total = StreamingDigest::new();
@@ -236,7 +230,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     let mut rows_seen: u64 = 0;
 
     let mut rows = stmt
-        .query(params_from_iter(params_slice))
+        .query(params_from_iter(w.params.iter().copied()))
         .map_err(openproxy_db::error::map_db_error)?;
 
     while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {
@@ -321,7 +315,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
         // Qualify all column references with `usage.` prefix to avoid
         // "ambiguous column name" errors when JOINing with combo_targets
         // (both tables have provider_id, combo_target_id, etc.).
-        let bare = w.sql.trim_start_matches("WHERE ").to_string();
+        let bare = w.sql.trim_start_matches("WHERE ");
         let qualified = bare
             .replace("created_at", "usage.created_at")
             .replace("provider_id", "usage.provider_id")
@@ -351,8 +345,6 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
         .prepare(&sql)
         .map_err(openproxy_db::error::map_db_error)?;
 
-    let params_slice = to_params(&w.params);
-
     let mut winners: u64 = 0;
     let mut losers: u64 = 0;
 
@@ -373,7 +365,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
     let mut wins_by_target: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
 
     let mut rows = stmt
-        .query(params_from_iter(params_slice))
+        .query(params_from_iter(w.params.iter().copied()))
         .map_err(openproxy_db::error::map_db_error)?;
 
     while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {

@@ -151,10 +151,10 @@ impl CredentialManager {
                                 )
                             }
                             "antigravity" => {
-                                let proj =
-                                    antigravity_map.get(&account_id.0).cloned().or_else(|| {
-                                        Self::antigravity_project_from_account(raw_account)
-                                    });
+                                let proj = antigravity_map
+                                    .get(&account_id.0)
+                                    .cloned()
+                                    .or_else(|| Self::antigravity_project_from_account(raw_account));
 
                                 let metadata = raw_account.oauth_provider_specific.clone();
 

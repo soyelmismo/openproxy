@@ -32,7 +32,7 @@ pub async fn get_proxy_summary(
 pub async fn sync_proxies(
     State(s): State<AppState>,
 ) -> Result<Json<openproxy_core::free_proxies::SyncSummary>, ApiError> {
-    let summary = openproxy_core::free_proxies::sync_all_providers(s.db_pool().clone()).await?;
+    let summary = openproxy_core::free_proxies::sync_all_providers(Arc::clone(s.db_pool())).await?;
     Ok(Json(summary))
 }
 
@@ -69,14 +69,14 @@ pub async fn test_proxy(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> {
-    let p = openproxy_core::free_proxies::test_single_proxy(s.db_pool().clone(), &id).await?;
+    let p = openproxy_core::free_proxies::test_single_proxy(Arc::clone(s.db_pool()), &id).await?;
     Ok(Json(p))
 }
 
 pub async fn test_all_proxies(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    openproxy_core::free_proxies::test_all_proxies_background(s.db_pool().clone());
+    openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(s.db_pool()));
     Ok(Json(serde_json::json!({ "status": "started" })))
 }
 

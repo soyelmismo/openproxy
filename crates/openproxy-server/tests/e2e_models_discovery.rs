@@ -88,7 +88,7 @@ impl MockStateHandle {
 }
 
 async fn mock_models_handler(AxumState(state): AxumState<Arc<MockState>>) -> impl IntoResponse {
-    let ids = state.catalog.lock().clone();
+    let ids = state.catalog.lock().to_vec();
     let data: Vec<serde_json::Value> = ids
         .into_iter()
         .map(|id| {
@@ -107,7 +107,7 @@ async fn mock_models_handler(AxumState(state): AxumState<Arc<MockState>>) -> imp
 /// when the test's runtime exits.
 async fn spawn_mock(initial: Vec<String>) -> (SocketAddr, MockStateHandle) {
     let state = MockState::new(initial);
-    let handle = MockStateHandle(state.clone());
+    let handle = MockStateHandle(Arc::clone(&state));
 
     let app = Router::new()
         .route("/v1/models", get(mock_models_handler))
@@ -289,7 +289,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
             admin::CreateProviderInput {
                 id: adapter.id().as_str().to_string(),
                 name: "E2E Mock Provider".into(),
-                base_url: adapter.config().base_url.clone(),
+                base_url: adapter.config().base_url.to_owned(),
                 auth_type: "bearer".into(),
                 format: "openai".into(),
                 extra_headers_json: None,
@@ -412,7 +412,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let base_url = format!("http://{addr}");
 
     // --- Step 2: build the test adapter + AppState --------------
-    let adapter = TestMockAdapter::new("e2e-mock", base_url.clone());
+    let adapter = TestMockAdapter::new("e2e-mock", base_url);
     let tmp = TempDir::new().expect("tempdir");
     let state = make_test_state(tmp.path(), &adapter).await;
     let provider = ProviderId::new("e2e-mock");
@@ -665,7 +665,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             &w,
             combos::AddTargetInput {
                 combo_id,
-                provider_id: provider.clone(),
+                provider_id: provider.to_owned(),
                 account_id: Some(account_id),
                 model_row_id: Some(c_row_id),
                 sub_combo_id: None,
@@ -829,7 +829,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             &w,
             combos::AddTargetInput {
                 combo_id,
-                provider_id: provider.clone(),
+                provider_id: provider.to_owned(),
                 account_id: Some(account_id),
                 model_row_id: Some(ModelRowId(new_c_id)),
                 sub_combo_id: None,

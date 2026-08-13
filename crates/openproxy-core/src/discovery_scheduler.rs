@@ -40,6 +40,7 @@ use crate::ids::ProviderId;
 use crate::models;
 use crate::providers::{self, AuthType};
 use crate::seed;
+use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
@@ -164,7 +165,7 @@ pub async fn start(
     for pid_str in seed::builtin_provider_ids() {
         let provider = ProviderId::new(pid_str);
         let adapter = match adapters.iter().find(|a| a.id() == &provider) {
-            Some(a) => a.clone(),
+            Some(a) => ProviderAdapterEnum::clone(a),
             None => {
                 // Should not happen: `builtin_provider_ids()` and
                 // `builtin_adapters()` are kept in lockstep. We log
@@ -179,9 +180,9 @@ pub async fn start(
             }
         };
 
-        let pool = db_pool.clone();
-        let key = master_key.clone();
-        let upstream = upstream_client.clone();
+        let pool = Arc::clone(&db_pool);
+        let key = Arc::clone(&master_key);
+        let upstream = Arc::clone(&upstream_client);
         let task_cancel = parent_cancel.child_token();
         let interval = config.interval_secs.max(1);
         let initial_stagger = config.initial_stagger_secs;
@@ -283,8 +284,8 @@ async fn run_one_provider(params: RunProviderParams) {
 
     loop {
         run_one_tick(
-            provider.clone(),
-            adapter.clone(),
+            ProviderId::new(provider.as_str()),
+            ProviderAdapterEnum::clone(&adapter),
             &db_pool,
             &master_key,
             &upstream_client,
@@ -423,7 +424,7 @@ async fn run_one_tick(
     // scheduler was the only path that didn't.
     let (api_key, account_label): (String, String) = match accounts_list.first() {
         Some(acc) => {
-            let label = acc.label.clone().unwrap_or_default();
+            let label = acc.label.as_deref().unwrap_or_default().to_string();
             // `auth_type` is a free-form `String` on the
             // `Account` row; "oauth" is the only value that
             // signals "no encrypted API key". For those we
@@ -439,14 +440,43 @@ async fn run_one_tick(
                     Err(e) => {
                         tracing::warn!(
                             provider = %provider,
-                            account_id = acc.id.0,
+                            account = acc.id.0,
                             error = %e,
-                            "discovery tick: failed to decrypt oauth access token; skipping oauth model discovery",
+                            "discovery tick: failed to decrypt oauth access token; skipping cycle",
                         );
-                        (String::new(), label)
+                        // B2: surface the decrypt failure to the
+                        // dashboard notifications tray. Same reason as
+                        // below — silent skips leave the operator
+                        // wondering why discovery is stuck (the
+                        // decrypt attempt is in an unknown state). Failure
+                        // to record the notification is swallowed — the
+                        // WARN log above is the source of truth, and the
+                        // dedup index collapses repeat identical codes
+                        // within 24h so a persistently bad key doesn't
+                        // flood the tray.
+                        let db_pool = Arc::clone(db_pool);
+                        let provider_str = provider.as_str().to_string();
+                        let acc_id = acc.id.0;
+                        let err_str = e.to_string();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Ok(notif_conn) = db_pool.open_connection() {
+                                let _ = crate::notifications::record_system(
+                                    &notif_conn,
+                                    crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
+                                    &format!("account_id={}: {}", acc_id, err_str),
+                                    Some(&provider_str),
+                                    None,
+                                );
+                            }
+                        })
+                        .await;
+                        return;
                     }
                 }
             } else {
+                // API-key based provider (Anthropic, OpenRouter, etc.).
+                // Decrypt the plaintext key from the DB so the adapter can
+                // talk to the upstream.
                 let decrypt_result = {
                     let w = db_pool.reader();
                     accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
@@ -456,19 +486,15 @@ async fn run_one_tick(
                     Err(e) => {
                         tracing::warn!(
                             provider = %provider,
-                            account_id = acc.id.0,
+                            account = acc.id.0,
                             error = %e,
                             "discovery tick: failed to decrypt api key; skipping cycle",
                         );
-                        // Surface to the dashboard's notifications tray.
-                        // Open a fresh connection (the writer held for the
-                        // decrypt attempt is in an unknown state). Failure
-                        // to record the notification is swallowed — the
-                        // WARN log above is the source of truth, and the
-                        // dedup index collapses repeat identical codes
-                        // within 24h so a persistently bad key doesn't
-                        // flood the tray.
-                        let db_pool = db_pool.clone();
+                        // B2: surface the decrypt failure to the
+                        // dashboard notifications tray so an operator who
+                        // typed an invalid key sees the red banner instead
+                        // of silent skips.
+                        let db_pool = Arc::clone(db_pool);
                         let provider_str = provider.as_str().to_string();
                         let acc_id = acc.id.0;
                         let err_str = e.to_string();
@@ -545,7 +571,7 @@ async fn run_one_tick(
             // rows the operator just hand-toggled since the
             // last successful tick. Failures are logged at WARN
             // and swallowed — the next tick tries again.
-            let db_pool_clone = db_pool.clone();
+            let db_pool_clone = Arc::clone(db_pool);
             let provider_clone = provider.clone();
             let keyword = provider_row
                 .as_ref()
@@ -590,7 +616,7 @@ async fn run_one_tick(
             // because the one used for `refresh_models` may be in a
             // half-finished state; `open_connection` is cheap and
             // the writer mutex is unaffected.
-            let db_pool = db_pool.clone();
+            let db_pool = Arc::clone(db_pool);
             let provider_str = provider.as_str().to_string();
             let err_str = e.to_string();
             let _ = tokio::task::spawn_blocking(move || {
@@ -744,7 +770,7 @@ mod tests {
         let (adapter, counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", three_models());
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter.clone()),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter),
         ]);
 
         // Run with paused time + 1s ticks. We expect the first
@@ -753,7 +779,7 @@ mod tests {
         // enough time for at least 2 ticks to confirm the
         // loop is alive.
         let sched = start(
-            pool.clone(),
+            Arc::clone(&pool),
             Arc::new(mk),
             adapters,
             UpstreamClient::new(),
@@ -782,30 +808,43 @@ mod tests {
         // The flake we hit with `advance(4s)` and then
         // yielding 16 times was that, on a busy CI box,
         // `advance` itself doesn't always poll the
-        // `current_thread` runtime to exhaustion across
-        // every virtual time step; we step in 1s chunks
-        // and yield between them.
-        for _ in 0..6 {
-            tokio::time::advance(Duration::from_secs(1)).await;
-            for _ in 0..32 {
+        for _ in 0..100 {
+            tokio::time::advance(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            for _ in 0..16 {
                 tokio::task::yield_now().await;
+            }
+            if counter.load(Ordering::SeqCst) >= 2 {
+                break;
             }
         }
 
+        let calls = counter.load(Ordering::SeqCst);
         assert!(
-            counter.load(Ordering::SeqCst) >= 1,
-            "mock adapter should have been called at least once"
+            calls >= 2,
+            "scheduler should have ticked at least twice in 2 virtual seconds, got {calls}",
         );
 
-        let rows = models_with_provider(&pool, "openrouter");
-        assert_eq!(rows.len(), 3, "expected three models in DB, got {rows:?}");
+        let active = models::list_active(
+            &pool.reader(),
+            &crate::ids::ProviderId::new("openrouter"),
+        )
+        .expect("list_active");
+        assert_eq!(active.len(), 3, "all 3 discovered models should be in DB");
 
-        // Cancel the scheduler so the task exits before the
-        // test drops the runtime.
         sched.cancel();
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
+        let calls_at_cancel = counter.load(Ordering::SeqCst);
+        for _ in 0..20 {
+            tokio::time::advance(Duration::from_millis(50)).await;
+            for _ in 0..16 {
+                tokio::task::yield_now().await;
+            }
         }
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            calls_at_cancel,
+            "no further calls after cancel",
+        );
     }
 
     /// A provider with zero accounts is iterated over without
@@ -815,7 +854,6 @@ mod tests {
     async fn scheduler_skips_provider_with_no_accounts() {
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
-        // Seed the provider row but NOT an account.
         {
             let conn = pool.writer();
             let provider_id = CoreProviderId::new("openrouter");
@@ -838,11 +876,11 @@ mod tests {
         let (adapter, counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", three_models());
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter.clone()),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter),
         ]);
 
         let sched = start(
-            pool.clone(),
+            Arc::clone(&pool),
             Arc::new(mk),
             adapters,
             UpstreamClient::new(),
@@ -945,7 +983,7 @@ mod tests {
         // suppressed the 1h sleep for ALL of them). Stagger is
         // 0 so every first tick fires immediately.
         let sched = start(
-            pool.clone(),
+            Arc::clone(&pool),
             Arc::new(mk),
             adapters,
             UpstreamClient::new(),
@@ -1044,7 +1082,7 @@ mod tests {
         // Should return successfully with zero tasks spawned
         // (every built-in has no adapter).
         let sched = start(
-            pool.clone(),
+            Arc::clone(&pool),
             Arc::new(mk),
             adapters,
             UpstreamClient::new(),
@@ -1271,11 +1309,11 @@ mod tests {
         let (adapter, _counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", models);
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter.clone()),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter),
         ]);
 
         let sched = start(
-            pool.clone(),
+            Arc::clone(&pool),
             Arc::new(mk),
             adapters,
             UpstreamClient::new(),
@@ -1408,10 +1446,10 @@ mod tests {
             openproxy_adapters::adapters::MockAdapter::failing_discovery("openrouter"),
         );
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![adapter.clone()]);
+            Arc::new(vec![adapter]);
 
         let sched = start(
-            pool.clone(),
+            Arc::clone(&pool),
             Arc::new(mk),
             adapters,
             UpstreamClient::new(),

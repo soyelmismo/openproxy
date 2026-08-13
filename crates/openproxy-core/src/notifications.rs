@@ -99,7 +99,7 @@ pub static NOTIF_TX: OnceCell<broadcast::Sender<NotificationEvent>> = OnceCell::
 pub fn init_broadcast() -> &'static broadcast::Sender<NotificationEvent> {
     NOTIF_TX.get_or_init(|| {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
-        let tx_clone = tx.clone();
+        let tx_clone = broadcast::Sender::clone(&tx);
         let _ =
             openproxy_types::notifications::NOTIFICATION_PUBLISHER.set(Box::new(move |event| {
                 let _ = tx_clone.send(event);
@@ -258,9 +258,9 @@ pub fn insert_many(
 
         for (i, row) in chunk.iter().enumerate() {
             params.push(Box::new(kind.to_string()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(payload_strings[i].clone()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(row.1.clone()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(row.2.clone()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(payload_strings[i].to_owned()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(row.1.to_owned()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(row.2.to_owned()) as Box<dyn rusqlite::ToSql>);
         }
 
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -289,7 +289,7 @@ pub fn insert_many(
             if let Some(dk) = &row.1
                 && !inserted_ids_by_dedup.contains_key(dk)
             {
-                missing_dedup_keys.push((i, dk.clone()));
+                missing_dedup_keys.push((i, dk.to_owned()));
             }
         }
 
@@ -310,7 +310,7 @@ pub fn insert_many(
             let mut select_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
             select_params.push(Box::new(kind.to_string()));
             for (_, dk) in &missing_dedup_keys {
-                select_params.push(Box::new(dk.clone()));
+                select_params.push(Box::new(dk.to_owned()));
             }
 
             let select_params_refs: Vec<&dyn rusqlite::ToSql> =
@@ -342,7 +342,7 @@ pub fn insert_many(
             };
 
             if let Some(id) = id {
-                all_results.push((id, row.0.clone()));
+                all_results.push((id, row.0.to_owned()));
             }
         }
     }
@@ -392,7 +392,7 @@ pub fn broadcast_one(
         let _ = tx.send(NotificationEvent {
             id,
             kind: kind.to_string(),
-            payload: payload.clone(),
+            payload: payload.to_owned(),
             created_at,
         });
     }

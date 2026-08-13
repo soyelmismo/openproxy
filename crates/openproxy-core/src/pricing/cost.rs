@@ -168,7 +168,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             // columns stay in sync and neither leaks the raw upstream
             // body (which can contain internal IPs, debug stacks, and
             // PII echoed back by misbehaving upstreams).
-            error_msg_redacted_for_db.clone(),
+            error_msg_redacted_for_db.as_deref(),
             input.is_streaming as i64,
             input.stream_complete as i64,
             input.stop_reason,
@@ -211,7 +211,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         response_body_json: None,
         request_headers: None,
         response_headers: None,
-        error_message: error_msg_redacted_for_db.clone(),
+        error_message: error_msg_redacted_for_db,
         race_total: Some(input.race_total),
         race_attempts: Some(input.race_attempts),
         is_streaming: input.is_streaming,

@@ -143,7 +143,7 @@ impl ProviderAdapter for ClineAdapter {
 
         let mut add_models = |entries: Vec<ClineModelEntry>, is_free: bool| {
             for entry in entries {
-                let mut id = entry.id.clone();
+                let mut id = entry.id;
                 if is_free && !id.ends_with(":free") && !id.contains("-free") {
                     id.push_str(":free");
                 }

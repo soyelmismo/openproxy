@@ -12,13 +12,13 @@ impl PipelineStage for QuotaEnforcerStage {
         ctx: &mut PipelineContext,
         next: crate::stage::PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let eligible = ctx.targets.clone();
+        let eligible = std::mem::take(&mut ctx.targets);
         if eligible.is_empty() {
             return next.execute(ctx).await;
         }
 
         let repo = ctx.pipeline.repo();
-        let master_key = ctx.pipeline.config.master_key.clone();
+        let master_key = std::sync::Arc::clone(&ctx.pipeline.config.master_key);
         let enabled = ctx.pipeline.config.quota_protection.enabled;
         let threshold = ctx.pipeline.config.quota_protection.threshold_percentage;
         let model = ctx.req.openai_request.model.clone();

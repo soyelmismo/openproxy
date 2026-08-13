@@ -5,6 +5,7 @@ use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use openproxy_types::error::CoreError;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 /// Request state passed down the middleware chain.
@@ -48,13 +49,13 @@ where
     }
 
     fn call(&mut self, state: PipelineState) -> Self::Future {
-        let pipeline = self.pipeline.clone();
-        let mut inner = self.inner.clone();
+        let pipeline = self.pipeline.to_owned();
+        let mut inner = self.inner.to_owned();
 
         let request_id = state.req.request_id.to_string();
         let trace_id = state.req.trace_id.to_string();
         // Since state is moved, we keep a cloned combo if available.
-        let combo = state.combo.clone();
+        let combo = state.combo.to_owned();
 
         let started = std::time::Instant::now();
 
@@ -65,10 +66,10 @@ where
                 && matches!(err, CoreError::NoHealthyTargets(_))
             {
                 if let Some(c) = combo {
-                    let repo = pipeline.repo().clone();
-                    let req_id = request_id.clone();
-                    let tr_id = trace_id.clone();
-                    let c = c.clone();
+                    let repo = pipeline.repo();
+                    let req_id = request_id.to_owned();
+                    let tr_id = trace_id.to_owned();
+                    let c = c.to_owned();
                     let elapsed = started.elapsed().as_millis() as u64;
                     let created = chrono::Utc::now().naive_utc().to_string();
                     let _ = tokio::task::spawn_blocking(move || {
@@ -106,7 +107,7 @@ impl<S> tower::Layer<S> for ErrorTelemetryLayer {
     type Service = ErrorTelemetryService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        ErrorTelemetryService::new(self.pipeline.clone(), inner)
+        ErrorTelemetryService::new(self.pipeline.to_owned(), inner)
     }
 }
 
@@ -143,8 +144,8 @@ where
     }
 
     fn call(&mut self, mut state: PipelineState) -> Self::Future {
-        let pipeline = self.pipeline.clone();
-        let mut inner = self.inner.clone();
+        let pipeline = self.pipeline.to_owned();
+        let mut inner = self.inner.to_owned();
 
         Box::pin(async move {
             // 1. Resolve the combo.
@@ -165,13 +166,13 @@ where
             };
 
             // 3. Flatten sub-combos.
-            let flat_targets = match pipeline.flatten_targets(&combo.id, targets.clone()).await {
+            let flat_targets = match pipeline.flatten_targets(&combo.id, targets.to_vec()).await {
                 Ok(t) => t,
                 Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
             };
 
             // 4. Filter out accounts that the circuit breaker marks unhealthy.
-            let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
+            let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.to_vec();
             let mut eligible: Vec<ComboTarget> = flat_targets
                 .into_iter()
                 .filter(|t| match t.account_id {
@@ -198,13 +199,13 @@ where
                     parked = pre_cb_snapshot.len(),
                     "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
                 );
-                eligible = pre_cb_snapshot.clone();
+                eligible = pre_cb_snapshot.to_vec();
             }
 
             if eligible.is_empty() {
                 if attempt == 1 {
                     let repopulated = match tokio::task::spawn_blocking({
-                        let p = pipeline.clone();
+                        let p = pipeline.to_owned();
                         let cid = combo.id;
                         move || p.repo().auto_populate_empty_combo(cid)
                     })
@@ -299,7 +300,7 @@ impl<S> tower::Layer<S> for ResolveLayer {
     type Service = ResolveService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        ResolveService::new(self.pipeline.clone(), inner)
+        ResolveService::new(self.pipeline.to_owned(), inner)
     }
 }
 
@@ -336,8 +337,8 @@ where
     }
 
     fn call(&mut self, mut state: PipelineState) -> Self::Future {
-        let pipeline = self.pipeline.clone();
-        let mut inner = self.inner.clone();
+        let pipeline = self.pipeline.to_owned();
+        let mut inner = self.inner.to_owned();
 
         Box::pin(async move {
             let Some(combo) = state.combo.as_ref() else {
@@ -351,11 +352,11 @@ where
             let attempt: u8 = 1;
 
             let filtered = {
-                let master_key = pipeline.config.master_key.clone();
-                let repo = pipeline.repo().clone();
+                let master_key = std::sync::Arc::clone(&pipeline.config.master_key);
+                let repo = pipeline.repo();
                 let enabled = pipeline.config.quota_protection.enabled;
                 let threshold = pipeline.config.quota_protection.threshold_percentage;
-                let req_model = state.req.openai_request.model.clone();
+                let req_model = state.req.openai_request.model.to_owned();
                 tokio::task::spawn_blocking(move || {
                     crate::quotas::apply_quota_routing(
                         enabled,
@@ -394,7 +395,7 @@ impl<S> tower::Layer<S> for QuotaLayer {
     type Service = QuotaService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        QuotaService::new(self.pipeline.clone(), inner)
+        QuotaService::new(self.pipeline.to_owned(), inner)
     }
 }
 
@@ -423,7 +424,7 @@ impl tower::Service<PipelineState> for RoutingService {
     }
 
     fn call(&mut self, state: PipelineState) -> Self::Future {
-        let pipeline = self.pipeline.clone();
+        let pipeline = self.pipeline.to_owned();
 
         Box::pin(async move {
             let Some(combo) = state.combo else {
@@ -451,15 +452,15 @@ impl tower::Service<PipelineState> for RoutingService {
                     .min(pipeline.config.racing.max_race_size as usize);
                 let race_result = crate::racing::run_race(
                     &pipeline,
-                    state.req.clone(),
+                    state.req.to_owned(),
                     &combo,
-                    to_run.clone(),
+                    to_run.to_vec(),
                     race_n as u8,
                 )
                 .await;
 
                 if race_result.error.is_none() {
-                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.clone()
+                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.to_owned()
                     {
                         let job = crate::worker::BackgroundJob::MarkClientResponse {
                             request_id,
@@ -470,9 +471,9 @@ impl tower::Service<PipelineState> for RoutingService {
                             && matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_))
                         {
                             let job = e.into_inner();
-                            let conn = pipeline.conn.clone();
-                            let repo = pipeline.repo().clone();
-                            let sel = pipeline.selection_registry().clone();
+                            let conn = Arc::clone(&pipeline.conn);
+                            let repo = pipeline.repo();
+                            let sel = Arc::clone(pipeline.selection_registry());
                             let _ = tokio::task::spawn_blocking(move || {
                                 crate::worker::process_job(&conn, repo.as_ref(), job, sel);
                             })
@@ -498,7 +499,7 @@ impl tower::Service<PipelineState> for RoutingService {
 
             for (idx, target) in to_run.iter().enumerate() {
                 let client_disconnected = {
-                    let mut rx = state.req.client_disconnected.clone();
+                    let mut rx = tokio::sync::watch::Receiver::clone(&state.req.client_disconnected);
                     pipeline.is_client_disconnected(&mut rx)
                 };
                 if let Some(reason) = client_disconnected {
@@ -516,7 +517,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 let mut target_local_retry_count: u8 = 1;
                 let mut result = pipeline
                     .execute_single(
-                        state.req.clone(),
+                        state.req.to_owned(),
                         &combo,
                         target,
                         overall_attempt,
@@ -542,7 +543,7 @@ impl tower::Service<PipelineState> for RoutingService {
                         break;
                     }
                     let client_disconnected = {
-                        let mut rx = state.req.client_disconnected.clone();
+                        let mut rx = tokio::sync::watch::Receiver::clone(&state.req.client_disconnected);
                         pipeline.is_client_disconnected(&mut rx)
                     };
                     if let Some(reason) = client_disconnected {
@@ -589,7 +590,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     overall_attempt = overall_attempt.saturating_add(1);
                     result = pipeline
                         .execute_single(
-                            state.req.clone(),
+                            state.req.to_owned(),
                             &combo,
                             target,
                             overall_attempt,
@@ -618,7 +619,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 if let Some(op) = cooldown_op {
                     match op {
                         "clear" => {
-                            let repo = pipeline.repo().clone();
+                            let repo = pipeline.repo();
                             let target_id = target.target.id;
                             let combo_id = combo.id.0;
                             let _ = tokio::task::spawn_blocking(move || {
@@ -653,11 +654,11 @@ impl tower::Service<PipelineState> for RoutingService {
                                 result.error,
                                 Some(openproxy_types::error::CoreError::RateLimited { .. })
                             );
-                            let repo = pipeline.repo().clone();
+                            let repo = pipeline.repo();
                             let target_id = target.target.id;
                             let account_id_opt = target.target.account_id;
-                            let req_model = target.model.model_id.0.clone();
-                            let combo_id = combo.id.0;
+                            let req_model = target.model.model_id.0.to_owned();
+                            let _combo_id = combo.id.0;
                             let _ = tokio::task::spawn_blocking(move || {
                                 let mut final_base_secs = base_secs;
                                 if is_rate_limited && let Some(account_id) = account_id_opt {
@@ -666,7 +667,7 @@ impl tower::Service<PipelineState> for RoutingService {
                                             repo.get_accounts_meta(&[account_id]).ok()?;
                                         let account = accounts.get(&account_id.0)?;
 
-                                        let mut reset_str = account.quota_session_reset_at.clone();
+                                        let mut reset_str = account.quota_session_reset_at.to_owned();
 
                                         if let Some(json) = &account.quota_model_details
                                             && let Ok(details) =
@@ -688,7 +689,7 @@ impl tower::Service<PipelineState> for RoutingService {
                                                     || req_model.eq_ignore_ascii_case(&d.model_id)
                                             }) && detail.session_reset_at.is_some()
                                             {
-                                                reset_str = detail.session_reset_at.clone();
+                                                reset_str = detail.session_reset_at.to_owned();
                                             }
                                         }
 
@@ -701,47 +702,28 @@ impl tower::Service<PipelineState> for RoutingService {
                                         final_base_secs = secs;
                                     }
                                 }
-
-                                if let Err(e) = repo.record_cooldown(
+                                let _ = repo.record_cooldown(
                                     target_id,
                                     &reason,
                                     mode,
                                     final_base_secs,
                                     max_secs,
                                     factor,
-                                ) {
-                                    tracing::warn!(
-                                        combo_id,
-                                        target_id = target_id.0,
-                                        error = %e,
-                                        "cooldown::record failed; non-fatal"
-                                    );
-                                }
+                                );
                             }).await;
                         }
                         _ => {}
                     }
                 }
 
-                let model_name = target
-                    .target
-                    .model_row_id
-                    .map(|_| "unresolved")
-                    .unwrap_or("unknown");
-                let outcome = if let Some(err) = &result.error {
-                    if crate::retry::RetryPolicy::is_retryable(
-                        err,
-                        pipeline.config.idle_chunk_retryable,
-                    ) {
-                        "retryable_failure"
-                    } else {
-                        "fatal_failure"
-                    }
+                let outcome = if result.error.is_none() {
+                    "ok"
                 } else {
-                    "success"
+                    "failed"
                 };
+                let model_name = &target.model.model_id.0;
                 combo_walk_log.push(format!(
-                    "  [{}] {} (model: {}, id: {}): {} (attempts: {})",
+                    "[{}] {}:{} (id={}) => {} (tries={})",
                     idx + 1,
                     target.target.provider_id,
                     model_name,
@@ -751,7 +733,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 ));
 
                 if result.error.is_none() {
-                    if let Some((request_id, attempt, target_id)) = result.usage_tuple.clone() {
+                    if let Some((request_id, attempt, target_id)) = result.usage_tuple.to_owned() {
                         let job = crate::worker::BackgroundJob::MarkClientResponse {
                             request_id,
                             attempt,
@@ -761,9 +743,9 @@ impl tower::Service<PipelineState> for RoutingService {
                             && matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_))
                         {
                             let job = e.into_inner();
-                            let conn = pipeline.conn.clone();
-                            let repo = pipeline.repo().clone();
-                            let sel = pipeline.selection_registry().clone();
+                            let conn = Arc::clone(&pipeline.conn);
+                            let repo = pipeline.repo();
+                            let sel = Arc::clone(pipeline.selection_registry());
                             let _ = tokio::task::spawn_blocking(move || {
                                 crate::worker::process_job(&conn, repo.as_ref(), job, sel);
                             })
@@ -814,7 +796,7 @@ impl<S> tower::Layer<S> for RoutingLayer {
     type Service = RoutingService;
 
     fn layer(&self, _inner: S) -> Self::Service {
-        RoutingService::new(self.pipeline.clone())
+        RoutingService::new(self.pipeline.to_owned())
     }
 }
 

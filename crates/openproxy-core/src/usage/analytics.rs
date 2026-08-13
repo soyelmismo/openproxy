@@ -212,19 +212,19 @@ impl BuiltWhere {
         // analytics queries in line with them.
         if let Some(from) = &f.from {
             clauses.push("datetime(created_at) >= datetime(?)");
-            params.push(Box::new(from.clone()));
+            params.push(Box::new(from.to_owned()));
         }
         if let Some(to) = &f.to {
             clauses.push("datetime(created_at) < datetime(?)");
-            params.push(Box::new(to.clone()));
+            params.push(Box::new(to.to_owned()));
         }
         if let Some(pid) = &f.provider_id {
             clauses.push("provider_id = ?");
-            params.push(Box::new(pid.0.clone()));
+            params.push(Box::new(pid.0.to_owned()));
         }
         if let Some(mid) = &f.model_id {
             clauses.push("upstream_model_id = ?");
-            params.push(Box::new(mid.clone()));
+            params.push(Box::new(mid.to_owned()));
         }
         if let Some(aid) = f.account_id {
             clauses.push("account_id = ?");

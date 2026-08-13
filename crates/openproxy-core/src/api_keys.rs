@@ -431,15 +431,15 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
     }
     if let Some(s) = &scopes_json {
         sets.push("scopes_json = ?");
-        bound.push(Box::new(s.clone()));
+        bound.push(Box::new(s.to_owned()));
     }
     if let Some(om) = &allowed_models_json {
         sets.push("allowed_models_json = ?");
-        bound.push(Box::new(om.clone()));
+        bound.push(Box::new(om.to_owned()));
     }
     if let Some(oc) = &allowed_combos_json {
         sets.push("allowed_combos_json = ?");
-        bound.push(Box::new(oc.clone()));
+        bound.push(Box::new(oc.to_owned()));
     }
     if let Some(active) = params.is_active {
         sets.push("is_active = ?");
@@ -826,10 +826,10 @@ mod tests {
         assert!(after.revoked_at.is_some(), "revoked_at stamped");
 
         // Idempotent: a second revoke preserves the original timestamp.
-        let first_ts = after.revoked_at.clone().unwrap();
+        let first_ts = after.revoked_at.as_deref().unwrap();
         revoke(&conn, key.id).expect("revoke 2");
         let after2 = get_by_id(&conn, key.id).expect("get 2").expect("present");
-        assert_eq!(after2.revoked_at.as_deref(), Some(first_ts.as_str()));
+        assert_eq!(after2.revoked_at.as_deref(), Some(first_ts));
     }
 
     #[test]
@@ -846,13 +846,11 @@ mod tests {
     fn regenerate_changes_hash_and_keeps_id() {
         let (conn, _p) = fresh_pool();
         let (key, plaintext) = create(&conn, make_input("regen"), "admin").expect("create");
-        let old_hash = key.key_hash.clone();
-        let old_prefix = key.key_prefix.clone();
 
         let (regen, new_plaintext) = regenerate(&conn, key.id).expect("regenerate");
         assert_ne!(new_plaintext, plaintext, "new plaintext differs");
-        assert_ne!(regen.key_hash, old_hash, "hash changed");
-        assert_ne!(regen.key_prefix, old_prefix, "prefix changed");
+        assert_ne!(regen.key_hash, key.key_hash, "hash changed");
+        assert_ne!(regen.key_prefix, key.key_prefix, "prefix changed");
         assert_eq!(regen.id, key.id, "id preserved");
         assert!(regen.is_active, "regenerate re-activates");
         assert!(regen.revoked_at.is_none(), "regenerate clears revoked_at");
@@ -1011,12 +1009,12 @@ mod tests {
         // First touch stamps.
         touch_last_used(&conn, key.id).expect("touch 1");
         let after1 = get_by_id(&conn, key.id).expect("get").expect("present");
-        let ts1 = after1.last_used_at.clone().expect("stamp 1");
+        let ts1 = after1.last_used_at.as_deref().expect("stamp 1");
 
         // Second touch immediately is throttled: column unchanged.
         touch_last_used(&conn, key.id).expect("touch 2");
         let after2 = get_by_id(&conn, key.id).expect("get").expect("present");
-        let ts2 = after2.last_used_at.clone().expect("stamp 2");
+        let ts2 = after2.last_used_at.as_deref().expect("stamp 2");
         assert_eq!(ts1, ts2, "throttled: same timestamp");
 
         // Manually move last_used_at to > 5 min ago → next touch wins.

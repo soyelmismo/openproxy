@@ -101,13 +101,13 @@ pub async fn list_models(
         let first_id = anthropic_data
             .first()
             .and_then(|v| v.get("id"))
-            .cloned()
-            .unwrap_or(serde_json::json!(""));
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let last_id = anthropic_data
             .last()
             .and_then(|v| v.get("id"))
-            .cloned()
-            .unwrap_or(serde_json::json!(""));
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
         Ok(Json(serde_json::json!({
             "data": anthropic_data,

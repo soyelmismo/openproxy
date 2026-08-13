@@ -58,13 +58,17 @@ fn collect_all_defs(value: &Value, defs: &mut serde_json::Map<String, Value>) {
         if let Some(Value::Object(d)) = map.get("$defs") {
             for (k, v) in d {
                 // 避免覆盖已存在的定义（先定义的优先）
-                defs.entry(k.clone()).or_insert_with(|| v.clone());
+                if !defs.contains_key(k) {
+                    defs.insert(k.clone(), v.clone());
+                }
             }
         }
         // 收集当前层级的 definitions (Draft-07 风格)
         if let Some(Value::Object(d)) = map.get("definitions") {
             for (k, v) in d {
-                defs.entry(k.clone()).or_insert_with(|| v.clone());
+                if !defs.contains_key(k) {
+                    defs.insert(k.clone(), v.clone());
+                }
             }
         }
         // 递归处理所有子节点
@@ -103,7 +107,9 @@ fn flatten_refs(
                 for (k, v) in def_map {
                     // 仅当当前 map 没有该 key 时才插入 (避免覆盖)
                     // 但通常 $ref 节点不应该有其他属性
-                    map.entry(k.clone()).or_insert_with(|| v.clone());
+                    if !map.contains_key(k) {
+                        map.insert(k.clone(), v.clone());
+                    }
                 }
 
                 // 递归处理刚刚合并进来的内容中可能包含的 $ref
@@ -164,7 +170,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // 我们将 items 的内容“对齐”到 properties 中。
             if (map.get("type").and_then(|t| t.as_str()) == Some("object")
                 || map.contains_key("properties"))
-                && let Some(items) = map.remove("items")
+                && let Some(mut items) = map.remove("items")
             {
                 tracing::warn!(
                     "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
@@ -173,10 +179,10 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     .entry("properties".to_string())
                     .or_insert_with(|| json!({}));
                 if let Some(target_map) = target_props.as_object_mut()
-                    && let Some(source_map) = items.as_object()
+                    && let Some(source_map) = items.as_object_mut()
                 {
-                    for (k, v) in source_map {
-                        target_map.entry(k.clone()).or_insert_with(|| v.clone());
+                    for (k, v) in std::mem::take(source_map) {
+                        target_map.entry(k).or_insert(v);
                     }
                 }
             }
@@ -188,14 +194,15 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 // `prop: true|false`, but Gemini's Schema proto requires every property
                 // value to be an object; a bare boolean triggers an upstream 400
                 // ("Invalid value at '...properties[N].value' ... false").
-                let dropped_keys: Vec<String> = props
-                    .iter()
-                    .filter(|(_, v)| !v.is_object())
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                for k in &dropped_keys {
-                    props.remove(k);
-                }
+                let mut dropped_keys = std::collections::HashSet::new();
+                props.retain(|k, v| {
+                    if v.is_object() {
+                        true
+                    } else {
+                        dropped_keys.insert(k.clone());
+                        false
+                    }
+                });
 
                 let mut nullable_keys = std::collections::HashSet::new();
                 for (k, v) in props.iter_mut() {
@@ -211,7 +218,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     req_arr.retain(|r| {
                         r.as_str()
                             .map(|s| {
-                                !nullable_keys.contains(s) && !dropped_keys.iter().any(|d| d == s)
+                                !nullable_keys.contains(s) && !dropped_keys.contains(s)
                             })
                             .unwrap_or(true)
                     });
@@ -266,15 +273,16 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             }
 
             // 2. [FIX #815] 处理 anyOf/oneOf 联合类型: 合并属性或择优选择分支
-            let mut union_to_merge = None;
-            if let Some(Value::Array(any_of)) = map.get("anyOf") {
-                union_to_merge = Some(any_of.clone());
+            let union_to_merge = if let Some(Value::Array(any_of)) = map.get("anyOf") {
+                Some(any_of.as_slice())
             } else if let Some(Value::Array(one_of)) = map.get("oneOf") {
-                union_to_merge = Some(one_of.clone());
-            }
+                Some(one_of.as_slice())
+            } else {
+                None
+            };
 
             if let Some(union_array) = union_to_merge
-                && let Some((best_branch, all_types)) = extract_best_schema_from_union(&union_array)
+                && let Some((best_branch, all_types)) = extract_best_schema_from_union(union_array)
             {
                 if let Value::Object(branch_obj) = best_branch {
                     // 合并分支属性到当前 map
@@ -284,10 +292,10 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                                 .entry("properties".to_string())
                                 .or_insert_with(|| Value::Object(serde_json::Map::new()))
                                 .as_object_mut()
-                                && let Some(source_props) = v.as_object()
+                                && let Value::Object(source_props) = v
                             {
                                 for (pk, pv) in source_props {
-                                    target_props.entry(pk.clone()).or_insert_with(|| pv.clone());
+                                    target_props.entry(pk).or_insert(pv);
                                 }
                             }
                         } else if k == "required" {
@@ -295,11 +303,11 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                                 .entry("required".to_string())
                                 .or_insert_with(|| Value::Array(Vec::new()))
                                 .as_array_mut()
-                                && let Some(source_req) = v.as_array()
+                                && let Value::Array(source_req) = v
                             {
                                 for rv in source_req {
-                                    if !target_req.contains(rv) {
-                                        target_req.push(rv.clone());
+                                    if !target_req.contains(&rv) {
+                                        target_req.push(rv);
                                     }
                                 }
                             }
@@ -338,13 +346,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 map.contains_key("functionCall") || map.contains_key("functionResponse");
             if is_schema_node && !has_standard_keyword && !map.is_empty() && !is_not_schema_payload
             {
-                let mut properties = serde_json::Map::new();
-                let keys: Vec<String> = map.keys().cloned().collect();
-                for k in keys {
-                    if let Some(v) = map.remove(&k) {
-                        properties.insert(k, v);
-                    }
-                }
+                let properties = std::mem::take(map);
                 map.insert("type".to_string(), Value::String("object".to_string()));
                 map.insert("properties".to_string(), Value::Object(properties));
 
@@ -365,14 +367,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 move_constraints_to_description(map);
 
                 // 5. [CRITICAL] 白名单过滤：彻底物理移除 Gemini 不支持的内容，防止 400 错误
-                let keys_to_remove: Vec<String> = map
-                    .keys()
-                    .filter(|k| !allowed_fields.contains(&k.as_str()))
-                    .cloned()
-                    .collect();
-                for k in keys_to_remove {
-                    map.remove(&k);
-                }
+                map.retain(|k, _| allowed_fields.contains(&k.as_str()));
 
                 // 6. [SAFETY] 处理空 Object
                 // [FIX] 移除 reason 字段注入逻辑
@@ -386,19 +381,15 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 }
 
                 // 7. [SAFETY] Required 字段对齐
-                let valid_prop_keys: Option<std::collections::HashSet<String>> = map
-                    .get("properties")
-                    .and_then(|p| p.as_object())
-                    .map(|obj| obj.keys().cloned().collect());
-
-                if let Some(required_val) = map.get_mut("required")
-                    && let Some(req_arr) = required_val.as_array_mut()
-                {
-                    if let Some(keys) = &valid_prop_keys {
-                        req_arr.retain(|k| k.as_str().map(|s| keys.contains(s)).unwrap_or(false));
-                    } else {
-                        req_arr.clear();
+                if let Some(mut required_val) = map.remove("required") {
+                    if let Some(req_arr) = required_val.as_array_mut() {
+                        if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+                            req_arr.retain(|k| k.as_str().map(|s| props.contains_key(s)).unwrap_or(false));
+                        } else {
+                            req_arr.clear();
+                        }
                     }
+                    map.insert("required".to_string(), required_val);
                 }
 
                 if !map.contains_key("type") {
@@ -500,30 +491,26 @@ fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
         let mut other_fields = serde_json::Map::new();
 
         for sub_schema in all_of {
-            if let Value::Object(sub_map) = sub_schema {
+            if let Value::Object(mut sub_map) = sub_schema {
                 // 合并属性
-                if let Some(Value::Object(props)) = sub_map.get("properties") {
+                if let Some(Value::Object(props)) = sub_map.remove("properties") {
                     for (k, v) in props {
-                        merged_properties.insert(k.clone(), v.clone());
+                        merged_properties.insert(k, v);
                     }
                 }
 
                 // 合并 required
-                if let Some(Value::Array(reqs)) = sub_map.get("required") {
+                if let Some(Value::Array(reqs)) = sub_map.remove("required") {
                     for req in reqs {
-                        if let Some(s) = req.as_str() {
-                            merged_required.insert(s.to_string());
+                        if let Value::String(s) = req {
+                            merged_required.insert(s);
                         }
                     }
                 }
 
                 // 合并其余字段 (第一个出现的胜出)
                 for (k, v) in sub_map {
-                    if k != "properties"
-                        && k != "required"
-                        && k != "allOf"
-                        && !other_fields.contains_key(&k)
-                    {
+                    if k != "allOf" && !other_fields.contains_key(&k) {
                         other_fields.insert(k, v);
                     }
                 }
@@ -631,7 +618,7 @@ fn score_schema_option(val: &Value) -> i32 {
 /// [NEW] 从 anyOf/oneOf 联合类型数组中选取最佳非 null Schema 分支
 /// 返回: (最佳Schema, 所有可能的类型列表)
 /// 参考 CLIProxyAPI 的 selectBest 逻辑
-fn extract_best_schema_from_union(union_array: &Vec<Value>) -> Option<(Value, Vec<String>)> {
+fn extract_best_schema_from_union(union_array: &[Value]) -> Option<(Value, Vec<String>)> {
     let mut best_option: Option<&Value> = None;
     let mut best_score = -1;
     let mut all_types = Vec::new();

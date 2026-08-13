@@ -183,33 +183,33 @@ impl AppState {
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
 
         spawn_background_tasks(SpawnBackgroundTasksArgs {
-            db_pool: db_pool.clone(),
+            db_pool: Arc::clone(&db_pool),
             config: config.clone(),
-            recording_ttl_secs_cell: recording_ttl_secs_cell.clone(),
-            maintenance_cell: maintenance_cell.clone(),
-            vacuum_status: vacuum_status.clone(),
-            master_key: master_key.clone(),
-            adapters: adapters.clone(),
-            upstream_client: upstream_client.clone(),
-            oauth_provider_registry: oauth_provider_registry.clone(),
+            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
+            maintenance_cell: Arc::clone(&maintenance_cell),
+            vacuum_status: Arc::clone(&vacuum_status),
+            master_key: Arc::clone(&master_key),
+            adapters: Arc::clone(&adapters),
+            upstream_client: Arc::clone(&upstream_client),
+            oauth_provider_registry: Arc::clone(&oauth_provider_registry),
         })
         .await;
 
         let discovery_scheduler = Arc::new(
             start_discovery_scheduler(
-                db_pool.clone(),
-                master_key.clone(),
-                adapters.clone(),
-                upstream_client.clone(),
+                Arc::clone(&db_pool),
+                Arc::clone(&master_key),
+                Arc::clone(&adapters),
+                Arc::clone(&upstream_client),
             )
             .await,
         );
 
         openproxy_core::smart_warmup::start_smart_warmup_scheduler(
-            db_pool.clone(),
+            Arc::clone(&db_pool),
             config.clone(),
-            upstream_client.clone(),
-            master_key.clone(),
+            Arc::clone(&upstream_client),
+            Arc::clone(&master_key),
         )
         .await;
 
@@ -219,7 +219,7 @@ impl AppState {
             ..Default::default()
         };
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
-        spawn_rate_limiter_cleanup(rate_limiter.clone());
+        spawn_rate_limiter_cleanup(Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
         let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
@@ -228,7 +228,7 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        spawn_memory_cleanup(selection_registry.clone(), circuit_breaker.clone());
+        spawn_memory_cleanup(Arc::clone(&selection_registry), circuit_breaker.clone());
 
         let quota_protection = config.quota_protection.clone();
 
@@ -240,10 +240,10 @@ impl AppState {
             db_pool.writer_arc(),
             repo,
             background_rx,
-            selection_registry.clone(),
+            Arc::clone(&selection_registry),
         );
 
-        let services = Arc::new(crate::services::Services::new(db_pool.clone()));
+        let services = Arc::new(crate::services::Services::new(Arc::clone(&db_pool)));
 
         let state = Self {
             config,
@@ -304,24 +304,24 @@ impl AppState {
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
 
         spawn_background_tasks(SpawnBackgroundTasksArgs {
-            db_pool: db_pool.clone(),
+            db_pool: Arc::clone(&db_pool),
             config: config.clone(),
-            recording_ttl_secs_cell: recording_ttl_secs_cell.clone(),
-            maintenance_cell: maintenance_cell.clone(),
-            vacuum_status: vacuum_status.clone(),
-            master_key: master_key.clone(),
-            adapters: adapters.clone(),
-            upstream_client: upstream_client.clone(),
-            oauth_provider_registry: oauth_provider_registry.clone(),
+            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
+            maintenance_cell: Arc::clone(&maintenance_cell),
+            vacuum_status: Arc::clone(&vacuum_status),
+            master_key: Arc::clone(&master_key),
+            adapters: Arc::clone(&adapters),
+            upstream_client: Arc::clone(&upstream_client),
+            oauth_provider_registry: Arc::clone(&oauth_provider_registry),
         })
         .await;
 
         let adapters_snapshot = Arc::clone(&adapters.read());
         let discovery_scheduler = discovery_scheduler::start(
-            db_pool.clone(),
-            master_key.clone(),
-            adapters_snapshot.clone(),
-            upstream_client.clone(),
+            Arc::clone(&db_pool),
+            Arc::clone(&master_key),
+            Arc::clone(&adapters_snapshot),
+            Arc::clone(&upstream_client),
             openproxy_core::discovery_scheduler::DiscoverySchedulerConfig {
                 interval_secs: 3_600,
                 initial_stagger_secs: 0,
@@ -334,7 +334,7 @@ impl AppState {
             ..Default::default()
         };
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
-        spawn_rate_limiter_cleanup(rate_limiter.clone());
+        spawn_rate_limiter_cleanup(Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
         let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
@@ -343,12 +343,12 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        spawn_memory_cleanup(selection_registry.clone(), circuit_breaker.clone());
+        spawn_memory_cleanup(Arc::clone(&selection_registry), circuit_breaker.clone());
 
         openproxy_core::notifications::init_broadcast();
 
         let (background_tx, _) = tokio::sync::mpsc::channel(1);
-        let services = Arc::new(crate::services::Services::new(db_pool.clone()));
+        let services = Arc::new(crate::services::Services::new(Arc::clone(&db_pool)));
 
         Self {
             config: config.clone(),
@@ -481,7 +481,7 @@ impl AppState {
     /// Return a clone of the OAuth provider registry (cheap —
     /// internally `Arc`-backed).
     pub fn oauth_provider_registry(&self) -> Arc<oauth::OAuthProviderRegistry> {
-        self.oauth_provider_registry.clone()
+        Arc::clone(&self.oauth_provider_registry)
     }
 
     /// Borrow the background discovery scheduler handle.
@@ -502,7 +502,7 @@ impl AppState {
     pub fn usage_tx(
         &self,
     ) -> tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow> {
-        self.usage_tx.clone()
+        tokio::sync::broadcast::Sender::clone(&self.usage_tx)
     }
 
     /// Borrow the stage broadcast sender. The live-log dashboard
@@ -511,14 +511,14 @@ impl AppState {
     /// `started → connecting → waiting_ttft → streaming → completed`
     /// in real time.
     pub fn stage_tx(&self) -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent> {
-        self.stage_tx.clone()
+        tokio::sync::broadcast::Sender::clone(&self.stage_tx)
     }
 
     /// Return a clone of the shared recording flag. The chat handler
     /// passes this into every `Pipeline` it builds so the toggle is
     /// visible to all in-flight requests.
     pub fn record_bodies_and_flags(&self) -> Arc<AtomicBool> {
-        self.record_bodies_and_headers.clone()
+        Arc::clone(&self.record_bodies_and_headers)
     }
 
     /// Read the current recording state.
@@ -622,7 +622,7 @@ impl AppState {
     pub fn background_tx(
         &self,
     ) -> tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob> {
-        self.background_tx.clone()
+        tokio::sync::mpsc::Sender::clone(&self.background_tx)
     }
 
     /// Read the current maintenance config (auto_vacuum, interval,
@@ -798,7 +798,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         upstream_client,
         oauth_provider_registry,
     } = args;
-    let prune_pool = db_pool.clone();
+    let prune_pool = Arc::clone(&db_pool);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         tick.tick().await;
@@ -809,7 +809,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         }
     });
 
-    let recording_ttl_pool = db_pool.clone();
+    let recording_ttl_pool = Arc::clone(&db_pool);
     let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -824,10 +824,10 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         }
     });
 
-    let refresh_pool = db_pool.clone();
-    let refresh_key = master_key.clone();
-    let refresh_upstream = upstream_client.clone();
-    let scheduler_registry = oauth_provider_registry.clone();
+    let refresh_pool = Arc::clone(&db_pool);
+    let refresh_key = Arc::clone(&master_key);
+    let refresh_upstream = Arc::clone(&upstream_client);
+    let scheduler_registry = Arc::clone(&oauth_provider_registry);
     tokio::spawn(async move {
         openproxy_core::oauth::start_refresh_scheduler(
             refresh_pool,
@@ -839,8 +839,8 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         .await;
     });
 
-    let sync_pool = db_pool.clone();
-    let sync_upstream = upstream_client.clone();
+    let sync_pool = Arc::clone(&db_pool);
+    let sync_upstream = Arc::clone(&upstream_client);
     let models_dev_enabled = std::env::var("MODELS_DEV_SYNC_ENABLED")
         .ok()
         .map(|v| v == "1" || v == "true")
@@ -860,12 +860,12 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         });
     }
 
-    let qs_pool = db_pool.clone();
-    let qs_config = _config.clone();
-    let qs_upstream = upstream_client.clone();
-    let qs_key = master_key.clone();
-    let qs_adapters = adapters.clone();
-    let qs_registry = oauth_provider_registry.clone();
+    let qs_pool = Arc::clone(&db_pool);
+    let qs_config = _config.to_owned();
+    let qs_upstream = Arc::clone(&upstream_client);
+    let qs_key = Arc::clone(&master_key);
+    let qs_adapters = Arc::clone(&adapters);
+    let qs_registry = Arc::clone(&oauth_provider_registry);
     tokio::spawn(async move {
         openproxy_core::quota_sync::start_quota_sync_scheduler(
             qs_pool,
@@ -878,7 +878,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         .await;
     });
 
-    let proxy_sync_pool = db_pool.clone();
+    let proxy_sync_pool = Arc::clone(&db_pool);
     tokio::spawn(async move {
         let interval_hours: u64 = std::env::var("OPENPROXY_PROXIES_SYNC_INTERVAL_HOURS")
             .ok()
@@ -892,7 +892,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
             tracing::info!("running scheduled background proxy sync");
             let mut next_sleep = interval_hours * 3600;
 
-            match openproxy_core::free_proxies::sync_all_providers(proxy_sync_pool.clone()).await {
+            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&proxy_sync_pool)).await {
                 Ok(summary) => {
                     tracing::info!(added = summary.added, "background proxy sync completed");
                     if summary.fetched == 0 {
@@ -901,7 +901,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                     } else {
                         // Iniciar pruebas en segundo plano de inmediato tras el sync
                         openproxy_core::free_proxies::test_all_proxies_background(
-                            proxy_sync_pool.clone(),
+                            Arc::clone(&proxy_sync_pool),
                         );
                     }
                 }
@@ -914,9 +914,9 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         }
     });
 
-    let prune_pool = db_pool.clone();
-    let maint_cell = maintenance_cell.clone();
-    let vac_status = vacuum_status.clone();
+    let prune_pool = Arc::clone(&db_pool);
+    let maint_cell = Arc::clone(&maintenance_cell);
+    let vac_status = Arc::clone(&vacuum_status);
     tokio::spawn(async move {
         let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
         let mut vacuum_counter: u32 = 0;
