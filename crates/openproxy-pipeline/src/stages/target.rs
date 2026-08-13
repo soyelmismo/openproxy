@@ -164,8 +164,19 @@ impl PipelineStage for FormattingStage {
             }
         };
 
-        let target_format = current.model.target_format;
-        let stream = ctx.req.openai_request.stream;
+        let target_format = match adapter.format() {
+            openproxy_adapters::adapters::AdapterFormat::Openai => openproxy_types::TargetFormat::Openai,
+            openproxy_adapters::adapters::AdapterFormat::Anthropic => openproxy_types::TargetFormat::Anthropic,
+            openproxy_adapters::adapters::AdapterFormat::Mixed => current.model.target_format,
+            openproxy_adapters::adapters::AdapterFormat::Gemini => openproxy_types::TargetFormat::Gemini,
+            openproxy_adapters::adapters::AdapterFormat::Responses => openproxy_types::TargetFormat::Responses,
+        };
+
+        let stream = if !ctx.req.openai_request.stream && ctx.req.stream_sink.is_some() {
+            true
+        } else {
+            ctx.req.openai_request.stream
+        };
 
         let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
             if openproxy_compression::would_compress(

@@ -328,6 +328,15 @@ impl UpstreamDispatcher {
         // total_deadline, not start + body_chunk_ms).
         upstream_request.is_streaming = true;
 
+        for (k, v) in headers {
+            if let (Ok(name), Ok(value)) = (
+                http::HeaderName::from_bytes(k.as_bytes()),
+                http::HeaderValue::from_str(v),
+            ) {
+                upstream_request.headers.insert(name, value);
+            }
+        }
+
         // Streaming-first dispatch: all upstream requests go through
         // `dispatch_upstream_streaming`, which drives the chunk-by-chunk
         // SSE state machine. The decision of whether to return a stream
@@ -1346,6 +1355,20 @@ impl UpstreamDispatcher {
             proxy_status: upstream_request.proxy_status.to_owned(),
         };
 
+        let Some(sink) = req.stream_sink.as_ref() else {
+            return self.record_and_fail(
+                req,
+                combo,
+                target,
+                dctx.fail_ctx_code(
+                    &CoreError::Internal("dispatch_upstream_streaming called without stream_sink".into()),
+                    None,
+                    None,
+                    500,
+                ),
+            );
+        };
+
         // Cancellation: the `client_disconnected` watch is the
         // operator's signal that the client has gone away. The
         // hyper-based upstream client accepts a `CancellationToken`;
@@ -1743,7 +1766,7 @@ impl UpstreamDispatcher {
             target,
             model,
             target_format,
-            sink: req.stream_sink.as_ref().unwrap(),
+            sink,
             trace_id: &trace_id,
             chunk_id: &chunk_id,
             model_name: &model_name,
