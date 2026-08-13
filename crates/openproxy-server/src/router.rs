@@ -460,7 +460,8 @@ pub fn build_router(state: AppState) -> Router {
         // matcher doesn't let `{id}` swallow `read-all` / `unread-count`.
         .route(
             "/notifications",
-            get(handlers::admin::notifications::list_notifications),
+            get(handlers::admin::notifications::list_notifications)
+                .delete(handlers::admin::notifications::delete_all_notifications),
         )
         .route(
             "/notifications/read-all",

@@ -541,6 +541,12 @@ pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
     Ok(changed > 0)
 }
 
+/// Permanently delete all notifications. Returns the number of rows deleted.
+pub fn delete_all(conn: &Connection) -> Result<usize> {
+    let changed = conn.execute("DELETE FROM notifications", [])?;
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -793,5 +799,29 @@ mod tests {
             archived_read_at.is_none(),
             "archived row should NOT be marked read by mark_all_read"
         );
+    }
+
+    #[test]
+    fn test_delete_all() {
+        let conn = fresh_db();
+        insert(
+            &conn,
+            KIND_MODEL_NEW,
+            &serde_json::json!({}),
+            Some("p1:m1"),
+            Some("p1"),
+        )
+        .unwrap();
+        insert(
+            &conn,
+            KIND_SYSTEM,
+            &serde_json::json!({}),
+            Some("sys:1"),
+            None,
+        )
+        .unwrap();
+        let deleted = delete_all(&conn).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(unread_count(&conn).unwrap(), 0);
     }
 }

@@ -489,6 +489,24 @@ async function archive(id: number): Promise<void> {
   }
 }
 
+/** Permanently delete / clear all notifications. Optimistically clears the list. */
+async function clearAll(): Promise<void> {
+  const snapshot: NotificationRow[] = rows;
+  rows = [];
+  setUnreadCount(0);
+  requestUpdate();
+  try {
+    await api("/notifications", { method: "DELETE" });
+    showToast(t("notifications.cleared_all"), "success");
+    void refreshUnreadCount();
+  } catch (e: unknown) {
+    rows = snapshot;
+    requestUpdate();
+    void refreshUnreadCount();
+    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
+  }
+}
+
 // ============================================================================
 // DnD — combo + targets cache
 // ============================================================================
@@ -954,6 +972,12 @@ async function onMarkAllRead(): Promise<void> {
   await markAllRead();
 }
 
+async function onClearAll(): Promise<void> {
+  if (rows.length === 0) return;
+  if (!confirm(t("notifications.clear_all_confirm"))) return;
+  await clearAll();
+}
+
 function onFilterChange(e: Event): void {
   const sel: HTMLSelectElement = e.target as HTMLSelectElement;
   const v: string = sel.value;
@@ -1105,6 +1129,7 @@ function renderHeader(): TemplateResult {
     <div class="actions">
       ${renderFilterDropdown()}
       <button class="small" ?disabled=${unread === 0} @click=${() => { void onMarkAllRead(); }}>${t("notifications.mark_all_read")}</button>
+      <button class="small danger" ?disabled=${rows.length === 0} @click=${() => { void onClearAll(); }}>${t("notifications.clear_all")}</button>
     </div>
   </div>`;
 }

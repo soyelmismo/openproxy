@@ -64,3 +64,11 @@ pub async fn delete_notification(
         )))
     }
 }
+
+pub async fn delete_all_notifications(
+    DbWriter(w): DbWriter,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let deleted = openproxy_core::notifications::delete_all(&w)
+        .map_err(|e| CoreError::Internal(format!("core_notifications::delete_all: {}", e)))?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
