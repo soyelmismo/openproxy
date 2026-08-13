@@ -345,8 +345,10 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
             prompt_tokens,
             completion_tokens,
             total_tokens,
-            prompt_tokens_details: resp.usage.cache_read_input_tokens.map(|c| openproxy_types::message::PromptTokensDetails {
-                cached_tokens: Some(c),
+            prompt_tokens_details: resp.usage.cache_read_input_tokens.map(|c| {
+                openproxy_types::message::PromptTokensDetails {
+                    cached_tokens: Some(c),
+                }
             }),
         }),
     }

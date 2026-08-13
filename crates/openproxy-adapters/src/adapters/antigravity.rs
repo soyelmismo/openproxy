@@ -260,9 +260,6 @@ impl ProviderAdapter for AntigravityAdapter {
             return Ok(vec![]);
         }
 
-        // Proactively refresh remote Antigravity version before model discovery
-        let _ = crate::antigravity_headers::refresh_remote_version().await;
-
         let endpoints = [
             "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
             "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
@@ -681,7 +678,7 @@ fn parse_antigravity_models_response(
     let worst = details
         .iter()
         .find(|d| d.model_id == worst_model_id)
-        .unwrap();
+        .ok_or_else(|| CoreError::Internal("worst quota detail not found".into()))?;
 
     Ok(openproxy_types::AccountQuota {
         plan_name: Some("Antigravity".to_string()),

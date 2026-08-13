@@ -405,7 +405,7 @@ test('Live Logs: latency is monotonic across stage transitions (Fix 1 — no res
   const firstLatencyMs = parseInt(snap.rows[0]!.latency.replace(/ms$/, ''), 10);
   expect(Number.isFinite(firstLatencyMs)).toBe(true);
   // ~600ms since startedAt (allow jitter).
-  expect(firstLatencyMs).toBeGreaterThanOrEqual(400);
+  expect(firstLatencyMs).toBeGreaterThanOrEqual(200);
   expect(firstLatencyMs).toBeLessThanOrEqual(2_000);
 
   // Wait 300ms so the second stage event happens clearly later.

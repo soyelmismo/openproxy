@@ -82,7 +82,7 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
             None
         } else {
             let map: std::collections::HashMap<_, _> = conf.extra_headers.iter().cloned().collect();
-            Some(serde_json::to_string(&map).unwrap())
+            serde_json::to_string(&map).ok()
         };
 
         providers::create(

@@ -46,12 +46,16 @@ pub fn apply_compression(
             let original_chars = count_content_chars(messages);
             let original_tokens =
                 openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            // Lite mode is 100% strictly lossless (whitespace normalization, dedup system, dedup identical text).
-            // Zero tool truncation, zero image stripping, zero content crushing.
-            let techniques = lite::apply_lite(messages)
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>();
+            // Content routing runs FIRST so SmartCrusher/LogCompressor/
+            // DiffCompressor see the full content before lite's brute
+            // truncation (compress_tool_results) kicks in as a fallback.
+            let mut techniques = apply_content_routing(messages);
+            techniques.extend(
+                lite::apply_lite(messages)
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect::<Vec<_>>(),
+            );
             let compressed_chars = count_content_chars(messages);
             let compressed_tokens =
                 openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
@@ -67,8 +71,7 @@ pub fn apply_compression(
             let original_chars = count_content_chars(messages);
             let original_tokens =
                 openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            let mut techniques = apply_content_routing(messages);
-            techniques.extend(rtk::apply_rtk(messages));
+            let techniques = rtk::apply_rtk(messages);
             let compressed_chars = count_content_chars(messages);
             let compressed_tokens =
                 openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
@@ -84,12 +87,16 @@ pub fn apply_compression(
             let original_chars = count_content_chars(messages);
             let original_tokens =
                 openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            // Lossless lite normalization first, then smart content routing, then rtk command filters.
-            let mut techniques = lite::apply_lite(messages)
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>();
-            techniques.extend(apply_content_routing(messages));
+            // Content routing first (smart compression), then lite
+            // (normalization + fallback truncation), then rtk
+            // (command-aware CLI filtering).
+            let mut techniques = apply_content_routing(messages);
+            techniques.extend(
+                lite::apply_lite(messages)
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect::<Vec<_>>(),
+            );
             techniques.extend(rtk::apply_rtk(messages));
             let compressed_chars = count_content_chars(messages);
             let compressed_tokens =
@@ -203,39 +210,9 @@ mod tests {
     }
 
     #[test]
-    fn test_lite_is_strictly_lossless() {
-        let long_code = "fn important() {\n    println!(\"hello\");\n}\n".repeat(200);
-        let mut messages = vec![
-            msg("system", "sys prompt"),
-            msg("system", "sys prompt"),
-            msg("user", "line1\n\n\n\nline2"),
-            OpenAIMessage {
-                role: "tool".into(),
-                content: Some(Value::String(long_code.clone())),
-                name: None,
-                tool_call_id: Some("call_1".into()),
-                tool_calls: None,
-                extra: Default::default(),
-            },
-        ];
-        let stats = apply_compression(&mut messages, CompressionMode::Lite);
-        // dedup_system applied
-        assert_eq!(messages.len(), 3);
-        // whitespace collapsed on user message
-        assert_eq!(
-            messages[1].content.as_ref().and_then(|c| c.as_str()).unwrap(),
-            "line1\n\nline2"
-        );
-        // tool message must be 100% untouched
-        let tool_result = messages[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(tool_result, &long_code);
-        assert!(!stats.techniques.iter().any(|t| t.contains("smart_crusher") || t.contains("diff_compressor") || t.contains("truncated")));
-    }
-
-    #[test]
-    fn test_rtk_routes_json_array_to_smart_crusher() {
+    fn test_lite_routes_json_array_to_smart_crusher() {
         // A tool result containing a JSON array of 20 homogeneous items
-        // should trigger SmartCrusher via the content router in RTK mode.
+        // should trigger SmartCrusher via the content router.
         let mut array = Vec::new();
         for i in 0..20 {
             array.push(serde_json::json!({
@@ -255,7 +232,7 @@ mod tests {
             tool_calls: None,
             extra: Default::default(),
         }];
-        let stats = apply_compression(&mut messages, CompressionMode::Rtk);
+        let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
             stats
                 .techniques
@@ -283,9 +260,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rtk_routes_git_diff_to_diff_compressor() {
+    fn test_lite_routes_git_diff_to_diff_compressor() {
         // A tool result containing a 40-line git diff should trigger
-        // DiffCompressor via the content router in RTK mode.
+        // DiffCompressor via the content router.
         let mut diff = String::from("diff --git a/foo.rs b/foo.rs\n");
         diff.push_str("index abc..def 100644\n");
         diff.push_str("--- a/foo.rs\n");
@@ -307,7 +284,7 @@ mod tests {
             tool_calls: None,
             extra: Default::default(),
         }];
-        let stats = apply_compression(&mut messages, CompressionMode::Rtk);
+        let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
             stats
                 .techniques
@@ -330,9 +307,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rtk_routes_build_log_to_log_compressor() {
+    fn test_lite_routes_build_log_to_log_compressor() {
         // A tool result containing a 60-line pytest output should trigger
-        // LogCompressor via the content router in RTK mode. We need ≥2 build-output
+        // LogCompressor via the content router. We need ≥2 build-output
         // patterns: pytest banner + ≥5 lines with error/fail keywords.
         let mut log = String::from("===== test session starts =====\n");
         for i in 0..50 {
@@ -354,7 +331,7 @@ mod tests {
             tool_calls: None,
             extra: Default::default(),
         }];
-        let stats = apply_compression(&mut messages, CompressionMode::Rtk);
+        let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
             stats.techniques.iter().any(|t| t == "lite::log_compressor"),
             "expected log_compressor technique, got: {:?}",
@@ -374,11 +351,11 @@ mod tests {
     }
 
     #[test]
-    fn test_rtk_skips_small_content() {
+    fn test_lite_skips_small_content() {
         // Content under 500 bytes should not be routed (not worth the
-        // detection overhead).
+        // detection overhead). Lite's basic normalization may still apply.
         let mut messages = vec![msg("tool", "{\"a\":1}")];
-        let stats = apply_compression(&mut messages, CompressionMode::Rtk);
+        let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
             !stats.techniques.iter().any(|t| t.contains("smart_crusher")
                 || t.contains("log_compressor")
@@ -389,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rtk_does_not_route_user_messages() {
+    fn test_lite_does_not_route_user_messages() {
         // User messages must never be compressed by the content router
         // (they're the operator's intent).
         let mut array = Vec::new();
@@ -398,7 +375,7 @@ mod tests {
         }
         let json_content = serde_json::to_string(&array).unwrap();
         let mut messages = vec![msg("user", &json_content)];
-        let stats = apply_compression(&mut messages, CompressionMode::Rtk);
+        let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
             !stats.techniques.iter().any(|t| t.contains("smart_crusher")),
             "user messages should not be routed to smart_crusher, got: {:?}",

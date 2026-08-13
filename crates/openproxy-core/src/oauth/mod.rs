@@ -397,7 +397,7 @@ define_oauth_provider! {
 }
 
 pub struct OAuthProviderRegistry {
-    inner: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, OAuthProviderEnum>>>,
+    inner: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, OAuthProviderEnum>>>,
 }
 
 impl Default for OAuthProviderRegistry {
@@ -410,7 +410,7 @@ impl OAuthProviderRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
         Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            inner: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -437,7 +437,7 @@ impl OAuthProviderRegistry {
     /// to override built-in ones at runtime.
     pub fn register_arc(&self, provider: OAuthProviderEnum) {
         let name = provider.name().to_string();
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock();
         guard.insert(name, provider);
     }
 
@@ -446,7 +446,7 @@ impl OAuthProviderRegistry {
     /// `antigravity`). If a provider with the same key already
     /// exists, it is replaced.
     pub fn register_arc_with_name(&self, name: &str, provider: OAuthProviderEnum) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock();
         guard.insert(name.to_string(), provider);
     }
 
@@ -459,7 +459,7 @@ impl OAuthProviderRegistry {
     /// Look up an OAuth provider by name. Returns `None` if no provider
     /// is registered with that name.
     pub fn get(&self, name: &str) -> Option<OAuthProviderEnum> {
-        let guard = self.inner.lock().unwrap();
+        let guard = self.inner.lock();
         guard.get(name).cloned()
     }
 }
@@ -891,9 +891,10 @@ pub async fn start_refresh_scheduler(
 
         use governor::{Quota, RateLimiter};
         use std::num::NonZeroU32;
-        let quota = Quota::with_period(std::time::Duration::from_secs(STAGGER_DELAY_SECS))
-            .unwrap()
-            .allow_burst(NonZeroU32::new(1).unwrap());
+        let quota = match Quota::with_period(std::time::Duration::from_secs(STAGGER_DELAY_SECS)) {
+            Some(q) => q.allow_burst(NonZeroU32::MIN),
+            None => Quota::per_second(NonZeroU32::MIN),
+        };
         let limiter = std::sync::Arc::new(RateLimiter::direct(quota));
 
         let mut join_set = tokio::task::JoinSet::new();

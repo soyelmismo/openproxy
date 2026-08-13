@@ -4,7 +4,7 @@ use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::Value;
 
 static REGION_RE: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").unwrap());
+    Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").expect("valid regex"));
 
 // =====================================================================
 // Kiro AI (AWS CodeWhisperer)

@@ -113,7 +113,7 @@ macro_rules! filter_skeleton {
 // call. Phase B already moved `strip_ansi` to memchr; this finishes the
 // job for the stderr-prefix path.
 static STDERR_RE: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").unwrap());
+    Lazy::new(|| regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("valid regex"));
 
 fn filter_stderr_prefixes(text: &str) -> String {
     STDERR_RE.replace_all(text, "").into_owned()

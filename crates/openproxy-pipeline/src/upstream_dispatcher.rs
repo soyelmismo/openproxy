@@ -194,7 +194,7 @@ impl UpstreamDispatcher {
             false
         })
         .await
-        .unwrap()
+        .unwrap_or(false)
     }
 
     pub(crate) fn is_client_disconnected(
@@ -292,7 +292,8 @@ impl UpstreamDispatcher {
                 repo.get_or_assign_provider_proxy(&provider_id, account_id)
             })
             .await
-            .unwrap()
+            .map_err(|e| CoreError::Internal(e.to_string()))
+            .and_then(|res| res)
         };
         let proxy_url = match proxy_result {
             Ok(url) => url,
@@ -861,7 +862,7 @@ impl UpstreamDispatcher {
                     );
                 })
                 .await
-                .unwrap();
+                .ok();
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -1056,7 +1057,11 @@ impl UpstreamDispatcher {
 
         let prompt_tokens = openai_response.usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = openai_response.usage.as_ref().map(|u| u.completion_tokens);
-        let cached_tokens = openai_response.usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref()).and_then(|d| d.cached_tokens);
+        let cached_tokens = openai_response
+            .usage
+            .as_ref()
+            .and_then(|u| u.prompt_tokens_details.as_ref())
+            .and_then(|d| d.cached_tokens);
 
         // Record the successful attempt and return.
         let total_ms_now = started.elapsed().as_millis() as u64;
@@ -1642,7 +1647,7 @@ impl UpstreamDispatcher {
                     );
                 })
                 .await
-                .unwrap();
+                .ok();
             }
             // NEW-2 fix: when the upstream returns 429 (or 408/503)
             // with a `Retry-After` header, surface the error as
@@ -1891,7 +1896,10 @@ impl UpstreamDispatcher {
         // closed.
         let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = usage.as_ref().map(|u| u.completion_tokens);
-        let cached_tokens = usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref()).and_then(|d| d.cached_tokens);
+        let cached_tokens = usage
+            .as_ref()
+            .and_then(|u| u.prompt_tokens_details.as_ref())
+            .and_then(|d| d.cached_tokens);
         // G1 fix: assemble the persisted response body. The accumulator
         // is `Some(_)` only when `is_recording() == true` at function
         // entry, so when recording is OFF the only cost is a single

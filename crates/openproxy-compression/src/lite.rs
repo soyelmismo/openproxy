@@ -266,207 +266,16 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
     applied
 }
 
-// ─── Technique 6: Clean invisible unicode & BOM ────────────────────────────
-
-pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
-    let mut applied = Vec::new();
-    for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.contains('\u{200B}')
-                    || text.contains('\u{200C}')
-                    || text.contains('\u{200D}')
-                    || text.contains('\u{FEFF}')
-                    || text.contains('\0')
-                    || text.contains('\r')
-                {
-                    let cleaned: String = text
-                        .replace("\r\n", "\n")
-                        .replace('\r', "\n")
-                        .replace('\u{200B}', "")
-                        .replace('\u{200C}', "")
-                        .replace('\u{200D}', "")
-                        .replace('\u{FEFF}', "")
-                        .replace('\0', "");
-                    if cleaned != text {
-                        *content = Value::String(cleaned);
-                        applied.push("lite::clean_unicode");
-                    }
-                }
-            }
-        }
-    }
-    applied
-}
-
-// ─── Technique 7: Strip ANSI escape sequences ──────────────────────────────
-
-pub fn strip_ansi_escapes(msgs: &mut Messages) -> Vec<&'static str> {
-    let mut applied = Vec::new();
-    for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.contains('\x1b') {
-                    let stripped = strip_ansi_string(text);
-                    if stripped != text {
-                        *content = Value::String(stripped);
-                        applied.push("lite::strip_ansi");
-                    }
-                }
-            }
-        }
-    }
-    applied
-}
-
-fn strip_ansi_string(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == 0x1B {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                i += 2;
-                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
-}
-
-// ─── Technique 8: Compact formatted multiline JSON ────────────────────────
-
-pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
-    let mut applied = Vec::new();
-    for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let trimmed = text.trim();
-                if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-                    || (trimmed.starts_with('[') && trimmed.ends_with(']'))
-                {
-                    if trimmed.contains('\n') || trimmed.contains("  ") {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                            let minified = val.to_string();
-                            if minified.len() < text.len() {
-                                *content = Value::String(minified);
-                                applied.push("lite::compact_json");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    applied
-}
-
-// ─── Technique 9: Collapse decorative ASCII separators ─────────────────────
-
-pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
-    let mut applied = Vec::new();
-    for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let collapsed = collapse_separator_runs(text);
-                if collapsed != text {
-                    *content = Value::String(collapsed);
-                    applied.push("lite::collapse_separators");
-                }
-            }
-        }
-    }
-    applied
-}
-
-fn collapse_separator_runs(s: &str) -> String {
-    let sep_chars = [b'-', b'=', b'*', b'#', b'_', b'~'];
-    let bytes = s.as_bytes();
-    let mut has_run = false;
-    for &sep in &sep_chars {
-        let mut count = 0;
-        for &b in bytes {
-            if b == sep {
-                count += 1;
-                if count >= 12 {
-                    has_run = true;
-                    break;
-                }
-            } else {
-                count = 0;
-            }
-        }
-        if has_run {
-            break;
-        }
-    }
-    if !has_run {
-        return s.to_string();
-    }
-
-    let mut out = String::with_capacity(s.len());
-    let mut cur_char: Option<char> = None;
-    let mut cur_count: usize = 0;
-
-    let flush = |out: &mut String, cur_char: Option<char>, cur_count: usize| {
-        if let Some(ch) = cur_char {
-            let is_sep = ['-', '=', '*', '#', '_', '~'].contains(&ch);
-            if is_sep && cur_count >= 12 {
-                for _ in 0..10 {
-                    out.push(ch);
-                }
-            } else {
-                for _ in 0..cur_count {
-                    out.push(ch);
-                }
-            }
-        }
-    };
-
-    for ch in s.chars() {
-        if Some(ch) == cur_char {
-            cur_count += 1;
-        } else {
-            flush(&mut out, cur_char, cur_count);
-            cur_char = Some(ch);
-            cur_count = 1;
-        }
-    }
-    flush(&mut out, cur_char, cur_count);
-    out
-}
-
 // ─── Apply all lite techniques ──────────────────────────────────────────────
 
-/// Aplica las técnicas deterministas y 100% lossless (zero semantic loss).
-///
-/// Solo ejecuta técnicas puramente sin pérdida:
-/// 1. `clean_invisible_unicode` (elimina zero-width spaces, BOM, null bytes, normaliza CRLF).
-/// 2. `strip_ansi_escapes` (elimina secuencias de color/escape ANSI de terminal).
-/// 3. `collapse_whitespace` (espacios al final de línea y 3+ newlines a 2).
-/// 4. `collapse_ascii_separators` (reduce separadores de 80 caracteres repetidos a 10).
-/// 5. `compact_json` (minifica JSONs indentados multilínea a formato compacto).
-/// 6. `dedup_system_prompt` (elimina system prompts duplicados idénticos).
-/// 7. `remove_redundant_content` (elimina mensajes consecutivos idénticos de texto).
+/// Aplica las 5 técnicas lite secuencialmente. Retorna las técnicas que aplicaron.
 pub fn apply_lite(msgs: &mut Messages) -> Vec<&'static str> {
     let mut all: Vec<&'static str> = Vec::new();
-    all.extend(clean_invisible_unicode(msgs));
-    all.extend(strip_ansi_escapes(msgs));
     all.extend(collapse_whitespace(msgs));
-    all.extend(collapse_ascii_separators(msgs));
-    all.extend(compact_json(msgs));
     all.extend(dedup_system_prompt(msgs));
+    all.extend(compress_tool_results(msgs));
     all.extend(remove_redundant_content(msgs));
+    all.extend(replace_image_urls(msgs));
     all
 }
 
@@ -623,9 +432,6 @@ mod tests {
         assert!(!techniques.is_empty());
         // dedup_system: 1 removed
         assert_eq!(msgs.len(), 3);
-        // Tool result must be preserved verbatim (no truncation)
-        let tool_content = msgs[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(tool_content.len(), 3000, "apply_lite must not truncate tool output");
     }
 
     #[test]
@@ -675,48 +481,5 @@ mod tests {
         let input = "😀😀😀\n\n\n😀😀";
         let out = normalize_message_whitespace(input);
         assert_eq!(out, "😀😀😀\n\n😀😀");
-    }
-
-    #[test]
-    fn test_clean_invisible_unicode() {
-        let mut msgs = vec![msg("user", "Hello\u{FEFF}\u{200B} world!\r\nSecond line.\0")];
-        let applied = clean_invisible_unicode(&mut msgs);
-        assert!(!applied.is_empty());
-        assert_eq!(
-            msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap(),
-            "Hello world!\nSecond line."
-        );
-    }
-
-    #[test]
-    fn test_strip_ansi_escapes() {
-        let mut msgs = vec![msg("tool", "\x1b[32mSuccess\x1b[0m: built target \x1b[1;34mfoo\x1b[0m")];
-        let applied = strip_ansi_escapes(&mut msgs);
-        assert!(!applied.is_empty());
-        assert_eq!(
-            msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap(),
-            "Success: built target foo"
-        );
-    }
-
-    #[test]
-    fn test_compact_json() {
-        let pretty = "{\n  \"name\": \"test\",\n  \"count\": 42,\n  \"nested\": {\n    \"ok\": true\n  }\n}";
-        let mut msgs = vec![msg("tool", pretty)];
-        let applied = compact_json(&mut msgs);
-        assert!(!applied.is_empty());
-        let res = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(res, "{\"count\":42,\"name\":\"test\",\"nested\":{\"ok\":true}}");
-    }
-
-    #[test]
-    fn test_collapse_ascii_separators() {
-        let mut msgs = vec![msg("user", "Start\n------------------------------------------------------------\nEnd")];
-        let applied = collapse_ascii_separators(&mut msgs);
-        assert!(!applied.is_empty());
-        assert_eq!(
-            msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap(),
-            "Start\n----------\nEnd"
-        );
     }
 }

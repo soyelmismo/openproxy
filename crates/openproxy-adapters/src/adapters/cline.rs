@@ -126,7 +126,9 @@ impl ProviderAdapter for ClineAdapter {
         upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        let url = self.models_url().unwrap();
+        let url = self
+            .models_url()
+            .ok_or_else(|| openproxy_types::error::CoreError::Internal("missing models_url".into()))?;
 
         let body = upstream_get_json(upstream_client, &url, &[])
             .await

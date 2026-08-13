@@ -290,7 +290,7 @@ pub fn load_proxy_test_url(conn: &Connection) -> Result<String> {
 }
 
 pub fn save_proxy_test_url(conn: &Connection, url: &str) -> Result<()> {
-    let raw = serde_json::to_string(url).unwrap();
+    let raw = serde_json::to_string(url).map_err(crate::error::map_db_error)?;
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
