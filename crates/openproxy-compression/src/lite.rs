@@ -268,14 +268,19 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
 
 // ─── Apply all lite techniques ──────────────────────────────────────────────
 
-/// Aplica las 5 técnicas lite secuencialmente. Retorna las técnicas que aplicaron.
+/// Aplica las técnicas deterministas y 100% lossless (zero semantic loss).
+///
+/// Solo ejecuta:
+/// 1. `collapse_whitespace` (espacios al final de línea y 3+ newlines a 2).
+/// 2. `dedup_system_prompt` (elimina system prompts duplicados idénticos).
+/// 3. `remove_redundant_content` (elimina mensajes consecutivos idénticos de texto).
+///
+/// No realiza ningún truncado de tools ni alteración de imágenes (eso corresponde a RTK).
 pub fn apply_lite(msgs: &mut Messages) -> Vec<&'static str> {
     let mut all: Vec<&'static str> = Vec::new();
     all.extend(collapse_whitespace(msgs));
     all.extend(dedup_system_prompt(msgs));
-    all.extend(compress_tool_results(msgs));
     all.extend(remove_redundant_content(msgs));
-    all.extend(replace_image_urls(msgs));
     all
 }
 
@@ -432,6 +437,9 @@ mod tests {
         assert!(!techniques.is_empty());
         // dedup_system: 1 removed
         assert_eq!(msgs.len(), 3);
+        // Tool result must be preserved verbatim (no truncation)
+        let tool_content = msgs[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
+        assert_eq!(tool_content.len(), 3000, "apply_lite must not truncate tool output");
     }
 
     #[test]
