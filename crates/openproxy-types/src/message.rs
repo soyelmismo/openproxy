@@ -188,7 +188,10 @@ impl OpenAIRequest {
 pub fn sanitize_single_tool(tool: &mut serde_json::Value) {
     if let Some(tool_obj) = tool.as_object_mut() {
         // Handle Anthropic-style tool objects sent directly to OpenAI endpoint
-        if tool_obj.get("type").is_none() && tool_obj.contains_key("input_schema") && tool_obj.contains_key("name") {
+        if tool_obj.get("type").is_none()
+            && tool_obj.contains_key("input_schema")
+            && tool_obj.contains_key("name")
+        {
             let name = tool_obj.remove("name");
             let desc = tool_obj.remove("description");
             let schema = tool_obj.remove("input_schema");
@@ -234,7 +237,8 @@ pub fn sanitize_single_tool(tool: &mut serde_json::Value) {
                         if !params.contains_key("type") {
                             params.insert("type".to_string(), serde_json::json!("object"));
                         }
-                        func_obj.insert("parameters".to_string(), serde_json::Value::Object(params));
+                        func_obj
+                            .insert("parameters".to_string(), serde_json::Value::Object(params));
                     }
                 }
             }
@@ -271,6 +275,9 @@ mod tests {
         let params = func.get("parameters").unwrap().as_object().unwrap();
         assert_eq!(params.get("type").unwrap(), "object");
         assert!(params.contains_key("properties"));
-        assert_eq!(params.get("required").unwrap(), &serde_json::json!(["prompt"]));
+        assert_eq!(
+            params.get("required").unwrap(),
+            &serde_json::json!(["prompt"])
+        );
     }
 }

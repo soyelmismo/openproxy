@@ -33,8 +33,7 @@ const KNOWN_STABLE_VERSION: &str = "4.3.0";
 const KNOWN_STABLE_CHROME: &str = "132.0.6834.160";
 const KNOWN_STABLE_ELECTRON: &str = "39.2.3";
 
-const AUTO_UPDATER_URL: &str =
-    "https://antigravity-auto-updater-974169037036.us-central1.run.app";
+const AUTO_UPDATER_URL: &str = "https://antigravity-auto-updater-974169037036.us-central1.run.app";
 const AUTO_UPDATER_RELEASES_URL: &str =
     "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases";
 const CACHE_TTL: Duration = Duration::from_secs(6 * 3600); // 6 hours
@@ -63,11 +62,7 @@ pub fn parse_version(text: &str) -> Option<String> {
 
 /// Compare two X.Y.Z semantic version strings.
 pub fn compare_semver(v1: &str, v2: &str) -> std::cmp::Ordering {
-    let parse = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect()
-    };
+    let parse = |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse().ok()).collect() };
     let p1 = parse(v1);
     let p2 = parse(v2);
     for i in 0..p1.len().max(p2.len()) {
@@ -102,7 +97,11 @@ pub async fn refresh_remote_version() -> Option<String> {
     // 1. Primary updater endpoint
     let req = crate::upstream::UpstreamRequest::get(AUTO_UPDATER_URL);
     if let Ok(resp) = client
-        .call(req, crate::upstream::TimeoutProfile::ModelDiscovery, cancel.clone())
+        .call(
+            req,
+            crate::upstream::TimeoutProfile::ModelDiscovery,
+            cancel.clone(),
+        )
         .await
         && resp.status.is_success()
         && let Ok(body_bytes) = resp.collect().await
@@ -172,9 +171,7 @@ fn version() -> String {
         (lock.version.clone(), should_refresh)
     };
 
-    if should_refresh
-        && !IS_FETCHING.swap(true, std::sync::atomic::Ordering::SeqCst)
-    {
+    if should_refresh && !IS_FETCHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 let _ = refresh_remote_version().await;
@@ -386,7 +383,10 @@ mod tests {
             parse_version("Auto updater is running. Fixed Version: 2.0.6"),
             Some("2.0.6".to_string())
         );
-        assert_eq!(parse_version("version 4.5.5 released"), Some("4.5.5".to_string()));
+        assert_eq!(
+            parse_version("version 4.5.5 released"),
+            Some("4.5.5".to_string())
+        );
         assert_eq!(parse_version("no version here"), None);
     }
 

@@ -625,7 +625,11 @@ mod tests {
         assert_eq!(msgs.len(), 3);
         // Tool result must be preserved verbatim (no truncation)
         let tool_content = msgs[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(tool_content.len(), 3000, "apply_lite must not truncate tool output");
+        assert_eq!(
+            tool_content.len(),
+            3000,
+            "apply_lite must not truncate tool output"
+        );
     }
 
     #[test]
@@ -679,7 +683,10 @@ mod tests {
 
     #[test]
     fn test_clean_invisible_unicode() {
-        let mut msgs = vec![msg("user", "Hello\u{FEFF}\u{200B} world!\r\nSecond line.\0")];
+        let mut msgs = vec![msg(
+            "user",
+            "Hello\u{FEFF}\u{200B} world!\r\nSecond line.\0",
+        )];
         let applied = clean_invisible_unicode(&mut msgs);
         assert!(!applied.is_empty());
         assert_eq!(
@@ -690,7 +697,10 @@ mod tests {
 
     #[test]
     fn test_strip_ansi_escapes() {
-        let mut msgs = vec![msg("tool", "\x1b[32mSuccess\x1b[0m: built target \x1b[1;34mfoo\x1b[0m")];
+        let mut msgs = vec![msg(
+            "tool",
+            "\x1b[32mSuccess\x1b[0m: built target \x1b[1;34mfoo\x1b[0m",
+        )];
         let applied = strip_ansi_escapes(&mut msgs);
         assert!(!applied.is_empty());
         assert_eq!(
@@ -701,17 +711,24 @@ mod tests {
 
     #[test]
     fn test_compact_json() {
-        let pretty = "{\n  \"name\": \"test\",\n  \"count\": 42,\n  \"nested\": {\n    \"ok\": true\n  }\n}";
+        let pretty =
+            "{\n  \"name\": \"test\",\n  \"count\": 42,\n  \"nested\": {\n    \"ok\": true\n  }\n}";
         let mut msgs = vec![msg("tool", pretty)];
         let applied = compact_json(&mut msgs);
         assert!(!applied.is_empty());
         let res = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(res, "{\"count\":42,\"name\":\"test\",\"nested\":{\"ok\":true}}");
+        assert_eq!(
+            res,
+            "{\"count\":42,\"name\":\"test\",\"nested\":{\"ok\":true}}"
+        );
     }
 
     #[test]
     fn test_collapse_ascii_separators() {
-        let mut msgs = vec![msg("user", "Start\n------------------------------------------------------------\nEnd")];
+        let mut msgs = vec![msg(
+            "user",
+            "Start\n------------------------------------------------------------\nEnd",
+        )];
         let applied = collapse_ascii_separators(&mut msgs);
         assert!(!applied.is_empty());
         assert_eq!(
