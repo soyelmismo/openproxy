@@ -319,7 +319,7 @@ impl<'a> UsageRecordBuilder<'a> {
         self.prompt_tokens = prompt_tokens;
         self
     }
-    
+
     pub fn cached_tokens(mut self, cached_tokens: Option<u32>) -> Self {
         self.cached_tokens = cached_tokens;
         self
