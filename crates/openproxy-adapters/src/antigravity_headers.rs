@@ -20,7 +20,10 @@
 //! UUID generated once per process launch.
 
 use http::HeaderValue;
-use std::sync::OnceLock;
+use parking_lot::RwLock;
+use regex::Regex;
+use std::sync::{LazyLock, OnceLock};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Known stable Antigravity version (must be >= the version Google's
@@ -29,6 +32,119 @@ use uuid::Uuid;
 const KNOWN_STABLE_VERSION: &str = "4.3.0";
 const KNOWN_STABLE_CHROME: &str = "132.0.6834.160";
 const KNOWN_STABLE_ELECTRON: &str = "39.2.3";
+
+const AUTO_UPDATER_URL: &str =
+    "https://antigravity-auto-updater-974169037036.us-central1.run.app";
+const AUTO_UPDATER_RELEASES_URL: &str =
+    "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases";
+const CACHE_TTL: Duration = Duration::from_secs(6 * 3600); // 6 hours
+
+static VERSION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+").expect("valid regex"));
+
+struct CachedVersion {
+    version: String,
+    fetched_at: Instant,
+}
+
+static VERSION_CACHE: LazyLock<RwLock<CachedVersion>> = LazyLock::new(|| {
+    RwLock::new(CachedVersion {
+        version: KNOWN_STABLE_VERSION.to_string(),
+        fetched_at: Instant::now() - Duration::from_secs(86400),
+    })
+});
+
+static IS_FETCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Parse version from response text (e.g. "Auto updater is running. Fixed Version: 2.0.6")
+pub fn parse_version(text: &str) -> Option<String> {
+    VERSION_REGEX.find(text).map(|m| m.as_str().to_string())
+}
+
+/// Compare two X.Y.Z semantic version strings.
+pub fn compare_semver(v1: &str, v2: &str) -> std::cmp::Ordering {
+    let parse = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .filter_map(|s| s.parse().ok())
+            .collect()
+    };
+    let p1 = parse(v1);
+    let p2 = parse(v2);
+    for i in 0..p1.len().max(p2.len()) {
+        let a = p1.get(i).copied().unwrap_or(0);
+        let b = p2.get(i).copied().unwrap_or(0);
+        match a.cmp(&b) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn update_cached_version(remote_version: &str) {
+    let mut lock = VERSION_CACHE.write();
+    if compare_semver(remote_version, &lock.version) == std::cmp::Ordering::Greater {
+        tracing::info!(
+            old_version = %lock.version,
+            new_version = %remote_version,
+            "Antigravity client version auto-updated"
+        );
+        lock.version = remote_version.to_string();
+    }
+    lock.fetched_at = Instant::now();
+}
+
+/// Fetch latest version from remote updater endpoints.
+pub async fn refresh_remote_version() -> Option<String> {
+    let client = crate::upstream::UpstreamClient::new();
+    let cancel = crate::upstream::CancellationToken::new();
+
+    // 1. Primary updater endpoint
+    let req = crate::upstream::UpstreamRequest::get(AUTO_UPDATER_URL);
+    if let Ok(resp) = client
+        .call(req, crate::upstream::TimeoutProfile::ModelDiscovery, cancel.clone())
+        .await
+        && resp.status.is_success()
+        && let Ok(body_bytes) = resp.collect().await
+        && let Ok(text) = std::str::from_utf8(&body_bytes)
+        && let Some(ver) = parse_version(text)
+    {
+        update_cached_version(&ver);
+        return Some(ver);
+    }
+
+    // 2. Releases feed fallback
+    let req = crate::upstream::UpstreamRequest::get(AUTO_UPDATER_RELEASES_URL);
+    if let Ok(resp) = client
+        .call(req, crate::upstream::TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        && resp.status.is_success()
+        && let Ok(body_bytes) = resp.collect().await
+        && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+        && let Some(arr) = json.as_array()
+    {
+        let mut best: Option<String> = None;
+        for item in arr {
+            if let Some(v_str) = item.get("version").and_then(|v| v.as_str())
+                && let Some(v_parsed) = parse_version(v_str)
+            {
+                if let Some(ref cur) = best {
+                    if compare_semver(&v_parsed, cur) == std::cmp::Ordering::Greater {
+                        best = Some(v_parsed);
+                    }
+                } else {
+                    best = Some(v_parsed);
+                }
+            }
+        }
+        if let Some(ref ver) = best {
+            update_cached_version(ver);
+            return best;
+        }
+    }
+
+    None
+}
 
 /// Platform info for the User-Agent string.
 fn platform_info() -> &'static str {
@@ -41,13 +157,35 @@ fn platform_info() -> &'static str {
 }
 
 /// The Antigravity version we report to the API. Uses the known-stable
-/// version as a floor (the API rejects clients that report a version
-/// that's too old). Override via `OPENPROXY_ANTIGRAVITY_VERSION` env var.
+/// version as a floor, auto-updating from the remote updater when available.
+/// Override via `OPENPROXY_ANTIGRAVITY_VERSION` env var.
 fn version() -> String {
-    std::env::var("OPENPROXY_ANTIGRAVITY_VERSION")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| KNOWN_STABLE_VERSION.to_string())
+    if let Ok(env_ver) = std::env::var("OPENPROXY_ANTIGRAVITY_VERSION")
+        && !env_ver.is_empty()
+    {
+        return env_ver;
+    }
+
+    let (ver, should_refresh) = {
+        let lock = VERSION_CACHE.read();
+        let should_refresh = lock.fetched_at.elapsed() >= CACHE_TTL;
+        (lock.version.clone(), should_refresh)
+    };
+
+    if should_refresh
+        && !IS_FETCHING.swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = refresh_remote_version().await;
+                IS_FETCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        } else {
+            IS_FETCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    ver
 }
 
 /// Persistent machine ID. Generated once per process lifetime from
@@ -240,5 +378,24 @@ mod tests {
         let mut headers = http::HeaderMap::new();
         inject_antigravity_headers(&mut headers, None);
         assert!(headers.get("x-goog-user-project").is_none());
+    }
+
+    #[test]
+    fn test_parse_version() {
+        assert_eq!(
+            parse_version("Auto updater is running. Fixed Version: 2.0.6"),
+            Some("2.0.6".to_string())
+        );
+        assert_eq!(parse_version("version 4.5.5 released"), Some("4.5.5".to_string()));
+        assert_eq!(parse_version("no version here"), None);
+    }
+
+    #[test]
+    fn test_compare_semver() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_semver("4.5.5", "4.3.0"), Ordering::Greater);
+        assert_eq!(compare_semver("4.3.0", "4.5.5"), Ordering::Less);
+        assert_eq!(compare_semver("4.3.0", "4.3.0"), Ordering::Equal);
+        assert_eq!(compare_semver("4.10.0", "4.9.9"), Ordering::Greater);
     }
 }
