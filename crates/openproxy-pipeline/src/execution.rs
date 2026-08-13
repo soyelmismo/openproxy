@@ -58,7 +58,7 @@ impl Pipeline {
             Ok(expanded)
         })
         .await
-        .unwrap()
+        .map_err(|e| CoreError::Internal(e.to_string()))?
     }
 
     pub(crate) async fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
@@ -85,7 +85,7 @@ impl Pipeline {
             Ok(added)
         })
         .await
-        .unwrap()
+        .map_err(|e| CoreError::Internal(e.to_string()))?
     }
 
     pub async fn resolve_combo_targets_full(
@@ -144,7 +144,7 @@ impl Pipeline {
             )
         })
         .await
-        .unwrap()
+        .unwrap_or_default()
     }
 
     pub(crate) async fn execute_single(
@@ -214,7 +214,7 @@ impl Pipeline {
                         attempt,
                         race_size,
                         err: &e,
-                        started: ctx.started.unwrap(),
+                        started: ctx.started.unwrap_or_else(std::time::Instant::now),
                         model: Some(&resolved_target.model),
                         connect_ms: None,
                         ttft_ms: None,
@@ -237,7 +237,7 @@ impl Pipeline {
                 .ok_or(CoreError::ComboNotFound(combo_id.0))
         })
         .await
-        .unwrap()
+        .map_err(|e| CoreError::Internal(e.to_string()))?
     }
 
     pub(crate) async fn resolve_targets(
@@ -264,7 +264,7 @@ impl Pipeline {
             repo.expand_account_rotation(ordered)
         })
         .await
-        .unwrap()
+        .map_err(|e| CoreError::Internal(e.to_string()))?
     }
 
     pub(crate) fn failure(

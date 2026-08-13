@@ -75,32 +75,32 @@ pub enum ContentType {
 
 /// Strict hunk header: `^@@ -\d+,\d+ \+\d+,\d+ @@`.
 static HUNK_HEADER_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").unwrap());
+    Lazy::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
 
 /// `^path:line:` pattern from grep / ripgrep output.
-static SEARCH_RESULT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").unwrap());
+static SEARCH_RESULT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("valid regex"));
 
 /// Source-code structural keywords: `fn `, `func `, `def `, `class `, etc.
 static SOURCE_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(fn |func |def |class |struct |enum |interface |public |private |protected )")
-        .unwrap()
+        .expect("valid regex")
 });
 
 /// Source-code import-like first line: `import `, `from `, `use `,
 /// `package `, `#include `, `require(`.
 static SOURCE_IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(import |from |use |package |#include |require\()").unwrap());
+    Lazy::new(|| Regex::new(r"^(import |from |use |package |#include |require\()").expect("valid regex"));
 
 /// Generic error/warn/etc. token (case-insensitive) used by the
 /// "≥5 matching lines" sub-rule of BuildOutput detection.
 static GENERIC_ERROR_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").expect("valid regex"));
 
 /// `^make[N]:` (N is digits).
-static MAKE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^make\[\d+\]:").unwrap());
+static MAKE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^make\[\d+\]:").expect("valid regex"));
 
 /// `^running N tests` (cargo).
-static CARGO_RUNNING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^running \d+ tests").unwrap());
+static CARGO_RUNNING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^running \d+ tests").expect("valid regex"));
 
 /// Maximum number of lines to scan for detection. The spec says "first 100
 /// lines" for the overall scan; sub-scans (git diff, build output, tabular)

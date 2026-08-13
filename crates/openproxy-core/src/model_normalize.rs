@@ -8,9 +8,9 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-static DATE_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").unwrap());
-static YYYYMM_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}$").unwrap());
-static VERSION_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-v\d+$").unwrap());
+static DATE_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").expect("valid regex"));
+static YYYYMM_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}$").expect("valid regex"));
+static VERSION_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-v\d+$").expect("valid regex"));
 
 /// Normalize a model ID for matching against models.dev canonical IDs.
 ///

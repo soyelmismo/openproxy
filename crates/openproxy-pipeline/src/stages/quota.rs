@@ -34,7 +34,7 @@ impl PipelineStage for QuotaEnforcerStage {
             )
         })
         .await
-        .unwrap();
+        .map_err(|e| CoreError::Internal(e.to_string()))?;
         if filtered.is_empty()
             && let Some(ref combo) = ctx.combo
         {

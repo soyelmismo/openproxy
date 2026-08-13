@@ -209,7 +209,8 @@ where
                         move || p.repo().auto_populate_empty_combo(cid)
                     })
                     .await
-                    .unwrap()
+                    .map_err(|e| CoreError::Internal(e.to_string()))
+                    .and_then(|res| res)
                     {
                         Ok(n) => n,
                         Err(e) => {
@@ -339,8 +340,14 @@ where
         let mut inner = self.inner.clone();
 
         Box::pin(async move {
-            let combo = state.combo.as_ref().unwrap();
-            let eligible = state.eligible_targets.take().unwrap();
+            let Some(combo) = state.combo.as_ref() else {
+                let err = CoreError::Internal("missing combo in state".into());
+                return Ok(pipeline.failure(err, 0, ErrorPhase::Route));
+            };
+            let Some(eligible) = state.eligible_targets.take() else {
+                let err = CoreError::Internal("missing eligible targets in state".into());
+                return Ok(pipeline.failure(err, 0, ErrorPhase::Route));
+            };
             let attempt: u8 = 1;
 
             let filtered = {
@@ -419,8 +426,14 @@ impl tower::Service<PipelineState> for RoutingService {
         let pipeline = self.pipeline.clone();
 
         Box::pin(async move {
-            let combo = state.combo.unwrap();
-            let to_run = state.eligible_targets.unwrap();
+            let Some(combo) = state.combo else {
+                let err = CoreError::Internal("missing combo in state".into());
+                return Ok(pipeline.failure(err, 0, ErrorPhase::Route));
+            };
+            let Some(to_run) = state.eligible_targets else {
+                let err = CoreError::Internal("missing eligible targets in state".into());
+                return Ok(pipeline.failure(err, 0, ErrorPhase::Route));
+            };
 
             let race_size: usize = match combo.strategy {
                 Strategy::Priority => to_run.len(),

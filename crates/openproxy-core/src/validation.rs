@@ -12,7 +12,12 @@ pub fn validate_base_url(url: &str) -> Result<()> {
             "base_url must start with http:// or https://, got: {url}"
         )));
     }
-    let remainder = &url[url.find("://").unwrap() + 3..];
+    let Some(scheme_end) = url.find("://") else {
+        return Err(CoreError::Validation(format!(
+            "base_url must start with http:// or https://, got: {url}"
+        )));
+    };
+    let remainder = &url[scheme_end + 3..];
     let host_end = remainder.find('/').unwrap_or(remainder.len());
     let host_part = &remainder[..host_end];
     let host = if let Some(colon_pos) = host_part.rfind(':') {

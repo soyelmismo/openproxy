@@ -134,7 +134,7 @@ impl Client {
         path: &str,
         body: impl serde::Serialize,
     ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
-        let b = bytes::Bytes::from(serde_json::to_vec(&body).unwrap());
+        let b = bytes::Bytes::from(serde_json::to_vec(&body)?);
         self.req(openproxy_adapters::upstream::UpstreamRequest::post_json(
             self.url(path),
             b,
@@ -239,7 +239,7 @@ impl Client {
         let resp = {
             let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
                 self.url(&path),
-                bytes::Bytes::from(serde_json::to_vec(&input).unwrap()),
+                bytes::Bytes::from(serde_json::to_vec(&input)?),
             );
             req.method = http::Method::PUT;
             self.req(req).await?

@@ -23,10 +23,10 @@ pub mod combos {
             "INSERT INTO combos(name, strategy, race_size) VALUES (?1, ?2, ?3)",
             rusqlite::params![name, strategy.as_str(), race_size as i64],
         )
-        .unwrap();
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         let id: i64 = conn
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .unwrap();
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         Ok(ComboId(id))
     }
 
@@ -34,13 +34,13 @@ pub mod combos {
         conn: &Connection,
         input: AddTargetInput,
     ) -> Result<openproxy_types::ids::ComboTargetId, openproxy_types::error::CoreError> {
-        let upstream_model_id: Option<String> = input.model_row_id.map(|mrid| {
+        let upstream_model_id: Option<String> = input.model_row_id.and_then(|mrid| {
             conn.query_row(
                 "SELECT model_id FROM models WHERE id = ?1",
                 rusqlite::params![mrid.0],
                 |r| r.get::<_, String>(0),
             )
-            .unwrap()
+            .ok()
         });
         conn.execute(
             "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
@@ -54,10 +54,10 @@ pub mod combos {
                 upstream_model_id,
                 input.priority_order,
             ],
-        ).unwrap();
+        ).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         let id: i64 = conn
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .unwrap();
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         Ok(openproxy_types::ids::ComboTargetId(id))
     }
 }

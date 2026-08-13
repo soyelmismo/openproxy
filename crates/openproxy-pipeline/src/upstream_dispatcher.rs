@@ -194,7 +194,7 @@ impl UpstreamDispatcher {
             false
         })
         .await
-        .unwrap()
+        .unwrap_or(false)
     }
 
     pub(crate) fn is_client_disconnected(
@@ -292,7 +292,8 @@ impl UpstreamDispatcher {
                 repo.get_or_assign_provider_proxy(&provider_id, account_id)
             })
             .await
-            .unwrap()
+            .map_err(|e| CoreError::Internal(e.to_string()))
+            .and_then(|res| res)
         };
         let proxy_url = match proxy_result {
             Ok(url) => url,
@@ -861,7 +862,7 @@ impl UpstreamDispatcher {
                     );
                 })
                 .await
-                .unwrap();
+                .ok();
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -1646,7 +1647,7 @@ impl UpstreamDispatcher {
                     );
                 })
                 .await
-                .unwrap();
+                .ok();
             }
             // NEW-2 fix: when the upstream returns 429 (or 408/503)
             // with a `Retry-After` header, surface the error as

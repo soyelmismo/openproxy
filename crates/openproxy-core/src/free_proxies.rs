@@ -1328,7 +1328,10 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
                         row.get::<_, i64>(2)?,
                     ))
                 })
-                .unwrap();
+                .map_err(|e| crate::error::CoreError::Database {
+                    message: e.to_string(),
+                    source: Some(Box::new(e)),
+                })?;
             for row in stats_rows.flatten() {
                 stats
                     .entry(row.0)
@@ -1535,8 +1538,8 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
     let mut scraped = Vec::new();
 
     let pool_for_sources = db_pool.clone();
-    let sources_res = tokio::task::spawn_blocking(move || {
-        let w = pool_for_sources.open_connection().unwrap();
+    let sources_res = tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
+        let w = pool_for_sources.open_connection().map_err(openproxy_db::error::map_db_error)?;
         // Ensure built-in sources exist
         let builtins = vec![
             ("builtin_proxifly", "Proxifly (Built-in)", ""),
