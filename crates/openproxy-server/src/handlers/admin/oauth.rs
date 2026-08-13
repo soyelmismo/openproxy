@@ -343,9 +343,8 @@ pub async fn oauth_device_poll(
                         device_code = %device_code,
                         error = %e.0,
                         "mark_consumed failed; downstream was already wired — \
-                         skipping post-exchange hook for this duplicate exchange",
+                         a replay may now succeed before the next cleanup sweep",
                     );
-                    return Err(e);
                 }
 
                 // Post-exchange hook. For Kiro this hits
