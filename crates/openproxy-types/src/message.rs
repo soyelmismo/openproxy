@@ -210,36 +210,35 @@ pub fn sanitize_single_tool(tool: &mut serde_json::Value) {
             return;
         }
 
-        if let Some(func_val) = tool_obj.get_mut("function") {
-            if let Some(func_obj) = func_val.as_object_mut() {
-                let has_props = func_obj.contains_key("properties");
-                let has_req = func_obj.contains_key("required");
-                let is_obj_type = func_obj.get("type").and_then(|v| v.as_str()) == Some("object");
+        if let Some(func_val) = tool_obj.get_mut("function")
+            && let Some(func_obj) = func_val.as_object_mut()
+        {
+            let has_props = func_obj.contains_key("properties");
+            let has_req = func_obj.contains_key("required");
+            let is_obj_type = func_obj.get("type").and_then(|v| v.as_str()) == Some("object");
 
-                if has_props || has_req || is_obj_type {
-                    let mut params = func_obj
-                        .get("parameters")
-                        .and_then(|p| p.as_object().cloned())
-                        .unwrap_or_default();
+            if has_props || has_req || is_obj_type {
+                let mut params = func_obj
+                    .get("parameters")
+                    .and_then(|p| p.as_object().cloned())
+                    .unwrap_or_default();
 
-                    if let Some(props) = func_obj.remove("properties") {
-                        params.insert("properties".to_string(), props);
+                if let Some(props) = func_obj.remove("properties") {
+                    params.insert("properties".to_string(), props);
+                }
+                if let Some(req) = func_obj.remove("required") {
+                    params.insert("required".to_string(), req);
+                }
+                if let Some(t) = func_obj.remove("type")
+                    && !params.contains_key("type")
+                {
+                    params.insert("type".to_string(), t);
+                }
+                if !params.is_empty() {
+                    if !params.contains_key("type") {
+                        params.insert("type".to_string(), serde_json::json!("object"));
                     }
-                    if let Some(req) = func_obj.remove("required") {
-                        params.insert("required".to_string(), req);
-                    }
-                    if let Some(t) = func_obj.remove("type") {
-                        if !params.contains_key("type") {
-                            params.insert("type".to_string(), t);
-                        }
-                    }
-                    if !params.is_empty() {
-                        if !params.contains_key("type") {
-                            params.insert("type".to_string(), serde_json::json!("object"));
-                        }
-                        func_obj
-                            .insert("parameters".to_string(), serde_json::Value::Object(params));
-                    }
+                    func_obj.insert("parameters".to_string(), serde_json::Value::Object(params));
                 }
             }
         }

@@ -271,28 +271,22 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.contains('\u{200B}')
-                    || text.contains('\u{200C}')
-                    || text.contains('\u{200D}')
-                    || text.contains('\u{FEFF}')
-                    || text.contains('\0')
-                    || text.contains('\r')
-                {
-                    let cleaned: String = text
-                        .replace("\r\n", "\n")
-                        .replace('\r', "\n")
-                        .replace('\u{200B}', "")
-                        .replace('\u{200C}', "")
-                        .replace('\u{200D}', "")
-                        .replace('\u{FEFF}', "")
-                        .replace('\0', "");
-                    if cleaned != text {
-                        *content = Value::String(cleaned);
-                        applied.push("lite::clean_unicode");
-                    }
-                }
+        if let Some(ref mut content) = msg.content
+            && let Some(text) = content.as_str()
+            && (text.contains('\u{200B}')
+                || text.contains('\u{200C}')
+                || text.contains('\u{200D}')
+                || text.contains('\u{FEFF}')
+                || text.contains('\0')
+                || text.contains('\r'))
+        {
+            let cleaned: String = text
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
+            if cleaned != text {
+                *content = Value::String(cleaned);
+                applied.push("lite::clean_unicode");
             }
         }
     }
@@ -304,15 +298,14 @@ pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn strip_ansi_escapes(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.contains('\x1b') {
-                    let stripped = strip_ansi_string(text);
-                    if stripped != text {
-                        *content = Value::String(stripped);
-                        applied.push("lite::strip_ansi");
-                    }
-                }
+        if let Some(ref mut content) = msg.content
+            && let Some(text) = content.as_str()
+            && text.contains('\x1b')
+        {
+            let stripped = strip_ansi_string(text);
+            if stripped != text {
+                *content = Value::String(stripped);
+                applied.push("lite::strip_ansi");
             }
         }
     }
@@ -349,21 +342,19 @@ fn strip_ansi_string(text: &str) -> String {
 pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let trimmed = text.trim();
-                if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-                    || (trimmed.starts_with('[') && trimmed.ends_with(']'))
-                {
-                    if trimmed.contains('\n') || trimmed.contains("  ") {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                            let minified = val.to_string();
-                            if minified.len() < text.len() {
-                                *content = Value::String(minified);
-                                applied.push("lite::compact_json");
-                            }
-                        }
-                    }
+        if let Some(ref mut content) = msg.content
+            && let Some(text) = content.as_str()
+        {
+            let trimmed = text.trim();
+            if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+                && (trimmed.contains('\n') || trimmed.contains("  "))
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+            {
+                let minified = val.to_string();
+                if minified.len() < text.len() {
+                    *content = Value::String(minified);
+                    applied.push("lite::compact_json");
                 }
             }
         }
@@ -376,13 +367,13 @@ pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let collapsed = collapse_separator_runs(text);
-                if collapsed != text {
-                    *content = Value::String(collapsed);
-                    applied.push("lite::collapse_separators");
-                }
+        if let Some(ref mut content) = msg.content
+            && let Some(text) = content.as_str()
+        {
+            let collapsed = collapse_separator_runs(text);
+            if collapsed != text {
+                *content = Value::String(collapsed);
+                applied.push("lite::collapse_separators");
             }
         }
     }
