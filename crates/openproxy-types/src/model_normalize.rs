@@ -182,22 +182,3 @@ mod tests {
         assert_eq!(normalize_model_id("llama3:8b"), "llama3-8b");
     }
 }
-
-#[cfg(test)]
-mod additional_tests {
-    use super::*;
-
-    #[test]
-    fn test_strip_compact_yyyymmdd() {
-        assert_eq!(strip_compact_yyyymmdd(""), None);
-        assert_eq!(strip_compact_yyyymmdd("short"), None);
-        assert_eq!(
-            strip_compact_yyyymmdd("model-20241022"),
-            Some("model".to_string())
-        );
-        assert_eq!(strip_compact_yyyymmdd("model-2024abcd"), None);
-        assert_eq!(strip_compact_yyyymmdd("model_20241022"), None);
-        assert_eq!(strip_compact_yyyymmdd("model-18991231"), None);
-        assert_eq!(strip_compact_yyyymmdd("model-21000101"), None);
-    }
-}

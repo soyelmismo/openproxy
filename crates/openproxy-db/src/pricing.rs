@@ -390,11 +390,7 @@ fn strip_model_suffixes(model: &str) -> Vec<String> {
     results
 }
 
-pub fn compute_cost_opt(
-    price: Option<Price>,
-    prompt_tokens: u32,
-    completion_tokens: u32,
-) -> Option<f64> {
+pub fn compute_cost_opt(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> Option<f64> {
     let price = price?;
     match price.kind.as_str() {
         "audio" => {

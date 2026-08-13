@@ -1091,10 +1091,7 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
     Ok(res)
 }
 
-pub fn auto_populate_empty_combo(
-    _conn: &rusqlite::Connection,
-    _combo_id: ComboId,
-) -> Result<usize> {
+pub fn auto_populate_empty_combo(_conn: &rusqlite::Connection, _combo_id: ComboId) -> Result<usize> {
     Ok(0)
 }
 

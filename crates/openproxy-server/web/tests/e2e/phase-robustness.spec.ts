@@ -360,6 +360,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
     total_ms: totalMs,
     prompt_tokens: 12,
     completion_tokens: 7,
+    cached_tokens: null,
     cost_usd: 0.0001,
     is_streaming: false,
     stream_complete: true,

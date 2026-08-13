@@ -422,11 +422,7 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
             prompt_tokens: u.prompt_token_count,
             completion_tokens: u.candidates_token_count,
             total_tokens: u.total_token_count,
-            prompt_tokens_details: u.cached_content_token_count.map(|c| {
-                openproxy_types::message::PromptTokensDetails {
-                    cached_tokens: Some(c),
-                }
-            }),
+            prompt_tokens_details: u.cached_content_token_count.map(|c| openproxy_types::message::PromptTokensDetails { cached_tokens: Some(c) }),
         });
 
     openproxy_types::OpenAIResponse {
