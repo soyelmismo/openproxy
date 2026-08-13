@@ -167,3 +167,110 @@ impl<'a> OpenAIRequestView<'a> {
         }
     }
 }
+
+impl OpenAIRequest {
+    /// Sanitize all tool definitions in this request.
+    pub fn sanitize_tools(&mut self) {
+        if let Some(tools) = &mut self.tools {
+            for tool in tools {
+                sanitize_single_tool(tool);
+            }
+        }
+    }
+}
+
+/// Sanitize a single tool definition to conform to standard OpenAI function-calling schema.
+///
+/// If a client puts `properties`, `required`, or `type: 'object'` directly at the `function` level
+/// instead of within `function.parameters`, this normalizes it into `function.parameters`
+/// and strips the misplaced fields to prevent strict upstream validators (like Fireworks / Pydantic)
+/// from rejecting the request with 400 Bad Request.
+pub fn sanitize_single_tool(tool: &mut serde_json::Value) {
+    if let Some(tool_obj) = tool.as_object_mut() {
+        // Handle Anthropic-style tool objects sent directly to OpenAI endpoint
+        if tool_obj.get("type").is_none() && tool_obj.contains_key("input_schema") && tool_obj.contains_key("name") {
+            let name = tool_obj.remove("name");
+            let desc = tool_obj.remove("description");
+            let schema = tool_obj.remove("input_schema");
+            let mut func = serde_json::Map::new();
+            if let Some(n) = name {
+                func.insert("name".to_string(), n);
+            }
+            if let Some(d) = desc {
+                func.insert("description".to_string(), d);
+            }
+            if let Some(s) = schema {
+                func.insert("parameters".to_string(), s);
+            }
+            tool_obj.insert("type".to_string(), serde_json::json!("function"));
+            tool_obj.insert("function".to_string(), serde_json::Value::Object(func));
+            return;
+        }
+
+        if let Some(func_val) = tool_obj.get_mut("function") {
+            if let Some(func_obj) = func_val.as_object_mut() {
+                let has_props = func_obj.contains_key("properties");
+                let has_req = func_obj.contains_key("required");
+                let is_obj_type = func_obj.get("type").and_then(|v| v.as_str()) == Some("object");
+
+                if has_props || has_req || is_obj_type {
+                    let mut params = func_obj
+                        .get("parameters")
+                        .and_then(|p| p.as_object().cloned())
+                        .unwrap_or_default();
+
+                    if let Some(props) = func_obj.remove("properties") {
+                        params.insert("properties".to_string(), props);
+                    }
+                    if let Some(req) = func_obj.remove("required") {
+                        params.insert("required".to_string(), req);
+                    }
+                    if let Some(t) = func_obj.remove("type") {
+                        if !params.contains_key("type") {
+                            params.insert("type".to_string(), t);
+                        }
+                    }
+                    if !params.is_empty() {
+                        if !params.contains_key("type") {
+                            params.insert("type".to_string(), serde_json::json!("object"));
+                        }
+                        func_obj.insert("parameters".to_string(), serde_json::Value::Object(params));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_misplaced_function_properties() {
+        let mut tool = serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "generate_image",
+                "description": "Generate an image",
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string" }
+                },
+                "required": ["prompt"]
+            }
+        });
+
+        sanitize_single_tool(&mut tool);
+
+        let func = tool.get("function").unwrap().as_object().unwrap();
+        assert!(!func.contains_key("properties"));
+        assert!(!func.contains_key("required"));
+        assert!(!func.contains_key("type"));
+
+        let params = func.get("parameters").unwrap().as_object().unwrap();
+        assert_eq!(params.get("type").unwrap(), "object");
+        assert!(params.contains_key("properties"));
+        assert_eq!(params.get("required").unwrap(), &serde_json::json!(["prompt"]));
+    }
+}
