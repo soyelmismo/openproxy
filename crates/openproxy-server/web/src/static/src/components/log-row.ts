@@ -97,7 +97,8 @@ function buildLogRowCells(
   
   if (has("cache")) {
     if (row && row.cached_tokens != null && row.cached_tokens > 0) {
-      cells.push(html`<span class="log-cache" style="color: var(--color-success);" title="${formatContext(row.cached_tokens)} tokens cached by upstream API">🎯 ${formatContext(row.cached_tokens)}</span>`);
+      const cachePct = row.prompt_tokens && row.prompt_tokens > 0 ? Math.round((row.cached_tokens / row.prompt_tokens) * 100) : 0;
+      cells.push(html`<span class="log-cache" style="color: var(--color-success); font-weight: 500;" title="${formatContext(row.cached_tokens)} tokens cached by upstream API out of ${formatContext(row.prompt_tokens)} prompt tokens">🎯 ${cachePct}%</span>`);
     } else {
       cells.push(html`<span class="log-cache">—</span>`);
     }
