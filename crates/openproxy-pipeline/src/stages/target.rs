@@ -257,7 +257,7 @@ impl PipelineStage for DispatchStage {
         let attempt = ctx.current_target_attempt;
         let race_size = ctx.race_size;
         let started = ctx.started.unwrap_or_else(std::time::Instant::now);
-        let trace_id = ctx.req.trace_id.to_string();
+        let trace_id = ctx.trace_id.clone();
         let combo = ctx
             .combo
             .as_ref()
@@ -530,7 +530,7 @@ impl PipelineStage for CustomAdapterStage {
                         ttft_ms: None,
                         status_code: 0,
                     },
-                    ctx.req.trace_id.to_string(),
+                    ctx.trace_id.clone(),
                 ));
             }
         };
