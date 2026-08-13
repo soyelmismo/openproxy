@@ -530,6 +530,25 @@ impl<'a> UsageRecordBuilder<'a> {
             false
         };
 
+        let mut cooldown_base_secs = self
+            .combo
+            .cooldown_base_secs
+            .unwrap_or(self.tracker.cooldown_secs);
+        let mut cooldown_max_secs = self
+            .combo
+            .cooldown_max_secs
+            .unwrap_or(self.tracker.cooldown_max_secs);
+
+        if let Some(openproxy_types::error::CoreError::RateLimited { retry_after_ms, .. }) = self.err {
+            let retry_secs = (retry_after_ms + 999) / 1000;
+            if retry_secs > cooldown_base_secs {
+                cooldown_base_secs = retry_secs;
+            }
+            if retry_secs > cooldown_max_secs {
+                cooldown_max_secs = retry_secs;
+            }
+        }
+
         let job = crate::worker::BackgroundJob::RecordAttempt {
             usage_input: input,
             target_id: self.target.id,
@@ -537,14 +556,8 @@ impl<'a> UsageRecordBuilder<'a> {
             error_msg: err_msg,
             is_upstream_health_issue: is_health_issue,
             cooldown_mode: self.combo.cooldown_mode,
-            cooldown_base_secs: self
-                .combo
-                .cooldown_base_secs
-                .unwrap_or(self.tracker.cooldown_secs),
-            cooldown_max_secs: self
-                .combo
-                .cooldown_max_secs
-                .unwrap_or(self.tracker.cooldown_max_secs),
+            cooldown_base_secs,
+            cooldown_max_secs,
             cooldown_factor: self
                 .combo
                 .cooldown_factor
