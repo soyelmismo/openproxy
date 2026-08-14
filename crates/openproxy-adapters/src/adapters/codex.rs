@@ -6,21 +6,29 @@ fn safe_env_value(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-pub fn codex_client_version() -> String {
+static CODEX_CLIENT_VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     safe_env_value("OPENPROXY_CODEX_CLIENT_VERSION")
         .or_else(|| safe_env_value("CODEX_CLIENT_VERSION"))
         .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string())
-}
+});
 
-pub fn codex_user_agent() -> String {
+static CODEX_USER_AGENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     safe_env_value("OPENPROXY_CODEX_USER_AGENT")
         .or_else(|| safe_env_value("CODEX_USER_AGENT"))
         .unwrap_or_else(|| {
             format!(
                 "codex-cli/{} (Windows 10.0.26200; x64)",
-                codex_client_version()
+                *CODEX_CLIENT_VERSION
             )
         })
+});
+
+pub fn codex_client_version() -> String {
+    CODEX_CLIENT_VERSION.clone()
+}
+
+pub fn codex_user_agent() -> String {
+    CODEX_USER_AGENT.clone()
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CodexAdapter {

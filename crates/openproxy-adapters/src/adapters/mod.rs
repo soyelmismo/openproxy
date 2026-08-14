@@ -857,13 +857,18 @@ pub(crate) async fn upstream_get_json(
 /// for every call.
 pub(crate) fn header_name(name: &str) -> Option<http::header::HeaderName> {
     use http::header;
-    match name.to_ascii_lowercase().as_str() {
-        "authorization" => Some(header::AUTHORIZATION),
-        "content-type" => Some(header::CONTENT_TYPE),
-        "user-agent" => Some(header::USER_AGENT),
-        "x-api-key" => Some(http::HeaderName::from_static("x-api-key")),
-        "x-goog-api-key" => Some(http::HeaderName::from_static("x-goog-api-key")),
-        _ => None,
+    if name.eq_ignore_ascii_case("authorization") {
+        Some(header::AUTHORIZATION)
+    } else if name.eq_ignore_ascii_case("content-type") {
+        Some(header::CONTENT_TYPE)
+    } else if name.eq_ignore_ascii_case("user-agent") {
+        Some(header::USER_AGENT)
+    } else if name.eq_ignore_ascii_case("x-api-key") {
+        Some(http::HeaderName::from_static("x-api-key"))
+    } else if name.eq_ignore_ascii_case("x-goog-api-key") {
+        Some(http::HeaderName::from_static("x-goog-api-key"))
+    } else {
+        None
     }
 }
 

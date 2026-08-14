@@ -40,9 +40,10 @@ pub enum Scheme {
 
 impl Scheme {
     pub fn from_uri(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "https" => Scheme::Https,
-            _ => Scheme::Http,
+        if s.eq_ignore_ascii_case("https") {
+            Scheme::Https
+        } else {
+            Scheme::Http
         }
     }
 }

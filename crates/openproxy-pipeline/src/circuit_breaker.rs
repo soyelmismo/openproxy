@@ -11,6 +11,20 @@ pub enum CircuitBreakerKey {
     Model(AccountId, ModelRowId),
 }
 
+impl CircuitBreakerKey {
+    pub fn from_target(
+        aid: AccountId,
+        scope: openproxy_types::providers::RateLimitScope,
+        model_row_id: Option<ModelRowId>,
+    ) -> Self {
+        if scope == openproxy_types::providers::RateLimitScope::Model {
+            CircuitBreakerKey::Model(aid, model_row_id.expect("flattened"))
+        } else {
+            CircuitBreakerKey::Account(aid)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
     Healthy,

@@ -419,16 +419,11 @@ impl PipelineStage for DispatchStage {
                 Some(e)
                     if RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) =>
                 {
-                    let key = if target.rate_limit_scope
-                        == openproxy_types::providers::RateLimitScope::Model
-                    {
-                        crate::circuit_breaker::CircuitBreakerKey::Model(
-                            aid,
-                            target.model_row_id.expect("flattened"),
-                        )
-                    } else {
-                        crate::circuit_breaker::CircuitBreakerKey::Account(aid)
-                    };
+                    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
+                        aid,
+                        target.rate_limit_scope,
+                        target.model_row_id,
+                    );
                     let outcome = ctx.pipeline.circuit_breaker.record_failure_outcome(key);
                     if outcome.just_opened {
                         let provider_id_str = target.provider_id.to_string();
@@ -464,16 +459,11 @@ impl PipelineStage for DispatchStage {
                     }
                 }
                 _ => {
-                    let key = if target.rate_limit_scope
-                        == openproxy_types::providers::RateLimitScope::Model
-                    {
-                        crate::circuit_breaker::CircuitBreakerKey::Model(
-                            aid,
-                            target.model_row_id.expect("flattened"),
-                        )
-                    } else {
-                        crate::circuit_breaker::CircuitBreakerKey::Account(aid)
-                    };
+                    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
+                        aid,
+                        target.rate_limit_scope,
+                        target.model_row_id,
+                    );
                     ctx.pipeline.circuit_breaker.record_success(key);
                 }
             }

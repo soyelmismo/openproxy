@@ -41,16 +41,11 @@ impl PipelineStage for RouterStage {
             .into_iter()
             .filter(|t| match t.account_id {
                 Some(aid) => {
-                    let key = if t.rate_limit_scope
-                        == openproxy_types::providers::RateLimitScope::Model
-                    {
-                        crate::circuit_breaker::CircuitBreakerKey::Model(
-                            aid,
-                            t.model_row_id.expect("flattened"),
-                        )
-                    } else {
-                        crate::circuit_breaker::CircuitBreakerKey::Account(aid)
-                    };
+                    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
+                        aid,
+                        t.rate_limit_scope,
+                        t.model_row_id,
+                    );
                     ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
                 }
                 None => true,
@@ -90,16 +85,11 @@ impl PipelineStage for RouterStage {
                         .into_iter()
                         .filter(|t| match t.account_id {
                             Some(aid) => {
-                                let key = if t.rate_limit_scope
-                                    == openproxy_types::providers::RateLimitScope::Model
-                                {
-                                    crate::circuit_breaker::CircuitBreakerKey::Model(
-                                        aid,
-                                        t.model_row_id.expect("flattened"),
-                                    )
-                                } else {
-                                    crate::circuit_breaker::CircuitBreakerKey::Account(aid)
-                                };
+                                let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
+                                    aid,
+                                    t.rate_limit_scope,
+                                    t.model_row_id,
+                                );
                                 ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
                             }
                             None => true,

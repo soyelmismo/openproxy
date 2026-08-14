@@ -40,14 +40,15 @@ fn platform_info() -> &'static str {
     }
 }
 
-/// The Antigravity version we report to the API. Uses the known-stable
-/// version as a floor (the API rejects clients that report a version
-/// that's too old). Override via `OPENPROXY_ANTIGRAVITY_VERSION` env var.
-fn version() -> String {
+static VERSION: LazyLock<String> = LazyLock::new(|| {
     std::env::var("OPENPROXY_ANTIGRAVITY_VERSION")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| KNOWN_STABLE_VERSION.to_string())
+});
+
+fn version() -> &'static str {
+    &VERSION
 }
 
 /// Persistent machine ID. Generated once per process lifetime from
@@ -149,7 +150,7 @@ pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Opt
     headers.insert("x-client-name", HeaderValue::from_static("antigravity"));
 
     // x-client-version
-    if let Ok(v) = HeaderValue::from_str(&version()) {
+    if let Ok(v) = HeaderValue::from_str(version()) {
         headers.insert("x-client-version", v);
     }
 
@@ -176,7 +177,7 @@ pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Opt
 
 /// Get the current Antigravity version string (for logging / diagnostics).
 pub fn current_version() -> String {
-    version()
+    version().to_string()
 }
 
 #[cfg(test)]

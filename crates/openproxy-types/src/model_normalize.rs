@@ -12,28 +12,33 @@ static DATE_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").expect("valid regex"));
 static YYYYMM_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-\d{4}$").expect("valid regex"));
+pub const MODEL_SUFFIXES: &[&str] = &[
+    "-free-trial",
+    "-free",
+    ":free",
+    "-low",
+    "-high",
+    "-medium",
+    "-tiered",
+    "-thinking",
+    "-agent",
+    "-preset",
+    "-fast",
+    "-turbo",
+    ":thinking",
+    ":online",
+    ":extended",
+    ":nitro",
+];
+
 static VERSION_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-v\d+$").expect("valid regex"));
 
 pub fn normalize_model_id(id: &str) -> String {
-    let s: &str = id.rsplit_once('/').map_or(id, |(_, rest)| rest);
-    let s: &str = s
-        .trim_end_matches("-free-trial")
-        .trim_end_matches("-free")
-        .trim_end_matches(":free")
-        .trim_end_matches("-low")
-        .trim_end_matches("-high")
-        .trim_end_matches("-medium")
-        .trim_end_matches("-tiered")
-        .trim_end_matches("-thinking")
-        .trim_end_matches("-agent")
-        .trim_end_matches("-preset")
-        .trim_end_matches("-fast")
-        .trim_end_matches("-turbo")
-        .trim_end_matches(":thinking")
-        .trim_end_matches(":online")
-        .trim_end_matches(":extended")
-        .trim_end_matches(":nitro");
+    let mut s: &str = id.rsplit_once('/').map_or(id, |(_, rest)| rest);
+    for suffix in MODEL_SUFFIXES {
+        s = s.trim_end_matches(suffix);
+    }
 
     let s = s.replace(":", "-");
 

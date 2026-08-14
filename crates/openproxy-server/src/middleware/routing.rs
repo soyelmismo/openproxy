@@ -94,9 +94,7 @@ fn resolve_routing_plan(
 
     if let RoutingPlan::Combo { combo_id, .. } = &plan
         && let Some(auth) = auth_result
-        && let Some(allowed) = &auth.allowed_combos
-        && !allowed.is_empty()
-        && !allowed.contains(&combo_id.0)
+        && !auth.is_combo_allowed(combo_id.0)
     {
         return Err(ApiError(CoreError::Auth(
             "combo not allowed for this key".to_string(),

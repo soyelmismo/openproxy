@@ -354,32 +354,17 @@ pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price
 }
 
 fn strip_model_suffixes(model: &str) -> Vec<&str> {
-    let suffixes = [
-        "-free-trial",
-        "-free",
-        ":free",
-        "-low",
-        "-high",
-        "-medium",
-        "-tiered",
-        "-thinking",
-        "-agent",
-        "-preset",
-        "-fast",
-        "-turbo",
-        ":thinking",
-        ":online",
-        ":extended",
-        ":nitro",
-    ];
     let mut results = Vec::new();
     let mut current = model;
 
-    while let Some(stripped) = suffixes.iter().find_map(|s| {
-        current
-            .strip_suffix(s)
-            .filter(|rem| !rem.is_empty() && *rem != current)
-    }) {
+    while let Some(stripped) = openproxy_types::model_normalize::MODEL_SUFFIXES
+        .iter()
+        .find_map(|s| {
+            current
+                .strip_suffix(s)
+                .filter(|rem| !rem.is_empty() && *rem != current)
+        })
+    {
         results.push(stripped);
         current = stripped;
     }

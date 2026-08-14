@@ -19,6 +19,15 @@ pub struct ValidatedApiToken {
     pub(crate) allowed_combos: Option<Vec<i64>>,
 }
 
+impl ValidatedApiToken {
+    pub fn is_combo_allowed(&self, combo_id: i64) -> bool {
+        match &self.allowed_combos {
+            Some(allowed) if !allowed.is_empty() => allowed.contains(&combo_id),
+            _ => true,
+        }
+    }
+}
+
 /// Resolve the caller from the `Authorization` header.
 ///
 /// Behaviour matrix:

@@ -58,6 +58,34 @@ pub struct UpstreamSseChunk {
 }
 
 impl UpstreamSseChunk {
+    /// Create a new chunk from a parsed JSON payload with default metadata.
+    pub fn new(payload: Value) -> Self {
+        Self {
+            raw_payload: None,
+            payload,
+            done: false,
+            usage: None,
+            stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: true,
+        }
+    }
+
+    /// Create a new [DONE] sentinel chunk.
+    pub fn done() -> Self {
+        Self {
+            raw_payload: None,
+            payload: Value::Null,
+            done: true,
+            usage: None,
+            stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: false,
+        }
+    }
+
     /// Get the forwardable JSON string. Returns the raw payload if
     /// available (zero allocation), otherwise serializes the parsed payload.
     pub fn into_json_string(self) -> String {

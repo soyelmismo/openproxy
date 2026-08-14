@@ -160,17 +160,10 @@ fn compress_diff_content(text: &str) -> Option<String> {
 /// Detect git diff format: first 10 lines contain `diff --git` OR a
 /// `@@ -a,b +c,d @@` hunk header.
 fn is_git_diff(lines: &[&str]) -> bool {
-    let mut has_diff_git = false;
-    let mut has_hunk_header = false;
-    for l in lines.iter().take(10) {
-        if l.starts_with("diff --git ") {
-            has_diff_git = true;
-        }
-        if HUNK_HEADER_RE.is_match(l) {
-            has_hunk_header = true;
-        }
-    }
-    has_diff_git || has_hunk_header
+    lines
+        .iter()
+        .take(10)
+        .any(|l| l.starts_with("diff --git ") || HUNK_HEADER_RE.is_match(l))
 }
 
 /// Parse a git diff into a list of files.
