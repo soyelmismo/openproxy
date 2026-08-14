@@ -318,8 +318,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
             ],
             |r| r.get::<_, i64>(0),
         )
-        .map(|v| v != 0)
-        .unwrap_or(false);
+        .is_ok_and(|v| v != 0);
 
     if target_exists {
         return Err(CoreError::Validation(format!(

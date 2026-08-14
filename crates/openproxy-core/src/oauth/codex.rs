@@ -188,14 +188,11 @@ impl OAuthProvider for CodexOAuthProvider {
         device_code: &str,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        let parts: Vec<&str> = device_code.splitn(2, '|').collect();
-        if parts.len() != 2 {
+        let Some((device_auth_id, user_code)) = device_code.split_once('|') else {
             return Err(CoreError::Validation(
                 "Invalid codex composite device code".into(),
             ));
-        }
-        let device_auth_id = parts[0];
-        let user_code = parts[1];
+        };
 
         let body = serde_json::json!({
             "device_auth_id": device_auth_id,

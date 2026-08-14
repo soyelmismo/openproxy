@@ -220,8 +220,7 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                     .get("image_url")
                     .and_then(|v| v.get("url"))
                     .and_then(|v| v.as_str())
-                    .map(|url| url.starts_with("data:image/"))
-                    .unwrap_or(false);
+                    .is_some_and(|url| url.starts_with("data:image/"));
                 if !is_data_image {
                     continue;
                 }

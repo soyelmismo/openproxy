@@ -449,8 +449,7 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
             let should_skip = rule
                 .unless
                 .as_ref()
-                .map(|u| u.is_match(&result))
-                .unwrap_or(false);
+                .is_some_and(|u| u.is_match(&result));
             if !should_skip {
                 applied_rules.push(filter.rule_match_output);
                 return (rule.message.to_string(), applied_rules);

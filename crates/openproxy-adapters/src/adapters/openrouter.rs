@@ -403,12 +403,11 @@ fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCa
     let has_image_input = entry
         .architecture
         .as_ref()
-        .map(|a| {
+        .is_some_and(|a| {
             a.input_modalities
                 .iter()
                 .any(|m| m == "image" || m == "video")
-        })
-        .unwrap_or(false);
+        });
     if has_image_input {
         caps.vision = Some(true);
         caps.attachment = Some(true);

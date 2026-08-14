@@ -308,8 +308,7 @@ fn strip_proxy_prefix<'a>(conn: &Connection, model_str: &'a str) -> (&'a str, Op
             |row| row.get::<_, i64>(0),
         )
         .optional()
-        .map(|v| v.unwrap_or(0) != 0)
-        .unwrap_or(false);
+        .is_ok_and(|v| v.unwrap_or(0) != 0);
     if exists {
         (&model_str[slash_idx + 1..], Some(prefix))
     } else {

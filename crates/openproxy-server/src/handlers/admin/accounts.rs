@@ -218,8 +218,7 @@ pub(crate) async fn resolve_refresh_account(
     if account_id.is_none() {
         let is_anonymous_fallback = provider_row
             .as_ref()
-            .map(|p| matches!(p.auth_type, core_providers::AuthType::None))
-            .unwrap_or(false);
+            .is_some_and(|p| matches!(p.auth_type, core_providers::AuthType::None));
 
         if is_anonymous_fallback || accounts_list.is_empty() {
             Ok((None, String::new()))

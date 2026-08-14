@@ -244,7 +244,7 @@ fn clean_object_properties_and_items(map: &mut serde_json::Map<String, Value>, d
         }
     }
 
-    if map.get("items").map(|i| !i.is_object()).unwrap_or(false) {
+    if map.get("items").is_some_and(|i| !i.is_object()) {
         map.remove("items");
     }
     if let Some(items) = map.get_mut("items") {
@@ -374,7 +374,7 @@ fn sanitize_schema_fields(
         if let Some(req_arr) = required_val.as_array_mut() {
             if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
                 req_arr.retain(|k| {
-                    k.as_str().map(|s| props.contains_key(s)).unwrap_or(false)
+                    k.as_str().is_some_and(|s| props.contains_key(s))
                 });
             } else {
                 req_arr.clear();

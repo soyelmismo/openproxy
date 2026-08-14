@@ -556,8 +556,7 @@ async fn run_phased_connect(
     let allow_private = cfg!(test)
         || cfg!(feature = "ssrf-bypass")
         || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+            .is_ok_and(|v| v == "true" || v == "1");
 
     let addrs: Vec<SocketAddr> = if allow_private {
         if cfg!(test) {
@@ -731,8 +730,7 @@ async fn run_phased_connect(
                 let (_, client_conn) = tls_stream.get_ref();
                 let negotiated_h2 = client_conn
                     .alpn_protocol()
-                    .map(|p| p == b"h2")
-                    .unwrap_or(false);
+                    .is_some_and(|p| p == b"h2");
                 return Ok(PhasedConnection::Tls {
                     io: Box::new(TokioIo::new(tls_stream)),
                     negotiated_h2,

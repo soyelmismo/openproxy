@@ -190,13 +190,11 @@ pub fn execute_sync_transaction(
 
         let combo_targets_present: bool = tx
             .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master \
-                 WHERE type = 'table' AND name = 'combo_targets'",
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'combo_targets'",
                 [],
                 |r| r.get::<_, i64>(0),
             )
-            .map(|n| n != 0)
-            .unwrap_or(false);
+            .is_ok_and(|n| n != 0);
 
         if combo_targets_present {
             for (new_id, upstream) in &new_rows {
@@ -244,8 +242,7 @@ pub fn generate_events(
             [],
             |r| r.get::<_, i64>(0),
         )
-        .map(|n| n != 0)
-        .unwrap_or(false);
+        .is_ok_and(|n| n != 0);
 
     if !notifications_present {
         return Ok(events);

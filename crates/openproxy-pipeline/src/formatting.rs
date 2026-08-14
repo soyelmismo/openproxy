@@ -286,15 +286,14 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                         if let Some(url_obj) = item.get("image_url").and_then(|v| v.as_object()) {
                             let url = url_obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
                             if url.starts_with("data:image/") {
-                                let parts_url: Vec<&str> = url.splitn(2, ',').collect();
-                                if parts_url.len() == 2 {
-                                    let mime = parts_url[0]
+                                if let Some((mime_part, data_part)) = url.split_once(',') {
+                                    let mime = mime_part
                                         .strip_prefix("data:")
                                         .and_then(|s| s.strip_suffix(";base64"))
                                         .unwrap_or("image/jpeg");
                                     parts.push(json!({
                                         "type": "input_image",
-                                        "image": parts_url[1],
+                                        "image": data_part,
                                         "mime_type": mime
                                     }));
                                 }

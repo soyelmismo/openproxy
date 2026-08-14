@@ -108,8 +108,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
         || event.stage == "cancelled"
         || event
             .status_code
-            .map(|s| s >= 400 && s != 0)
-            .unwrap_or(false)
+            .is_some_and(|s| s >= 400 && s != 0)
         || event.error.is_some();
 
     if is_terminal {

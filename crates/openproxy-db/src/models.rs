@@ -438,8 +438,7 @@ pub fn apply_auto_activation(
             [],
             |r| r.get::<_, i64>(0),
         )
-        .map(|n| n != 0)
-        .unwrap_or(false);
+        .is_ok_and(|n| n != 0);
 
     if notifications_present && !newly_active.is_empty() {
         let _ = crate::batch::batch_insert(
@@ -612,8 +611,7 @@ pub fn upsert_many(
                 [],
                 |r| r.get::<_, i64>(0),
             )
-            .map(|n| n != 0)
-            .unwrap_or(false);
+            .is_ok_and(|n| n != 0);
 
         if combo_targets_present {
             for (new_id, upstream) in &new_rows {

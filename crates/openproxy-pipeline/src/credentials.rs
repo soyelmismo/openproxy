@@ -94,8 +94,7 @@ impl CredentialManager {
                     let requires_oauth = adapters
                         .iter()
                         .find(|a| a.id().as_str() == t.provider_id.as_str())
-                        .map(|a| a.metadata().requires_oauth)
-                        .unwrap_or(false);
+                        .is_some_and(|a| a.metadata().requires_oauth);
 
                     if !has_api_key && !requires_oauth {
                         tracing::error!("account {} has no API key (OAuth account?)", account_id.0);

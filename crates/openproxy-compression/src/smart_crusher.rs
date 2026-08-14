@@ -229,8 +229,7 @@ fn value_has_error_token(v: &Value) -> bool {
 /// intentionally NOT checked — only values, per the spec.
 fn item_has_error_token(item: &Value) -> bool {
     item.as_object()
-        .map(|o| o.values().any(value_has_error_token))
-        .unwrap_or(false)
+        .is_some_and(|o| o.values().any(value_has_error_token))
 }
 
 /// Try the lossy crush path. Returns `None` if nothing would be dropped

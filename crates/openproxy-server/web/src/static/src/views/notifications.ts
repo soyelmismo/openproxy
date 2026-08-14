@@ -279,10 +279,22 @@ const TARGETS_CACHE_TTL_MS: number = 30_000;
 // Module-local state
 // ============================================================================
 
+const PAGE_LIMIT: number = 50;
+
 /** The current list of notifications, newest first. Prepend on every
  *  live WS event; refetch the whole list on filter change is NOT
  *  needed — the filter is applied client-side. */
 let rows: NotificationRow[] = [];
+
+/** Whether there may be more notifications in the database to load. */
+let hasMore: boolean = false;
+
+/** True while a background page-load request is in flight. */
+let isLoadingMore: boolean = false;
+
+/** The lowest notification id currently loaded into memory. Used as
+ *  the `before_id` cursor for subsequent page requests. */
+let oldestLoadedId: number | null = null;
 
 /** Error from the initial fetch. Renders as a banner above the list. */
 let loadError: string | null = null;
@@ -391,22 +403,64 @@ function matchesFilter(r: NotificationRow): boolean {
  *  would still increment, producing the "1 new unread but no new
  *  notification appears in the list" ghost. */
 async function fetchInitial(): Promise<void> {
+  isLoadingMore = false;
+  oldestLoadedId = null;
+  hasMore = false;
   try {
-    const raw: unknown = await api("/notifications?limit=50");
+    const raw: unknown = await api(`/notifications?limit=${PAGE_LIMIT}`);
     if (Array.isArray(raw)) {
       rows = raw as NotificationRow[];
+      if (rows.length > 0 && rows[0]) {
+        oldestLoadedId = rows.reduce((min, r) => Math.min(min, r.id), rows[0].id);
+      }
+      hasMore = rows.length >= PAGE_LIMIT;
     } else {
       rows = [];
+      hasMore = false;
     }
     loadError = null;
   } catch (e: unknown) {
     loadError = e instanceof Error ? e.message : String(e);
     rows = [];
+    hasMore = false;
   }
   // Tell the store which ids we've already loaded so WS rebroadcasts
   // for them don't cause a spurious optimistic +1 on the badge.
   markIdsSeen(rows.map((r) => r.id));
   requestUpdate();
+}
+
+/** Fetch the next batch of older notifications using cursor pagination.
+ *  Appends returned rows to `rows` and updates the unread store cache. */
+async function loadMore(): Promise<void> {
+  if (isLoadingMore || !hasMore) return;
+  isLoadingMore = true;
+  requestUpdate();
+  try {
+    const query: string = oldestLoadedId !== null
+      ? `/notifications?limit=${PAGE_LIMIT}&before_id=${oldestLoadedId}`
+      : `/notifications?limit=${PAGE_LIMIT}`;
+    const raw: unknown = await api(query);
+    if (Array.isArray(raw)) {
+      const nextRows: NotificationRow[] = raw as NotificationRow[];
+      if (nextRows.length > 0 && nextRows[0]) {
+        const nextMinId: number = nextRows.reduce((min, r) => Math.min(min, r.id), nextRows[0].id);
+        oldestLoadedId = oldestLoadedId !== null ? Math.min(oldestLoadedId, nextMinId) : nextMinId;
+        const existingIds: Set<number> = new Set<number>(rows.map((r) => r.id));
+        const toAdd: NotificationRow[] = nextRows.filter((r) => !existingIds.has(r.id));
+        rows = [...rows, ...toAdd];
+        markIdsSeen(toAdd.map((r) => r.id));
+      }
+      hasMore = nextRows.length >= PAGE_LIMIT;
+    } else {
+      hasMore = false;
+    }
+  } catch (_e: unknown) {
+    // Retain current rows on network error
+  } finally {
+    isLoadingMore = false;
+    requestUpdate();
+  }
 }
 
 /** Mark a single notification as read. Idempotent — the server returns
@@ -469,6 +523,13 @@ async function archive(id: number): Promise<void> {
   rows = rows.filter((x) => x.id !== id);
   if (wasUnread) decrementUnread(1);
   requestUpdate();
+
+  // If there are more notifications on the server and the remaining list
+  // is running low (< 10 items, or matching filter empty), auto-load more.
+  if (hasMore && !isLoadingMore && (rows.length < 10 || (filter !== "all" && rows.filter(matchesFilter).length === 0))) {
+    void loadMore();
+  }
+
   try {
     await api(`/notifications/${id}/archive`, { method: "POST" });
     void refreshUnreadCount();
@@ -960,6 +1021,9 @@ function onFilterChange(e: Event): void {
   if (v === "all" || v === "unread" || v === "model_new" || v === "model_gone" || v === "model_auto_activated" || v === "system") {
     filter = v;
     requestUpdate();
+    if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) {
+      void loadMore();
+    }
   }
 }
 
@@ -1115,6 +1179,11 @@ function renderList(): TemplateResult {
   }
   const filtered: NotificationRow[] = rows.filter(matchesFilter);
   if (rows.length === 0) {
+    if (isLoadingMore) {
+      return html`<div class="notification-empty">
+        <p>${t("common.loading")}</p>
+      </div>`;
+    }
     return html`<div class="notification-empty">
       <div class="notification-empty-icon" aria-hidden="true">🔔</div>
       <p>${t("notifications.no_notifications")}</p>
@@ -1131,9 +1200,18 @@ function renderList(): TemplateResult {
     return html`${noUnreadHint}<div class="notification-empty">
       <div class="notification-empty-icon" aria-hidden="true">🔍</div>
       <p>${t("common.empty")}</p>
+      ${hasMore ? html`<button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>
+        ${isLoadingMore ? t("common.loading") : t("notifications.load_more")}
+      </button>` : nothing}
     </div>`;
   }
-  return html`${noUnreadHint}<div class="notification-list">${filtered.map(renderCard)}</div>`;
+  return html`${noUnreadHint}<div class="notification-list">${filtered.map(renderCard)}</div>${hasMore ? html`
+    <div style="display:flex;justify-content:center;margin:var(--space-4, 1rem) 0;">
+      <button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>
+        ${isLoadingMore ? t("common.loading") : t("notifications.load_more")}
+      </button>
+    </div>
+  ` : nothing}`;
 }
 
 function renderView(): TemplateResult {
@@ -1153,6 +1231,9 @@ export async function mountNotifications(): Promise<(() => void) | void> {
   loadError = null;
   filter = "all";
   expandedComboId = null;
+  hasMore = false;
+  isLoadingMore = false;
+  oldestLoadedId = null;
 
   // Mount the lit-html view. `mountView` registers the render
   // function with the reactive system so `requestUpdate()` (called

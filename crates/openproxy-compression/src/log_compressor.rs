@@ -248,8 +248,7 @@ fn classify_line(line: &str) -> LineKind {
             && rest
                 .chars()
                 .next()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false)
+                .is_some_and(|c| c.is_ascii_digit())
         {
             return LineKind::StackTrace;
         }

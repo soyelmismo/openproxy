@@ -380,7 +380,7 @@ fn openai_message_preserves_null_content_and_tool_calls() {
     let raw = r#"{"model":"test","messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"foo","arguments":"{}"}}]}],"stream":false}"#;
     let req: OpenAIRequest = serde_json::from_str(raw).unwrap();
     let msg = &req.messages[0];
-    assert!(msg.content.as_ref().map(|v| v.is_null()).unwrap_or(false));
+    assert!(msg.content.as_ref().is_some_and(|v| v.is_null()));
     assert_eq!(msg.tool_calls.as_ref().map(|v| v.len()), Some(1));
     let serialized = serde_json::to_value(&req).unwrap();
     assert_eq!(
@@ -398,7 +398,7 @@ fn openai_message_preserves_content_array() {
     let raw = r#"{"model":"test","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://example.com/img.png"}}]}],"stream":false}"#;
     let req: OpenAIRequest = serde_json::from_str(raw).unwrap();
     let msg = &req.messages[0];
-    assert!(msg.content.as_ref().map(|v| v.is_array()).unwrap_or(false));
+    assert!(msg.content.as_ref().is_some_and(|v| v.is_array()));
     let serialized = serde_json::to_value(&req).unwrap();
     let arr = &serialized["messages"][0]["content"];
     assert!(arr.is_array());
