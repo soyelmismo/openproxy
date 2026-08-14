@@ -94,11 +94,11 @@ impl UpstreamRequest {
     /// `UpstreamClient` does not need to know about the multipart
     /// shape — it just ships the bytes through with the supplied
     /// Content-Type.
-    pub fn post_multipart(url: impl Into<String>, content_type: String, body: Bytes) -> Self {
+    pub fn post_multipart(url: impl Into<String>, content_type: &str, body: Bytes) -> Self {
         let mut headers = HeaderMap::new();
         headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_str(&content_type)
+            http::HeaderValue::from_str(content_type)
                 .unwrap_or_else(|_| http::HeaderValue::from_static("multipart/form-data")),
         );
         Self {

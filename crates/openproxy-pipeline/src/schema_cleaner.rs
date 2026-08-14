@@ -320,7 +320,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 // [NEW] 添加类型提示到描述中 (参考 CLIProxyAPI)
                 if all_types.len() > 1 {
                     let type_hint = format!("Accepts: {}", all_types.join(" | "));
-                    append_hint_to_description(map, type_hint);
+                    append_hint_to_description(map, &type_hint);
                 }
             }
 
@@ -556,15 +556,15 @@ fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
 
 /// [NEW] 将提示信息追加到 description 字段
 /// 参考 CLIProxyAPI 的 Lazy Hint 策略
-fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: String) {
+fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: &str) {
     let desc_val = map
         .entry("description".to_string())
         .or_insert_with(|| Value::String("".to_string()));
 
     if let Value::String(s) = desc_val {
         if s.is_empty() {
-            *s = hint;
-        } else if !s.contains(&hint) {
+            *s = hint.to_string();
+        } else if !s.contains(hint) {
             *s = format!("{} {}", s, hint);
         }
     }
@@ -590,7 +590,7 @@ fn move_constraints_to_description(map: &mut serde_json::Map<String, Value>) {
 
     if !hints.is_empty() {
         let constraint_hint = format!("[Constraint: {}]", hints.join(", "));
-        append_hint_to_description(map, constraint_hint);
+        append_hint_to_description(map, &constraint_hint);
     }
 }
 

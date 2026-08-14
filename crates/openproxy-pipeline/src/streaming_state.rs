@@ -625,7 +625,7 @@ impl<'a> ChunkProcessor<'a> {
                             a.set_usage(u.to_owned());
                         }
                         if let Some(sr) = &state.stop_reason {
-                            a.set_stop_reason(sr.to_owned());
+                            a.set_stop_reason(sr);
                         }
                         a.append_openai_raw(payload_str);
                         // Extract reasoning_content from the
@@ -1097,7 +1097,7 @@ impl<'a> ChunkProcessor<'a> {
                             a.set_usage(u.to_owned());
                         }
                         if let Some(sr) = &state.stop_reason {
-                            a.set_stop_reason(sr.to_owned());
+                            a.set_stop_reason(sr);
                         }
                         if let Some(dr) = &delta_reasoning
                             && !dr.is_empty()

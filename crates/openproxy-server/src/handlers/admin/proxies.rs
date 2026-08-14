@@ -55,12 +55,12 @@ pub async fn create_custom_proxy(
     }
     let p = openproxy_core::free_proxies::add_custom_proxy(
         &w,
-        body.host.trim().to_string(),
+        body.host.trim(),
         body.port,
-        body.r#type.trim().to_string(),
-        body.country_code.map(|c| c.trim().to_string()),
-        body.username.map(|u| u.trim().to_string()),
-        body.password.map(|p| p.trim().to_string()),
+        body.r#type.trim(),
+        body.country_code.as_deref().map(str::trim),
+        body.username.as_deref().map(str::trim),
+        body.password.as_deref().map(str::trim),
     )?;
     Ok(Json(p))
 }

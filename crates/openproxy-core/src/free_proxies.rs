@@ -321,12 +321,12 @@ pub fn get_proxy_status_by_url(conn: &rusqlite::Connection, url: &str) -> Option
 
 pub fn add_custom_proxy(
     conn: &Connection,
-    host: String,
+    host: &str,
     port: u16,
-    r#type: String,
-    country_code: Option<String>,
-    username: Option<String>,
-    password: Option<String>,
+    r#type: &str,
+    country_code: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
 ) -> crate::error::Result<FreeProxy> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -1943,10 +1943,10 @@ mod tests {
 
         let p = add_custom_proxy(
             &conn,
-            "1.2.3.4".to_string(),
+            "1.2.3.4",
             8080,
-            "http".to_string(),
-            Some("US".to_string()),
+            "http",
+            Some("US"),
             None,
             None,
         )
@@ -2039,9 +2039,9 @@ mod tests {
         // 3. Add an alive proxy
         let p = add_custom_proxy(
             &conn,
-            "1.2.3.4".to_string(),
+            "1.2.3.4",
             8080,
-            "socks5".to_string(),
+            "socks5",
             None,
             None,
             None,
@@ -2134,9 +2134,9 @@ mod tests {
 
         let p = add_custom_proxy(
             &conn,
-            "1.2.3.4".to_string(),
+            "1.2.3.4",
             8080,
-            "socks5".to_string(),
+            "socks5",
             None,
             None,
             None,

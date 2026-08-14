@@ -458,9 +458,9 @@ impl ResponseAccumulator {
     /// Record the first non-null stop_reason. Subsequent non-null values
     /// are ignored (matches the existing `stop_reason` local in
     /// `dispatch_upstream_streaming`).
-    pub fn set_stop_reason(&mut self, reason: String) {
+    pub fn set_stop_reason(&mut self, reason: &str) {
         if self.stop_reason.is_none() {
-            self.stop_reason = Some(reason);
+            self.stop_reason = Some(reason.to_string());
         }
     }
 
@@ -736,7 +736,7 @@ mod tests {
             total_tokens: 30,
             prompt_tokens_details: None,
         });
-        acc.set_stop_reason("stop".to_string());
+        acc.set_stop_reason("stop");
         let v = acc.finish("id", 0, "m");
         assert_eq!(v["usage"]["prompt_tokens"], 10);
         assert_eq!(v["usage"]["completion_tokens"], 20);

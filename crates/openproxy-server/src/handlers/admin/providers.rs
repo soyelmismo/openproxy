@@ -173,10 +173,10 @@ pub async fn update_provider(
 
 async fn run_provider_refresh(
     s: AppState,
-    provider_id_str: String,
+    provider_id_str: &str,
     q: ProviderRefreshQuery,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let provider = ProviderId::new(&provider_id_str);
+    let provider = ProviderId::new(provider_id_str);
     let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
 
     // 1. Find the adapter. Check built-in adapters first, then
@@ -368,5 +368,5 @@ pub async fn refresh_provider_models(
     Path(provider_id): Path<String>,
     Query(q): Query<ProviderRefreshQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    run_provider_refresh(s, provider_id, q).await
+    run_provider_refresh(s, &provider_id, q).await
 }

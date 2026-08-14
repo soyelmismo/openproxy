@@ -434,7 +434,7 @@ async fn dispatch_audio_request(
     let content_type = format!("multipart/form-data; boundary={}", boundary);
     let mut req = openproxy_adapters::upstream::UpstreamRequest::post_multipart(
         upstream_url,
-        content_type,
+        &content_type,
         bytes::Bytes::from(payload),
     );
 
