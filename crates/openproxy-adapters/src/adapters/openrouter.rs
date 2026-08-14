@@ -94,13 +94,9 @@ impl ProviderAdapter for OpenRouterAdapter {
         })?;
 
         let auth = format!("Bearer {api_key}");
-        let body = upstream_get_json(
-            upstream_client,
-            &url,
-            &[("Authorization", &auth)],
-        )
-        .await
-        .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
+        let body = upstream_get_json(upstream_client, &url, &[("Authorization", &auth)])
+            .await
+            .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
 
         let arr = body.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
             openproxy_types::error::CoreError::Parse(
@@ -123,14 +119,20 @@ impl ProviderAdapter for OpenRouterAdapter {
 
                 // Extract modalities (skip empty arrays so they serialize
                 // as NULL rather than `[]`).
-                let input_modalities = entry
-                    .architecture
-                    .as_mut()
-                    .and_then(|a| if a.input_modalities.is_empty() { None } else { Some(std::mem::take(&mut a.input_modalities)) });
-                let output_modalities = entry
-                    .architecture
-                    .as_mut()
-                    .and_then(|a| if a.output_modalities.is_empty() { None } else { Some(std::mem::take(&mut a.output_modalities)) });
+                let input_modalities = entry.architecture.as_mut().and_then(|a| {
+                    if a.input_modalities.is_empty() {
+                        None
+                    } else {
+                        Some(std::mem::take(&mut a.input_modalities))
+                    }
+                });
+                let output_modalities = entry.architecture.as_mut().and_then(|a| {
+                    if a.output_modalities.is_empty() {
+                        None
+                    } else {
+                        Some(std::mem::take(&mut a.output_modalities))
+                    }
+                });
 
                 // Context: prefer top-level, fallback to top_provider.
                 let context_length = entry

@@ -1,25 +1,9 @@
 use super::*;
-
-pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
-    ("http-referer", "https://cline.bot"),
-    ("x-title", "Cline"),
-    ("user-agent", "Cline/4.1.3"),
-    ("x-is-multiroot", "false"),
-    ("x-client-type", "VSCode Extension"),
-    ("x-client-version", "4.1.3"),
-    ("x-platform", "Visual Studio Code"),
-    ("x-platform-version", "1.96.0"), // Typical VSCode version
-    ("x-core-version", "4.1.3"),
-];
+pub use crate::spoofer::CLINE_SPOOFING_HEADERS;
+use crate::spoofer::{ClientSpoofer, ClineSpoofer};
 
 pub fn apply_cline_spoofing_headers(req: &mut UpstreamRequest) {
-    for &(k, v) in CLINE_SPOOFING_HEADERS {
-        if let Ok(name) = http::header::HeaderName::try_from(k)
-            && let Ok(val) = http::HeaderValue::try_from(v)
-        {
-            req.headers.insert(name, val);
-        }
-    }
+    ClineSpoofer.apply_to_request(req);
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -56,10 +40,7 @@ impl ClineAdapter {
                 base_url: "https://api.cline.bot/api/v1".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,
-                extra_headers: CLINE_SPOOFING_HEADERS
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
+                extra_headers: ClineSpoofer.headers(),
             },
         }
     }
@@ -68,10 +49,6 @@ impl ClineAdapter {
 crate::adapters::derive_default_from_new!(ClineAdapter);
 
 impl ProviderAdapter for ClineAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -87,10 +64,6 @@ impl ProviderAdapter for ClineAdapter {
         meta
     }
 
-    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        format!("{}/chat/completions", self.config.base_url)
-    }
-
     fn build_auth_header(&self, access_token: &str) -> Option<(String, String)> {
         let token = if access_token.starts_with("workos:") {
             access_token.to_string()
@@ -98,23 +71,6 @@ impl ProviderAdapter for ClineAdapter {
             format!("workos:{}", access_token)
         };
         Some(("Authorization".into(), format!("Bearer {}", token)))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        if let Some((name, value)) = self.build_auth_header(api_key) {
-            headers.push((name, value));
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        for (k, v) in &self.config.extra_headers {
-            headers.push((k.clone(), v.clone()));
-        }
-        headers
     }
 
     fn models_url(&self) -> Option<String> {
@@ -126,9 +82,9 @@ impl ProviderAdapter for ClineAdapter {
         upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        let url = self
-            .models_url()
-            .ok_or_else(|| openproxy_types::error::CoreError::Internal("missing models_url".into()))?;
+        let url = self.models_url().ok_or_else(|| {
+            openproxy_types::error::CoreError::Internal("missing models_url".into())
+        })?;
 
         let body = upstream_get_json(upstream_client, &url, &[])
             .await

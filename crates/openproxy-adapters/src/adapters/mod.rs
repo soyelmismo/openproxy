@@ -134,9 +134,29 @@ pub trait ProviderAdapter: Send + Sync {
     /// - `Openai` -> `base_url + "/chat/completions"`
     /// - `Anthropic` -> `base_url + "/messages"` (plus any provider-specific
     ///   query string such as `?beta=true`)
-    /// - `Gemini` -> `base_url + "/models/" + model + ":generateContent"`
+    /// - `Gemini` -> `base_url + "/models/" + model + ":streamGenerateContent?alt=sse"`
+    /// - `Responses` -> `base_url + "/responses"`
     /// - `Mixed` -> depends on `target_format` (same per-branch rules as above)
-    fn build_chat_url(&self, target_format: TargetFormat, model: &ModelId) -> String;
+    fn build_chat_url(&self, target_format: TargetFormat, model: &ModelId) -> String {
+        match self.format() {
+            AdapterFormat::Openai => format!("{}/chat/completions", self.config().base_url),
+            AdapterFormat::Anthropic => format!("{}/messages", self.config().base_url),
+            AdapterFormat::Gemini => {
+                format!(
+                    "{}/models/{}:streamGenerateContent?alt=sse",
+                    self.config().base_url,
+                    model.as_str()
+                )
+            }
+            AdapterFormat::Responses => format!("{}/responses", self.config().base_url),
+            AdapterFormat::Mixed => match target_format {
+                TargetFormat::Openai => format!("{}/chat/completions", self.config().base_url),
+                TargetFormat::Anthropic => format!("{}/messages", self.config().base_url),
+                TargetFormat::Gemini => format!("{}/chat/completions", self.config().base_url),
+                TargetFormat::Responses => format!("{}/responses", self.config().base_url),
+            },
+        }
+    }
 
     /// Build the chat URL with account-level context (label).
     /// Default: ignores label and delegates to build_chat_url.
@@ -238,7 +258,9 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// URL of the provider's `/models` endpoint for live discovery, or `None`
     /// if the provider does not expose a model list (e.g. MiniMax).
-    fn models_url(&self) -> Option<String>;
+    fn models_url(&self) -> Option<String> {
+        Some(format!("{}/models", self.config().base_url))
+    }
 
     /// Models URL with account-level context (label).
     /// Default: ignores label and delegates to models_url.
@@ -252,15 +274,33 @@ pub trait ProviderAdapter: Send + Sync {
     /// The default implementation GETs [`Self::models_url`] with a
     /// `Bearer` auth header and parses an OpenRouter-style
     /// `{"data": [{...}]}` payload. Providers with a different
-    /// response shape override this method. As of Gate 6 the
-    /// HTTP transport is the [`UpstreamClient`] (hyper-based, with
-    /// per-phase timeouts); the legacy `UpstreamClient` is no
-    /// longer threaded through this trait.
+    /// response shape override this method.
     fn fetch_models(
         &self,
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        async move {
+            let url = self
+                .models_url()
+                .ok_or_else(|| CoreError::Internal(format!("{}: models_url is None", self.id())))?;
+            let target_format = match self.format() {
+                AdapterFormat::Openai => TargetFormat::Openai,
+                AdapterFormat::Anthropic => TargetFormat::Anthropic,
+                AdapterFormat::Gemini => TargetFormat::Gemini,
+                AdapterFormat::Responses => TargetFormat::Responses,
+                AdapterFormat::Mixed => TargetFormat::Openai,
+            };
+            fetch_openai_models(
+                &url,
+                upstream_client,
+                api_key,
+                self.id().as_str(),
+                target_format,
+            )
+            .await
+        }
+    }
 
     /// Fetch models with account-level context (label).
     /// Default: ignores label and delegates to fetch_models.
@@ -655,6 +695,105 @@ macro_rules! derive_default_from_new {
 }
 pub(crate) use derive_default_from_new;
 
+#[macro_export]
+macro_rules! declare_openai_adapter {
+    (
+        $(#[$meta:meta])*
+        $struct_name:ident,
+        id: $id:expr,
+        name: $name:expr,
+        base_url: $base_url:expr
+        $(, rate_limit_scope: $rl_scope:expr)?
+        $(, anonymous_fallback: $anon:expr)?
+        $(, extra_headers: $extra_headers:expr)?
+        $(, models_url: $models_url:expr)?,
+        custom_impl: {
+            $($custom_items:tt)*
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        pub struct $struct_name {
+            config: $crate::adapters::ProviderAdapterConfig,
+        }
+
+        impl $struct_name {
+            pub fn new() -> Self {
+                #[allow(unused_mut)]
+                let mut extra_headers = Vec::new();
+                $(
+                    extra_headers = $extra_headers;
+                )?
+                #[allow(unused_mut)]
+                let mut anonymous_fallback = false;
+                $(
+                    anonymous_fallback = $anon;
+                )?
+                #[allow(unused_mut)]
+                let mut rate_limit_scope = "account".to_string();
+                $(
+                    rate_limit_scope = $rl_scope.to_string();
+                )?
+
+                Self {
+                    config: $crate::adapters::ProviderAdapterConfig {
+                        id: openproxy_types::ProviderId::new($id),
+                        name: $name.into(),
+                        anonymous_fallback,
+                        rate_limit_scope,
+                        base_url: $base_url.into(),
+                        auth_type: $crate::adapters::AdapterAuthType::Bearer,
+                        format: $crate::adapters::AdapterFormat::Openai,
+                        extra_headers,
+                    },
+                }
+            }
+        }
+
+        $crate::adapters::derive_default_from_new!($struct_name);
+
+        impl $crate::adapters::ProviderAdapter for $struct_name {
+            fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
+                &self.config
+            }
+
+            $(
+                fn models_url(&self) -> Option<String> {
+                    Some($models_url.into())
+                }
+            )?
+
+            $($custom_items)*
+        }
+    };
+
+    (
+        $(#[$meta:meta])*
+        $struct_name:ident,
+        id: $id:expr,
+        name: $name:expr,
+        base_url: $base_url:expr
+        $(, rate_limit_scope: $rl_scope:expr)?
+        $(, anonymous_fallback: $anon:expr)?
+        $(, extra_headers: $extra_headers:expr)?
+        $(, models_url: $models_url:expr)?
+    ) => {
+        $crate::declare_openai_adapter!(
+            $(#[$meta])*
+            $struct_name,
+            id: $id,
+            name: $name,
+            base_url: $base_url
+            $(, rate_limit_scope: $rl_scope)?
+            $(, anonymous_fallback: $anon)?
+            $(, extra_headers: $extra_headers)?
+            $(, models_url: $models_url)?,
+            custom_impl: {}
+        );
+    };
+}
+pub use declare_openai_adapter;
+
 pub mod antigravity;
 pub mod cline;
 pub mod cloudflare_workers_ai;
@@ -670,6 +809,7 @@ pub mod mock;
 pub mod nous_research;
 pub mod nvidia_nim;
 pub mod ollama_cloud;
+pub mod opencode_common;
 pub mod opencode_go;
 pub mod opencode_zen;
 pub mod openrouter;
@@ -806,13 +946,9 @@ pub(crate) async fn fetch_openai_models(
     target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
     let auth = format!("Bearer {api_key}");
-    let body = upstream_get_json(
-        upstream_client,
-        url,
-        &[("Authorization", &auth)],
-    )
-    .await
-    .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;
+    let body = upstream_get_json(upstream_client, url, &[("Authorization", &auth)])
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;
 
     let payload: OpenAIModelsResponse =
         <OpenAIModelsResponse as serde::Deserialize>::deserialize(&body)

@@ -406,9 +406,7 @@ impl UpstreamClient {
             Some(bytes) => Full::new(bytes),
             None => Full::new(Bytes::new()),
         };
-        let mut builder = Request::builder()
-            .method(spec.method)
-            .uri(&spec.url);
+        let mut builder = Request::builder().method(spec.method).uri(&spec.url);
         {
             let headers = builder.headers_mut().ok_or_else(|| {
                 UpstreamError::Invalid("failed to build request headers".to_string())

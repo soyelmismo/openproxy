@@ -366,7 +366,8 @@ mod tests {
     async fn from_watch_and_token_fires_on_race_token() {
         let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
-        let token = CancellationToken::from_watch_and_token(rx, CancellationToken::clone(&race_token));
+        let token =
+            CancellationToken::from_watch_and_token(rx, CancellationToken::clone(&race_token));
         assert!(!token.is_cancelled());
 
         race_token.cancel();

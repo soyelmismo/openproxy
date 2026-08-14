@@ -1,0 +1,201 @@
+//! Client spoofing traits and presets for upstream providers.
+//!
+//! Providers like Cline, OpenCode, and Antigravity require specific client
+//! identity headers (User-Agent, machine fingerprint, editor metadata, etc.)
+//! to accept requests. This module unifies spoofing into the [`ClientSpoofer`]
+//! trait and provides standard presets.
+
+use crate::upstream::UpstreamRequest;
+use http::HeaderValue;
+
+/// Trait for injecting client identity and spoofing headers into requests.
+pub trait ClientSpoofer: Send + Sync {
+    /// Return the full list of spoofed headers as `(name, value)` pairs.
+    fn headers(&self) -> Vec<(String, String)>;
+
+    /// Apply the spoofed headers to an [`UpstreamRequest`].
+    fn apply_to_request(&self, req: &mut UpstreamRequest) {
+        self.apply_to_header_map(&mut req.headers);
+    }
+
+    /// Apply the spoofed headers to an [`http::HeaderMap`].
+    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
+        for (k, v) in self.headers() {
+            if let Ok(name) = http::header::HeaderName::try_from(k.as_str())
+                && let Ok(val) = HeaderValue::try_from(v.as_str())
+            {
+                headers.insert(name, val);
+            }
+        }
+    }
+}
+
+// =====================================================================
+// Cline Preset
+// =====================================================================
+
+pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
+    ("http-referer", "https://cline.bot"),
+    ("x-title", "Cline"),
+    ("user-agent", "Cline/4.1.3"),
+    ("x-is-multiroot", "false"),
+    ("x-client-type", "VSCode Extension"),
+    ("x-client-version", "4.1.3"),
+    ("x-platform", "Visual Studio Code"),
+    ("x-platform-version", "1.96.0"),
+    ("x-core-version", "4.1.3"),
+];
+
+/// Preset for Cline client identity headers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClineSpoofer;
+
+impl ClientSpoofer for ClineSpoofer {
+    fn headers(&self) -> Vec<(String, String)> {
+        CLINE_SPOOFING_HEADERS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
+        for &(k, v) in CLINE_SPOOFING_HEADERS {
+            if let Ok(name) = http::header::HeaderName::try_from(k)
+                && let Ok(val) = HeaderValue::try_from(v)
+            {
+                headers.insert(name, val);
+            }
+        }
+    }
+}
+
+// =====================================================================
+// OpenCode Preset
+// =====================================================================
+
+pub const OPENCODE_SPOOFING_HEADERS: &[(&str, &str)] = &[
+    ("User-Agent", "opencode/1.31.0"),
+    ("opencode-version", "1.31.0"),
+    ("openai-beta", "responses_websockets=2026-02-06"),
+];
+
+/// Preset for OpenCode client identity headers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenCodeSpoofer;
+
+impl ClientSpoofer for OpenCodeSpoofer {
+    fn headers(&self) -> Vec<(String, String)> {
+        OPENCODE_SPOOFING_HEADERS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
+        for &(k, v) in OPENCODE_SPOOFING_HEADERS {
+            if let Ok(name) = http::header::HeaderName::try_from(k)
+                && let Ok(val) = HeaderValue::try_from(v)
+            {
+                headers.insert(name, val);
+            }
+        }
+    }
+}
+
+// =====================================================================
+// Antigravity Preset
+// =====================================================================
+
+/// Preset for Google Antigravity (Cloud Code) client identity headers.
+#[derive(Debug, Clone, Default)]
+pub struct AntigravitySpoofer {
+    pub project_id: Option<String>,
+}
+
+impl AntigravitySpoofer {
+    pub fn new() -> Self {
+        Self { project_id: None }
+    }
+
+    pub fn with_project(project_id: impl Into<String>) -> Self {
+        Self {
+            project_id: Some(project_id.into()),
+        }
+    }
+}
+
+impl ClientSpoofer for AntigravitySpoofer {
+    fn headers(&self) -> Vec<(String, String)> {
+        let mut hm = http::HeaderMap::new();
+        self.apply_to_header_map(&mut hm);
+        hm.into_iter()
+            .filter_map(|(k, v)| {
+                k.map(|name| {
+                    (
+                        name.as_str().to_string(),
+                        v.to_str().unwrap_or("").to_string(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
+        crate::antigravity_headers::inject_antigravity_headers(headers, self.project_id.as_deref());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cline_spoofer() {
+        let spoofer = ClineSpoofer;
+        let mut req = UpstreamRequest::get("https://dummy.url");
+        spoofer.apply_to_request(&mut req);
+
+        for &(k, v) in CLINE_SPOOFING_HEADERS {
+            let header_val = req.headers.get(k).expect("header missing");
+            assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_opencode_spoofer() {
+        let spoofer = OpenCodeSpoofer;
+        let headers = spoofer.headers();
+        assert_eq!(headers.len(), 3);
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "User-Agent" && v == "opencode/1.31.0")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "opencode-version" && v == "1.31.0")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "openai-beta" && v == "responses_websockets=2026-02-06")
+        );
+    }
+
+    #[test]
+    fn test_antigravity_spoofer() {
+        let spoofer = AntigravitySpoofer::with_project("project-xyz");
+        let headers = spoofer.headers();
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "x-client-name" && v == "antigravity")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "x-goog-user-project" && v == "project-xyz")
+        );
+    }
+}

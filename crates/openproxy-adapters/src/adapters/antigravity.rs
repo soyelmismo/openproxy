@@ -1,4 +1,5 @@
 use super::*;
+use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
 // =====================================================================
 // Antigravity (Cloud Code)
@@ -43,7 +44,6 @@ impl AntigravityAdapter {
 
         let mut models = Vec::new();
         for (model_id, model_data) in models_obj {
-
             let display_name = model_data
                 .get("displayName")
                 .and_then(|d| d.as_str())
@@ -190,15 +190,7 @@ impl ProviderAdapter for AntigravityAdapter {
         let mut headers_vec = Vec::with_capacity(10);
         headers_vec.push(("Authorization".into(), format!("Bearer {}", api_key)));
         headers_vec.push(("Content-Type".into(), "application/json".into()));
-
-        // Inject antigravity headers
-        let mut hm = http::HeaderMap::new();
-        crate::antigravity_headers::inject_antigravity_headers(&mut hm, None);
-        for (k, v) in hm.iter() {
-            if let Ok(v_str) = v.to_str() {
-                headers_vec.push((k.as_str().to_string(), v_str.to_string()));
-            }
-        }
+        headers_vec.extend(AntigravitySpoofer::new().headers());
 
         for (k, v) in &self.config.extra_headers {
             headers_vec.push((k.clone(), v.clone()));
@@ -272,7 +264,7 @@ impl ProviderAdapter for AntigravityAdapter {
                 http::header::CONTENT_TYPE,
                 HeaderValue::from_static("application/json"),
             );
-            crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+            AntigravitySpoofer::new().apply_to_request(&mut req);
 
             let cancel = CancellationToken::new();
             if let Ok(resp) = upstream_client
