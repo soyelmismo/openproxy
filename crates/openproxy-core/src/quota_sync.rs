@@ -113,12 +113,13 @@ async fn run_quota_sync_cycle(
     let delay_ms = config.quota_sync.delay_between_accounts_ms;
 
     // 3. Process each account with a delay
+    let supported_refs: Vec<&str> = supported_providers.iter().map(|s| s.as_str()).collect();
     for account_id in accounts_to_sync {
         match refresh_single_account_quota(
             account_id,
             db_pool,
             master_key,
-            &supported_providers,
+            &supported_refs,
             upstream_client,
             oauth_registry,
         )
@@ -149,7 +150,7 @@ pub async fn refresh_single_account_quota(
     account_id: AccountId,
     db_pool: &Arc<DbPool>,
     master_key: &Arc<MasterKey>,
-    supported_providers: &[String],
+    supported_providers: &[&str],
     upstream_client: &Arc<UpstreamClient>,
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) -> crate::error::Result<Option<AccountQuota>> {
@@ -157,7 +158,7 @@ pub async fn refresh_single_account_quota(
         let db_pool = Arc::clone(db_pool);
         let master_key = Arc::clone(master_key);
         // Extract the strings to avoid cloning the whole slice into the move closure
-        let supported_providers: Vec<String> = supported_providers.to_vec();
+        let supported_providers: Vec<String> = supported_providers.iter().map(|s| s.to_string()).collect();
         let res = tokio::task::spawn_blocking(move || {
             let r = db_pool.reader();
             let acc = admin::account_for_quota_refresh(&r, account_id, master_key.as_ref())?;

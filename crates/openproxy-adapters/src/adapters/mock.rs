@@ -12,12 +12,12 @@ pub struct MockAdapter {
 }
 
 impl MockAdapter {
-    pub fn new(id: &str, base_url: String, format: AdapterFormat) -> Self {
+    pub fn new(id: &str, base_url: &str, format: AdapterFormat) -> Self {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new(id),
                 name: format!("Mock {}", id),
-                base_url,
+                base_url: base_url.to_string(),
                 auth_type: AdapterAuthType::Bearer,
                 format,
                 extra_headers: Vec::new(),
@@ -35,14 +35,14 @@ impl MockAdapter {
         models: Vec<DiscoveredModel>,
     ) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut adapter = Self::new(id, String::new(), AdapterFormat::Openai);
+        let mut adapter = Self::new(id, "", AdapterFormat::Openai);
         adapter.call_count = Some(std::sync::Arc::clone(&counter));
         adapter.models_to_return = Some(models);
         (adapter, counter)
     }
 
     pub fn failing_discovery(id: &str) -> Self {
-        let mut adapter = Self::new(id, String::new(), AdapterFormat::Openai);
+        let mut adapter = Self::new(id, "", AdapterFormat::Openai);
         adapter.fail_fetch = true;
         adapter
     }

@@ -132,10 +132,11 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             "{}/{}/ai/models/search",
             self.config.base_url, account_label
         );
+        let auth = format!("Bearer {}", api_key);
         fetch_models_with_auth(
             &url,
             upstream_client,
-            &[("Authorization", format!("Bearer {}", api_key))],
+            &[("Authorization", &auth)],
             "result",
             "cloudflare",
             |raw| {

@@ -107,10 +107,11 @@ impl ProviderAdapter for OpenCodeGoAdapter {
         // `.bearer_auth(api_key)` UpstreamClient call: it sets the
         // `Authorization: Bearer ***` header. We pass the same
         // string in via the helper.
+        let auth = format!("Bearer {api_key}");
         let body = upstream_get_json(
             upstream_client,
             &url,
-            &[("Authorization", format!("Bearer {api_key}"))],
+            &[("Authorization", &auth)],
         )
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("opencode-go /models: {e}")))?;

@@ -74,7 +74,7 @@ impl ProviderAdapter for GeminiAdapter {
         fetch_models_with_auth(
             &url,
             upstream_client,
-            &[("x-goog-api-key", api_key.to_string())],
+            &[("x-goog-api-key", api_key)],
             "models",
             "gemini",
             |m| {

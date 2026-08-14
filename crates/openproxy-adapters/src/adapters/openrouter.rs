@@ -93,10 +93,11 @@ impl ProviderAdapter for OpenRouterAdapter {
             openproxy_types::error::CoreError::Internal("openrouter has no models_url".into())
         })?;
 
+        let auth = format!("Bearer {api_key}");
         let body = upstream_get_json(
             upstream_client,
             &url,
-            &[("Authorization", format!("Bearer {api_key}"))],
+            &[("Authorization", &auth)],
         )
         .await
         .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
@@ -275,14 +276,14 @@ impl OpenRouterAdapter {
 
         Ok(parse_openrouter_quota(
             &json,
-            openproxy_types::now_unix_secs_str(),
+            &openproxy_types::now_unix_secs_str(),
         ))
     }
 }
 
 fn parse_openrouter_quota(
     body: &serde_json::Value,
-    last_fetched_at: String,
+    last_fetched_at: &str,
 ) -> openproxy_types::AccountQuota {
     let data = body.get("data");
 
@@ -327,7 +328,7 @@ fn parse_openrouter_quota(
         weekly_limit: None,
         weekly_reset_at: None,
         plan_name: Some(plan_name),
-        last_fetched_at,
+        last_fetched_at: last_fetched_at.to_string(),
         fetch_error,
         model_details: None,
     }

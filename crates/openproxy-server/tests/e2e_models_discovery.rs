@@ -141,12 +141,12 @@ struct TestMockAdapter {
 }
 
 impl TestMockAdapter {
-    fn new(id: &str, base_url: String) -> Self {
+    fn new(id: &str, base_url: &str) -> Self {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new(id),
                 name: format!("Mock {}", id),
-                base_url,
+                base_url: base_url.to_string(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,
                 extra_headers: vec![],
@@ -412,7 +412,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let base_url = format!("http://{addr}");
 
     // --- Step 2: build the test adapter + AppState --------------
-    let adapter = TestMockAdapter::new("e2e-mock", base_url);
+    let adapter = TestMockAdapter::new("e2e-mock", &base_url);
     let tmp = TempDir::new().expect("tempdir");
     let state = make_test_state(tmp.path(), &adapter).await;
     let provider = ProviderId::new("e2e-mock");

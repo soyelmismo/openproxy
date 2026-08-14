@@ -3732,12 +3732,12 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     //    bails with `ProviderNotFound` before reaching the HTTP
     //    layer. We want ONLY our mock to be discoverable.
     // -----------------------------------------------------------------
-    fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> PipelineConfig {
+    fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> PipelineConfig {
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
         let mock = crate::test_utils::MockAdapter {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("test-mock-sse"),
-                base_url,
+                base_url: base_url.to_string(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,
                 extra_headers: Vec::new(),
@@ -3955,7 +3955,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     //    `idle_chunk_ms` instead, the run would still be
     //    pending at the 3s timeout below.
     // -----------------------------------------------------------------
-    let cfg = test_config_with_mock(mk, upstream_url.to_owned());
+    let cfg = test_config_with_mock(mk, &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (mut req, cancel_tx) = make_request(combo_id);

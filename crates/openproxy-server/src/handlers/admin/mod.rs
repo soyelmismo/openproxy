@@ -842,15 +842,14 @@ pub struct TestResult {
 }
 
 impl TestResult {
-    fn skipped(row_id: i64, reason: impl Into<String>) -> Self {
-        let r: String = reason.into();
+    fn skipped(row_id: i64, reason: &str) -> Self {
         Self {
             row_id,
             status: 0,
             elapsed_ms: 0,
-            error_msg: Some(r.clone()),
+            error_msg: Some(reason.to_string()),
             skipped: true,
-            skip_reason: Some(r),
+            skip_reason: Some(reason.to_string()),
         }
     }
 }

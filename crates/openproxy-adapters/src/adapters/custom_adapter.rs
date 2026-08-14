@@ -152,20 +152,21 @@ impl ProviderAdapter for CustomAdapter {
         })?;
 
         // Build auth header based on the provider's auth type.
-        let auth_headers: Vec<(&str, String)> = if api_key.is_empty() {
-            vec![]
+        let bearer_auth = format!("Bearer {api_key}");
+        let auth_headers: &[(&str, &str)] = if api_key.is_empty() {
+            &[]
         } else {
             match self.config.auth_type {
                 AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                    vec![("Authorization", format!("Bearer {api_key}"))]
+                    &[("Authorization", bearer_auth.as_str())]
                 }
-                AdapterAuthType::XApiKey => vec![("x-api-key", api_key.to_string())],
-                AdapterAuthType::GoogApiKey => vec![("x-goog-api-key", api_key.to_string())],
-                AdapterAuthType::None => vec![],
+                AdapterAuthType::XApiKey => &[("x-api-key", api_key)],
+                AdapterAuthType::GoogApiKey => &[("x-goog-api-key", api_key)],
+                AdapterAuthType::None => &[],
             }
         };
 
-        let body = upstream_get_json(upstream_client, &url, &auth_headers)
+        let body = upstream_get_json(upstream_client, &url, auth_headers)
             .await
             .map_err(|e| {
                 CoreError::UpstreamConnection(format!("{} /models: {e}", self.config.id))

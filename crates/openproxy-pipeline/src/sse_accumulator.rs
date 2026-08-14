@@ -409,17 +409,15 @@ impl ResponseAccumulator {
             for tc in tool_calls {
                 if let Some(tc_obj) = tc.as_object() {
                     let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                    let id = tc_obj.get("id").and_then(|i| i.as_str()).map(String::from);
+                    let id = tc_obj.get("id").and_then(|i| i.as_str());
                     let name = tc_obj
                         .get("function")
                         .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str())
-                        .map(String::from);
+                        .and_then(|n| n.as_str());
                     let arguments = tc_obj
                         .get("function")
                         .and_then(|f| f.get("arguments"))
-                        .and_then(|a| a.as_str())
-                        .map(String::from);
+                        .and_then(|a| a.as_str());
                     self.update_openai_tool_call_delta(index, id, name, arguments);
                 }
             }
@@ -468,9 +466,9 @@ impl ResponseAccumulator {
     pub fn update_openai_tool_call_delta(
         &mut self,
         index: usize,
-        id: Option<String>,
-        name: Option<String>,
-        arguments: Option<String>,
+        id: Option<&str>,
+        name: Option<&str>,
+        arguments: Option<&str>,
     ) {
         while self.tool_calls.len() <= index {
             self.tool_calls.push(AccumulatedToolCall {
@@ -481,13 +479,15 @@ impl ResponseAccumulator {
         }
         let tc = &mut self.tool_calls[index];
         if let Some(id_val) = id {
-            tc.id = id_val;
+            tc.id.clear();
+            tc.id.push_str(id_val);
         }
         if let Some(name_val) = name {
-            tc.name = name_val;
+            tc.name.clear();
+            tc.name.push_str(name_val);
         }
         if let Some(args_val) = arguments {
-            tc.arguments.push_str(&args_val);
+            tc.arguments.push_str(args_val);
         }
     }
 
@@ -495,7 +495,7 @@ impl ResponseAccumulator {
     /// wire format already gives the call as a single chunk; the only
     /// reason we accumulate is so the persisted `response_body_json`
     /// carries a clean tool_calls array (not the streaming deltas).
-    pub fn append_openai_tool_call(&mut self, id: Option<String>, name: String, arguments: String) {
+    pub fn append_openai_tool_call(&mut self, id: Option<&str>, name: &str, arguments: &str) {
         self.update_openai_tool_call_delta(0, id, Some(name), Some(arguments));
     }
 
@@ -779,9 +779,9 @@ mod tests {
     fn append_openai_tool_call_accumulates() {
         let mut acc = ResponseAccumulator::new();
         acc.append_openai_tool_call(
-            Some("call_1".into()),
-            "get_time".into(),
-            r#"{"zone":"UTC"}"#.into(),
+            Some("call_1"),
+            "get_time",
+            r#"{"zone":"UTC"}"#,
         );
         let v = acc.finish("id", 0, "m");
         let tool_calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();

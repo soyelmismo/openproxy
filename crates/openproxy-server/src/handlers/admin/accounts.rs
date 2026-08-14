@@ -101,11 +101,11 @@ pub async fn refresh_account_quota(
     let result: Result<Json<serde_json::Value>, ApiError> = async move {
         let account_id = AccountId::new(account_id);
 
-        let supported_providers: Vec<String> = s
-            .adapters()
+        let adapters = s.adapters();
+        let supported_providers: Vec<&str> = adapters
             .iter()
             .filter(|a| a.metadata().quota_refresh_supported)
-            .map(|a| a.id().to_string())
+            .map(|a| a.id().as_str())
             .collect();
 
         let q_opt = openproxy_core::quota_sync::refresh_single_account_quota(

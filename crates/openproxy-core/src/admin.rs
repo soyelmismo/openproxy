@@ -1362,7 +1362,7 @@ mod tests {
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
             openproxy_adapters::adapters::MockAdapter::new(
                 "stub",
-                String::new(),
+                "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
             ),
         );

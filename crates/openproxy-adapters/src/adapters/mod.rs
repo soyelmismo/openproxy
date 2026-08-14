@@ -714,7 +714,7 @@ pub use openrouter::OpenRouterAdapter;
 pub(crate) async fn upstream_get_json(
     upstream_client: &Arc<UpstreamClient>,
     url: &str,
-    headers: &[(&str, String)],
+    headers: &[(&str, &str)],
 ) -> std::result::Result<serde_json::Value, String> {
     let mut req = UpstreamRequest::get(url);
     for (k, v) in headers {
@@ -805,10 +805,11 @@ pub(crate) async fn fetch_openai_models(
     provider_name: &str,
     target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
+    let auth = format!("Bearer {api_key}");
     let body = upstream_get_json(
         upstream_client,
         url,
-        &[("Authorization", format!("Bearer {api_key}"))],
+        &[("Authorization", &auth)],
     )
     .await
     .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;
@@ -846,7 +847,7 @@ pub(crate) async fn fetch_openai_models(
 pub(crate) async fn fetch_models_with_auth<F>(
     url: &str,
     upstream_client: &std::sync::Arc<UpstreamClient>,
-    headers: &[(&str, String)],
+    headers: &[(&str, &str)],
     array_key: &str,
     error_prefix: &str,
     mapper: F,

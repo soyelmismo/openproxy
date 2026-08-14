@@ -77,10 +77,11 @@ impl ProviderAdapter for OllamaCloudAdapter {
             CoreError::Internal("ollama-cloud: models_url is None (impossible)".into())
         })?;
 
+        let auth = format!("Bearer {api_key}");
         let body = upstream_get_json(
             upstream_client,
             &url,
-            &[("Authorization", format!("Bearer {api_key}"))],
+            &[("Authorization", &auth)],
         )
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {e}")))?;
