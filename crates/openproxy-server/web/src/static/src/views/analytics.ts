@@ -653,7 +653,7 @@ function renderByModelTable(): TemplateResult {
   const body = byModel.length
     ? html`<div class="analytics-table-wrap"><table>
         <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.metric.tokens")}</th><th class="num">Local Compress</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
-        <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td class="analytics-model-cell" title=${r.upstream_model_id}>${r.upstream_model_id}</td><td class="num">${fmtNumber(r.unique_requests)}</td><td class="num">${fmtNumber(r.total_prompt_tokens + r.total_completion_tokens)}</td><td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${Math.round(r.avg_compression_savings_pct)}%` : "—"}</td><td class="num">${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
+        <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td class="analytics-model-cell" title=${r.upstream_model_id}>${r.upstream_model_id}</td><td class="num">${fmtNumber(r.unique_requests)}</td><td class="num">${fmtNumber(r.total_prompt_tokens + r.total_completion_tokens)}</td><td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${r.avg_compression_savings_pct < 1 && r.avg_compression_savings_pct > 0 ? r.avg_compression_savings_pct.toFixed(2) : Math.round(r.avg_compression_savings_pct)}%` : "—"}</td><td class="num">${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
       </table></div>`
     : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
   return card(t("analytics.chart.by_model"), body);
@@ -670,7 +670,7 @@ function renderByProviderTable(): TemplateResult {
           <td class="num">${fmtNumber(r.winners)}</td>
           <td class="num">${fmtNumber(r.total_prompt_tokens)}</td>
           <td class="num">${fmtNumber(r.total_completion_tokens)}</td>
-          <td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${Math.round(r.avg_compression_savings_pct)}%` : "—"}</td>
+          <td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${r.avg_compression_savings_pct < 1 && r.avg_compression_savings_pct > 0 ? r.avg_compression_savings_pct.toFixed(2) : Math.round(r.avg_compression_savings_pct)}%` : "—"}</td>
           <td class="num">${fmtCost(r.total_cost_usd)}</td>
         </tr>`)}</tbody>
       </table></div>`

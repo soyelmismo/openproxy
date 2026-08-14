@@ -106,7 +106,7 @@ function buildLogRowCells(
   if (has("compression")) {
     const savings = row ? row.compression_savings_pct : null;
     if (savings != null && savings > 0) {
-      const pct = Math.round(savings);
+      const pct = savings < 1 ? savings.toFixed(2) : Math.round(savings).toString();
       const tech = row ? row.compression_techniques : "";
       cells.push(html`<span class="log-compression" style="background: rgba(34, 197, 94, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: 500;" title="Local Compression: ${pct}% savings (BPE cl100k_base) — ${tech}">⚡ ${pct}%</span>`);
     } else {

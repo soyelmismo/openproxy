@@ -1451,9 +1451,9 @@ function renderCompressionSummary(log: LogDetailLog): TemplateResult | null {
   const pct = log.compression_savings_pct ?? null;
   if (pct == null || pct <= 0) return null;
   const tech = log.compression_techniques ?? "";
-  const pctRounded = Math.round(pct);
-  const pctText = `-${pctRounded}% tok`;
-  const tooltip = `Token savings: ${pctRounded}% (BPE cl100k_base)${tech.length > 0 ? " — " + tech : ""}`;
+  const pctTextVal = pct < 1 ? pct.toFixed(2) : Math.round(pct).toString();
+  const pctText = `-${pctTextVal}% tok`;
+  const tooltip = `Token savings: ${pctTextVal}% (BPE cl100k_base)${tech.length > 0 ? " — " + tech : ""}`;
   return html`<div><strong>Compression:</strong> <span title=${tooltip}>${pctText}</span></div>`;
 }
 
