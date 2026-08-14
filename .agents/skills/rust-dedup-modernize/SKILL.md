@@ -9,6 +9,29 @@ Guía operativa para auditar repositorios Rust, localizar código duplicado/boil
 
 ---
 
+## 0. Criterios de Valor (ROI) y Reglas de Parada
+
+Antes de ejecutar cualquier cambio, clasificar cada oportunidad detectada:
+
+| Prioridad | Categoría | Condición de ejecución |
+| :--- | :--- | :--- |
+| **P1** | Eliminar dependencia externa (`once_cell` → `LazyLock`, etc.) | Siempre ejecutar |
+| **P2** | Deduplicar lógica real (>10 líneas idénticas entre módulos) | Siempre ejecutar |
+| **P3** | Extraer función de monolito >100 líneas | Solo si se agrega al menos 1 test unitario para la función extraída |
+| **P4** | Modernizar syntax (`let-else`, `is_some_and`, `split_once`) | Solo si reduce ≥3 líneas netas por sitio de aplicación |
+| **P5** | Cambiar firma `&str` vs `String` / eliminar `.clone()` cosmético | Solo con evidencia de `clone()` en call-site caliente (hot path medido o loop) |
+
+### Regla de parada obligatoria:
+- P1-P2: ejecutar siempre.
+- P3: ejecutar si se cumplen los tests.
+- P4-P5: agrupar como "cleanup cosmético" en UN solo commit al final. Si el diff de P1-P3 ya supera 300 líneas, **descartar P4-P5** de la sesión.
+- **NUNCA** mezclar prioridades distintas en el mismo commit.
+
+### Regla anti-bucle:
+- Si un cambio de P4-P5 falla en compilar o testear al segundo intento, **descartarlo** y documentar como oportunidad futura.
+
+---
+
 ## 1. Detección y Deduplicación Sistemática de Código
 
 ### 1.1 Patrones de Código Repetitivo Comunes
@@ -273,6 +296,11 @@ flowchart TD
   4. *Memoria & Concurrencia:* Reemplazo de `.clone()` innecesario por `Arc::unwrap_or_clone` o `Cow`, migración de `once_cell`/`lazy_static` a `std::sync::LazyLock`/`OnceLock`.
   5. *Errores & Linter:* Conversiones manuales `.map_err()` candidatas a `From` o traits de extensión.
 
+- **Filtro de salida del inventario:**
+  - Cada oportunidad DEBE incluir: **líneas afectadas** (estimado), **categoría de ROI** (P1-P5 según §0), y **riesgo** (bajo/medio/alto).
+  - El parent **DESCARTA** oportunidades P4-P5 si el total de cambios P1-P3 ya supera 300 líneas de diff.
+  - Oportunidades sin categoría asignada se rechazan.
+
 ---
 
 ### 3.2 Etapa 2: Aplicación Quirúrgica (Subagentes `self`)
@@ -282,6 +310,7 @@ flowchart TD
   - Aplicar cambios con parches mínimos y anclas precisas.
   - Compilar y validar el crate asignado en cada paso: `cargo test -p <crate>`.
   - Prohibido alterar contratos públicos o semántica de errores salvo orden explícita.
+  - **Extracción de funciones >20 líneas:** agregar al menos 1 test unitario para la función extraída. Si es `pub` → test obligatorio. Si es `fn` privada cubierta por tests existentes → documentar qué test la cubre con `// Cubierto por test: <nombre>`.
 
 ---
 
@@ -292,8 +321,19 @@ flowchart TD
   - ¿Algún `let-else` cambió la rama de escape alterando el tipo o mensaje de error original?
   - ¿Algún `split_once` asumió separadores inexistentes rompiendo casos borde?
   - ¿Alguna deduplicación de tipos introdujo acoplamiento circular o dependencias innecesarias?
+  - ¿Se agregaron tests para todas las funciones extraídas de >20 líneas?
 - **Validación Final:**
   ```bash
   cargo clippy --workspace --all-targets -- -D warnings
   cargo test --workspace
   ```
+
+---
+
+### 3.4 Política de Commits
+
+- **UN commit por categoría de cambio** (P1: dep removal, P2: dedup, P3: extraction, P4-P5: cosmético).
+- **Mensaje con scope concreto:** `refactor(db): extract generic load_config_val/save_config_val`.
+- **PROHIBIDO:** mensajes genéricos como "modernize idioms", "deduplicate boilerplate" o "modern rust idioms".
+- Si todo el refactor cabe en <200 líneas de diff neto, squash en un solo commit.
+- Si el diff supera 200 líneas, máximo 1 commit por categoría P (máx 3-4 commits por sesión).

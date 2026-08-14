@@ -20,21 +20,8 @@ Procedimiento repo-agnóstico de alta eficiencia para auditar código, erradicar
   - Transformar errores: `.ok_or_else(|| CustomError::...)`.
   - Control de flujo defensivo: `if let Some(...) = ...` o `match`.
 
-### 1.2 `clone()` Excesivo / Defensivo (Gasto Inútil de Memoria y CPU)
-- **Problema:** Duplica buffers en el heap, oculta problemas de ownership y penaliza el throughput.
-- **Detección:** `\.clone\(\)` en bucles calientes o sobre structs grandes (`OpenAIRequest`, `String`, `Vec`).
-- **Remediación:**
-  - Pasar referencias prestadas (`&T`, `&str`, `&[u8]`).
-  - Usar `Cow<'_, T>` para clonación lazy (solo si se muta).
-  - Transferir ownership (`into_*`, mover valores en lugar de clonar antes de pasar).
-  - Compartir datos inmutables de solo lectura con `Arc<T>` en vez de clonar el contenido.
-
-### 1.3 `String` o `Vec<T>` por Valor en Parámetros de Lectura (Asignación Forzada)
-- **Problema:** Fuerza asignación/copia en el caller incluso si este ya posee un `&str` o slice.
-- **Detección:** Funciones de solo lectura con firmas `fn foo(s: String)` o `fn bar(v: Vec<T>)`.
-- **Remediación:**
-  - Usar vistas prestadas: `&str` en lugar de `String`, `&[T]` en lugar de `Vec<T>`.
-  - Usar polimorfismo zero-cost si se acepta tanto prestado como poseído: `impl AsRef<str>`, `impl AsRef<[T]>` o `impl Into<String>`.
+### ~~1.2-1.3 `clone()` excesivo / `String` por valor~~ → Delegado
+> Estas prácticas se auditan exclusivamente desde el skill **`rust-dedup-modernize`** (§0, prioridad P5) con filtro de ROI. No duplicar aquí.
 
 ### 1.4 `for i in 0..len` / `while i < len` (Bounds Checking Innecesario)
 - **Problema:** Exige verificación de límites en cada acceso `arr[i]`, gasta CPU, propensa a bugs de off-by-one.
