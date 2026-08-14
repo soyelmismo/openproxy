@@ -374,7 +374,7 @@ pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
 }
 
 fn collapse_separator_runs(s: &str) -> String {
-    let sep_chars = [b'-', b'=', b'*', b'#', b'_', b'~'];
+    let sep_chars = *b"-=*#_~";
     let bytes = s.as_bytes();
     let mut has_run = false;
     for &sep in &sep_chars {
