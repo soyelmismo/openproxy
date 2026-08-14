@@ -183,15 +183,7 @@ where
     E: Fn(&T) -> V,
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
 {
-    query_in_chunks_by_with_params(
-        conn,
-        sql_template,
-        &[],
-        items,
-        chunk_size,
-        extract,
-        map_row,
-    )
+    query_in_chunks_by_with_params(conn, sql_template, &[], items, chunk_size, extract, map_row)
 }
 
 /// Helper to query rows in chunks with prefix parameters and an extraction closure.
@@ -339,10 +331,7 @@ mod tests {
     fn test_repeat_row_template() {
         assert_eq!(repeat_row_template("(?1, ?2)", 0), "");
         assert_eq!(repeat_row_template("(?1, ?2)", 1), "(?1, ?2)");
-        assert_eq!(
-            repeat_row_template("(?1, ?2)", 2),
-            "(?1, ?2), (?1, ?2)"
-        );
+        assert_eq!(repeat_row_template("(?1, ?2)", 2), "(?1, ?2), (?1, ?2)");
     }
 
     #[test]
@@ -366,11 +355,8 @@ mod tests {
     #[test]
     fn test_query_in_chunks() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)",
-            [],
-        )
-        .unwrap();
+        conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
 
         for i in 1..=10 {
             conn.execute(
@@ -390,7 +376,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(names, vec!["item_2", "item_4", "item_6", "item_8", "item_10"]);
+        assert_eq!(
+            names,
+            vec!["item_2", "item_4", "item_6", "item_8", "item_10"]
+        );
     }
 
     #[test]

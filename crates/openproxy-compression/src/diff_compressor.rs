@@ -333,7 +333,10 @@ fn cap_hunks(hunks: &[Hunk]) -> (Vec<&Hunk>, usize) {
     }
     kept_indices.sort_unstable();
     let truncated = hunks.len() - kept_indices.len();
-    let kept: Vec<&Hunk> = kept_indices.into_iter().filter_map(|i| hunks.get(i)).collect();
+    let kept: Vec<&Hunk> = kept_indices
+        .into_iter()
+        .filter_map(|i| hunks.get(i))
+        .collect();
     (kept, truncated)
 }
 

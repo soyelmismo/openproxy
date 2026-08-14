@@ -594,8 +594,7 @@ pub(crate) async fn run_test_for_model(
             &pipeline_req.openai_request.messages,
             true,
             &adapter,
-        )
-        {
+        ) {
             Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
                 Ok(v) => (url, v),
                 Err(e) => {
@@ -625,7 +624,9 @@ pub(crate) async fn run_test_for_model(
                         elapsed_ms: 0,
                         error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                         skipped: true,
-                        skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
+                        skip_reason: Some(
+                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
+                        ),
                     },
                     None,
                 );
@@ -820,7 +821,12 @@ pub(crate) async fn run_test_for_model(
     );
 
     let request_headers_map = if !opts.in_combo_fanout {
-        Some(req.headers.iter().map(|(k,v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect::<std::collections::HashMap<_,_>>())
+        Some(
+            req.headers
+                .iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        )
     } else {
         None
     };

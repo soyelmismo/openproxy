@@ -132,8 +132,10 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
     //    The handler clones `tx` for any *additional* cancel sources
     //    it wants to merge (deadline watchdog) and threads `rx`
     //    into the pipeline.
-    req.extensions_mut()
-        .insert(CancelWatch { tx: tokio::sync::watch::Sender::clone(&tx), rx });
+    req.extensions_mut().insert(CancelWatch {
+        tx: tokio::sync::watch::Sender::clone(&tx),
+        rx,
+    });
 
     // 2. Run the handler.
     let mut response = next.run(req).await;

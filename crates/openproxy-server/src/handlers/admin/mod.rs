@@ -18,7 +18,7 @@ pub mod usage;
 pub mod tests;
 
 pub(crate) use auth::{admin_auth_middleware, authenticate_admin_ws};
-pub(crate) use models::{resolve_adapter, run_test_for_model, TestOptions, TestResult};
+pub(crate) use models::{TestOptions, resolve_adapter, run_test_for_model};
 pub(crate) use oauth::refresh_oauth_if_needed;
 pub(crate) use openproxy_db::combos as core_combos;
 pub(crate) use openproxy_types::combos as types_combos;
@@ -48,7 +48,8 @@ pub(crate) use openproxy_core::{
     accounts as core_accounts, analytics, api_keys as core_api_keys,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     models as core_models, oauth as core_oauth, providers as core_providers, seed,
-    usage as core_usage, usage::UsageFilter,
+    usage as core_usage,
+    usage::UsageFilter,
 };
 pub(crate) use openproxy_db as core_db;
 pub(crate) use openproxy_db::conn::ADMIN_LOCK_TIMEOUT;

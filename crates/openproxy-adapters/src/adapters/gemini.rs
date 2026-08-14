@@ -521,7 +521,9 @@ mod tests {
 
         let gemini_req = openai_to_gemini(&req, &messages);
         assert_eq!(
-            gemini_req.system_instruction.unwrap().parts[0].text.as_deref(),
+            gemini_req.system_instruction.unwrap().parts[0]
+                .text
+                .as_deref(),
             Some("You are helpful")
         );
         assert_eq!(gemini_req.contents.len(), 2);

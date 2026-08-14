@@ -332,4 +332,3 @@ mod tests {
         assert_eq!(extract_content_part_text(&json!(123)), "123");
     }
 }
-

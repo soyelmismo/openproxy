@@ -892,7 +892,9 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
             tracing::info!("running scheduled background proxy sync");
             let mut next_sleep = interval_hours * 3600;
 
-            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&proxy_sync_pool)).await {
+            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&proxy_sync_pool))
+                .await
+            {
                 Ok(summary) => {
                     tracing::info!(added = summary.added, "background proxy sync completed");
                     if summary.fetched == 0 {
@@ -900,9 +902,9 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                         next_sleep = 300;
                     } else {
                         // Iniciar pruebas en segundo plano de inmediato tras el sync
-                        openproxy_core::free_proxies::test_all_proxies_background(
-                            Arc::clone(&proxy_sync_pool),
-                        );
+                        openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(
+                            &proxy_sync_pool,
+                        ));
                     }
                 }
                 Err(e) => {

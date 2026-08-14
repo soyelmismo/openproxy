@@ -163,7 +163,9 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
 /// [`REDACTED_PLACEHOLDER`] for sensitive entries. Keys
 /// are not deleted — the dashboard wants to see WHICH
 /// headers were sent, not just the non-sensitive values.
-pub fn redact_btreemap_sensitive(mut headers: BTreeMap<String, String>) -> BTreeMap<String, String> {
+pub fn redact_btreemap_sensitive(
+    mut headers: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     for (k, v) in headers.iter_mut() {
         if is_sensitive(k) {
             *v = REDACTED_PLACEHOLDER.to_string();

@@ -1,7 +1,4 @@
-#![allow(
-    clippy::too_many_arguments,
-    clippy::ptr_arg
-)]
+#![allow(clippy::too_many_arguments, clippy::ptr_arg)]
 #![allow(
     clippy::vec_init_then_push,
     clippy::items_after_test_module,
@@ -44,9 +41,9 @@ pub mod providers;
 pub mod quota_sync;
 pub mod race;
 
+pub use openproxy_db::batch;
 #[allow(unused_imports)]
 pub(crate) use openproxy_db::secrets;
-pub use openproxy_db::batch;
 pub mod seed;
 pub mod smart_warmup;
 

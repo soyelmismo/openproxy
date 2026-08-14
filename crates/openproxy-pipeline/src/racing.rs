@@ -61,7 +61,9 @@ pub(crate) async fn run_race(
         let mut req = req.clone();
         let handle = race_sink.handle(worker_idx);
         req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
-        req.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(token));
+        req.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(
+            token,
+        ));
 
         let combo = combo.clone();
         let p = pipeline.clone();

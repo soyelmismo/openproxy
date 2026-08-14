@@ -74,10 +74,7 @@ mod tests {
 
         let changed = mutate_message_text(&mut msg, |text| Some(text.replace("   ", " ")));
         assert!(changed);
-        assert_eq!(
-            msg.content,
-            Some(Value::String("hello world".to_string()))
-        );
+        assert_eq!(msg.content, Some(Value::String("hello world".to_string())));
     }
 
     #[test]

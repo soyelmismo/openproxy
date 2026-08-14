@@ -233,7 +233,8 @@ pub fn insert_many(
 
     let mut all_results = Vec::with_capacity(rows.len());
 
-    let chunk_size = (openproxy_db::batch::SQLITE_MAX_VARIABLE_NUMBER / 4).clamp(1, openproxy_db::batch::DEFAULT_CHUNK_SIZE);
+    let chunk_size = (openproxy_db::batch::SQLITE_MAX_VARIABLE_NUMBER / 4)
+        .clamp(1, openproxy_db::batch::DEFAULT_CHUNK_SIZE);
     for chunk in rows.chunks(chunk_size) {
         let sql = openproxy_db::batch::build_insert_sql(
             "INSERT OR IGNORE INTO",
@@ -291,14 +292,15 @@ pub fn insert_many(
                 .iter()
                 .map(|(_, dk)| dk.as_str())
                 .collect();
-            let missing_rows: Vec<(i64, String)> = openproxy_db::batch::query_in_chunks_with_params(
-                conn,
-                "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
-                &[&kind as &dyn rusqlite::ToSql],
-                &dedup_keys,
-                openproxy_db::batch::DEFAULT_CHUNK_SIZE,
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
+            let missing_rows: Vec<(i64, String)> =
+                openproxy_db::batch::query_in_chunks_with_params(
+                    conn,
+                    "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
+                    &[&kind as &dyn rusqlite::ToSql],
+                    &dedup_keys,
+                    openproxy_db::batch::DEFAULT_CHUNK_SIZE,
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
             for (id, dk) in missing_rows {
                 existing_ids.insert(dk, id);
             }

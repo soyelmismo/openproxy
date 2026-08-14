@@ -217,9 +217,7 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 {
                     req_arr.retain(|r| {
                         r.as_str()
-                            .map(|s| {
-                                !nullable_keys.contains(s) && !dropped_keys.contains(s)
-                            })
+                            .map(|s| !nullable_keys.contains(s) && !dropped_keys.contains(s))
                             .unwrap_or(true)
                     });
                     if req_arr.is_empty() {
@@ -384,7 +382,9 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 if let Some(mut required_val) = map.remove("required") {
                     if let Some(req_arr) = required_val.as_array_mut() {
                         if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
-                            req_arr.retain(|k| k.as_str().map(|s| props.contains_key(s)).unwrap_or(false));
+                            req_arr.retain(|k| {
+                                k.as_str().map(|s| props.contains_key(s)).unwrap_or(false)
+                            });
                         } else {
                             req_arr.clear();
                         }

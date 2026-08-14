@@ -164,7 +164,9 @@ impl Pipeline {
         ctx.current_target_attempt = attempt;
         ctx.race_size = race_size;
         ctx.total_targets = total_targets;
-        ctx.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(race_cancel));
+        ctx.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(
+            race_cancel,
+        ));
         ctx.started = Some(std::time::Instant::now());
 
         if attempt > 1 {

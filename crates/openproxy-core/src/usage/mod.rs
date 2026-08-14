@@ -1669,7 +1669,11 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 request_id: event.request_id.to_owned(),
                 trace_id: event.trace_id.to_owned(),
                 provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
-                upstream_model_id: event.upstream_model_id.as_deref().unwrap_or_default().to_string(),
+                upstream_model_id: event
+                    .upstream_model_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
                 started_at_ms: started_at,
                 updated_at_ms: now_ms,
                 stage: event.stage.to_owned(),

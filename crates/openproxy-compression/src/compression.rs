@@ -186,13 +186,23 @@ mod tests {
         assert_eq!(messages.len(), 3);
         // whitespace collapsed on user message
         assert_eq!(
-            messages[1].content.as_ref().and_then(|c| c.as_str()).unwrap(),
+            messages[1]
+                .content
+                .as_ref()
+                .and_then(|c| c.as_str())
+                .unwrap(),
             "line1\n\nline2"
         );
         // tool message must be 100% untouched
-        let tool_result = messages[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
+        let tool_result = messages[2]
+            .content
+            .as_ref()
+            .and_then(|c| c.as_str())
+            .unwrap();
         assert_eq!(tool_result, &long_code);
-        assert!(!stats.techniques.iter().any(|t| t.contains("smart_crusher") || t.contains("diff_compressor") || t.contains("truncated")));
+        assert!(!stats.techniques.iter().any(|t| t.contains("smart_crusher")
+            || t.contains("diff_compressor")
+            || t.contains("truncated")));
     }
 
     #[test]

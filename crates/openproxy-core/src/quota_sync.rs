@@ -158,7 +158,8 @@ pub async fn refresh_single_account_quota(
         let db_pool = Arc::clone(db_pool);
         let master_key = Arc::clone(master_key);
         // Extract the strings to avoid cloning the whole slice into the move closure
-        let supported_providers: Vec<String> = supported_providers.iter().map(|s| s.to_string()).collect();
+        let supported_providers: Vec<String> =
+            supported_providers.iter().map(|s| s.to_string()).collect();
         let res = tokio::task::spawn_blocking(move || {
             let r = db_pool.reader();
             let acc = admin::account_for_quota_refresh(&r, account_id, master_key.as_ref())?;

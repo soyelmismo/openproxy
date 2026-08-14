@@ -80,7 +80,11 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
         let extra_headers = if conf.extra_headers.is_empty() {
             None
         } else {
-            let map: std::collections::HashMap<&str, &str> = conf.extra_headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let map: std::collections::HashMap<&str, &str> = conf
+                .extra_headers
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
             serde_json::to_string(&map).ok()
         };
 

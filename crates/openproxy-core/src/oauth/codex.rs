@@ -94,7 +94,8 @@ impl OAuthProvider for CodexOAuthProvider {
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<DeviceAuthorizationResponse> {
         let body = serde_json::json!({ "client_id": CLIENT_ID });
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req =
             UpstreamRequest::post_json(DEVICE_USERCODE_URL, bytes::Bytes::from(body_bytes));
         req.headers.insert(
@@ -200,7 +201,8 @@ impl OAuthProvider for CodexOAuthProvider {
             "device_auth_id": device_auth_id,
             "user_code": user_code,
         });
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req = UpstreamRequest::post_json(DEVICE_TOKEN_URL, bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
