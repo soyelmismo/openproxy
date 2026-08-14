@@ -208,4 +208,31 @@ mod tests {
             "invalid provider format: invalid"
         );
     }
+
+    #[test]
+    fn test_auth_type_as_str() {
+        assert_eq!(AuthType::Bearer.as_str(), "bearer");
+        assert_eq!(AuthType::XApiKey.as_str(), "x-api-key");
+        assert_eq!(AuthType::GoogApiKey.as_str(), "goog-api-key");
+        assert_eq!(AuthType::OAuth.as_str(), "oauth");
+        assert_eq!(AuthType::None.as_str(), "none");
+    }
+
+    #[test]
+    fn test_auth_type_parse() {
+        assert_eq!(AuthType::parse("bearer").unwrap(), AuthType::Bearer);
+        assert_eq!(AuthType::parse("x-api-key").unwrap(), AuthType::XApiKey);
+        assert_eq!(
+            AuthType::parse("goog-api-key").unwrap(),
+            AuthType::GoogApiKey
+        );
+        assert_eq!(AuthType::parse("oauth").unwrap(), AuthType::OAuth);
+        assert_eq!(AuthType::parse("none").unwrap(), AuthType::None);
+
+        assert!(AuthType::parse("invalid").is_err());
+        assert_eq!(
+            AuthType::parse("invalid").unwrap_err(),
+            "invalid auth_type: invalid"
+        );
+    }
 }
