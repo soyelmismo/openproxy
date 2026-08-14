@@ -233,40 +233,32 @@ pub fn insert_many(
 
     let mut all_results = Vec::with_capacity(rows.len());
 
-    for chunk in rows.chunks(500) {
-        let mut sql = String::from(
-            "INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES ",
+    let chunk_size = (openproxy_db::batch::SQLITE_MAX_VARIABLE_NUMBER / 4).clamp(1, openproxy_db::batch::DEFAULT_CHUNK_SIZE);
+    for chunk in rows.chunks(chunk_size) {
+        let sql = openproxy_db::batch::build_insert_sql(
+            "INSERT OR IGNORE INTO",
+            "notifications",
+            &["kind", "payload_json", "dedup_key", "provider_id"],
+            chunk.len(),
+            Some("RETURNING id, dedup_key"),
         );
-        let mut params = Vec::new();
-        let mut payload_strings = Vec::new();
+        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() * 4);
 
-        for (i, row) in chunk.iter().enumerate() {
-            if i > 0 {
-                sql.push_str(", ");
+        for row in chunk {
+            params.push(kind.to_owned().into());
+            params.push(serde_json::to_string(&row.0)?.into());
+            match &row.1 {
+                Some(k) => params.push(k.to_owned().into()),
+                None => params.push(rusqlite::types::Value::Null),
             }
-            sql.push_str(&format!(
-                "(?{}, ?{}, ?{}, ?{})",
-                i * 4 + 1,
-                i * 4 + 2,
-                i * 4 + 3,
-                i * 4 + 4
-            ));
-            payload_strings.push(serde_json::to_string(&row.0)?);
+            match &row.2 {
+                Some(p) => params.push(p.to_owned().into()),
+                None => params.push(rusqlite::types::Value::Null),
+            }
         }
-
-        sql.push_str(" RETURNING id, dedup_key");
-
-        for (row, payload) in chunk.iter().zip(payload_strings.iter()) {
-            params.push(Box::new(kind.to_string()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(payload.to_owned()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(row.1.to_owned()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(row.2.to_owned()) as Box<dyn rusqlite::ToSql>);
-        }
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
         let mut stmt = conn.prepare(&sql)?;
-        let mut returned_rows = stmt.query(&params_refs[..])?;
+        let mut returned_rows = stmt.query(rusqlite::params_from_iter(params))?;
 
         let mut inserted_ids_by_dedup = std::collections::HashMap::new();
         let mut inserted_ids_no_dedup = Vec::new();
@@ -295,32 +287,19 @@ pub fn insert_many(
 
         let mut existing_ids = std::collections::HashMap::new();
         if !missing_dedup_keys.is_empty() {
-            // Need to fetch missing IDs. Since SQLite has variable limit, chunk the SELECT just in case,
-            // though 500 is within 32766 easily.
-            let placeholders = missing_dedup_keys
+            let dedup_keys: Vec<&str> = missing_dedup_keys
                 .iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(", ");
-            let select_sql = format!(
+                .map(|(_, dk)| dk.as_str())
+                .collect();
+            let missing_rows: Vec<(i64, String)> = openproxy_db::batch::query_in_chunks_with_params(
+                conn,
                 "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
-                placeholders
-            );
-
-            let mut select_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-            select_params.push(Box::new(kind.to_string()));
-            for (_, dk) in &missing_dedup_keys {
-                select_params.push(Box::new(dk.to_owned()));
-            }
-
-            let select_params_refs: Vec<&dyn rusqlite::ToSql> =
-                select_params.iter().map(|p| p.as_ref()).collect();
-            let mut select_stmt = conn.prepare(&select_sql)?;
-            let mut select_rows = select_stmt.query(&select_params_refs[..])?;
-
-            while let Some(r) = select_rows.next()? {
-                let id: i64 = r.get(0)?;
-                let dk: String = r.get(1)?;
+                &[&kind as &dyn rusqlite::ToSql],
+                &dedup_keys,
+                openproxy_db::batch::DEFAULT_CHUNK_SIZE,
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            for (id, dk) in missing_rows {
                 existing_ids.insert(dk, id);
             }
         }
@@ -793,5 +772,27 @@ mod tests {
             archived_read_at.is_none(),
             "archived row should NOT be marked read by mark_all_read"
         );
+    }
+
+    #[test]
+    fn test_insert_many_large_batch() {
+        let conn = fresh_db();
+        let count = 350;
+        let mut rows = Vec::with_capacity(count);
+        for i in 0..count {
+            rows.push((
+                serde_json::json!({"item": i}),
+                Some(format!("dedup_{}", i)),
+                Some("test_provider".to_string()),
+            ));
+        }
+
+        let inserted = insert_many(&conn, KIND_MODEL_NEW, &rows).unwrap();
+        assert_eq!(inserted.len(), count);
+
+        // Re-inserting the same rows should dedup and return the same IDs
+        let reinserted = insert_many(&conn, KIND_MODEL_NEW, &rows).unwrap();
+        assert_eq!(reinserted.len(), count);
+        assert_eq!(inserted, reinserted);
     }
 }

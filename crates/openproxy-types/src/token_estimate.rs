@@ -93,9 +93,7 @@ pub fn estimate_completion_tokens(text: &str) -> u32 {
 /// the operator knows the count is approximate.
 fn count_tokens(text: &str) -> u32 {
     if let Some(ref bpe) = *ENCODER {
-        match bpe.encode_with_special_tokens(text) {
-            tokens => tokens.len() as u32,
-        }
+        bpe.encode_with_special_tokens(text).len() as u32
     } else {
         // Fallback: ~4 chars per token (English), ~2 for CJK.
         // This is the same heuristic as before, used only if BPE

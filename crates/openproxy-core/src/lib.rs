@@ -46,6 +46,7 @@ pub mod race;
 
 #[allow(unused_imports)]
 pub(crate) use openproxy_db::secrets;
+pub use openproxy_db::batch;
 pub mod seed;
 pub mod smart_warmup;
 

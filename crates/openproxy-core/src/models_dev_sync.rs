@@ -348,10 +348,12 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     };
     if !model_rows.is_empty() {
         for chunk in model_rows.chunks(900 / 3) {
-            let mut sql =
-                String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
-            sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
-            sql.push_str(") UPDATE models SET model_id_normalized = updates.normalized FROM updates WHERE models.provider_id = updates.provider_id AND models.model_id = updates.model_id");
+            let vals = openproxy_db::batch::values_placeholders(chunk.len(), 3);
+            let sql = format!(
+                "WITH updates(provider_id, model_id, normalized) AS (VALUES {vals}) \
+                 UPDATE models SET model_id_normalized = updates.normalized FROM updates \
+                 WHERE models.provider_id = updates.provider_id AND models.model_id = updates.model_id"
+            );
 
             let mut norm_strings = Vec::with_capacity(chunk.len());
             for (_, model_id) in chunk {
@@ -391,10 +393,12 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     };
     if !sync_rows.is_empty() {
         for chunk in sync_rows.chunks(900 / 3) {
-            let mut sql =
-                String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
-            sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
-            sql.push_str(") UPDATE model_capabilities_sync SET model_id_normalized = updates.normalized FROM updates WHERE model_capabilities_sync.provider_id = updates.provider_id AND model_capabilities_sync.model_id = updates.model_id");
+            let vals = openproxy_db::batch::values_placeholders(chunk.len(), 3);
+            let sql = format!(
+                "WITH updates(provider_id, model_id, normalized) AS (VALUES {vals}) \
+                 UPDATE model_capabilities_sync SET model_id_normalized = updates.normalized FROM updates \
+                 WHERE model_capabilities_sync.provider_id = updates.provider_id AND model_capabilities_sync.model_id = updates.model_id"
+            );
 
             let mut norm_strings = Vec::with_capacity(chunk.len());
             for (_, model_id) in chunk {
@@ -734,35 +738,21 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         if combo_ids.is_empty() {
             std::collections::HashSet::new()
         } else {
-            // We use IN (?) bindings where possible, but if there's > 999 we can chunk or just fetch what we need
-            // Here, fetching only for known combos is much smaller than the full table.
-            // In a background job context, a manual filter like this is safe if chunking isn't strictly required
-            // but let's implement chunks just to be fully SQLite-safe.
-            let mut set = std::collections::HashSet::new();
-            for chunk in combo_ids.chunks(900) {
-                let placeholders = vec!["?"; chunk.len()].join(",");
-                let query = format!(
-                    "SELECT combo_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
-                    placeholders
-                );
-                let mut stmt = conn
-                    .prepare(&query)
-                    .map_err(openproxy_db::error::map_db_error)?;
-                let params = rusqlite::params_from_iter(chunk.iter());
-                let rows = stmt
-                    .query_map(params, |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, Option<i64>>(1)?.unwrap_or(-1),
-                            row.get::<_, i64>(2)?,
-                        ))
-                    })
-                    .map_err(openproxy_db::error::map_db_error)?;
-                for row in rows.filter_map(|r| r.ok()) {
-                    set.insert(row);
-                }
-            }
-            set
+            let rows = openproxy_db::batch::query_in_chunks(
+                conn,
+                "SELECT combo_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
+                &combo_ids,
+                openproxy_db::batch::DEFAULT_CHUNK_SIZE,
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?.unwrap_or(-1),
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+            rows.into_iter().collect()
         }
     };
 
@@ -770,27 +760,15 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         if combo_ids.is_empty() {
             std::collections::HashMap::new()
         } else {
-            let mut map = std::collections::HashMap::new();
-            for chunk in combo_ids.chunks(900) {
-                let placeholders = vec!["?"; chunk.len()].join(",");
-                let query = format!(
-                    "SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id",
-                    placeholders
-                );
-                let mut stmt = conn
-                    .prepare(&query)
-                    .map_err(openproxy_db::error::map_db_error)?;
-                let params = rusqlite::params_from_iter(chunk.iter());
-                let rows = stmt
-                    .query_map(params, |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?))
-                    })
-                    .map_err(openproxy_db::error::map_db_error)?;
-                for (id, max_order) in rows.filter_map(|r| r.ok()) {
-                    map.insert(id, max_order);
-                }
-            }
-            map
+            let rows = openproxy_db::batch::query_in_chunks(
+                conn,
+                "SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id",
+                &combo_ids,
+                openproxy_db::batch::DEFAULT_CHUNK_SIZE,
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?)),
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+            rows.into_iter().collect()
         }
     };
 

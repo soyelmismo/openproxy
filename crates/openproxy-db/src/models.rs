@@ -207,30 +207,22 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
     if row_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat_n("?", row_ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let query = format!(
-        "SELECT id, provider_id, model_id, display_name, target_format, \
-                discovered_at, expires_at, timeout_overrides_json, active, \
-                last_test_status, last_test_at, custom, \
-                context_length, max_output_tokens, capabilities_json, \
-                family, model_type, input_modalities_json, \
-                output_modalities_json \
-         FROM models WHERE id IN ({})",
-        placeholders
-    );
-    let mut stmt = conn.prepare_cached(&query).map_err(map_db_error)?;
-    let ids: Vec<&dyn rusqlite::ToSql> = row_ids
-        .iter()
-        .map(|id| &id.0 as &dyn rusqlite::ToSql)
-        .collect();
-    let rows = stmt.query_map(&*ids, map_row).map_err(map_db_error)?;
-    let mut models = Vec::with_capacity(row_ids.len());
-    for row in rows {
-        models.push(row.map_err(map_db_error)?);
-    }
-    Ok(models)
+    let query = "SELECT id, provider_id, model_id, display_name, target_format, \
+                 discovered_at, expires_at, timeout_overrides_json, active, \
+                 last_test_status, last_test_at, custom, \
+                 context_length, max_output_tokens, capabilities_json, \
+                 family, model_type, input_modalities_json, \
+                 output_modalities_json \
+          FROM models WHERE id IN ({})";
+    crate::batch::query_in_chunks_by(
+        conn,
+        query,
+        row_ids,
+        crate::batch::DEFAULT_CHUNK_SIZE,
+        |id| id.0,
+        map_row,
+    )
+    .map_err(map_db_error)
 }
 
 pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<Model>> {
@@ -450,25 +442,14 @@ pub fn apply_auto_activation(
         .unwrap_or(false);
 
     if notifications_present && !newly_active.is_empty() {
-        for chunk in newly_active.chunks(200) {
-            let mut query = String::with_capacity(120 + chunk.len() * 30);
-            query.push_str("INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES ");
-
-            let mut query_params = Vec::with_capacity(chunk.len() * 4);
-
-            for (i, (model_id, display_name)) in chunk.iter().enumerate() {
-                if i > 0 {
-                    query.push_str(", ");
-                }
-                let p_start = i * 4 + 1;
-                query.push_str(&format!(
-                    "(?{}, ?{}, ?{}, ?{})",
-                    p_start,
-                    p_start + 1,
-                    p_start + 2,
-                    p_start + 3
-                ));
-
+        let _ = crate::batch::batch_insert(
+            &tx,
+            "INSERT OR IGNORE INTO",
+            "notifications",
+            &["kind", "payload_json", "dedup_key", "provider_id"],
+            &newly_active,
+            None,
+            |(model_id, display_name), query_params| {
                 let payload = serde_json::json!({
                     "provider_id": provider.as_str(),
                     "model_id": model_id,
@@ -483,10 +464,8 @@ pub fn apply_auto_activation(
                 query_params.push(rusqlite::types::Value::Text(payload.to_string()));
                 query_params.push(rusqlite::types::Value::Text(dedup));
                 query_params.push(rusqlite::types::Value::Text(provider.as_str().to_string()));
-            }
-
-            let _ = tx.execute(&query, rusqlite::params_from_iter(query_params));
-        }
+            },
+        );
     }
 
     tx.commit().map_err(map_db_error)?;

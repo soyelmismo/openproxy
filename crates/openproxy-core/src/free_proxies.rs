@@ -610,32 +610,38 @@ pub fn upsert_scraped_proxies(
             source: Some(Box::new(e)),
         })?;
 
-    for chunk in proxies.chunks(100) {
-        let mut sql = String::from(
-            "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, username, password, priority, created_at, updated_at) VALUES ",
-        );
-        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() * 11);
+    let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
+               source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
+               type = excluded.type, \
+               country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
+               username = excluded.username, \
+               password = excluded.password, \
+               priority = excluded.priority, \
+               updated_at = excluded.updated_at";
 
-        for (i, p) in chunk.iter().enumerate() {
-            if i > 0 {
-                sql.push_str(", ");
-            }
-            let base = i * 11;
-            sql.push_str(&format!(
-                "(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, 'unknown', NULL, NULL, ?{}, ?{}, ?{}, ?{}, ?{})",
-                base + 1,
-                base + 2,
-                base + 3,
-                base + 4,
-                base + 5,
-                base + 6,
-                base + 7,
-                base + 8,
-                base + 9,
-                base + 10,
-                base + 11
-            ));
-
+    openproxy_db::batch::batch_insert(
+        &tx,
+        "INSERT INTO",
+        "free_proxies",
+        &[
+            "id",
+            "source",
+            "host",
+            "port",
+            "type",
+            "country_code",
+            "status",
+            "latency_ms",
+            "last_validated",
+            "username",
+            "password",
+            "priority",
+            "created_at",
+            "updated_at",
+        ],
+        proxies,
+        Some(on_conflict_suffix),
+        |p, params| {
             let id = uuid::Uuid::new_v4().to_string();
             params.push(id.into());
             params.push(p.source.to_owned().into());
@@ -646,6 +652,9 @@ pub fn upsert_scraped_proxies(
                 Some(cc) => params.push(cc.to_owned().into()),
                 None => params.push(rusqlite::types::Value::Null),
             }
+            params.push("unknown".to_string().into());
+            params.push(rusqlite::types::Value::Null);
+            params.push(rusqlite::types::Value::Null);
             match &p.username {
                 Some(u) => params.push(u.to_owned().into()),
                 None => params.push(rusqlite::types::Value::Null),
@@ -657,23 +666,12 @@ pub fn upsert_scraped_proxies(
             params.push(p.priority.into());
             params.push(now.to_owned().into());
             params.push(now.to_owned().into());
-        }
-
-        sql.push_str(" ON CONFLICT(host, port) DO UPDATE SET \
-               source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
-               type = excluded.type, \
-               country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
-               username = excluded.username, \
-               password = excluded.password, \
-               priority = excluded.priority, \
-               updated_at = excluded.updated_at");
-
-        tx.execute(&sql, rusqlite::params_from_iter(params))
-            .map_err(|e| crate::error::CoreError::Database {
-                message: e.to_string(),
-                source: Some(Box::new(e)),
-            })?;
-    }
+        },
+    )
+    .map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
 
     tx.commit().map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
