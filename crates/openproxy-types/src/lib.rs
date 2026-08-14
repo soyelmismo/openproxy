@@ -27,7 +27,7 @@ pub use ids::{
 };
 pub use message::{
     OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIRequestView, OpenAIResponse, OpenAIUsage,
-    TargetFormat,
+    TargetFormat, extract_content_part_text, extract_content_text,
 };
 pub use providers::{
     AuthType, DiscoveredModel, Provider, ProviderFormat, ProviderMetadata, RateLimitScope,

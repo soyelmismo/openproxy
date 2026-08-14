@@ -1,4 +1,3 @@
-use crate::translation::helpers::*;
 use crate::translation::types::*;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::{Value, json};
@@ -71,7 +70,7 @@ pub fn openai_to_anthropic(
         }
 
         match role {
-            "system" => system_parts.push(message_content_to_text(&m.content)),
+            "system" => system_parts.push(m.extract_text()),
             "assistant" => {
                 if let Some(tool_calls) = m.tool_calls.as_ref() {
                     // Assistant message with tool_calls. First flush
@@ -84,7 +83,7 @@ pub fn openai_to_anthropic(
                         blocks.push(json!({"type": "text", "text": text}));
                         pending_assistant_text.clear();
                     }
-                    let text = message_content_to_text(&m.content);
+                    let text = m.extract_text();
                     if !text.is_empty() {
                         blocks.push(json!({"type": "text", "text": text}));
                     }
@@ -126,7 +125,7 @@ pub fn openai_to_anthropic(
                     // pending_assistant_text instead of emitting
                     // immediately — consecutive assistant text messages
                     // will be merged into a single assistant message.
-                    let text = message_content_to_text(&m.content);
+                    let text = m.extract_text();
                     // Skip empty / system-injected markers.
                     if text.is_empty()
                         || text.starts_with("Operation interrupted")
@@ -142,7 +141,7 @@ pub fn openai_to_anthropic(
                 // the SAME user message as the text (content =
                 // [tool_result..., text]). Otherwise emit the text as
                 // a plain string user message.
-                let text = message_content_to_text(&m.content);
+                let text = m.extract_text();
                 if !pending_tool_results.is_empty() {
                     pending_tool_results.push(json!({"type": "text", "text": text}));
                     conversation.push(AnthropicMessage {
@@ -160,7 +159,7 @@ pub fn openai_to_anthropic(
             }
             "tool" => {
                 let tool_use_id = m.tool_call_id.as_deref().unwrap_or("");
-                let content_text = message_content_to_text(&m.content);
+                let content_text = m.extract_text();
                 pending_tool_results.push(json!({
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,

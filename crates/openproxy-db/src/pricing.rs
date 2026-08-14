@@ -413,3 +413,144 @@ pub fn compute_cost_opt(
 pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {
     compute_cost_opt(price, prompt_tokens, completion_tokens).unwrap_or(0.0)
 }
+
+pub fn lookup_price(provider: &str, model: &str) -> Option<Price> {
+    lookup(provider, model)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_openrouter_model() {
+        let price = lookup("openrouter", "openai/gpt-4o").unwrap();
+        assert_eq!(price.input_per_1m, 2.5);
+        assert_eq!(price.output_per_1m, 10.0);
+    }
+
+    #[test]
+    fn known_minimax_model() {
+        let price = lookup("minimax", "minimax-m2.1").unwrap();
+        assert_eq!(price.input_per_1m, 0.2);
+        assert_eq!(price.output_per_1m, 0.2);
+    }
+
+    #[test]
+    fn compute_cost_basic() {
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+            ..Default::default()
+        });
+        // 1.0 * 1000 / 1e6 + 2.0 * 500 / 1e6 = 0.001 + 0.001 = 0.002
+        let cost = compute_cost(price, 1000, 500);
+        assert!((cost - 0.002).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_cost_with_zero_tokens() {
+        let price = Some(Price {
+            input_per_1m: 5.0,
+            output_per_1m: 10.0,
+            ..Default::default()
+        });
+        assert_eq!(compute_cost(price, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn compute_cost_unknown_pricing() {
+        // None means "unknown" — treat as free, no panic.
+        assert_eq!(compute_cost(None, 1_000_000, 1_000_000), 0.0);
+    }
+
+    #[test]
+    fn pricing_lookup_is_deterministic() {
+        let a = lookup("openrouter", "anthropic/claude-sonnet-4").unwrap();
+        let b = lookup("openrouter", "anthropic/claude-sonnet-4").unwrap();
+        assert_eq!(a.input_per_1m, b.input_per_1m);
+        assert_eq!(a.output_per_1m, b.output_per_1m);
+        // Cross-provider fallback: a model registered under "openrouter"
+        // can be found via a different provider id.
+        let cross = lookup("minimax", "anthropic/claude-sonnet-4").unwrap();
+        assert_eq!(cross.input_per_1m, a.input_per_1m);
+    }
+
+    #[test]
+    fn pricing_lookup_cross_provider_matches_minimax_m3() {
+        // MiniMax-M3 is registered under ("minimax", "MiniMax-M3").
+        // A request from "tokenrouter" with model "MiniMax-M3" should
+        // still find the price via the cross-provider fallback.
+        let price = lookup("tokenrouter", "MiniMax-M3").unwrap();
+        assert_eq!(price.input_per_1m, 1.0);
+        assert_eq!(price.output_per_1m, 1.0);
+    }
+
+    #[test]
+    fn pricing_lookup_truly_unknown_returns_none() {
+        // A model that doesn't exist in ANY provider's entry.
+        assert!(lookup("openrouter", "no/such-model-xyz").is_none());
+        assert!(lookup("unknown-provider", "whatever").is_none());
+    }
+
+    #[test]
+    fn default_pricing_kind_is_chat() {
+        let price = Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+            ..Default::default()
+        };
+        assert_eq!(price.kind, "chat");
+    }
+
+    #[test]
+    fn serde_default_pricing_kind_is_chat() {
+        let json = r#"{"input_per_1m": 1.0, "output_per_1m": 2.0}"#;
+        let price: Price = serde_json::from_str(json).unwrap();
+        assert_eq!(price.kind, "chat");
+    }
+
+    #[test]
+    fn compute_cost_audio_dispatch() {
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 0.0,
+            kind: "audio".to_string(),
+        });
+        let cost = compute_cost(price, 60_000, 0);
+        assert!((cost - 60.0 / 1_000_000.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn compute_cost_image_dispatch() {
+        let price = Some(Price {
+            input_per_1m: 10.0,
+            output_per_1m: 0.0,
+            kind: "image".to_string(),
+        });
+        let cost = compute_cost(price, 4, 0);
+        assert!((cost - 40.0 / 1_000_000.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn compute_cost_chat_dispatch_ignores_completion_for_audio() {
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 999_999.0,
+            kind: "audio".to_string(),
+        });
+        let cost = compute_cost(price, 10_000, 1_000_000);
+        assert!((cost - 10.0 / 1_000_000.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_cost_unknown_kind_falls_back_to_chat() {
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+            kind: "video".to_string(),
+        });
+        let cost = compute_cost(price, 1000, 500);
+        assert!((cost - 0.002).abs() < 1e-12);
+    }
+}

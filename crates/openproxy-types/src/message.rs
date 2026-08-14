@@ -52,6 +52,51 @@ pub struct OpenAIMessage {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Extracts text from an optional JSON content value, handling string, multipart array, null, etc.
+pub fn extract_content_text(content: &Option<serde_json::Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(extract_content_part_text)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(""),
+        Some(Value::Null) | None => String::new(),
+        Some(value) => value.to_string(),
+    }
+}
+
+/// Extracts text from a single content part JSON value.
+pub fn extract_content_part_text(part: &serde_json::Value) -> String {
+    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+        return text.to_string();
+    }
+    if let Some(content) = part.get("content").and_then(|v| v.as_str()) {
+        return content.to_string();
+    }
+    match part {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+impl OpenAIMessage {
+    /// Extracts a direct string slice if the message content is a plain string.
+    /// Returns `None` if content is `None`, `Null`, or structured (e.g. array of parts).
+    pub fn extract_text_lossless(&self) -> Option<&str> {
+        self.content.as_ref().and_then(|c| c.as_str())
+    }
+
+    /// Extracts all text content from the message, handling both plain strings
+    /// and multipart arrays (e.g. `[{"type": "text", "text": "..."}]` or `[{"content": "..."}]`).
+    /// Returns an empty string if content is `None` or `Null`.
+    pub fn extract_text(&self) -> String {
+        extract_content_text(&self.content)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIResponse {
     pub id: String,
@@ -167,3 +212,124 @@ impl<'a> OpenAIRequestView<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_extract_text_plain_string() {
+        let msg = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!("hello world")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg.extract_text(), "hello world");
+        assert_eq!(msg.extract_text_lossless(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_extract_text_array_parts() {
+        let msg = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!([
+                {"type": "text", "text": "hello "},
+                {"type": "text", "text": "world"}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg.extract_text(), "hello world");
+        assert_eq!(msg.extract_text_lossless(), None);
+    }
+
+    #[test]
+    fn test_extract_text_array_with_content_field() {
+        let msg = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!([
+                {"type": "text", "content": "foo "},
+                {"type": "text", "content": "bar"}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg.extract_text(), "foo bar");
+        assert_eq!(msg.extract_text_lossless(), None);
+    }
+
+    #[test]
+    fn test_extract_text_array_plain_strings() {
+        let msg = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!(["hello ", "world"])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg.extract_text(), "hello world");
+        assert_eq!(msg.extract_text_lossless(), None);
+    }
+
+    #[test]
+    fn test_extract_text_array_mixed() {
+        let msg = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!([
+                "first ",
+                {"type": "text", "text": "second "},
+                {"type": "text", "content": "third"}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg.extract_text(), "first second third");
+        assert_eq!(msg.extract_text_lossless(), None);
+    }
+
+    #[test]
+    fn test_extract_text_none_and_null() {
+        let msg_none = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg_none.extract_text(), "");
+        assert_eq!(msg_none.extract_text_lossless(), None);
+
+        let msg_null = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some(json!(null)),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(msg_null.extract_text(), "");
+        assert_eq!(msg_null.extract_text_lossless(), None);
+    }
+
+    #[test]
+    fn test_extract_content_part_text() {
+        assert_eq!(extract_content_part_text(&json!({"text": "abc"})), "abc");
+        assert_eq!(extract_content_part_text(&json!({"content": "xyz"})), "xyz");
+        assert_eq!(extract_content_part_text(&json!("str")), "str");
+        assert_eq!(extract_content_part_text(&json!(null)), "");
+        assert_eq!(extract_content_part_text(&json!(123)), "123");
+    }
+}
+

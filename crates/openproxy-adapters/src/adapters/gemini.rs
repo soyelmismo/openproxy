@@ -225,34 +225,6 @@ pub struct GeminiUsageMetadata {
     pub cached_content_token_count: Option<u32>,
 }
 
-fn message_content_to_text(content: &Option<serde_json::Value>) -> String {
-    match content {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(serde_json::Value::Array(parts)) => parts
-            .iter()
-            .map(openai_content_part_to_text)
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(""),
-        Some(serde_json::Value::Null) | None => String::new(),
-        Some(value) => value.to_string(),
-    }
-}
-
-fn openai_content_part_to_text(part: &serde_json::Value) -> String {
-    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-        return text.to_string();
-    }
-    if let Some(content) = part.get("content").and_then(|v| v.as_str()) {
-        return content.to_string();
-    }
-    match part {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Null => String::new(),
-        other => other.to_string(),
-    }
-}
-
 pub fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<GeminiInlineData> {
     let obj = part.as_object()?;
     if obj.get("type").and_then(|v| v.as_str())? != "image_url" {
@@ -280,11 +252,15 @@ fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<G
                     };
                 }
                 GeminiPart {
-                    text: Some(openai_content_part_to_text(part)),
+                    text: Some(openproxy_types::extract_content_part_text(part)),
                     ..Default::default()
                 }
             })
             .collect(),
+        Some(serde_json::Value::String(s)) => vec![GeminiPart {
+            text: Some(s.clone()),
+            ..Default::default()
+        }],
         Some(serde_json::Value::Null) => vec![GeminiPart {
             text: Some(String::new()),
             ..Default::default()
@@ -309,7 +285,7 @@ pub fn openai_to_gemini(
 
     for m in override_messages {
         match m.role.as_str() {
-            "system" => system_parts.push(message_content_to_text(&m.content)),
+            "system" => system_parts.push(m.extract_text()),
             "user" => {
                 contents.push(GeminiContent {
                     role: "user".to_string(),
@@ -504,5 +480,64 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);
         assert_eq!(usage.total_tokens, 30);
+    }
+
+    #[test]
+    fn test_openai_to_gemini_string_and_array_content() {
+        let req = openproxy_types::OpenAIRequest {
+            model: "gemini-2.5-pro".to_string(),
+            messages: vec![],
+            ..Default::default()
+        };
+        let messages = vec![
+            openproxy_types::OpenAIMessage {
+                role: "system".to_string(),
+                content: Some(json!("You are helpful")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            },
+            openproxy_types::OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("Direct string")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            },
+            openproxy_types::OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!([
+                    {"type": "text", "text": "Part 1 "},
+                    {"type": "text", "content": "Part 2"}
+                ])),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            },
+        ];
+
+        let gemini_req = openai_to_gemini(&req, &messages);
+        assert_eq!(
+            gemini_req.system_instruction.unwrap().parts[0].text.as_deref(),
+            Some("You are helpful")
+        );
+        assert_eq!(gemini_req.contents.len(), 2);
+        assert_eq!(gemini_req.contents[0].role, "user");
+        assert_eq!(
+            gemini_req.contents[0].parts[0].text.as_deref(),
+            Some("Direct string")
+        );
+        assert_eq!(gemini_req.contents[1].role, "model");
+        assert_eq!(
+            gemini_req.contents[1].parts[0].text.as_deref(),
+            Some("Part 1 ")
+        );
+        assert_eq!(
+            gemini_req.contents[1].parts[1].text.as_deref(),
+            Some("Part 2")
+        );
     }
 }
