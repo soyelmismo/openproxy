@@ -56,12 +56,13 @@ pub struct OpenAIMessage {
 pub fn extract_content_text(content: &Option<serde_json::Value>) -> String {
     match content {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .map(extract_content_part_text)
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(""),
+        Some(Value::Array(parts)) => {
+            let mut out = String::new();
+            for part in parts {
+                out.push_str(&extract_content_part_text(part));
+            }
+            out
+        }
         Some(Value::Null) | None => String::new(),
         Some(value) => value.to_string(),
     }

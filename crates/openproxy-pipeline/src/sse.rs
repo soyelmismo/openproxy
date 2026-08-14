@@ -202,10 +202,10 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     if trimmed.is_empty() || trimmed.starts_with(':') {
         return Ok(None);
     }
-    let payload = match trimmed.strip_prefix("data:") {
-        Some(rest) => rest.trim_start(),
-        None => return Ok(None),
+    let Some(rest) = trimmed.strip_prefix("data:") else {
+        return Ok(None);
     };
+    let payload = rest.trim_start();
     if payload == "[DONE]" {
         return Ok(Some(UpstreamSseChunk {
             raw_payload: None,
@@ -350,10 +350,10 @@ pub fn parse_gemini_sse_line(
     if trimmed.is_empty() || trimmed.starts_with(':') {
         return Ok(None);
     }
-    let payload = match trimmed.strip_prefix("data:") {
-        Some(rest) => rest.trim_start(),
-        None => return Ok(None),
+    let Some(rest) = trimmed.strip_prefix("data:") else {
+        return Ok(None);
     };
+    let payload = rest.trim_start();
     if payload == "[DONE]" {
         return Ok(Some(UpstreamSseChunk {
             raw_payload: None,

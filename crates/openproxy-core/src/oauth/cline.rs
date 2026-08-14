@@ -2,7 +2,6 @@
 
 use crate::error::{CoreError, Result};
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
-use base64::Engine;
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
@@ -248,7 +247,7 @@ impl OAuthProvider for ClineOAuthProvider {
         };
 
         if let Some(ref id_jwt) = token.id_token
-            && let Some(claims) = decode_jwt_payload(id_jwt)
+            && let Some(claims) = super::decode_jwt_payload(id_jwt)
             && let Some(val) = extract(&claims)
         {
             return Some(val);
@@ -260,18 +259,9 @@ impl OAuthProvider for ClineOAuthProvider {
             .unwrap_or(&token.access_token)
             .strip_prefix("workos:")
             .unwrap_or(&token.access_token);
-        let claims = decode_jwt_payload(jwt)?;
+        let claims = super::decode_jwt_payload(jwt)?;
         extract(&claims)
     }
-}
-
-fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
-    let payload = jwt.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
-        .ok()?;
-    serde_json::from_slice(&bytes).ok()
 }
 
 #[derive(serde::Deserialize)]
@@ -304,6 +294,7 @@ fn parse_expires_in(data: &ClineAuthResponseData) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
 
     #[test]
     fn test_cline_auth_response_data_deserialization_and_ttl() {

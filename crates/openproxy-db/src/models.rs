@@ -87,19 +87,33 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
     })
 }
 
-pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model>> {
-    let mut stmt = conn
-        .prepare(
+macro_rules! model_select {
+    ($tail:expr) => {
+        concat!(
             "SELECT id, provider_id, model_id, display_name, target_format, \
                     discovered_at, expires_at, timeout_overrides_json, active, \
                     last_test_status, last_test_at, custom, \
                     context_length, max_output_tokens, capabilities_json, \
                     family, model_type, input_modalities_json, \
                     output_modalities_json \
-             FROM models \
-             WHERE provider_id = ? \
-               AND active = 1",
+             FROM models ",
+            $tail
         )
+    };
+    () => {
+        "SELECT id, provider_id, model_id, display_name, target_format, \
+                discovered_at, expires_at, timeout_overrides_json, active, \
+                last_test_status, last_test_at, custom, \
+                context_length, max_output_tokens, capabilities_json, \
+                family, model_type, input_modalities_json, \
+                output_modalities_json \
+         FROM models"
+    };
+}
+
+pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model>> {
+    let mut stmt = conn
+        .prepare(model_select!("WHERE provider_id = ? AND active = 1"))
         .map_err(map_db_error)?;
 
     let rows = stmt
@@ -111,16 +125,7 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
 
 pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models \
-             WHERE active = 1",
-        )
+        .prepare(model_select!("WHERE active = 1"))
         .map_err(map_db_error)?;
 
     let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
@@ -130,15 +135,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
 
 pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models",
-        )
+        .prepare(model_select!())
         .map_err(map_db_error)?;
 
     let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
@@ -151,7 +148,7 @@ pub fn mark_expired(conn: &Connection) -> Result<usize> {
         .execute(
             "DELETE FROM models \
              WHERE expires_at IS NOT NULL \
-               AND expires_at < datetime('now', '-7 days')",
+                AND expires_at < datetime('now', '-7 days')",
             [],
         )
         .map_err(map_db_error)?;
@@ -188,13 +185,7 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
 pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Model>> {
     let res = conn
         .query_row(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models WHERE id = ?",
+            model_select!("WHERE id = ?"),
             [row_id.0],
             map_row,
         )
@@ -207,13 +198,7 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
     if row_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let query = "SELECT id, provider_id, model_id, display_name, target_format, \
-                 discovered_at, expires_at, timeout_overrides_json, active, \
-                 last_test_status, last_test_at, custom, \
-                 context_length, max_output_tokens, capabilities_json, \
-                 family, model_type, input_modalities_json, \
-                 output_modalities_json \
-          FROM models WHERE id IN ({})";
+    let query = model_select!("WHERE id IN ({})");
     crate::batch::query_in_chunks_by(
         conn,
         query,
@@ -226,26 +211,13 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
 }
 
 pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<Model>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models \
-             WHERE model_id = ?1 \
-               AND active = 1 \
-             ORDER BY id ASC \
-             LIMIT 1",
-        )
-        .map_err(map_db_error)?;
-    let mut rows = stmt.query_map([model_id], map_row).map_err(map_db_error)?;
-    match rows.next() {
-        Some(row) => Ok(Some(row.map_err(map_db_error)?)),
-        None => Ok(None),
-    }
+    conn.query_row(
+        model_select!("WHERE model_id = ?1 AND active = 1 ORDER BY id ASC LIMIT 1"),
+        [model_id],
+        map_row,
+    )
+    .optional()
+    .map_err(map_db_error)
 }
 
 pub fn find_active_by_provider_and_name(
@@ -253,29 +225,13 @@ pub fn find_active_by_provider_and_name(
     provider_id: &ProviderId,
     model_id: &str,
 ) -> Result<Option<Model>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models \
-             WHERE provider_id = ?1 \
-               AND model_id = ?2 \
-               AND active = 1 \
-             ORDER BY id ASC \
-             LIMIT 1",
-        )
-        .map_err(map_db_error)?;
-    let mut rows = stmt
-        .query_map(params![provider_id.as_str(), model_id], map_row)
-        .map_err(map_db_error)?;
-    match rows.next() {
-        Some(row) => Ok(Some(row.map_err(map_db_error)?)),
-        None => Ok(None),
-    }
+    conn.query_row(
+        model_select!("WHERE provider_id = ?1 AND model_id = ?2 AND active = 1 ORDER BY id ASC LIMIT 1"),
+        params![provider_id.as_str(), model_id],
+        map_row,
+    )
+    .optional()
+    .map_err(map_db_error)
 }
 
 pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result<()> {

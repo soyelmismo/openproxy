@@ -194,7 +194,7 @@ pub fn query_in_chunks_by_with_params<T, V, R, E, F>(
     items: &[T],
     chunk_size: usize,
     extract: E,
-    mut map_row: F,
+    map_row: F,
 ) -> rusqlite::Result<Vec<R>>
 where
     V: rusqlite::ToSql,
@@ -204,33 +204,15 @@ where
     if items.is_empty() {
         return Ok(Vec::new());
     }
-
-    let max_chunk = SQLITE_MAX_VARIABLE_NUMBER
-        .saturating_sub(prefix_params.len())
-        .max(1);
-    let effective_chunk_size = chunk_size.clamp(1, max_chunk);
-    let mut results = Vec::with_capacity(items.len());
-
-    for chunk in items.chunks(effective_chunk_size) {
-        let placeholders = in_placeholders(chunk.len());
-        let sql = sql_template.replace("{}", &placeholders);
-        let mut stmt = conn.prepare_cached(&sql)?;
-
-        let extracted_values: Vec<V> = chunk.iter().map(&extract).collect();
-        let mut params: Vec<&dyn rusqlite::ToSql> =
-            Vec::with_capacity(prefix_params.len() + chunk.len());
-        params.extend_from_slice(prefix_params);
-        for val in &extracted_values {
-            params.push(val as &dyn rusqlite::ToSql);
-        }
-
-        let mut rows = stmt.query(rusqlite::params_from_iter(params))?;
-        while let Some(row) = rows.next()? {
-            results.push(map_row(row)?);
-        }
-    }
-
-    Ok(results)
+    let extracted: Vec<V> = items.iter().map(extract).collect();
+    query_in_chunks_with_params(
+        conn,
+        sql_template,
+        prefix_params,
+        &extracted,
+        chunk_size,
+        map_row,
+    )
 }
 
 /// Performs chunked batch inserts, splitting `items` so that `chunk.len() * columns.len() <= SQLITE_MAX_VARIABLE_NUMBER`.

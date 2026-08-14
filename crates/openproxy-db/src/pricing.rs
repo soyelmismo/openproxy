@@ -257,10 +257,7 @@ static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> = L
 });
 
 pub fn lookup(provider: &str, model: &str) -> Option<Price> {
-    if let Some((_, price)) = PRICING_TABLE
-        .iter()
-        .find(|((p, m), _)| *p == provider && *m == model)
-    {
+    if let Some(price) = PRICING_TABLE.get(&(provider, model)) {
         return Some(price.clone());
     }
     if let Some((_, price)) = PRICING_TABLE.iter().find(|((_, m), _)| *m == model) {

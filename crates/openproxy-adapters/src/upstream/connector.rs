@@ -183,20 +183,20 @@ impl HyperConnection for PhasedConnection {
 /// shared across every HTTPS request. Loading webpki roots is a few
 /// KB and happens once at first use.
 fn tls_connector() -> TlsConnector {
-    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
-    let cfg = CONFIG.get_or_init(|| {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        // Enable ALPN h2 + http/1.1 so the server can negotiate HTTP/2.
-        // Without ALPN, even with hyper's http2 feature, the server
-        // falls back to HTTP/1.1.
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        Arc::new(config)
-    });
-    TlsConnector::from(Arc::clone(cfg))
+    static CONFIG: std::sync::LazyLock<Arc<rustls::ClientConfig>> =
+        std::sync::LazyLock::new(|| {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let mut config = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            // Enable ALPN h2 + http/1.1 so the server can negotiate HTTP/2.
+            // Without ALPN, even with hyper's http2 feature, the server
+            // falls back to HTTP/1.1.
+            config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+            Arc::new(config)
+        });
+    TlsConnector::from(Arc::clone(&CONFIG))
 }
 
 /// Per-phase timeouts carried by a `PhasedConnector`. All values are
@@ -797,11 +797,10 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // expired entries every 5 minutes. Without this, the cache grows
     // unbounded as the process sees new hosts (provider rotation,
     // CDN shards, etc.) — each entry is ~200 bytes but over weeks of
-    // uptime with many providers it adds up.
-    static DNS_CACHE: std::sync::OnceLock<
+    static DNS_CACHE: std::sync::LazyLock<
         dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
-    > = std::sync::OnceLock::new();
-    let cache = DNS_CACHE.get_or_init(dashmap::DashMap::new);
+    > = std::sync::LazyLock::new(dashmap::DashMap::new);
+    let cache = &*DNS_CACHE;
     let cache_key = format!("{}:{}", host, port);
     let now = std::time::Instant::now();
     const DNS_TTL: std::time::Duration = std::time::Duration::from_secs(300);
@@ -825,16 +824,15 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // flag — only the first caller spawns the task.
     static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     SWEEP_STARTED.get_or_init(|| {
-        let cache_for_sweep = DNS_CACHE.get().expect("DNS_CACHE init order");
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
             tick.tick().await; // skip immediate first tick
             loop {
                 tick.tick().await;
                 let now = std::time::Instant::now();
-                let before = cache_for_sweep.len();
-                cache_for_sweep.retain(|_, (_, expiry)| *expiry > now);
-                let after = cache_for_sweep.len();
+                let before = DNS_CACHE.len();
+                DNS_CACHE.retain(|_, (_, expiry)| *expiry > now);
+                let after = DNS_CACHE.len();
                 if before != after {
                     tracing::debug!(before, after, evicted = before - after, "DNS cache sweep");
                 }
@@ -910,8 +908,7 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
         .port_u16()
         .ok_or_else(|| "Missing proxy port".to_string())?;
     let auth = uri.authority().and_then(|a| {
-        let auth_str = a.as_str();
-        auth_str.find('@').map(|idx| auth_str[..idx].to_string())
+        a.as_str().split_once('@').map(|(user_pass, _)| user_pass.to_string())
     });
 
     Ok(ProxyConfig {
@@ -1046,7 +1043,7 @@ async fn run_proxy_tunnel(
             }
 
             let resp_str = String::from_utf8_lossy(&headers_buf);
-            let first_line = resp_str.split("\r\n").next().unwrap_or("");
+            let first_line = resp_str.lines().next().unwrap_or("");
             if !first_line.contains(" 200 ") {
                 return Err(io::Error::other(format!(
                     "HTTP CONNECT proxy returned error: {}",

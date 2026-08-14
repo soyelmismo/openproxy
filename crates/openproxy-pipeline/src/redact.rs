@@ -111,9 +111,9 @@ pub const REDACTED_HEADER_VALUE_MAX: usize = 4 * 1024;
 /// Truncate a header value to [`REDACTED_HEADER_VALUE_MAX`] bytes,
 /// appending an ellipsis marker so the dashboard can see the
 /// value was cut off.
-fn truncate_header_value(v: &str) -> String {
+fn truncate_header_value(v: &str) -> std::borrow::Cow<'_, str> {
     if v.len() <= REDACTED_HEADER_VALUE_MAX {
-        v.to_string()
+        std::borrow::Cow::Borrowed(v)
     } else {
         // `char_indices` is byte-accurate; cutting at a non-char
         // boundary would panic on the next `.to_string()`.
@@ -126,7 +126,7 @@ fn truncate_header_value(v: &str) -> String {
         let mut s = String::with_capacity(cut + "...[truncated]".len());
         s.push_str(&v[..cut]);
         s.push_str("...[truncated]");
-        s
+        std::borrow::Cow::Owned(s)
     }
 }
 
@@ -141,7 +141,7 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
             // (empty string). Keep that behaviour but cap the
             // length so a megabyte User-Agent cannot blow up
             // the persisted `usage.request_headers` row.
-            truncate_header_value(v.to_str().unwrap_or(""))
+            truncate_header_value(v.to_str().unwrap_or("")).into_owned()
         };
         out.insert(k.as_str().to_string(), value);
     }
@@ -170,7 +170,7 @@ pub fn redact_btreemap_sensitive(
         if is_sensitive(k) {
             *v = REDACTED_PLACEHOLDER.to_string();
         } else if v.len() > REDACTED_HEADER_VALUE_MAX {
-            *v = truncate_header_value(v);
+            *v = truncate_header_value(v).into_owned();
         }
     }
     headers

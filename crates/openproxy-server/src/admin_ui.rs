@@ -117,31 +117,31 @@ pub async fn serve_asset(uri: Uri) -> Response {
         return index_html().await.into_response();
     }
 
-    if let Some(file) = DashboardAssets::get(path) {
-        let mime = from_path(path).first_or_octet_stream();
-        // `dist/` is the esbuild output — bundles that change content
-        // on every build. We don't currently content-hash filenames
-        // (esbuild emits `app.js`, not `app.<hash>.js`), so an
-        // immutable cache would be a footgun on redeploys. Keep the
-        // no-cache policy for now; if we add content hashing later,
-        // flip `dist/` to `public, max-age=31536000, immutable`.
-        let cache = "no-cache, no-store, must-revalidate";
-        let mut headers = axum::http::HeaderMap::new();
-        // `mime.as_ref()` is `&str`; `HeaderValue::from_str` only
-        // fails on invisible ASCII / control chars, which a
-        // `mime_guess`-derived type never contains.
-        if let Ok(ct) = HeaderValue::from_str(mime.as_ref()) {
-            headers.insert(header::CONTENT_TYPE, ct);
-        }
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-        let body = Body::from(file.data);
-        return (StatusCode::OK, headers, body).into_response();
-    }
+    let Some(file) = DashboardAssets::get(path) else {
+        // SPA fallback: unknown `/admin/*` paths (e.g. client-side
+        // routes like `/admin/combos/42/edit`) get the SPA shell so the
+        // hash-router can take over.
+        return index_html().await.into_response();
+    };
 
-    // SPA fallback: unknown `/admin/*` paths (e.g. client-side
-    // routes like `/admin/combos/42/edit`) get the SPA shell so the
-    // hash-router can take over.
-    index_html().await.into_response()
+    let mime = from_path(path).first_or_octet_stream();
+    // `dist/` is the esbuild output — bundles that change content
+    // on every build. We don't currently content-hash filenames
+    // (esbuild emits `app.js`, not `app.<hash>.js`), so an
+    // immutable cache would be a footgun on redeploys. Keep the
+    // no-cache policy for now; if we add content hashing later,
+    // flip `dist/` to `public, max-age=31536000, immutable`.
+    let cache = "no-cache, no-store, must-revalidate";
+    let mut headers = axum::http::HeaderMap::new();
+    // `mime.as_ref()` is `&str`; `HeaderValue::from_str` only
+    // fails on invisible ASCII / control chars, which a
+    // `mime_guess`-derived type never contains.
+    if let Ok(ct) = HeaderValue::from_str(mime.as_ref()) {
+        headers.insert(header::CONTENT_TYPE, ct);
+    }
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    let body = Body::from(file.data);
+    (StatusCode::OK, headers, body).into_response()
 }
 
 /// `GET /admin/i18n/{lang}` — serve a language pack.
@@ -201,31 +201,32 @@ pub async fn serve_i18n(lang: Path<String>) -> Response {
             .into_response();
     }
     let filename = format!("{}.json", lang);
-    if let Some(file) = I18nAssets::get(&filename) {
-        let body = Body::from(file.data);
+    let Some(file) = I18nAssets::get(&filename) else {
         return (
-            StatusCode::OK,
-            [
-                (
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("application/json; charset=utf-8"),
-                ),
-                (
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static("public, max-age=86400"),
-                ),
-            ],
-            body,
+            StatusCode::NOT_FOUND,
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            )],
+            Body::from(r#"{"error":"Language pack not found"}"#),
         )
             .into_response();
-    }
+    };
+
+    let body = Body::from(file.data);
     (
-        StatusCode::NOT_FOUND,
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/plain; charset=utf-8"),
-        )],
-        "language not found",
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            ),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=86400"),
+            ),
+        ],
+        body,
     )
         .into_response()
 }

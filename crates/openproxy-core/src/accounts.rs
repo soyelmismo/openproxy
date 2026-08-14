@@ -466,16 +466,14 @@ pub fn store_oauth_tokens(
         email,
     } = params;
     let access_blob = master_key.encrypt(access_token)?;
-    let refresh_blob = match refresh_token {
-        Some(rt) => Some(master_key.encrypt(rt)?),
-        None => None,
-    };
+    let refresh_blob = refresh_token
+        .map(|rt| master_key.encrypt(rt))
+        .transpose()?;
 
     // Encrypt oauth_provider_specific with master_key (base64 for TEXT column).
-    let provider_specific_encrypted = match provider_specific {
-        Some(ps) => Some(encrypt_oauth_provider_specific(ps, master_key)?),
-        None => None,
-    };
+    let provider_specific_encrypted = provider_specific
+        .map(|ps| encrypt_oauth_provider_specific(ps, master_key))
+        .transpose()?;
 
     // Default to 1 hour from now when the upstream omits `expires_in`.
     // Without this the account would never be auto-refreshed because
@@ -571,10 +569,7 @@ pub fn decrypt_refresh_token(
         )))?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
-    match blob {
-        Some(b) => Ok(Some(master_key.decrypt(&b)?)),
-        None => Ok(None),
-    }
+    blob.map(|b| master_key.decrypt(&b)).transpose()
 }
 
 pub fn decrypt_refresh_tokens(
@@ -594,10 +589,7 @@ pub fn decrypt_refresh_tokens(
         |row| {
             let id: i64 = row.get(0)?;
             let blob: Option<Vec<u8>> = row.get(1)?;
-            let token = match blob {
-                Some(b) => master_key.decrypt(&b).map(Some),
-                None => Ok(None),
-            };
+            let token = blob.map(|b| master_key.decrypt(&b)).transpose();
             Ok((AccountId(id), token))
         },
     )

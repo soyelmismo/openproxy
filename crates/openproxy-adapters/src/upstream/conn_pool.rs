@@ -63,10 +63,10 @@ impl HostKey {
 /// entry. `Instant` itself is not `Copy` into an atomic, so we
 /// convert to `u64` millis at store time and back to `Instant` at
 /// load time. Monotonicity is guaranteed by `Instant` (NTP-immune).
-static PROCESS_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+static PROCESS_START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
 
 fn process_start() -> Instant {
-    *PROCESS_START.get_or_init(Instant::now)
+    *PROCESS_START
 }
 
 /// Current monotonic millis since `process_start()`. Used as the

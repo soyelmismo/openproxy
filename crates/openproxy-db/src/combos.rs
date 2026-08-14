@@ -42,10 +42,7 @@ pub fn create_combo(
         }
     }
 
-    let id: i64 = conn
-        .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .map_err(crate::error::map_db_error)?;
-    Ok(ComboId(id))
+    Ok(ComboId(conn.last_insert_rowid()))
 }
 
 pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
@@ -361,10 +358,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
         }
     }
 
-    let id: i64 = conn
-        .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .map_err(crate::error::map_db_error)?;
-    Ok(ComboTargetId(id))
+    Ok(ComboTargetId(conn.last_insert_rowid()))
 }
 
 /// Gate F1: re-bind orphaned `combo_targets` rows that referenced a

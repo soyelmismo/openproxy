@@ -21,6 +21,16 @@ pub use crate::accounts::{
     StoreOAuthTokensParams,
 };
 
+pub(crate) fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
+    use base64::Engine;
+    let payload = jwt.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 pub mod antigravity;
 pub mod cline;
 pub mod codex;

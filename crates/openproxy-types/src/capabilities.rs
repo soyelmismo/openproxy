@@ -91,7 +91,7 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
     caps.structured_output = Some(true);
     caps.temperature = Some(true);
 
-    if caps.vision == Some(true) {
+    if caps.vision.unwrap_or(false) {
         caps.attachment = Some(true);
     }
 
@@ -100,7 +100,7 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
 
 pub fn infer_input_modalities(caps: &ModelCapabilities) -> Vec<&'static str> {
     let mut out = vec!["text"];
-    if caps.vision == Some(true) {
+    if caps.vision.unwrap_or(false) {
         out.push("image");
     }
     out

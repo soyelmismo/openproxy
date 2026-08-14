@@ -16,7 +16,7 @@ static VERSION_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-v\d+$").expect("valid regex"));
 
 pub fn normalize_model_id(id: &str) -> String {
-    let s: &str = id.rsplit('/').next().unwrap_or(id);
+    let s: &str = id.rsplit_once('/').map_or(id, |(_, rest)| rest);
     let s: &str = s
         .trim_end_matches("-free-trial")
         .trim_end_matches("-free")

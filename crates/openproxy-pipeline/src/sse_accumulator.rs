@@ -436,14 +436,9 @@ impl ResponseAccumulator {
             self.truncated = true;
             return;
         }
-        self.reasoning = Some(match self.reasoning.take() {
-            Some(existing) => {
-                let mut combined = existing;
-                combined.push_str(text);
-                combined
-            }
-            None => text.to_string(),
-        });
+        self.reasoning
+            .get_or_insert_with(String::new)
+            .push_str(text);
         self.total_bytes += additional;
     }
 

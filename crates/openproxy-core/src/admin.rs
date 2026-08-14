@@ -256,13 +256,7 @@ pub fn update_provider(
     if let Some(ref url) = input.base_url {
         validate_base_url(url)?;
     }
-    // Rust's `Option<Option<&str>>` is awkward to build; the inner
-    // map over `Option<String>` keeps the call site readable.
-    let keyword: Option<Option<&str>> = match input.auto_activate_keyword {
-        None => None,
-        Some(None) => Some(None),
-        Some(Some(ref s)) => Some(Some(s.as_str())),
-    };
+    let keyword = input.auto_activate_keyword.as_ref().map(|o| o.as_deref());
     providers::update(
         conn,
         id,

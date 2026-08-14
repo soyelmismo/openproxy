@@ -63,6 +63,13 @@ use std::fmt::Write as _;
 /// Mantiene un `UpstreamClient` reutilizable y la `base_url` del server.
 /// Es `Send + Sync` y barato de clonar (comparte el `UpstreamClient`
 /// interior, que ya es `Arc`-interno).
+fn missing_field_err(msg: impl Into<String>) -> ClientError {
+    ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        msg.into(),
+    )))
+}
+
 #[derive(Clone)]
 pub struct Client {
     base_url: String,
@@ -169,12 +176,10 @@ impl Client {
     ) -> Result<ProviderId, ClientError> {
         let resp = self.post_json("/admin/providers", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "missing \"id\" string in create_provider response",
-            )))
-        })?;
+        let id = body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| missing_field_err("missing \"id\" string in create_provider response"))?;
         Ok(ProviderId::new(id.to_string()))
     }
 
@@ -212,12 +217,10 @@ impl Client {
     ) -> Result<AccountId, ClientError> {
         let resp = self.post_json("/admin/accounts", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
-            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "missing numeric \"id\" in create_account response",
-            )))
-        })?;
+        let id = body
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| missing_field_err("missing numeric \"id\" in create_account response"))?;
         Ok(AccountId::new(id))
     }
 
@@ -261,12 +264,10 @@ impl Client {
     pub async fn create_combo(&self, input: CreateComboInput) -> Result<ComboId, ClientError> {
         let resp = self.post_json("/admin/combos", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
-            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "missing numeric \"id\" in create_combo response",
-            )))
-        })?;
+        let id = body
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| missing_field_err("missing numeric \"id\" in create_combo response"))?;
         Ok(ComboId(id))
     }
 
@@ -298,12 +299,10 @@ impl Client {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
         let resp = self.post_json(&path, &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
-            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "missing numeric \"id\" in add_target response",
-            )))
-        })?;
+        let id = body
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| missing_field_err("missing numeric \"id\" in add_target response"))?;
         Ok(id)
     }
 
@@ -347,17 +346,9 @@ impl Client {
         let touched = body
             .get("touched")
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| {
-                ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "missing \"touched\" in refresh_models response",
-                )))
-            })?;
+            .ok_or_else(|| missing_field_err("missing \"touched\" in refresh_models response"))?;
         usize::try_from(touched).map_err(|_| {
-            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("\"touched\" does not fit in usize: {}", touched),
-            )))
+            missing_field_err(format!("\"touched\" does not fit in usize: {}", touched))
         })
     }
 

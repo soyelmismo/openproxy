@@ -3,7 +3,6 @@
 //! Uses OpenAI's custom device authorization flow.
 //! The ChatGPT account id from `id_token` claims is stored as `{"workspaceId": "..."}` when available.
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -304,7 +303,7 @@ impl OAuthProvider for CodexOAuthProvider {
     crate::delegate_oauth_to_generic!(refresh_token);
 
     fn provider_specific_from_token(&self, token: &TokenResponse) -> Option<String> {
-        let claims = token.id_token.as_deref().and_then(decode_jwt_payload)?;
+        let claims = token.id_token.as_deref().and_then(super::decode_jwt_payload)?;
         let workspace_id = extract_workspace_id(&claims)?;
         serde_json::to_string(&CodexProviderMeta {
             workspace_id: Some(workspace_id),
@@ -313,21 +312,13 @@ impl OAuthProvider for CodexOAuthProvider {
     }
 
     fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
-        let claims = token.id_token.as_deref().and_then(decode_jwt_payload)?;
+        let claims = token.id_token.as_deref().and_then(super::decode_jwt_payload)?;
         claims
             .get("email")
             .and_then(|v| v.as_str())
             .filter(|v| !v.is_empty())
             .map(ToString::to_string)
     }
-}
-
-fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
-    let payload = jwt.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    serde_json::from_slice(&bytes).ok()
 }
 
 fn extract_workspace_id(claims: &serde_json::Value) -> Option<String> {
