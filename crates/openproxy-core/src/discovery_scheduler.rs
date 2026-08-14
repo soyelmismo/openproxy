@@ -60,6 +60,10 @@ pub const DISCOVERY_INTERVAL_SECS: u64 = 3_600;
 /// the row "warm" for one cycle.
 const DISCOVERY_TTL_SECONDS: i64 = 3_600;
 
+/// Default initial stagger in seconds. 15 seconds allows quick discovery
+/// on startup without swamping the network immediately.
+pub const DEFAULT_INITIAL_STAGGER_SECS: u64 = 15;
+
 /// Configuration knobs exposed to the caller. The defaults match
 /// [`DISCOVERY_INTERVAL_SECS`]; tests use the fields to shrink the
 /// cadence so a `#[tokio::test(flavor = "current_thread")]` with
@@ -72,8 +76,8 @@ pub struct DiscoverySchedulerConfig {
     /// Upper bound (inclusive) of the uniform initial stagger in
     /// seconds. The first tick for each provider is scheduled at a
     /// random delay in `[0, initial_stagger_secs]`; production sets
-    /// this to `interval_secs` so the herd spreads across a full
-    /// cycle. Tests typically set it to 0 so the first tick is
+    /// this to `DEFAULT_INITIAL_STAGGER_SECS` so initial discovery happens
+    /// quickly. Tests typically set it to 0 so the first tick is
     /// immediate.
     pub initial_stagger_secs: u64,
 }
@@ -82,7 +86,7 @@ impl Default for DiscoverySchedulerConfig {
     fn default() -> Self {
         Self {
             interval_secs: DISCOVERY_INTERVAL_SECS,
-            initial_stagger_secs: DISCOVERY_INTERVAL_SECS,
+            initial_stagger_secs: DEFAULT_INITIAL_STAGGER_SECS,
         }
     }
 }
@@ -162,24 +166,48 @@ pub async fn start(
     let parent_cancel = CancellationToken::new();
     let mut task_count = 0usize;
 
+    // Collect all provider candidates:
+    // 1. Built-in providers defined in seed
+    // 2. Custom providers existing in DB
+    let mut seen_providers = std::collections::HashSet::new();
+    let mut resolved_providers = Vec::new();
+
+    // 1. Built-in providers that have an adapter in `adapters`
     for pid_str in seed::builtin_provider_ids() {
         let provider = ProviderId::new(pid_str);
-        let adapter = match adapters.iter().find(|a| a.id() == &provider) {
-            Some(a) => ProviderAdapterEnum::clone(a),
-            None => {
-                // Should not happen: `builtin_provider_ids()` and
-                // `builtin_adapters()` are kept in lockstep. We log
-                // and skip rather than panic so a future drift
-                // doesn't take the whole scheduler down.
-                tracing::warn!(
-                    provider = %provider,
-                    "no adapter registered for built-in provider; \
-                     discovery scheduler skipping this provider",
-                );
-                continue;
-            }
-        };
+        if let Some(a) = adapters.iter().find(|a| a.id() == &provider) {
+            seen_providers.insert(provider.clone());
+            resolved_providers.push((provider, ProviderAdapterEnum::clone(a)));
+        } else {
+            tracing::warn!(
+                provider = %provider,
+                "no adapter registered for built-in provider; \
+                 discovery scheduler skipping this provider",
+            );
+        }
+    }
 
+    // 2. Custom providers from DB
+    {
+        let r = db_pool.reader();
+        if let Ok(db_list) = providers::list(&r) {
+            for p in db_list {
+                if !seen_providers.contains(&p.id) {
+                    let adapter = if let Some(a) = adapters.iter().find(|a| a.id() == &p.id) {
+                        ProviderAdapterEnum::clone(a)
+                    } else {
+                        ProviderAdapterEnum::Custom(
+                            openproxy_adapters::adapters::CustomAdapter::from_provider_row(&p),
+                        )
+                    };
+                    seen_providers.insert(p.id.clone());
+                    resolved_providers.push((p.id, adapter));
+                }
+            }
+        }
+    }
+
+    for (provider, adapter) in resolved_providers {
         let pool = Arc::clone(&db_pool);
         let key = Arc::clone(&master_key);
         let upstream = Arc::clone(&upstream_client);
@@ -196,9 +224,6 @@ pub async fn start(
         let first_delay_secs = if initial_stagger == 0 {
             0
         } else {
-            // `rand::random::<u64>()` samples the full u64 range;
-            // we mod into the caller's window. Modulo bias is
-            // negligible at any plausible window (max ~3600).
             rand::random::<u64>() % (initial_stagger + 1)
         };
 
@@ -221,6 +246,61 @@ pub async fn start(
         }));
         task_count += 1;
     }
+
+    // Dynamic supervisor: checks periodically for newly created providers
+    let supervisor_pool = Arc::clone(&db_pool);
+    let supervisor_key = Arc::clone(&master_key);
+    let supervisor_upstream = Arc::clone(&upstream_client);
+    let supervisor_cancel = parent_cancel.child_token();
+    let supervisor_interval = config.interval_secs.max(1);
+    let supervisor_adapters = Arc::clone(&adapters);
+
+    tokio::spawn(async move {
+        let initial_wait = Duration::from_secs(supervisor_interval.min(60));
+        tokio::select! {
+            _ = sleep(initial_wait) => {}
+            _ = supervisor_cancel.cancelled() => return,
+        }
+
+        loop {
+            let db_providers = {
+                let r = supervisor_pool.reader();
+                providers::list(&r).unwrap_or_default()
+            };
+
+            for p in db_providers {
+                if !p.active {
+                    continue;
+                }
+                let adapter = if let Some(a) = supervisor_adapters.iter().find(|a| a.id() == &p.id) {
+                    ProviderAdapterEnum::clone(a)
+                } else {
+                    ProviderAdapterEnum::Custom(
+                        openproxy_adapters::adapters::CustomAdapter::from_provider_row(&p),
+                    )
+                };
+
+                run_one_tick(
+                    p.id,
+                    adapter,
+                    &supervisor_pool,
+                    &supervisor_key,
+                    &supervisor_upstream,
+                )
+                .await;
+
+                tokio::select! {
+                    _ = sleep(Duration::from_millis(200)) => {}
+                    _ = supervisor_cancel.cancelled() => return,
+                }
+            }
+
+            tokio::select! {
+                _ = sleep(Duration::from_secs(supervisor_interval)) => {}
+                _ = supervisor_cancel.cancelled() => return,
+            }
+        }
+    });
 
     DiscoveryScheduler {
         cancel: parent_cancel,
@@ -533,6 +613,14 @@ async fn run_one_tick(
             return;
         }
     };
+    // Update CustomAdapter from the latest provider_row so endpoint edits take effect immediately
+    let adapter = match (&adapter, &provider_row) {
+        (ProviderAdapterEnum::Custom(_), Some(row)) => {
+            ProviderAdapterEnum::Custom(openproxy_adapters::adapters::CustomAdapter::from_provider_row(row))
+        }
+        _ => adapter,
+    };
+
     let result = admin::refresh_models(
         conn,
         &provider,

@@ -28,6 +28,7 @@ pub async fn create_provider(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateProviderInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let is_anonymous = input.auth_type.eq_ignore_ascii_case("none");
     // Scope the writer guard so it is dropped BEFORE
     // rebuild_adapters re-acquires the same non-reentrant
     // parking_lot::Mutex. Holding the guard across
@@ -57,6 +58,19 @@ pub async fn create_provider(
             "reloaded adapter registry after creating provider"
         );
     }
+
+    if is_anonymous {
+        let s_clone = s.clone();
+        let pid_str = id.to_string();
+        tokio::spawn(async move {
+            let q = ProviderRefreshQuery {
+                account_id: None,
+                ttl_seconds: None,
+            };
+            let _ = run_provider_refresh(s_clone, &pid_str, q).await;
+        });
+    }
+
     Ok(Json(serde_json::json!({ "id": id.as_str() })))
 }
 
@@ -171,7 +185,7 @@ pub async fn update_provider(
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
-async fn run_provider_refresh(
+pub(crate) async fn run_provider_refresh(
     s: AppState,
     provider_id_str: &str,
     q: ProviderRefreshQuery,

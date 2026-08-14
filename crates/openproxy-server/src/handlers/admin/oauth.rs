@@ -152,6 +152,16 @@ pub async fn oauth_exchange(
             );
         }
 
+        let s_clone = s.clone();
+        let p_clone = provider.clone();
+        tokio::spawn(async move {
+            let q = ProviderRefreshQuery {
+                account_id: Some(account_id.0),
+                ttl_seconds: None,
+            };
+            let _ = super::providers::run_provider_refresh(s_clone, &p_clone, q).await;
+        });
+
         Ok(Json(serde_json::json!({
             "account_id": account_id.0,
             "provider": provider,
@@ -363,6 +373,16 @@ pub async fn oauth_device_poll(
                         "oauth post_exchange hook failed; account usable without it"
                     );
                 }
+
+                let s_clone = s.clone();
+                let p_clone = provider.clone();
+                tokio::spawn(async move {
+                    let q = ProviderRefreshQuery {
+                        account_id: Some(account_id.0),
+                        ttl_seconds: None,
+                    };
+                    let _ = super::providers::run_provider_refresh(s_clone, &p_clone, q).await;
+                });
 
                 Ok(Json(serde_json::json!({
                     "status": "ok",
