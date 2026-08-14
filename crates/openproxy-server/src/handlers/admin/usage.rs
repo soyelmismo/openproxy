@@ -7,6 +7,47 @@ use axum::{
 
 use openproxy_core::usage as core_usage;
 
+pub const ERRORS_DEFAULT_LIMIT: u32 = 100;
+pub const USAGE_RECENT_DEFAULT_LIMIT: u32 = 50;
+pub const USAGE_RECENT_MAX_LIMIT: u32 = 500;
+pub const USAGE_RECENT_MAX_SINCE_ID: i64 = i64::MAX / 2;
+pub const WS_OUTBOX_CAPACITY: usize = 2048;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RecentQuery {
+    pub since_id: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClientWsMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub since_id: Option<i64>,
+}
+
+pub enum NotifRxEvent {
+    Event(openproxy_core::notifications::NotificationEvent),
+    Lagged(u64),
+    Closed,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UsageStreamQuery {
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DetailQuery {
+    pub id: Option<i64>,
+    pub trace_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UsageDetailResponse {
+    pub row: core_usage::UsageDetailRow,
+}
+
 pub async fn usage_summary(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,

@@ -471,6 +471,12 @@ pub async fn clear_combo_target_cooldown(
     ))
 }
 
+/// Body for `POST /admin/combos/:id/targets/reorder`.
+#[derive(Debug, Deserialize)]
+pub struct ReorderComboTargetsInput {
+    pub target_ids: Vec<i64>,
+}
+
 pub async fn reorder_combo_targets(
     State(s): State<AppState>,
     Path(combo_id): Path<i64>,

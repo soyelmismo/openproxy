@@ -4,6 +4,24 @@ use axum::{
     extract::{Query, State},
 };
 
+/// Query parameters for `GET /admin/debug/logs`.
+#[derive(Debug, Default, Deserialize)]
+pub struct DebugLogsQuery {
+    pub since: Option<u64>,
+    pub request_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub level: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// Response envelope for `GET /admin/debug/logs`.
+#[derive(Debug, Serialize)]
+pub struct DebugLogsResponse {
+    pub entries: Vec<crate::debug_log::DebugLogEntry>,
+    pub latest_seq: u64,
+    pub total_in_buffer: usize,
+}
+
 pub async fn debug_logs(
     State(_s): State<AppState>,
     Query(q): Query<DebugLogsQuery>,

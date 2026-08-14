@@ -5,6 +5,14 @@ use axum::{
     extract::{Path, Query},
 };
 
+/// Query string for `GET /admin/api/notifications`.
+#[derive(Debug, Default, Deserialize)]
+pub struct NotificationsQuery {
+    pub unread: Option<bool>,
+    pub limit: Option<i64>,
+    pub before_id: Option<i64>,
+}
+
 pub async fn list_notifications(
     DbReader(r): DbReader,
     Query(q): Query<NotificationsQuery>,

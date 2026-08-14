@@ -132,6 +132,66 @@ pub async fn sync_models_dev(
     Ok(Json(serde_json::json!({ "message": msg })))
 }
 
+/// Query string for `POST /admin/models/:id/refresh` — lets the caller
+/// override the refresh TTL in seconds and pin a specific account.
+#[derive(Debug, Default, Deserialize)]
+pub struct RefreshQuery {
+    /// Cache TTL in seconds for the discovered rows. Defaults to 1 hour.
+    pub ttl_seconds: Option<i64>,
+    /// Account id whose API key will be used. Required when the provider
+    /// has more than one account; otherwise the first account wins. The
+    /// API key is decrypted on the fly and is never logged or echoed.
+    pub account_id: Option<i64>,
+}
+
+/// `GET /admin/models` — every row in the `models` table.
+#[derive(Debug, Default, Deserialize)]
+pub struct ListModelsQuery {
+    pub provider_id: Option<String>,
+}
+
+/// `POST /admin/models/:id/test` input
+#[derive(Debug, Default, Deserialize)]
+pub struct TestModelInput {
+    pub account_id: Option<i64>,
+    pub proxy_id: Option<String>,
+}
+
+/// Maximum number of characters from a failing response body that we
+/// surface back to the dashboard.
+pub const TEST_ERROR_BODY_MAX_CHARS: usize = 512;
+
+/// The outcome of a single test ping.
+#[derive(Debug, Clone)]
+pub struct TestResult {
+    pub row_id: i64,
+    pub status: u16,
+    pub elapsed_ms: u64,
+    pub error_msg: Option<String>,
+    pub skipped: bool,
+    pub skip_reason: Option<String>,
+}
+
+impl TestResult {
+    pub fn skipped(row_id: i64, reason: &str) -> Self {
+        Self {
+            row_id,
+            status: 0,
+            elapsed_ms: 0,
+            error_msg: Some(reason.to_string()),
+            skipped: true,
+            skip_reason: Some(reason.to_string()),
+        }
+    }
+}
+
+/// Knobs that distinguish the per-row test path from the
+/// per-combo fan-out.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TestOptions {
+    pub in_combo_fanout: bool,
+}
+
 pub async fn refresh_models(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -139,8 +199,6 @@ pub async fn refresh_models(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     run_refresh(s, id, q).await
 }
-
-use super::TestOptions;
 
 pub(crate) async fn run_test_for_model(
     s: &AppState,

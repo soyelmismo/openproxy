@@ -1,16 +1,16 @@
 use axum::{extract::State, http::HeaderMap, response::IntoResponse};
 use bytes::Bytes;
 use futures::stream::Stream;
-use openproxy_pipeline::redact::redact_sensitive_headers;
-use openproxy_pipeline::{Pipeline, PipelineRequest};
-use openproxy_types::ids::{ApiKeyId, RequestId, TraceId};
+use openproxy_types::TargetFormat;
+use openproxy_types::ids::ApiKeyId;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    disconnect::CancelWatch, error::ApiError, middleware::auth::ParsedChatRequest, state::AppState,
+    disconnect::CancelWatch, error::ApiError, middleware::auth::ParsedChatRequest,
+    services::PipelineRunner, state::AppState,
 };
 use openproxy_pipeline::translation::{
     AnthropicRequest, anthropic_request_to_openai, openai_response_to_anthropic,
@@ -37,119 +37,41 @@ pub async fn anthropic_messages(
     let cancel = cancel_watch
         .map(|axum::Extension(cw)| cw)
         .unwrap_or_default();
-    let token_inner = auth_token;
+    let api_key_id: Option<ApiKeyId> = auth_token.as_ref().map(|r| r.key_id);
 
-    let api_key_id: Option<ApiKeyId> = token_inner.as_ref().map(|r| r.key_id);
-    let combo_id = resolved_route.combo_id;
-    let combo_override = resolved_route.combo_override;
-    let targets_override = resolved_route.targets_override;
+    let pipeline = PipelineRunner::build_pipeline(&state);
+    let is_stream = openai_req.stream;
+    let model = openai_req.model.clone();
 
-    let config = openproxy_pipeline::PipelineConfig {
-        defaults: openproxy_pipeline::timeouts::Timeouts::from_config(&state.timeouts()),
-        racing: state.config().racing.clone(),
-        retries: state.config().retries,
-        max_attempts: state.config().retries.max_attempts,
-        master_key: Arc::clone(state.master_key()),
-        adapters: state.adapters(),
-        cooldown_secs: state.config().cooldown.cooldown_secs,
-        cooldown_max_secs: state.config().cooldown.max_secs,
-        cooldown_factor: state.config().cooldown.factor,
-        upstream_client: Arc::clone(state.upstream_client()),
-        oauth_provider_registry: Some(state.oauth_provider_registry()),
-        compression_mode: state.compression_mode(),
-        idle_chunk_retryable: state.idle_chunk_retryable(),
-        quota_protection: state.quota_protection(),
-        background_tx: state.background_tx(),
-    };
-    let pipeline = Pipeline::with_selection_registry(
-        state.db_pool().writer_arc(),
-        config,
-        state.record_bodies_and_flags(),
-        state.selection_registry(),
-        state.circuit_breaker(),
+    let prepared = PipelineRunner::prepare_request(
+        &state,
+        &headers,
+        cancel,
+        openai_req,
+        parsed_req.bytes,
+        api_key_id,
+        resolved_route.combo_id,
+        resolved_route.combo_override,
+        resolved_route.targets_override,
+        openproxy_types::EndpointKind::Chat,
     );
 
-    let request_id = RequestId::new();
-    let trace_id = TraceId::new();
+    let request_id = prepared.req.request_id;
 
-    let client_deadline_ms: Option<u64> = headers
-        .get("x-request-deadline-ms")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|ms| *ms > 0);
-    let total_ms = state.timeouts().total_ms;
-    let watchdog_budget_ms = client_deadline_ms
-        .filter(|&ms| ms < total_ms)
-        .unwrap_or(total_ms);
-
-    let (tx, rx) = tokio::sync::mpsc::channel(64);
-    let CancelWatch {
-        tx: watchdog_tx,
-        rx: client_disconnected,
-    } = cancel;
-
-    let stream_sink = if openai_req.stream {
-        Some(openproxy_pipeline::StreamSink::Direct(tx))
-    } else {
-        Some(openproxy_pipeline::StreamSink::Discard)
-    };
-
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = done_rx => {}
-            _ = tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)) => {
-                let _ = watchdog_tx.send(Some(openproxy_types::CancelReason::WatchdogTimeout));
-            }
-        }
-    });
-
-    let req = PipelineRequest {
-        request_id,
-        trace_id,
-        combo_id,
-        openai_request: Arc::clone(&openai_req),
-        client_disconnected,
-        stream_sink,
-        api_key_id,
-        combo_override,
-        targets_override,
-        request_headers: redact_sensitive_headers(&headers),
-        request_body_json: Some(parsed_req.bytes),
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::EndpointKind::Chat,
-        compressed_messages: Arc::new(std::sync::OnceLock::new()),
-    };
-
-    if openai_req.stream {
+    if is_stream {
         let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
+        let done_tx = prepared.done_tx;
+        let req = prepared.req;
         tokio::spawn(async move {
             let result = pipeline.run(req).await;
             let _ = done_tx.send(());
             if let Some(err) = result.error {
-                let raw_err = err.to_string();
-                let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-                let message = crate::error::truncate_error_message(&redacted.0);
-                let error_json = serde_json::json!({
-                    "type": "error",
-                    "error": {
-                        "type": err.code(),
-                        "message": message
-                    }
-                });
-                let error_str = serde_json::to_string(&error_json).unwrap_or_else(|_| {
-                    r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()
-                });
-                let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
-                frame.extend_from_slice(b"event: error\ndata: ");
-                frame.extend_from_slice(error_str.as_bytes());
-                frame.extend_from_slice(b"\n\n");
-                let _ = error_tx.send(frame.freeze()).await;
+                let frame = ApiError(err).to_sse_error_frame(TargetFormat::Anthropic);
+                let _ = error_tx.send(frame).await;
             }
         });
 
-        let main_stream = ReceiverStream::new(rx);
+        let main_stream = ReceiverStream::new(prepared.stream_rx);
         let error_stream = ReceiverStream::new(error_rx);
         let mut merged = futures::stream::SelectAll::new();
         merged.push(main_stream);
@@ -160,7 +82,7 @@ pub async fn anthropic_messages(
             has_started: false,
             has_finished: false,
             message_id: format!("msg_{}", request_id),
-            model: openai_req.model.clone(),
+            model,
             block_index: 0,
             in_text_block: false,
             in_tool_block: false,
@@ -176,8 +98,8 @@ pub async fn anthropic_messages(
         )
             .into_response())
     } else {
-        let result = pipeline.run(req).await;
-        let _ = done_tx.send(());
+        let result = pipeline.run(prepared.req).await;
+        let _ = prepared.done_tx.send(());
         if let Some(err) = result.error {
             return Err(ApiError(err));
         }
@@ -185,10 +107,8 @@ pub async fn anthropic_messages(
             Some(resp) => {
                 let anthropic_resp = openai_response_to_anthropic(resp);
                 serde_json::to_value(&anthropic_resp).unwrap_or_else(|e| {
-                    let raw_err = e.to_string();
-                    let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-                    let message = crate::error::truncate_error_message(&redacted.0);
-                    serde_json::json!({"error": {"message": message}})
+                    let err = ApiError(openproxy_types::CoreError::Internal(e.to_string()));
+                    serde_json::json!({"error": {"message": err.sanitized_message()}})
                 })
             }
             None => serde_json::json!({"error": {"message": "no response"}}),

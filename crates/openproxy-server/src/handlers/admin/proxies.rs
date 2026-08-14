@@ -6,6 +6,26 @@ use axum::{
 };
 use openproxy_adapters::upstream::is_private_or_reserved;
 
+#[derive(Debug, Default, Deserialize)]
+pub struct ListProxiesQuery {
+    pub source: Option<String>,
+    pub status: Option<String>,
+    pub protocol: Option<String>,
+    pub search: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateCustomProxyInput {
+    pub host: String,
+    pub port: u16,
+    pub r#type: String,
+    pub country_code: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
 pub async fn list_proxies(
     DbReader(r): DbReader,
     Query(query): Query<ListProxiesQuery>,

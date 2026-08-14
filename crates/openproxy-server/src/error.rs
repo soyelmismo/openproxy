@@ -43,28 +43,67 @@ impl std::fmt::Debug for ApiError {
     }
 }
 
+impl ApiError {
+    /// Return the error message sanitized (secrets redacted) and truncated to length limit.
+    pub fn sanitized_message(&self) -> String {
+        let raw = self.0.to_string();
+        let redacted = openproxy_core::cost::redact_error_msg(&raw);
+        truncate_error_message(&redacted.0)
+    }
+
+    /// Render this error as a pre-formatted SSE frame (`Bytes`).
+    ///
+    /// - Anthropic format: `event: error\ndata: {"type":"error","error":{"type":...,"message":...}}\n\n`
+    /// - OpenAI / default format: `data: {"error":{"message":...,"type":...,"code":...}}\n\n`
+    pub fn to_sse_error_frame(&self, format: openproxy_types::TargetFormat) -> bytes::Bytes {
+        let message = self.sanitized_message();
+        let error_str = match format {
+            openproxy_types::TargetFormat::Anthropic => {
+                let error_json = serde_json::json!({
+                    "type": "error",
+                    "error": {
+                        "type": self.0.code(),
+                        "message": message,
+                    }
+                });
+                serde_json::to_string(&error_json).unwrap_or_else(|_| {
+                    r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()
+                })
+            }
+            _ => {
+                let error_json = serde_json::json!({
+                    "error": {
+                        "message": message,
+                        "type": self.0.code(),
+                        "code": self.0.http_status(),
+                    }
+                });
+                serde_json::to_string(&error_json).unwrap_or_else(|_| {
+                    r#"{"error":{"message":"Internal server error","type":"internal_error","code":500}}"#.to_string()
+                })
+            }
+        };
+
+        let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
+        match format {
+            openproxy_types::TargetFormat::Anthropic => {
+                frame.extend_from_slice(b"event: error\ndata: ");
+            }
+            _ => {
+                frame.extend_from_slice(b"data: ");
+            }
+        }
+        frame.extend_from_slice(error_str.as_bytes());
+        frame.extend_from_slice(b"\n\n");
+        frame.freeze()
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status =
             StatusCode::from_u16(self.0.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        // LOW fix: cap the serialized error message so an upstream
-        // returning a multi-MiB HTML error page, a Python traceback,
-        // or any other verbose body does NOT get amplified into the
-        // JSON response we ship back to our own client. The cap is
-        // applied at the HTTP boundary, AFTER `Display` produces the
-        // full string, so all the existing error variants are covered
-        // (validation messages, database messages, upstream bodies)
-        // without having to add a cap to each variant.
-        //
-        // MEDIUM-2 fix: also run the error message through
-        // `redact_error_msg` before truncating. This strips patterns
-        // like `sk-...`, `x-api-key: ...`, `Authorization: Bearer ...`
-        // that upstream proxies might echo in their error responses.
-        // The DB-persisted form has always been redacted (cost.rs);
-        // now the live HTTP response is too.
-        let raw = self.0.to_string();
-        let redacted = openproxy_core::cost::redact_error_msg(&raw);
-        let message = truncate_error_message(&redacted.0);
+        let message = self.sanitized_message();
         let body = json!({
             "error": {
                 "code": self.0.code(),
@@ -133,5 +172,31 @@ mod tests {
         assert!(out.ends_with("...[truncated]"));
         // Round-trip via std::str to verify we did not produce invalid UTF-8.
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn to_sse_error_frame_openai_format() {
+        let err = ApiError(CoreError::Validation("bad key sk-abcdef1234567890abcdef".into()));
+        let frame = err.to_sse_error_frame(openproxy_types::TargetFormat::Openai);
+        let frame_str = std::str::from_utf8(&frame).unwrap();
+
+        assert!(frame_str.starts_with("data: "));
+        assert!(frame_str.ends_with("\n\n"));
+        assert!(!frame_str.contains("sk-abcdef1234567890abcdef"));
+        assert!(frame_str.contains("[REDACTED]"));
+        assert!(frame_str.contains("\"type\":\"validation\""));
+    }
+
+    #[test]
+    fn to_sse_error_frame_anthropic_format() {
+        let err = ApiError(CoreError::Validation("bad key Authorization: Bearer secret_token_12345".into()));
+        let frame = err.to_sse_error_frame(openproxy_types::TargetFormat::Anthropic);
+        let frame_str = std::str::from_utf8(&frame).unwrap();
+
+        assert!(frame_str.starts_with("event: error\ndata: "));
+        assert!(frame_str.ends_with("\n\n"));
+        assert!(!frame_str.contains("secret_token_12345"));
+        assert!(frame_str.contains("[REDACTED]"));
+        assert!(frame_str.contains("\"type\":\"error\""));
     }
 }

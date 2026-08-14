@@ -9,6 +9,12 @@ use openproxy_core::admin as core_admin;
 use openproxy_core::providers as core_providers;
 use std::io::Write;
 
+/// Query string for `GET /admin/accounts` — supports `?provider_id=...`.
+#[derive(Debug, Default, Deserialize)]
+pub struct AccountListQuery {
+    pub provider_id: Option<String>,
+}
+
 pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,

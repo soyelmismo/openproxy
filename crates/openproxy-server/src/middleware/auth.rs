@@ -189,10 +189,8 @@ pub async fn auth_middleware(
                     axum::http::StatusCode::PAYLOAD_TOO_LARGE,
                 ));
             } else {
-                let redacted = openproxy_core::cost::redact_error_msg(&err_str);
-                let message = crate::error::truncate_error_message(&redacted.0);
                 return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
-                    message,
+                    err_str,
                 )));
             }
         }
@@ -200,10 +198,7 @@ pub async fn auth_middleware(
 
     let mut parsed: openproxy_types::OpenAIRequest =
         serde_json::from_slice(&bytes).map_err(|e| {
-            let raw_err = e.to_string();
-            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-            let message = crate::error::truncate_error_message(&redacted.0);
-            crate::error::ApiError(openproxy_types::CoreError::Parse(message))
+            crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string()))
         })?;
 
     // Sanitize orphaned tool calls and tool messages to avoid upstream 400 Bad Request errors.

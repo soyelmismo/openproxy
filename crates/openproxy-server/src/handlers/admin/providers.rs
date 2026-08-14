@@ -8,6 +8,29 @@ use openproxy_core::admin as core_admin;
 use openproxy_core::oauth::OAuthProvider;
 use openproxy_core::providers as core_providers;
 
+#[derive(serde::Serialize)]
+pub struct ProviderWithOAuth {
+    #[serde(flatten)]
+    pub provider: core_providers::Provider,
+    pub oauth_flows: Option<Vec<String>>,
+    pub metadata: openproxy_core::providers::ProviderMetadata,
+    pub active_models: i64,
+    pub total_models: i64,
+}
+
+pub const PROVIDER_REFRESH_DEFAULT_TTL_SECS: i64 = 3_600;
+
+/// Query string for `POST /admin/providers/:id/refresh`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ProviderRefreshQuery {
+    /// Cache TTL in seconds for the discovered rows. Defaults to 1 hour.
+    pub ttl_seconds: Option<i64>,
+    /// Account id whose API key will be used. Required when the provider
+    /// has more than one account; otherwise the first *healthy* account
+    /// wins.
+    pub account_id: Option<i64>,
+}
+
 pub async fn list_providers(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<ProviderWithOAuth>>, ApiError> {

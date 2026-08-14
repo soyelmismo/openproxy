@@ -1,6 +1,24 @@
 use super::*;
 use axum::{Json, extract::State};
 
+/// Read-only view of the relevant `AppConfig` sections.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeConfigResponse {
+    pub timeouts: TimeoutsConfig,
+    pub retries: RetriesConfig,
+    pub circuit_breaker: CircuitBreakerConfig,
+    pub racing: RacingConfig,
+    /// Lifetime in seconds for recorded request/response bodies and
+    /// headers. `0` means bodies are pruned immediately on the next
+    /// prune tick.
+    pub recording_ttl_secs: i64,
+    pub compression: openproxy_compression::CompressionMode,
+    /// When true, idle_chunk timeouts are treated as retryable
+    /// (pipeline falls through to the next target).
+    pub idle_chunk_retryable: bool,
+    pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
+}
+
 pub async fn admin_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",

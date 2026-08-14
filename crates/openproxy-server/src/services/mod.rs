@@ -1,5 +1,8 @@
 //! Application services centralizing business logic and decoupling HTTP handlers.
 
+pub mod pipeline_runner;
+pub use pipeline_runner::{PipelineRunner, PreparedPipelineRequest};
+
 use crate::repositories::{
     AccountRepository, ApiKeyRepository, ComboRepository, ModelRepository, Repository,
     SqliteRepository,
