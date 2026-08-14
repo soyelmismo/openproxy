@@ -1,83 +1,137 @@
 ---
 name: clean-refactor
-description: Skill repo-agnóstica para detectar y corregir rápidamente malas prácticas, optimizar bucles y límites, deduplicar lógica mediante macros/traits plug & play, y ejecutar refactors secuenciales con auditoría dual y commit automático.
+description: Skill repo-agnóstica para detectar y corregir rápidamente malas prácticas de rendimiento, memoria y concurrencia, deduplicar lógica mediante macros/traits plug & play, y ejecutar refactors secuenciales con auditoría dual y commit automático.
 ---
 
 # Clean Refactor & Bad Practices Remediation
 
-Procedimiento repo-agnóstico de alta eficiencia para auditar código, erradicar malas prácticas de rendimiento, deduplicar lógica mediante abstracciones plug & play y ejecutar refactors secuenciales con doble verificación.
+Procedimiento repo-agnóstico de alta eficiencia para auditar código, erradicar malas prácticas de rendimiento, memoria y estabilidad, deduplicar lógica mediante abstracciones plug & play y ejecutar refactors secuenciales con doble verificación.
 
 ---
 
-## 1. Detección y Auditoría de Malas Prácticas
+## 1. Catálogo de Malas Prácticas y Remediaciones Idiomáticas
 
-### 1.1 Anti-patrones de Iteración e Indexación
-- **Problema:** Bucles con rangos e indexación manual (`for i in 0..len`, `for i in 0..n`, `while i < len { arr[i] }`) exigen chequeo de límites (*bounds checking*) en cada iteración, gastan CPU innecesariamente y reducen la legibilidad.
-- **Detección:**
-  - Buscar rangos indexados en el código: `for\s+\w+\s+in\s+0\.\.`, `while\s+\w+\s*<\s*.*\.len\(\)`, accesos `[i]`, `[idx]`.
-  - Buscar lints suprimidos (ej. `#[allow(clippy::needless_range_loop)]`).
+### 1.1 `.unwrap()` indiscriminado (Riesgo de Panic)
+- **Problema:** Lanza `panic!`, aborta el hilo o el proceso, oculta causas de error en producción.
+- **Detección:** Búsqueda de `\.unwrap\(\)` y `\.expect\(` en rutas no-test.
+- **Remediación:**
+  - Propagar con operador `?` (`Result<T, E>` / `Option<T>`).
+  - Proporcionar fallbacks: `.unwrap_or(default)`, `.unwrap_or_else(|| ...)`.
+  - Transformar errores: `.ok_or_else(|| CustomError::...)`.
+  - Control de flujo defensivo: `if let Some(...) = ...` o `match`.
+
+### 1.2 `clone()` Excesivo / Defensivo (Gasto Inútil de Memoria y CPU)
+- **Problema:** Duplica buffers en el heap, oculta problemas de ownership y penaliza el throughput.
+- **Detección:** `\.clone\(\)` en bucles calientes o sobre structs grandes (`OpenAIRequest`, `String`, `Vec`).
+- **Remediación:**
+  - Pasar referencias prestadas (`&T`, `&str`, `&[u8]`).
+  - Usar `Cow<'_, T>` para clonación lazy (solo si se muta).
+  - Transferir ownership (`into_*`, mover valores en lugar de clonar antes de pasar).
+  - Compartir datos inmutables de solo lectura con `Arc<T>` en vez de clonar el contenido.
+
+### 1.3 `String` o `Vec<T>` por Valor en Parámetros de Lectura (Asignación Forzada)
+- **Problema:** Fuerza asignación/copia en el caller incluso si este ya posee un `&str` o slice.
+- **Detección:** Funciones de solo lectura con firmas `fn foo(s: String)` o `fn bar(v: Vec<T>)`.
+- **Remediación:**
+  - Usar vistas prestadas: `&str` en lugar de `String`, `&[T]` en lugar de `Vec<T>`.
+  - Usar polimorfismo zero-cost si se acepta tanto prestado como poseído: `impl AsRef<str>`, `impl AsRef<[T]>` o `impl Into<String>`.
+
+### 1.4 `for i in 0..len` / `while i < len` (Bounds Checking Innecesario)
+- **Problema:** Exige verificación de límites en cada acceso `arr[i]`, gasta CPU, propensa a bugs de off-by-one.
+- **Detección:** `for\s+\w+\s+in\s+0\.\.`, `while\s+\w+\s*<\s*.*\.len\(\)`, indexación `[i]`, `[idx]`.
 - **Remediación:**
   - Iteración directa: `.iter()`, `.iter_mut()`, `.into_iter()`.
   - Iteración con índice: `.iter().enumerate()`.
-  - Pares o ventanas: `.windows(2)`, `.iter().zip(...)`.
-  - Búsqueda / corte: `.position(|item| ...)` en vez de contadores manuales.
-  - Inserción masiva: `.extend(...)` en vez de bucles manuales de inserción.
+  - Pares o ventanas contiguas: `.windows(2)`.
+  - Iteración en paralelo de colecciones: `.zip()`.
+  - Localización de corte: `.position(|&x| ...)` o `.take_while(...)`.
+  - Inserción masiva: `.extend(...)`.
 
-### 1.2 Código Clonado y Módulos Duplicados
-- **Problema:** Copias de utilidades, parsers, normalizadores o tablas de configuración entre crates o módulos generan desincronización y deuda técnica.
-- **Remediación:** Centralizar en el crate/módulo de nivel más bajo (e.g. `types` o `common`) y reexportar con `pub use`.
+### 1.5 `Rc<RefCell<T>>` / `Arc<Mutex<T>>` Ubicuo (Evasión del Borrow Checker)
+- **Problema:** Evade el borrow checker estático, penaliza el runtime con locking / ref-counting dinámico y arriesga deadlocks o panics en runtime (`BorrowMutError`).
+- **Detección:** Estructuras internas plagadas de `RefCell`, `Mutex` o `RwLock` para estados no compartidos.
+- **Remediación:**
+  - Repensar ownership: flujo unidireccional de datos.
+  - Separar estado mutable de estado inmutable.
+  - Uso de canales (MPSC / broadcast) para paso de mensajes en lugar de memoria compartida bloqueada.
 
-### 1.3 Aritmética Manual de Placeholders y Base de Datos
+### 1.6 `static mut` / Estado Global Mutable (Inseguridad y Concurrencia Rota)
+- **Problema:** Requiere bloques `unsafe`, introduce condiciones de carrera (*data races*) y complica los tests concurrentes.
+- **Detección:** `static\s+mut\s+`.
+- **Remediación:**
+  - Pasar estado explícito en structs o contextos de aplicación.
+  - Tipos atómicos para enteros/flags simples (`AtomicBool`, `AtomicU64`).
+  - Inicialización thread-safe inmutable con `std::sync::OnceLock<T>`.
+  - Sincronización segura mediante `Arc<tokio::sync::RwLock<T>>`.
+
+### 1.7 Ignorar o Suprimir Advertencias de Clippy / Linters
+- **Problema:** Acumula deuda técnica, oculta anti-patrones y degrada la calidad del repositorio.
+- **Detección:** Atributos `#![allow(clippy::...)]` o `#[allow(clippy::...)]` a nivel de crate o módulo.
+- **Remediación:**
+  - Eliminar supresiones artificiales.
+  - Ejecutar verificación estricta: `cargo clippy --workspace --all-targets -- -D warnings`.
+  - Corregir la causa raíz (función base o diseño de tipos).
+
+### 1.8 Bloqueos Síncronos en Código Asíncrono
+- **Problema:** `std::thread::sleep`, `std::fs`, o llamadas de red bloqueantes dentro de tareas async congelan el reactor/event loop de Tokio.
+- **Detección:** Uso de `std::thread::sleep`, `std::sync::Mutex` en paths async continuos con `.await`.
+- **Remediación:**
+  - Usar alternativas asíncronas (`tokio::time::sleep`, `tokio::fs`).
+  - Para trabajo intensivo de CPU o APIs síncronas legadas: `tokio::task::spawn_blocking`.
+
+### 1.9 Aritmética Manual de Placeholders y Desbordamiento en Bases de Datos
 - **Problema:** Concatenación manual de `(?1, ?2...)` o `?{base + i}` propensa a sobrepasar límites del motor (ej. `SQLITE_MAX_VARIABLE_NUMBER = 999`).
-- **Remediación:** Helpers genéricos de fragmentación (`query_in_chunks`) y macros/constructores de batch insert tipados.
+- **Detección:** Concatenaciones de strings SQL con índices dinámicos en bucles.
+- **Remediación:**
+  - Helpers genéricos de fragmentación por lotes (`query_in_chunks`).
+  - Macros declarativas de inserción en batch (`batch_insert!`) que respetan el límite de parámetros.
+
+### 1.10 Código Clonado y Duplicación de Lógica de Negocio
+- **Problema:** Copias de parsers, normalizadores, tablas o helpers entre módulos generan bugs por desincronización.
+- **Remediación:**
+  - Centralizar en el crate/módulo base (`types`, `common` o `core`).
+  - Reexportar limpiamente con `pub use`.
 
 ---
 
-## 2. Ciclo "Encuentra > Arregla" (Find -> Fix Loop)
+## 2. Ciclo de Ejecución "Encuentra > Arregla" (Find -> Fix Loop)
 
-Para cada categoría de error identificada:
-1. **Localizar:** Listar ubicaciones exactas con enlaces de archivo y número de líneas (`file:///path/to/file#L...`).
-2. **Proponer Reemplazo Idiomático:** Formular la solución más simple con stdlib / iteradores nativos.
+1. **Localizar:** Listar cada ocurrencia exacta con enlace navegable (`[archivo](file:///path/to/file#L10-L25)`).
+2. **Proponer Reemplazo Idiomático:** Formular la solución de mayor jerarquía lazy (Stdlib > API nativa > Dependencia actual > Código mínimo).
 3. **Parchear Directamente:** Aplicar cambios mínimos y precisos con anclas exactas en el codebase.
-4. **Verificar:** Ejecutar linter con advertencias forzadas (ej. `cargo clippy -- -D <lint>`) y suite de tests unitarios.
+4. **Verificar:** Ejecutar linter con advertencias forzadas (ej. `cargo clippy -- -D <lint>`) y suite completa de pruebas unitarias/e2e.
 
 ---
 
-## 3. Análisis de Deduplicación y Arquitectura Plug & Play
+## 3. Modularización y Arquitectura Plug & Play
 
-Cuando se audita un codebase para modularización:
-1. **Identificar Boilerplate Repetitivo:**
-   - Adaptadores de proveedores / clientes de API con 80% de métodos idénticos.
-   - Handlers de endpoints con orquestación duplicada (timeouts, watchdogs, streaming channels, redacción de secretos).
-   - Visitors o middlewares imperativos sin interfaz común.
-2. **Diseñar Abstracciones Reutilizables:**
-   - **Traits con Defaults:** Proporcionar implementaciones estándar para métodos comunes en el trait base.
-   - **Macros Declarativas:** Generar boilerplate de configuración mediante macros de pocas líneas (ej. `declare_adapter!`).
-   - **Traits de Pipeline:** Encapsular middleware como etapas de streaming (`StreamingStage: process_chunk -> StreamAction`).
-   - **Visitors de Contenido:** Manejar estructuras complejas (ej. strings vs arrays multipart) en un único punto (`mutate_content`).
-3. **Documentar Plan de Acción:** Generar informe estructurado en `.md` con roadmap, impacto en LOC y beneficios arquitectónicos.
+Para habilitar la adición sin fricción de nuevos recursos (proveedores, endpoints, stages de streaming, filtros):
+1. **Traits con Defaults:** Proporcionar implementaciones estándar para métodos comunes en el trait base (ej. `build_chat_url`, `models_url`, `fetch_models`).
+2. **Macros Declarativas:** Generar boilerplate de configuración en una única invocación de 5 líneas (ej. `declare_openai_adapter!`, `sqlite_batch_insert!`).
+3. **Pipelines Modulares:** Componer middleware mediante traits de etapas (`StreamingChunkStage` -> `process_chunk(&mut self, chunk) -> StreamAction`).
+4. **Visitors Polimórficos:** Centralizar mutaciones de estructuras complejas (e.g. `mutate_message_text` para strings planos y arrays multipart) evitando código repetitivo.
 
 ---
 
-## 4. Flujo de Ejecución Secuencial con Subagentes (Dual-Agent Pipeline)
+## 4. Pipeline de Refactorización Secuencial (Dual-Agent)
 
-Para ejecutar refactorizaciones de gran escala de forma segura:
+Para refactorizaciones de gran escala:
 
 ```
-[Punto N] -> [Subagente Refactor] -> [Subagente Reviewer] -> [Tests & Lints] -> [Commit & Push] -> [Punto N+1]
+[Punto N] -> [Subagente Refactor] -> [Subagente Reviewer/Auditor] -> [Tests & Lints] -> [Commit & Push] -> [Punto N+1]
 ```
 
-### 4.1 Subagente Refactor (Punto N)
-- Aplica el diseño técnico acordado para el módulo específico.
-- Elimina código redundante y conecta las nuevas macros/traits/helpers.
-- Verifica compilación básica del paquete.
+1. **Subagente Refactor:**
+   - Aplica los cambios estructurales acordados.
+   - Elimina código redundante y conecta las nuevas macros/traits/helpers.
+   - Verifica compilación básica.
 
-### 4.2 Subagente Reviewer / Auditor (Punto N)
-- Inspecciona el `git diff` completo.
-- Audita exhaustivamente que **ninguna lógica de negocio**, comportamiento sutil, headers específicos, serializaciones o fallback se haya perdido o modificado inadvertidamente.
-- Corrige discrepancias o añade pruebas de regresión.
-- Ejecuta la suite de pruebas del proyecto (`cargo test --workspace`, `npm test`, `pytest`, etc.).
+2. **Subagente Reviewer / Auditor:**
+   - Inspecciona el `git diff` completo.
+   - Audita que **ninguna lógica de negocio**, comportamiento sutil, headers específicos, serializaciones o fallback se haya perdido o modificado.
+   - Corrige discrepancias o añade pruebas de regresión.
+   - Ejecuta la suite de pruebas del proyecto (`cargo test --workspace`, `npm test`, `pytest`, etc.).
 
-### 4.3 Commit y Sincronización
-- Realizar commit atómico con mensaje semántico (`refactor(...)`).
-- Sincronizar con el repositorio remoto (`git push`) antes de avanzar al siguiente punto.
+3. **Commit y Sincronización Atómica:**
+   - Realizar commit atómico con mensaje semántico (`refactor(...)`, `perf(...)`, `fix(...)`).
+   - Sincronizar con el repositorio remoto (`git push`) antes de pasar al siguiente punto.
