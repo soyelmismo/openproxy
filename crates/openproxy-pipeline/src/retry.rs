@@ -71,8 +71,7 @@ impl RetryPolicy {
                 // If it slips through as UpstreamError, we don't want to retry the same target.
                 *status != 429
             }
-            Cancelled(_) => false,
-            RaceLost => false,
+            Cancelled(_) | RaceLost => false,
             _ => true,
         }
     }

@@ -30,11 +30,12 @@ impl CustomAdapter {
     /// back to an empty vec on parse failure).
     pub fn from_provider_row(provider: &openproxy_types::Provider) -> Self {
         let auth_type = match provider.auth_type {
-            openproxy_types::AuthType::Bearer => AdapterAuthType::Bearer,
+            // OAuth tokens are still passed as Bearer on the wire.
+            openproxy_types::AuthType::Bearer | openproxy_types::AuthType::OAuth => {
+                AdapterAuthType::Bearer
+            }
             openproxy_types::AuthType::XApiKey => AdapterAuthType::XApiKey,
             openproxy_types::AuthType::GoogApiKey => AdapterAuthType::GoogApiKey,
-            // OAuth tokens are still passed as Bearer on the wire.
-            openproxy_types::AuthType::OAuth => AdapterAuthType::Bearer,
             openproxy_types::AuthType::None => AdapterAuthType::None,
         };
 

@@ -169,10 +169,10 @@ pub fn route_content(content: &str) -> Option<(String, &'static str)> {
         ContentType::JsonArray => smart_crusher::crush_json_string(content),
         ContentType::GitDiff => diff_compressor::compress_diff_string(content),
         ContentType::BuildOutput => log_compressor::compress_log_string(content),
-        ContentType::SearchResults => None,
-        ContentType::Tabular => None,
-        ContentType::SourceCode => None,
-        ContentType::PlainText => None,
+        ContentType::SearchResults
+        | ContentType::Tabular
+        | ContentType::SourceCode
+        | ContentType::PlainText => None,
     }
 }
 

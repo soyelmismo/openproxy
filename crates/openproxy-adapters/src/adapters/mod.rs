@@ -150,9 +150,10 @@ pub trait ProviderAdapter: Send + Sync {
             }
             AdapterFormat::Responses => format!("{}/responses", self.config().base_url),
             AdapterFormat::Mixed => match target_format {
-                TargetFormat::Openai => format!("{}/chat/completions", self.config().base_url),
+                TargetFormat::Openai | TargetFormat::Gemini => {
+                    format!("{}/chat/completions", self.config().base_url)
+                }
                 TargetFormat::Anthropic => format!("{}/messages", self.config().base_url),
-                TargetFormat::Gemini => format!("{}/chat/completions", self.config().base_url),
                 TargetFormat::Responses => format!("{}/responses", self.config().base_url),
             },
         }
@@ -719,21 +720,21 @@ macro_rules! declare_openai_adapter {
 
         impl $struct_name {
             pub fn new() -> Self {
-                #[allow(unused_mut)]
-                let mut extra_headers = Vec::new();
-                $(
-                    extra_headers = $extra_headers;
-                )?
-                #[allow(unused_mut)]
-                let mut anonymous_fallback = false;
-                $(
-                    anonymous_fallback = $anon;
-                )?
-                #[allow(unused_mut)]
-                let mut rate_limit_scope = "account".to_string();
-                $(
-                    rate_limit_scope = $rl_scope.to_string();
-                )?
+                let extra_headers = {
+                    let val = Vec::new();
+                    $(let val = $extra_headers;)?
+                    val
+                };
+                let anonymous_fallback = {
+                    let val = false;
+                    $(let val = $anon;)?
+                    val
+                };
+                let rate_limit_scope = {
+                    let val = "account".to_string();
+                    $(let val = $rl_scope.to_string();)?
+                    val
+                };
 
                 Self {
                     config: $crate::adapters::ProviderAdapterConfig {

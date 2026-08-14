@@ -22,6 +22,12 @@ pub struct KiroMeta {
     pub profile_arn: Option<String>,
 }
 
+pub type AccountsMetaMaps = (
+    HashMap<i64, RawAccount>,
+    HashMap<i64, KiroMeta>,
+    HashMap<i64, String>,
+);
+
 pub use PipelineRepository as Repository;
 
 pub trait PipelineRepository: Send + Sync {
@@ -33,16 +39,11 @@ pub trait PipelineRepository: Send + Sync {
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
     fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey)
     -> Result<String>;
-    #[allow(clippy::too_many_arguments)]
     fn store_oauth_tokens(
         &self,
         account_id: AccountId,
-        access_token: &str,
-        refresh_token: Option<&str>,
         master_key: &MasterKey,
-        token_type: &str,
-        expires_at: Option<&str>,
-        scope: Option<&str>,
+        params: openproxy_types::accounts::StoreOAuthTokensParams<'_>,
     ) -> Result<()>;
     fn insert_and_broadcast_notification(
         &self,
@@ -101,15 +102,7 @@ pub trait PipelineRepository: Send + Sync {
 
     // Batch Loading
     fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>>;
-    #[allow(clippy::type_complexity)]
-    fn get_accounts_meta(
-        &self,
-        account_ids: &[AccountId],
-    ) -> Result<(
-        HashMap<i64, RawAccount>,
-        HashMap<i64, KiroMeta>,
-        HashMap<i64, String>,
-    )>;
+    fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps>;
     fn get_providers_auth_type(
         &self,
         provider_ids: &[ProviderId],
@@ -322,19 +315,15 @@ impl PipelineRepository for SqlitePipelineRepository {
     fn store_oauth_tokens(
         &self,
         account_id: AccountId,
-        access_token: &str,
-        refresh_token: Option<&str>,
         master_key: &MasterKey,
-        _token_type: &str,
-        expires_at: Option<&str>,
-        _scope: Option<&str>,
+        params: openproxy_types::accounts::StoreOAuthTokensParams<'_>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let access_token_encrypted = master_key.encrypt(access_token)?;
-        let refresh_token_encrypted = refresh_token.map(|rt| master_key.encrypt(rt)).transpose()?;
+        let access_token_encrypted = master_key.encrypt(params.access_token)?;
+        let refresh_token_encrypted = params.refresh_token.map(|rt| master_key.encrypt(rt)).transpose()?;
         conn.execute(
             "UPDATE accounts SET access_token_encrypted = ?1, refresh_token_encrypted = ?2, expires_at = ?3 WHERE id = ?4",
-            rusqlite::params![access_token_encrypted, refresh_token_encrypted, expires_at, account_id.0]
+            rusqlite::params![access_token_encrypted, refresh_token_encrypted, params.expires_at, account_id.0]
         ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
 
@@ -593,14 +582,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         Ok(map)
     }
 
-    fn get_accounts_meta(
-        &self,
-        account_ids: &[AccountId],
-    ) -> Result<(
-        HashMap<i64, RawAccount>,
-        HashMap<i64, KiroMeta>,
-        HashMap<i64, String>,
-    )> {
+    fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
         let mut raw_map = HashMap::new();

@@ -212,7 +212,39 @@ impl UpstreamDispatcher {
         };
         self.record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
     }
+}
 
+pub(crate) struct DispatchParams<'a> {
+    pub target: &'a ComboTarget,
+    pub combo: &'a Combo,
+    pub req: PipelineRequest,
+    pub model: &'a Model,
+    pub target_format: openproxy_types::TargetFormat,
+    pub url: &'a str,
+    pub headers: &'a [(String, String)],
+    pub body_bytes: bytes::Bytes,
+    pub resolved_timeouts: &'a Timeouts,
+    pub started: Instant,
+    pub attempt: u8,
+    pub race_size: u8,
+    pub trace_id: String,
+}
+
+pub(crate) struct StreamDispatchParams<'a> {
+    pub target: &'a ComboTarget,
+    pub combo: &'a Combo,
+    pub req: PipelineRequest,
+    pub model: &'a Model,
+    pub target_format: openproxy_types::TargetFormat,
+    pub resolved_timeouts: &'a Timeouts,
+    pub started: Instant,
+    pub attempt: u8,
+    pub race_size: u8,
+    pub trace_id: String,
+    pub upstream_request: UpstreamRequest,
+}
+
+impl UpstreamDispatcher {
     pub(crate) fn record_and_fail_with_trace_id(
         &self,
         req: PipelineRequest,
@@ -221,47 +253,45 @@ impl UpstreamDispatcher {
         ctx: FailureContext<'_>,
         trace_id: String,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(
-            req, combo, target, ctx, trace_id, None, None, 0, "",
-        )
+        self.tracker.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
+            req,
+            combo,
+            target,
+            ctx,
+            trace_id,
+            acc: None,
+            chunk_id: None,
+            created: 0,
+            model_name: "",
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: PipelineRequest,
-        combo: &Combo,
-        target: &ComboTarget,
-        ctx: FailureContext<'_>,
-        trace_id: String,
-        acc: Option<&crate::sse_accumulator::ResponseAccumulator>,
-        chunk_id: Option<&str>,
-        created: u64,
-        model_name: &str,
+        params: crate::PartialFailureParams<'_>,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(
-            req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name,
-        )
+        self.tracker.record_and_fail_with_trace_id_and_partial(params)
     }
 
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn dispatch_upstream(
         &self,
-        target: &ComboTarget,
-        combo: &Combo,
-        req: PipelineRequest,
-        model: &Model,
-        target_format: openproxy_types::TargetFormat,
-        url: &str,
-        headers: &[(String, String)],
-        body_bytes: bytes::Bytes,
-        resolved_timeouts: &Timeouts,
-        started: Instant,
-        attempt: u8,
-        race_size: u8,
-        trace_id: String,
+        params: DispatchParams<'_>,
     ) -> PipelineResult {
+        let DispatchParams {
+            target,
+            combo,
+            req,
+            model,
+            target_format,
+            url,
+            headers,
+            body_bytes,
+            resolved_timeouts,
+            started,
+            attempt,
+            race_size,
+            trace_id,
+        } = params;
         let mut dctx = DispatchContext {
             attempt,
             race_size,
@@ -347,7 +377,7 @@ impl UpstreamDispatcher {
         // always uses stream=true (set in the translation layer).
         if req.stream_sink.is_some() {
             return self
-                .dispatch_upstream_streaming(
+                .dispatch_upstream_streaming(StreamDispatchParams {
                     target,
                     combo,
                     req,
@@ -359,7 +389,7 @@ impl UpstreamDispatcher {
                     race_size,
                     trace_id,
                     upstream_request,
-                )
+                })
                 .await;
         }
 
@@ -1157,17 +1187,17 @@ impl UpstreamDispatcher {
                 None => None,
             };
             let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-            return self.record_and_fail_with_trace_id_and_partial(
+            return self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
                 req,
                 combo,
                 target,
-                fail_ctx,
+                ctx: fail_ctx,
                 trace_id,
-                acc_ref,
-                Some(chunk_id),
+                acc: acc_ref,
+                chunk_id: Some(chunk_id),
                 created,
                 model_name,
-            );
+            });
         }
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
             Some(a) => {
@@ -1184,17 +1214,17 @@ impl UpstreamDispatcher {
             CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
         };
         let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
-        self.record_and_fail_with_trace_id_and_partial(
+        self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
             req,
             combo,
             target,
-            fail_ctx,
+            ctx: fail_ctx,
             trace_id,
-            acc_ref,
-            Some(chunk_id),
+            acc: acc_ref,
+            chunk_id: Some(chunk_id),
             created,
             model_name,
-        )
+        })
     }
 
     pub(crate) fn fail_on_sink_send_error(
@@ -1274,17 +1304,17 @@ impl UpstreamDispatcher {
                                 None => None,
                             };
                         let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-                        self.record_and_fail_with_trace_id_and_partial(
+                        self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
                             req,
                             combo,
                             target,
-                            fail_ctx,
+                            ctx: fail_ctx,
                             trace_id,
-                            acc_ref,
-                            Some(chunk_id),
+                            acc: acc_ref,
+                            chunk_id: Some(chunk_id),
                             created,
                             model_name,
-                        )
+                        })
                     };
                 }
                 let is_watchdog_fired = watchdog_fired.is_some();
@@ -1316,17 +1346,17 @@ impl UpstreamDispatcher {
             None => None,
         };
         let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status());
-        self.record_and_fail_with_trace_id_and_partial(
+        self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
             req,
             combo,
             target,
-            fail_ctx,
+            ctx: fail_ctx,
             trace_id,
-            acc_ref,
-            Some(chunk_id),
+            acc: acc_ref,
+            chunk_id: Some(chunk_id),
             created,
             model_name,
-        )
+        })
     }
 
     // ---------------------------------------------------------------------
@@ -1336,22 +1366,23 @@ impl UpstreamDispatcher {
     /// Streaming variant of dispatch_upstream. Reads SSE lines from
     /// the upstream response and forwards each translated chunk through
     /// the stream_sink channel in real-time.
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn dispatch_upstream_streaming(
         &self,
-        target: &ComboTarget,
-        combo: &Combo,
-        req: PipelineRequest,
-        model: &Model,
-        target_format: openproxy_types::TargetFormat,
-        resolved_timeouts: &Timeouts,
-        started: Instant,
-        attempt: u8,
-        race_size: u8,
-        trace_id: String,
-        upstream_request: UpstreamRequest,
+        params: StreamDispatchParams<'_>,
     ) -> PipelineResult {
+        let StreamDispatchParams {
+            target,
+            combo,
+            req,
+            model,
+            target_format,
+            resolved_timeouts,
+            started,
+            attempt,
+            race_size,
+            trace_id,
+            upstream_request,
+        } = params;
         let dctx = DispatchContext {
             attempt,
             race_size,
@@ -1794,7 +1825,7 @@ impl UpstreamDispatcher {
         };
 
         match state.run_stream_loop(&ctx, self, &mut stream).await {
-            Ok(crate::streaming_state::ChunkResult::Return(r)) => return r,
+            Ok(crate::streaming_state::ChunkResult::Return(r)) => return *r,
             Ok(crate::streaming_state::ChunkResult::Break) => {}
             Err(e) => {
                 // If the stream loop failed with a CoreError (e.g. I/O error reading body),
@@ -1872,17 +1903,17 @@ impl UpstreamDispatcher {
                 }
                 None => None,
             };
-            return self.record_and_fail_with_trace_id_and_partial(
+            return self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
                 req,
                 combo,
                 target,
-                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, 502),
+                ctx: dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, 502),
                 trace_id,
-                acc_ref,
-                Some(&chunk_id),
+                acc: acc_ref,
+                chunk_id: Some(&chunk_id),
                 created,
-                &model_name,
-            );
+                model_name: &model_name,
+            });
         }
 
         // Record usage.

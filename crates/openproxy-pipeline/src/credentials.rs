@@ -22,18 +22,30 @@ impl CredentialManager {
                     .map(ToString::to_string)
             })
     }
+}
 
-    #[allow(clippy::too_many_arguments)]
+pub struct ResolutionMaps<'a> {
+    pub models_map: &'a HashMap<i64, Model>,
+    pub accounts_map: &'a HashMap<i64, RawAccount>,
+    pub kiro_map: &'a HashMap<i64, KiroMeta>,
+    pub antigravity_map: &'a HashMap<i64, String>,
+    pub providers_map: &'a HashMap<String, String>,
+}
+
+impl CredentialManager {
     pub fn resolve_credentials(
         eligible: Vec<ComboTarget>,
-        models_map: &HashMap<i64, Model>,
-        accounts_map: &HashMap<i64, RawAccount>,
-        kiro_map: &HashMap<i64, KiroMeta>,
-        antigravity_map: &HashMap<i64, String>,
-        providers_map: &HashMap<String, String>,
+        maps: &ResolutionMaps<'_>,
         master_key: &MasterKey,
         oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
     ) -> Vec<ResolvedTarget> {
+        let ResolutionMaps {
+            models_map,
+            accounts_map,
+            kiro_map,
+            antigravity_map,
+            providers_map,
+        } = maps;
         let mut resolved = Vec::with_capacity(eligible.len());
         for t in eligible {
             let Some(model_row_id) = t.model_row_id else {

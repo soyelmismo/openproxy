@@ -413,196 +413,33 @@ async fn run_one_tick(
 ) {
     let started = Instant::now();
 
-    // (1) Provider row check. We hold the writer only for the
-    // duration of the `provider_row + accounts_list` snapshot;
-    // the writer mutex must be released before we open a second
-    // handle and call `refresh_models.await` (the `Connection`
-    // carried by `refresh_models` is `Send` but the pool's
-    // `MutexGuard` is not).
-    let (provider_row, accounts_list) = {
-        let w = db_pool.reader();
-        let row = match providers::get(&w, &provider) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(
-                    provider = %provider,
-                    error = %e,
-                    "discovery tick: failed to load provider row; skipping cycle",
-                );
-                return;
-            }
-        };
-        let accs = match accounts::list(&w, Some(&provider), master_key) {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::warn!(
-                    provider = %provider,
-                    error = %e,
-                    "discovery tick: failed to list accounts; skipping cycle",
-                );
-                return;
-            }
-        };
-        (row, accs)
+    let Some((provider_row, accounts_list)) =
+        load_provider_snapshot(db_pool, &provider, master_key)
+    else {
+        return;
     };
 
-    // (2) Skip path: provider missing, no accounts, or
-    // explicitly-anonymous provider with no accounts. Log at
-    // DEBUG so a verbose operator can see the cycle was hit,
-    // but stay quiet at INFO.
-    if provider_row.is_none() {
+    let Some(ref p_row) = provider_row else {
         tracing::debug!(
             provider = %provider,
             "discovery tick: provider row missing; skipping cycle",
         );
         return;
-    }
-    let is_anonymous = matches!(
-        provider_row.as_ref().map(|p| p.auth_type),
-        Some(AuthType::None)
-    );
-    if accounts_list.is_empty() {
-        if is_anonymous {
-            // Anonymous provider: empty accounts is expected, no
-            // decrypt needed. We pass an empty API key below and
-            // let the adapter do its thing.
-            tracing::debug!(
-                provider = %provider,
-                "discovery tick: anonymous provider, no accounts; using empty api key",
-            );
-        } else {
-            tracing::info!(
-                provider = %provider,
-                "discovery tick: provider has no accounts; skipping silently",
-            );
-            return;
-        }
-    }
-
-    // (3) Pick the first account (highest priority) and decrypt.
-    // For OAuth accounts we still pass an empty string —
-    // `refresh_models` is what the admin handler does in this
-    // same situation (it short-circuits to a refresh-oauth path
-    // out-of-band; the discovery scheduler doesn't do that
-    // because the OAuth refresh scheduler already keeps tokens
-    // fresh, and the /models endpoint for the OAuth upstreams
-    // doesn't actually require a usable access token at the
-    // point we'd be calling it). This mirrors the existing
-    // admin path: `api_key = String::new()` for the
-    // selected_account_id == None branch.
-    //
-    // B1 (Bug 2): also resolve the account's `label` so providers
-    // like `cloudflare-workers-ai` that interpolate the account
-    // label into their URL path (see
-    // `CloudflareWorkersAIAdapter::fetch_models_for_account` and
-    // `build_chat_url_for_account`) get a non-empty value here.
-    // Previously this branch passed `""` as the label, which
-    // produced URLs like `accounts//ai/models/search` (double
-    // slash — empty account id) and 404'd on every Cloudflare
-    // discovery tick. The admin handler in
-    // `handlers/admin.rs::refresh_models` already does the same
-    // `a.label.unwrap_or_default()` lookup; the discovery
-    // scheduler was the only path that didn't.
-    let (api_key, account_label): (String, String) = match accounts_list.first() {
-        Some(acc) => {
-            let label = acc.label.as_deref().unwrap_or_default().to_string();
-            // `auth_type` is a free-form `String` on the
-            // `Account` row; "oauth" is the only value that
-            // signals "no encrypted API key". For those we
-            // decrypt the access token from the database so the
-            // adapter can fetch account-specific models.
-            if acc.auth_type == "oauth" {
-                let decrypt_result = {
-                    let w = db_pool.reader();
-                    accounts::decrypt_access_token(&w, acc.id, master_key.as_ref())
-                };
-                match decrypt_result {
-                    Ok(k) => (k, label),
-                    Err(e) => {
-                        tracing::warn!(
-                            provider = %provider,
-                            account = acc.id.0,
-                            error = %e,
-                            "discovery tick: failed to decrypt oauth access token; skipping cycle",
-                        );
-                        // B2: surface the decrypt failure to the
-                        // dashboard notifications tray. Same reason as
-                        // below — silent skips leave the operator
-                        // wondering why discovery is stuck (the
-                        // decrypt attempt is in an unknown state). Failure
-                        // to record the notification is swallowed — the
-                        // WARN log above is the source of truth, and the
-                        // dedup index collapses repeat identical codes
-                        // within 24h so a persistently bad key doesn't
-                        // flood the tray.
-                        let db_pool = Arc::clone(db_pool);
-                        let provider_str = provider.as_str().to_string();
-                        let acc_id = acc.id.0;
-                        let err_str = e.to_string();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            if let Ok(notif_conn) = db_pool.open_connection() {
-                                let _ = crate::notifications::record_system(
-                                    &notif_conn,
-                                    crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
-                                    &format!("account_id={}: {}", acc_id, err_str),
-                                    Some(&provider_str),
-                                    None,
-                                );
-                            }
-                        })
-                        .await;
-                        return;
-                    }
-                }
-            } else {
-                // API-key based provider (Anthropic, OpenRouter, etc.).
-                // Decrypt the plaintext key from the DB so the adapter can
-                // talk to the upstream.
-                let decrypt_result = {
-                    let w = db_pool.reader();
-                    accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
-                };
-                match decrypt_result {
-                    Ok(k) => (k, label),
-                    Err(e) => {
-                        tracing::warn!(
-                            provider = %provider,
-                            account = acc.id.0,
-                            error = %e,
-                            "discovery tick: failed to decrypt api key; skipping cycle",
-                        );
-                        // B2: surface the decrypt failure to the
-                        // dashboard notifications tray so an operator who
-                        // typed an invalid key sees the red banner instead
-                        // of silent skips.
-                        let db_pool = Arc::clone(db_pool);
-                        let provider_str = provider.as_str().to_string();
-                        let acc_id = acc.id.0;
-                        let err_str = e.to_string();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            if let Ok(notif_conn) = db_pool.open_connection() {
-                                let _ = crate::notifications::record_system(
-                                    &notif_conn,
-                                    crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
-                                    &format!("account_id={}: {}", acc_id, err_str),
-                                    Some(&provider_str),
-                                    None,
-                                );
-                            }
-                        })
-                        .await;
-                        return;
-                    }
-                }
-            }
-        }
-        None => (String::new(), String::new()),
     };
 
-    // (4) Open a fresh connection and run the refresh. The
-    // borrow of `db_pool` is over — the `&Arc<DbPool>` argument
-    // is fine to keep borrowing because the spawned task owns
-    // an `Arc` clone anyway.
+    let is_anonymous = matches!(p_row.auth_type, AuthType::None);
+    let Some((api_key, account_label)) = resolve_account_credentials(
+        db_pool,
+        &provider,
+        &accounts_list,
+        is_anonymous,
+        master_key,
+    )
+    .await
+    else {
+        return;
+    };
+
     let conn = match db_pool.open_connection() {
         Ok(c) => c,
         Err(e) => {
@@ -614,7 +451,7 @@ async fn run_one_tick(
             return;
         }
     };
-    // Update CustomAdapter from the latest provider_row so endpoint edits take effect immediately
+
     let adapter = match (&adapter, &provider_row) {
         (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(
             openproxy_adapters::adapters::CustomAdapter::from_provider_row(row),
@@ -634,9 +471,137 @@ async fn run_one_tick(
     .await;
 
     let duration_ms = started.elapsed().as_millis();
+    handle_discovery_outcome(db_pool, &provider, &provider_row, result, duration_ms).await;
+}
 
-    // (5) Log outcome. We deliberately do NOT include the
-    // `api_key` or any account plaintext in the log payload.
+fn load_provider_snapshot(
+    db_pool: &Arc<DbPool>,
+    provider: &ProviderId,
+    master_key: &Arc<MasterKey>,
+) -> Option<(Option<providers::Provider>, Vec<accounts::Account>)> {
+    let w = db_pool.reader();
+    let row = match providers::get(&w, provider) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                provider = %provider,
+                error = %e,
+                "discovery tick: failed to load provider row; skipping cycle",
+            );
+            return None;
+        }
+    };
+    let accs = match accounts::list(&w, Some(provider), master_key) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                provider = %provider,
+                error = %e,
+                "discovery tick: failed to list accounts; skipping cycle",
+            );
+            return None;
+        }
+    };
+    Some((row, accs))
+}
+
+async fn resolve_account_credentials(
+    db_pool: &Arc<DbPool>,
+    provider: &ProviderId,
+    accounts_list: &[accounts::Account],
+    is_anonymous: bool,
+    master_key: &Arc<MasterKey>,
+) -> Option<(String, String)> {
+    if accounts_list.is_empty() {
+        if is_anonymous {
+            tracing::debug!(
+                provider = %provider,
+                "discovery tick: anonymous provider, no accounts; using empty api key",
+            );
+            return Some((String::new(), String::new()));
+        } else {
+            tracing::info!(
+                provider = %provider,
+                "discovery tick: provider has no accounts; skipping silently",
+            );
+            return None;
+        }
+    }
+
+    let Some(acc) = accounts_list.first() else {
+        return Some((String::new(), String::new()));
+    };
+
+    let label = acc.label.as_deref().unwrap_or_default().to_string();
+    if acc.auth_type == "oauth" {
+        let decrypt_result = {
+            let w = db_pool.reader();
+            accounts::decrypt_access_token(&w, acc.id, master_key.as_ref())
+        };
+        match decrypt_result {
+            Ok(k) => Some((k, label)),
+            Err(e) => {
+                tracing::warn!(
+                    provider = %provider,
+                    account = acc.id.0,
+                    error = %e,
+                    "discovery tick: failed to decrypt oauth access token; skipping cycle",
+                );
+                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string()).await;
+                None
+            }
+        }
+    } else {
+        let decrypt_result = {
+            let w = db_pool.reader();
+            accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
+        };
+        match decrypt_result {
+            Ok(k) => Some((k, label)),
+            Err(e) => {
+                tracing::warn!(
+                    provider = %provider,
+                    account = acc.id.0,
+                    error = %e,
+                    "discovery tick: failed to decrypt api key; skipping cycle",
+                );
+                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string()).await;
+                None
+            }
+        }
+    }
+}
+
+async fn record_decrypt_failed_notification(
+    db_pool: &Arc<DbPool>,
+    provider: &ProviderId,
+    acc_id: i64,
+    err_str: &str,
+) {
+    let db_pool = Arc::clone(db_pool);
+    let provider_str = provider.as_str().to_string();
+    let err_str = err_str.to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Ok(notif_conn) = db_pool.open_connection() {
+            let _ = crate::notifications::record_system(
+                &notif_conn,
+                crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
+                &format!("account_id={}: {}", acc_id, err_str),
+                Some(&provider_str),
+                None,
+            );
+        }
+    })
+    .await;
+}
+
+async fn handle_discovery_outcome(
+    db_pool: &Arc<DbPool>,
+    provider: &ProviderId,
+    provider_row: &Option<providers::Provider>,
+    result: openproxy_types::Result<models::UpsertResult>,
+    duration_ms: u128,
+) {
     match result {
         Ok(upsert) => {
             tracing::info!(
@@ -647,19 +612,6 @@ async fn run_one_tick(
                 "discovery tick: refresh complete",
             );
 
-            // (6) Gate F2: re-apply the provider's
-            // `auto_activate_keyword` rule against the rows the
-            // refresh just touched. Mirrors what the admin
-            // handler does after `refresh_models` — see
-            // `crates/openproxy-server/src/handlers/admin.rs`
-            // step (7). We open a fresh connection here (the
-            // one we handed to `refresh_models` is gone by now)
-            // and only run this on success: if the upstream
-            // 500'd the catalog wasn't mutated and re-applying
-            // the rule would be wasted work + could re-flip
-            // rows the operator just hand-toggled since the
-            // last successful tick. Failures are logged at WARN
-            // and swallowed — the next tick tries again.
             let db_pool_clone = Arc::clone(db_pool);
             let provider_clone = provider.clone();
             let keyword = provider_row
@@ -688,23 +640,12 @@ async fn run_one_tick(
             .await;
         }
         Err(e) => {
-            // Errors must not kill the loop. WARN, not ERROR, so
-            // an upstream that's briefly down doesn't page
-            // anyone.
             tracing::warn!(
                 provider = %provider,
                 error = %e,
                 duration_ms,
                 "discovery tick: refresh failed",
             );
-            // Surface to the dashboard's notifications tray. The
-            // dedup key for system notifications is the `code`, so
-            // repeat identical `discovery_failed` codes within 24h
-            // collapse into one row — an upstream that's flapping
-            // won't flood the tray. We open a fresh connection
-            // because the one used for `refresh_models` may be in a
-            // half-finished state; `open_connection` is cheap and
-            // the writer mutex is unaffected.
             let db_pool = Arc::clone(db_pool);
             let provider_str = provider.as_str().to_string();
             let err_str = e.to_string();

@@ -136,16 +136,18 @@ async fn run_pipeline(
     let is_stream = resolved_route.openai_req.stream;
 
     let prepared = PipelineRunner::prepare_request(
-        &state,
-        &headers,
-        cancel,
-        resolved_route.openai_req,
-        raw_request_body,
-        api_key_id,
-        resolved_route.combo_id,
-        resolved_route.combo_override,
-        resolved_route.targets_override,
-        openproxy_types::EndpointKind::Chat,
+        crate::services::pipeline_runner::PrepareRequestParams {
+            state: &state,
+            headers: &headers,
+            cancel,
+            openai_req: resolved_route.openai_req,
+            raw_request_body,
+            api_key_id,
+            combo_id: resolved_route.combo_id,
+            combo_override: resolved_route.combo_override,
+            targets_override: resolved_route.targets_override,
+            endpoint_kind: openproxy_types::EndpointKind::Chat,
+        },
     );
 
     if is_stream {

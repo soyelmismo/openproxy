@@ -217,28 +217,25 @@ mod tests {
         (conn, path)
     }
 
-    /// Insert one usage row with all defaults driven by the test fixture.
-    /// Counts start at 0/200ms ttft/1200ms total to make aggregate assertions
-    /// easy to write by inspection.
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
-    fn insert(
-        conn: &Connection,
-        request_id: &str,
-        trace_id: &str,
-        provider: &str,
-        model: &str,
+    #[derive(Default)]
+    struct TestUsageParams<'a> {
+        request_id: &'a str,
+        trace_id: &'a str,
+        provider: &'a str,
+        model: &'a str,
         account: Option<i64>,
         status: u16,
         prompt: i64,
         completion: i64,
-        cost: impl Into<Option<f64>>,
+        cost: Option<f64>,
         ttft: Option<i64>,
         total: i64,
         race_lost: bool,
-        err: Option<&str>,
-    ) {
-        let cost: Option<f64> = cost.into();
+        err: Option<&'a str>,
+    }
+
+    fn insert(conn: &Connection, p: TestUsageParams<'_>) {
+        let status = if p.status == 0 { 200 } else { p.status };
         conn.execute(
             "INSERT INTO usage (\
                 request_id, trace_id, attempt, provider_id, account_id, \
@@ -249,19 +246,19 @@ mod tests {
                 ?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, 50, ?9, ?10, ?11, ?12, ?12, 1, ?13, datetime('now')\
              )",
             params![
-                request_id,
-                trace_id,
-                provider,
-                account,
-                model,
-                prompt,
-                completion,
-                cost,
-                ttft,
-                total,
+                p.request_id,
+                p.trace_id,
+                p.provider,
+                p.account,
+                p.model,
+                p.prompt,
+                p.completion,
+                p.cost,
+                p.ttft,
+                p.total,
                 status as i64,
-                err,
-                race_lost as i64,
+                p.err,
+                p.race_lost as i64,
             ],
         )
         .expect("insert");
@@ -279,51 +276,56 @@ mod tests {
         let t3 = TraceId::new().to_string();
         insert(
             &conn,
-            &req,
-            &t1,
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            100,
-            50,
-            0.01,
-            Some(200),
-            1200,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &req,
+                trace_id: &t1,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.01),
+                ttft: Some(200),
+                total: 1200,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &req,
-            &t2,
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            200,
-            100,
-            50,
-            0.01,
-            Some(200),
-            1200,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &req,
+                trace_id: &t2,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.01),
+                ttft: Some(200),
+                total: 1200,
+                race_lost: true,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &req,
-            &t3,
-            "openrouter",
-            "openai/gpt-4o",
-            Some(3),
-            200,
-            100,
-            50,
-            0.01,
-            Some(200),
-            1200,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &req,
+                trace_id: &t3,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(3),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.01),
+                ttft: Some(200),
+                total: 1200,
+                race_lost: true,
+                ..Default::default()
+            },
         );
 
         let s = summary(&conn, &UsageFilter::default()).expect("summary");
@@ -352,51 +354,54 @@ mod tests {
         let r3 = RequestId::new().to_string();
         insert(
             &conn,
-            &r1,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.001,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.001),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r2,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            200,
-            10,
-            5,
-            0.001,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.001),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r3,
-            &TraceId::new().to_string(),
-            "anthropic",
-            "claude-3.5-sonnet",
-            Some(3),
-            200,
-            10,
-            5,
-            0.001,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &TraceId::new().to_string(),
+                provider: "anthropic",
+                model: "claude-3.5-sonnet",
+                account: Some(3),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.001),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
 
         let f = UsageFilter {
@@ -427,67 +432,71 @@ mod tests {
         let r4 = RequestId::new().to_string();
         insert(
             &conn,
-            &r1,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            100,
-            50,
-            0.5,
-            Some(200),
-            1200,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.5),
+                ttft: Some(200),
+                total: 1200,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r2,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            100,
-            50,
-            0.5,
-            Some(200),
-            1200,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.5),
+                ttft: Some(200),
+                total: 1200,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r3,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o-mini",
-            Some(1),
-            200,
-            100,
-            50,
-            0.05,
-            Some(200),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o-mini",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.05),
+                ttft: Some(200),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r4,
-            &TraceId::new().to_string(),
-            "anthropic",
-            "claude-3.5-sonnet",
-            Some(2),
-            200,
-            100,
-            50,
-            1.0,
-            Some(200),
-            1500,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r4,
+                trace_id: &TraceId::new().to_string(),
+                provider: "anthropic",
+                model: "claude-3.5-sonnet",
+                account: Some(2),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(1.0),
+                ttft: Some(200),
+                total: 1500,
+                ..Default::default()
+            },
         );
 
         let rows = by_model(&conn, &UsageFilter::default()).expect("by_model");
@@ -531,67 +540,72 @@ mod tests {
         let r4 = RequestId::new().to_string();
         insert(
             &conn,
-            &r1,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.10,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.10),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r2,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.10,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.10),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r3,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            200,
-            10,
-            5,
-            0.05,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.05),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r4,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            500,
-            10,
-            5,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("upstream 500"),
+            TestUsageParams {
+                request_id: &r4,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 500,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("upstream 500"),
+                ..Default::default()
+            },
         );
 
         let rows = by_account(&conn, &UsageFilter::default()).expect("by_account");
@@ -619,56 +633,67 @@ mod tests {
         let (conn, _p) = fresh_conn();
         // 3x 200, 2x 429, 1x 500
         for _ in 0..3 {
+            let req = RequestId::new().to_string();
+            let trace = TraceId::new().to_string();
             insert(
                 &conn,
-                &RequestId::new().to_string(),
-                &TraceId::new().to_string(),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(1),
-                200,
-                10,
-                5,
-                0.01,
-                Some(100),
-                600,
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &req,
+                    trace_id: &trace,
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    account: Some(1),
+                    status: 200,
+                    prompt: 10,
+                    completion: 5,
+                    cost: Some(0.01),
+                    ttft: Some(100),
+                    total: 600,
+                    ..Default::default()
+                },
             );
         }
         for _ in 0..2 {
+            let req = RequestId::new().to_string();
+            let trace = TraceId::new().to_string();
             insert(
                 &conn,
-                &RequestId::new().to_string(),
-                &TraceId::new().to_string(),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(1),
-                429,
-                10,
-                5,
-                0.0,
-                Some(100),
-                600,
-                false,
-                Some("rate limited"),
+                TestUsageParams {
+                    request_id: &req,
+                    trace_id: &trace,
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    account: Some(1),
+                    status: 429,
+                    prompt: 10,
+                    completion: 5,
+                    cost: Some(0.0),
+                    ttft: Some(100),
+                    total: 600,
+                    err: Some("rate limited"),
+                    ..Default::default()
+                },
             );
         }
+        let req = RequestId::new().to_string();
+        let trace = TraceId::new().to_string();
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            500,
-            10,
-            5,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("oops"),
+            TestUsageParams {
+                request_id: &req,
+                trace_id: &trace,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 500,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("oops"),
+                ..Default::default()
+            },
         );
 
         let rows = by_status(&conn, &UsageFilter::default()).expect("by_status");
@@ -689,54 +714,65 @@ mod tests {
     fn errors_returns_only_4xx_5xx() {
         let (conn, _p) = fresh_conn();
         // 1 success
+        let r1 = RequestId::new().to_string();
+        let t1 = TraceId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let t2 = TraceId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let t3 = TraceId::new().to_string();
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.01,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &t1,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.01),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         // 1 400, 1 502
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            400,
-            10,
-            5,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("bad request"),
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &t2,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 400,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("bad request"),
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            502,
-            10,
-            5,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("upstream down"),
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &t3,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 502,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("upstream down"),
+                ..Default::default()
+            },
         );
 
         let rows = errors(&conn, &UsageFilter::default(), 50).expect("errors");
@@ -762,19 +798,21 @@ mod tests {
             let trace = format!("trace-{}", i);
             insert(
                 &conn,
-                &req,
-                &trace,
-                "openrouter",
-                "openai/gpt-4o",
-                Some(1),
-                500,
-                10,
-                5,
-                0.0,
-                Some(100),
-                600,
-                false,
-                Some("err"),
+                TestUsageParams {
+                    request_id: &req,
+                    trace_id: &trace,
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    account: Some(1),
+                    status: 500,
+                    prompt: 10,
+                    completion: 5,
+                    cost: Some(0.0),
+                    ttft: Some(100),
+                    total: 600,
+                    err: Some("err"),
+                    ..Default::default()
+                },
             );
         }
         let rows = errors(&conn, &UsageFilter::default(), 2).expect("errors");
@@ -841,37 +879,44 @@ mod tests {
     fn avg_ttft_skips_null_rows() {
         let (conn, _p) = fresh_conn();
         // Row 1: ttft=100; Row 2: ttft NULL (race_lost pre-body).
+        let req1 = RequestId::new().to_string();
+        let trace1 = TraceId::new().to_string();
+        let req2 = RequestId::new().to_string();
+        let trace2 = TraceId::new().to_string();
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.01,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &req1,
+                trace_id: &trace1,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.01),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.01,
-            None,
-            600,
-            true,
-            Some("race lost"),
+            TestUsageParams {
+                request_id: &req2,
+                trace_id: &trace2,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.01),
+                ttft: None,
+                total: 600,
+                race_lost: true,
+                err: Some("race lost"),
+            },
         );
         let s = summary(&conn, &UsageFilter::default()).expect("summary");
         assert_eq!(s.avg_ttft_ms, Some(100.0), "NULL ttft is excluded from AVG");
@@ -884,53 +929,64 @@ mod tests {
     fn recent_returns_rows_after_since_id() {
         let (conn, _p) = fresh_conn();
         // Three rows, ids will be 1, 2, 3.
+        let r1 = RequestId::new().to_string();
+        let t1 = TraceId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let t2 = TraceId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let t3 = TraceId::new().to_string();
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.01,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &t1,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.01),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            200,
-            20,
-            10,
-            0.02,
-            Some(150),
-            700,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &t2,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 200,
+                prompt: 20,
+                completion: 10,
+                cost: Some(0.02),
+                ttft: Some(150),
+                total: 700,
+                race_lost: true,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "anthropic",
-            "claude-3.5-sonnet",
-            Some(3),
-            500,
-            0,
-            0,
-            0.0,
-            None,
-            800,
-            false,
-            Some("oops"),
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &t3,
+                provider: "anthropic",
+                model: "claude-3.5-sonnet",
+                account: Some(3),
+                status: 500,
+                prompt: 0,
+                completion: 0,
+                cost: Some(0.0),
+                ttft: None,
+                total: 800,
+                err: Some("oops"),
+                ..Default::default()
+            },
         );
 
         // since_id = 0 returns all three, in id ASC order.
@@ -967,53 +1023,64 @@ mod tests {
     #[test]
     fn recent_desc_returns_newest_first() {
         let (conn, _p) = fresh_conn();
+        let r1 = RequestId::new().to_string();
+        let t1 = TraceId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let t2 = TraceId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let t3 = TraceId::new().to_string();
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            10,
-            5,
-            0.01,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &t1,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 10,
+                completion: 5,
+                cost: Some(0.01),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            200,
-            20,
-            10,
-            0.02,
-            Some(150),
-            700,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &t2,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 200,
+                prompt: 20,
+                completion: 10,
+                cost: Some(0.02),
+                ttft: Some(150),
+                total: 700,
+                race_lost: true,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "anthropic",
-            "claude-3.5-sonnet",
-            Some(3),
-            500,
-            0,
-            0,
-            0.0,
-            None,
-            800,
-            false,
-            Some("oops"),
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &t3,
+                provider: "anthropic",
+                model: "claude-3.5-sonnet",
+                account: Some(3),
+                status: 500,
+                prompt: 0,
+                completion: 0,
+                cost: Some(0.0),
+                ttft: None,
+                total: 800,
+                err: Some("oops"),
+                ..Default::default()
+            },
         );
 
         let rows = recent_desc(&conn, 2).expect("recent_desc");
@@ -1045,53 +1112,59 @@ mod tests {
         // Attempt 1: 502 upstream failure.
         insert(
             &conn,
-            &shared_req,
-            "trace-a",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            502,
-            10,
-            0,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("upstream 502"),
+            TestUsageParams {
+                request_id: &shared_req,
+                trace_id: "trace-a",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 502,
+                prompt: 10,
+                completion: 0,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("upstream 502"),
+                ..Default::default()
+            },
         );
         // Attempt 2: 429 rate limit.
         insert(
             &conn,
-            &shared_req,
-            "trace-b",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            429,
-            10,
-            0,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("rate limited"),
+            TestUsageParams {
+                request_id: &shared_req,
+                trace_id: "trace-b",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 429,
+                prompt: 10,
+                completion: 0,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("rate limited"),
+                ..Default::default()
+            },
         );
         // Attempt 3: 200 success, full tokens.
         insert(
             &conn,
-            &shared_req,
-            "trace-c",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(3),
-            200,
-            100,
-            50,
-            0.03,
-            Some(150),
-            700,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &shared_req,
+                trace_id: "trace-c",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(3),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.03),
+                ttft: Some(150),
+                total: 700,
+                race_lost: true,
+                ..Default::default()
+            },
         );
 
         let rows = recent(&conn, 0, 50).expect("recent");
@@ -1130,35 +1203,39 @@ mod tests {
         let shared_req = RequestId::new().to_string();
         insert(
             &conn,
-            &shared_req,
-            "trace-a",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            502,
-            10,
-            0,
-            0.0,
-            Some(100),
-            600,
-            false,
-            Some("upstream 502"),
+            TestUsageParams {
+                request_id: &shared_req,
+                trace_id: "trace-a",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 502,
+                prompt: 10,
+                completion: 0,
+                cost: Some(0.0),
+                ttft: Some(100),
+                total: 600,
+                err: Some("upstream 502"),
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &shared_req,
-            "trace-b",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(2),
-            200,
-            100,
-            50,
-            0.03,
-            Some(150),
-            700,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &shared_req,
+                trace_id: "trace-b",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(2),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.03),
+                ttft: Some(150),
+                total: 700,
+                race_lost: true,
+                ..Default::default()
+            },
         );
         let rows = recent_desc(&conn, 50).expect("recent_desc");
         // No grouping — two attempts = two rows.
@@ -1369,67 +1446,72 @@ mod tests {
         let r4 = RequestId::new().to_string();
         insert(
             &conn,
-            &r1,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            100,
-            50,
-            0.25,
-            Some(200),
-            1200,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.25),
+                ttft: Some(200),
+                total: 1200,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r2,
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o-mini",
-            Some(1),
-            200,
-            100,
-            50,
-            0.25,
-            Some(200),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openrouter",
+                model: "openai/gpt-4o-mini",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.25),
+                ttft: Some(200),
+                total: 600,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r3,
-            &TraceId::new().to_string(),
-            "anthropic",
-            "claude-3.5-sonnet",
-            Some(2),
-            200,
-            100,
-            50,
-            1.00,
-            Some(200),
-            1500,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &TraceId::new().to_string(),
+                provider: "anthropic",
+                model: "claude-3.5-sonnet",
+                account: Some(2),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(1.00),
+                ttft: Some(200),
+                total: 1500,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            &r4,
-            &TraceId::new().to_string(),
-            "openai",
-            "gpt-4o",
-            Some(3),
-            200,
-            100,
-            50,
-            0.10,
-            Some(200),
-            800,
-            true,
-            None,
+            TestUsageParams {
+                request_id: &r4,
+                trace_id: &TraceId::new().to_string(),
+                provider: "openai",
+                model: "gpt-4o",
+                account: Some(3),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.10),
+                ttft: Some(200),
+                total: 800,
+                race_lost: true,
+                ..Default::default()
+            },
         );
 
         let rows = by_provider(&conn, &UsageFilter::default()).expect("by_provider");
@@ -1556,72 +1638,85 @@ mod tests {
     fn summary_counts_rows_with_null_pricing() {
         let (conn, _p) = fresh_conn();
         // Row 1: normal — has prompt_tokens and a non-zero cost.
+        let r1 = RequestId::new().to_string();
+        let t1 = TraceId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let t2 = TraceId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let t3 = TraceId::new().to_string();
+        let r4 = RequestId::new().to_string();
+        let t4 = TraceId::new().to_string();
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            100,
-            50,
-            0.01,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r1,
+                trace_id: &t1,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 100,
+                completion: 50,
+                cost: Some(0.01),
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         // Row 2: NULL pricing — prompt_tokens > 0 but cost_usd is NULL.
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            200,
-            200,
-            50,
-            None,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r2,
+                trace_id: &t2,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 200,
+                prompt: 200,
+                completion: 50,
+                cost: None,
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         // Row 3: NULL pricing — same shape, different provider.
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "anthropic",
-            "claude-3.5-sonnet",
-            Some(2),
-            200,
-            300,
-            0,
-            None,
-            Some(100),
-            600,
-            false,
-            None,
+            TestUsageParams {
+                request_id: &r3,
+                trace_id: &t3,
+                provider: "anthropic",
+                model: "claude-3.5-sonnet",
+                account: Some(2),
+                status: 200,
+                prompt: 300,
+                completion: 0,
+                cost: None,
+                ttft: Some(100),
+                total: 600,
+                ..Default::default()
+            },
         );
         // Row 4: zero tokens AND zero cost — NOT null pricing (no tokens consumed).
         insert(
             &conn,
-            &RequestId::new().to_string(),
-            &TraceId::new().to_string(),
-            "openrouter",
-            "openai/gpt-4o",
-            Some(1),
-            500,
-            0,
-            0,
-            0.00,
-            Some(100),
-            600,
-            false,
-            Some("err"),
+            TestUsageParams {
+                request_id: &r4,
+                trace_id: &t4,
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                account: Some(1),
+                status: 500,
+                prompt: 0,
+                completion: 0,
+                cost: Some(0.00),
+                ttft: Some(100),
+                total: 600,
+                err: Some("err"),
+                ..Default::default()
+            },
         );
 
         let s = summary(&conn, &UsageFilter::default()).expect("summary");

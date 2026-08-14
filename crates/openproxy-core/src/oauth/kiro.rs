@@ -597,18 +597,15 @@ impl OAuthProvider for KiroOAuthProvider {
             }
         }
 
-        let final_body = match success_body {
-            Some(b) => b,
-            None => {
-                let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-                return Err(CoreError::UpstreamError {
-                    status: status.as_u16(),
-                    provider: "kiro".into(),
-                    model: "<oauth>".into(),
-                    body: body_str,
-                    is_proxy_rotated: false,
-                });
-            }
+        let Some(final_body) = success_body else {
+            let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+            return Err(CoreError::UpstreamError {
+                status: status.as_u16(),
+                provider: "kiro".into(),
+                model: "<oauth>".into(),
+                body: body_str,
+                is_proxy_rotated: false,
+            });
         };
 
         let mut data: serde_json::Value = serde_json::from_slice(&final_body)

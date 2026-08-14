@@ -1,5 +1,7 @@
-use crate::{ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult};
-use openproxy_adapters::upstream::CancellationToken;
+use crate::{
+    ErrorPhase, FailureContext, PartialFailureParams, Pipeline, PipelineRequest, PipelineResult,
+    SingleExecutionParams,
+};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::ids::ComboId;
@@ -135,11 +137,13 @@ impl Pipeline {
 
             crate::credentials::CredentialManager::resolve_credentials(
                 eligible,
-                &models_map,
-                &accounts_map,
-                &kiro_map,
-                &antigravity_map,
-                &providers_map,
+                &crate::credentials::ResolutionMaps {
+                    models_map: &models_map,
+                    accounts_map: &accounts_map,
+                    kiro_map: &kiro_map,
+                    antigravity_map: &antigravity_map,
+                    providers_map: &providers_map,
+                },
                 master_key.as_ref(),
                 oauth_registry.as_deref(),
             )
@@ -148,17 +152,19 @@ impl Pipeline {
         .unwrap_or_default()
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_single(
         &self,
-        req: PipelineRequest,
-        combo: &Combo,
-        resolved_target: &crate::context::ResolvedTarget,
-        attempt: u8,
-        race_size: u8,
-        total_targets: u8,
-        race_cancel: &CancellationToken,
+        params: SingleExecutionParams<'_>,
     ) -> PipelineResult {
+        let SingleExecutionParams {
+            req,
+            combo,
+            resolved_target,
+            attempt,
+            race_size,
+            total_targets,
+            race_cancel,
+        } = params;
         let mut ctx = crate::context::PipelineContext::new(req, self.clone());
         ctx.combo = Some(combo.clone());
         ctx.current_target = Some(resolved_target.clone());
@@ -324,27 +330,23 @@ impl Pipeline {
         ctx: FailureContext<'_>,
         trace_id: String,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id_and_partial(
-            req, combo, target, ctx, trace_id, None, None, 0, "",
-        )
+        self.record_and_fail_with_trace_id_and_partial(PartialFailureParams {
+            req,
+            combo,
+            target,
+            ctx,
+            trace_id,
+            acc: None,
+            chunk_id: None,
+            created: 0,
+            model_name: "",
+        })
     }
 
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: PipelineRequest,
-        combo: &Combo,
-        target: &ComboTarget,
-        ctx: FailureContext<'_>,
-        trace_id: String,
-        acc: Option<&crate::sse_accumulator::ResponseAccumulator>,
-        chunk_id: Option<&str>,
-        created: u64,
-        model_name: &str,
+        params: PartialFailureParams<'_>,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(
-            req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name,
-        )
+        self.tracker.record_and_fail_with_trace_id_and_partial(params)
     }
 }

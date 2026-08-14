@@ -75,7 +75,6 @@ impl StreamingChunkStage for StreamingStagePipeline {
 }
 
 /// Represents an event in the streaming pipeline.
-#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChunkEvent {
     /// A data chunk, typically representing an SSE payload or raw bytes.
     Data(Bytes),
@@ -84,7 +83,7 @@ pub(crate) enum ChunkEvent {
     /// The end of the stream (e.g., [DONE] received or EOF reached).
     Done,
     /// Early return with a complete PipelineResult.
-    Return(crate::PipelineResult),
+    Return(Box<crate::PipelineResult>),
 }
 
 use crate::streaming_state::StreamContext;

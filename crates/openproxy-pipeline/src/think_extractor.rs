@@ -144,13 +144,9 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
     let mut remaining = content;
 
     loop {
-        // Find the earliest opening tag.
-        let (tag_idx, _tag_name) = match find_earliest_tag(remaining, THINK_OPEN_TAGS) {
-            Some(v) => v,
-            None => {
-                result.content.push_str(remaining);
-                break;
-            }
+        let Some((tag_idx, _tag_name)) = find_earliest_tag(remaining, THINK_OPEN_TAGS) else {
+            result.content.push_str(remaining);
+            break;
         };
 
         // Push content before the tag.
@@ -362,21 +358,17 @@ impl ThinkStreamExtractor {
     fn process_outside_think(&mut self, input: &str) -> (String, String) {
         let lower = input.to_ascii_lowercase();
 
-        // Look for any opening tag.
-        let (tag_pos, tag_str) = match find_earliest_tag(&lower, THINK_OPEN_TAGS) {
-            Some(v) => v,
-            None => {
-                // No opening tag found. But the end of the input might
-                // be the start of a tag (e.g. "<thi"). Check if the
-                // input ends with a partial tag prefix and buffer it.
-                let safe_len = find_safe_split_point(input);
-                let content = input[..safe_len].to_string();
-                self.tag_buffer = input[safe_len..].to_string();
-                // Strip orphaned close tags from the content (e.g.
-                // stray </think> without a matching <think>).
-                let cleaned = strip_orphaned_close_tags(&content);
-                return (cleaned, String::new());
-            }
+        let Some((tag_pos, tag_str)) = find_earliest_tag(&lower, THINK_OPEN_TAGS) else {
+            // No opening tag found. But the end of the input might
+            // be the start of a tag (e.g. "<thi"). Check if the
+            // input ends with a partial tag prefix and buffer it.
+            let safe_len = find_safe_split_point(input);
+            let content = input[..safe_len].to_string();
+            self.tag_buffer = input[safe_len..].to_string();
+            // Strip orphaned close tags from the content (e.g.
+            // stray </think> without a matching <think>).
+            let cleaned = strip_orphaned_close_tags(&content);
+            return (cleaned, String::new());
         };
 
         // Found an opening tag. Emit content before it.

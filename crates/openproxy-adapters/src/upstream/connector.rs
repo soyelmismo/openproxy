@@ -624,16 +624,13 @@ async fn run_phased_connect(
             }
         }
     }
-    let mut stream = match stream {
-        Some(s) => s,
-        None => {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Dial,
-                kind: PhasedErrorKind::Io(
-                    last_err.unwrap_or_else(|| io::Error::other("no addresses to dial")),
-                ),
-            }));
-        }
+    let Some(mut stream) = stream else {
+        return Err(Box::new(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Io(
+                last_err.unwrap_or_else(|| io::Error::other("no addresses to dial")),
+            ),
+        }));
     };
 
     // ---- Proxy Handshake Tunnel -----------------------------------------

@@ -1,7 +1,8 @@
 pub mod pipeline;
 pub use pipeline::{
-    ErrorPhase, FailureContext, Pipeline, PipelineConfig, PipelineRequest, PipelineResult,
-    SSE_DONE_BYTES, is_upstream_health_issue, parse_retry_after_ms,
+    ErrorPhase, FailureContext, PartialFailureParams, Pipeline, PipelineConfig, PipelineRequest,
+    PipelineResult, SSE_DONE_BYTES, SingleExecutionParams, is_upstream_health_issue,
+    parse_retry_after_ms,
 };
 pub mod race_sink;
 pub use race_sink::{StreamSink, StreamSinkError};

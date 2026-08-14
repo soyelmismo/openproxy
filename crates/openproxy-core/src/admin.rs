@@ -266,14 +266,16 @@ pub fn update_provider(
     providers::update(
         conn,
         id,
-        input.name.as_deref(),
-        input.base_url.as_deref(),
-        input.extra_headers_json.as_deref(),
-        keyword,
-        input.use_proxies,
-        input.proxy_rotation_errors.as_deref(),
-        input.proxy_rotation_mode.as_deref(),
-        input.rate_limit_scope,
+        providers::UpdateProviderParams {
+            name: input.name.as_deref(),
+            base_url: input.base_url.as_deref(),
+            extra_headers_json: input.extra_headers_json.as_deref(),
+            auto_activate_keyword: keyword,
+            use_proxies: input.use_proxies,
+            proxy_rotation_errors: input.proxy_rotation_errors.as_deref(),
+            proxy_rotation_mode: input.proxy_rotation_mode.as_deref(),
+            rate_limit_scope: input.rate_limit_scope,
+        },
     )
 }
 

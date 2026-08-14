@@ -249,14 +249,15 @@ pub async fn refresh_single_account_quota(
                             let _ = accounts::store_oauth_tokens(
                                 &w,
                                 account_id,
-                                &access_token,
-                                refresh_token.as_deref(),
                                 &master_key,
-                                &token_type,
-                                expires_at.as_deref(),
-                                scope.as_deref(),
-                                None,
-                                None,
+                                accounts::StoreOAuthTokensParams {
+                                    access_token: &access_token,
+                                    refresh_token: refresh_token.as_deref(),
+                                    token_type: &token_type,
+                                    expires_at: expires_at.as_deref(),
+                                    scope: scope.as_deref(),
+                                    ..Default::default()
+                                },
                             );
                         })
                         .await;

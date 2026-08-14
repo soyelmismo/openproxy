@@ -443,16 +443,12 @@ mod tests {
         (conn, path)
     }
 
-    /// Insert a usage row with explicit race-related fields so each test can
-    /// shape its own distribution. Uses status_code=200 by default.
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
-    fn insert(
-        conn: &Connection,
-        request_id: &str,
-        trace_id: &str,
-        provider: &str,
-        model: &str,
+    #[derive(Default)]
+    struct TestUsageParams<'a> {
+        request_id: &'a str,
+        trace_id: &'a str,
+        provider: &'a str,
+        model: &'a str,
         connect_ms: Option<i64>,
         ttft_ms: Option<i64>,
         total_ms: i64,
@@ -460,7 +456,12 @@ mod tests {
         race_total: i64,
         race_lost: bool,
         combo_target_id: Option<i64>,
-    ) {
+        status_code: Option<i64>,
+    }
+
+    fn insert(conn: &Connection, p: TestUsageParams<'_>) {
+        let status = p.status_code.unwrap_or(200);
+        let race_total = if p.race_total == 0 { 1 } else { p.race_total };
         conn.execute(
             "INSERT INTO usage (\
                 request_id, trace_id, attempt, provider_id, account_id, \
@@ -469,66 +470,25 @@ mod tests {
                 tokens_per_sec, status_code, error_msg, error_msg_redacted, \
                 race_total, race_lost, created_at\
              ) VALUES (\
-                ?1, ?2, 1, ?3, NULL, ?4, ?5, 0, 0, 0.0, ?6, ?7, ?8, ?9, 200, \
-                NULL, NULL, ?10, ?11, datetime('now')\
+                ?1, ?2, 1, ?3, NULL, ?4, ?5, 0, 0, 0.0, ?6, ?7, ?8, ?9, ?10, \
+                NULL, NULL, ?11, ?12, datetime('now')\
              )",
             params![
-                request_id,
-                trace_id,
-                provider,
-                model,
-                combo_target_id,
-                connect_ms,
-                ttft_ms,
-                total_ms,
-                tokens_per_sec,
+                p.request_id,
+                p.trace_id,
+                p.provider,
+                p.model,
+                p.combo_target_id,
+                p.connect_ms,
+                p.ttft_ms,
+                p.total_ms,
+                p.tokens_per_sec,
+                status,
                 race_total,
-                race_lost as i64,
+                p.race_lost as i64,
             ],
         )
         .expect("insert");
-    }
-
-    /// Like `insert` but with an explicit `status_code` — used to test
-    /// error-row exclusion in latency percentiles.
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
-    fn insert_with_status(
-        conn: &Connection,
-        request_id: &str,
-        trace_id: &str,
-        provider: &str,
-        model: &str,
-        connect_ms: Option<i64>,
-        ttft_ms: Option<i64>,
-        total_ms: i64,
-        race_lost: bool,
-        status_code: i64,
-    ) {
-        conn.execute(
-            "INSERT INTO usage (\
-                request_id, trace_id, attempt, provider_id, account_id, \
-                upstream_model_id, combo_target_id, prompt_tokens, \
-                completion_tokens, cost_usd, connect_ms, ttft_ms, total_ms, \
-                tokens_per_sec, status_code, error_msg, error_msg_redacted, \
-                race_total, race_lost, created_at\
-             ) VALUES (\
-                ?1, ?2, 1, ?3, NULL, ?4, NULL, 0, 0, 0.0, ?5, ?6, ?7, \
-                NULL, ?8, NULL, NULL, 1, ?9, datetime('now')\
-             )",
-            params![
-                request_id,
-                trace_id,
-                provider,
-                model,
-                connect_ms,
-                ttft_ms,
-                total_ms,
-                status_code,
-                race_lost as i64,
-            ],
-        )
-        .expect("insert_with_status");
     }
 
     // -----------------------------------------------------------------------
@@ -542,17 +502,14 @@ mod tests {
         for v in 0..100i64 {
             insert(
                 &conn,
-                &format!("req-{}", v),
-                &format!("trace-{}", v),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(v),
-                None,
-                0,
-                None,
-                1,
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &format!("req-{}", v),
+                    trace_id: &format!("trace-{}", v),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(v),
+                    ..Default::default()
+                },
             );
         }
 
@@ -590,34 +547,29 @@ mod tests {
         for i in 0..10i64 {
             insert(
                 &conn,
-                &format!("w-{}", i),
-                &format!("wt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(1000 + i),
-                None,
-                0,
-                None,
-                1,
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &format!("w-{}", i),
+                    trace_id: &format!("wt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(1000 + i),
+                    ..Default::default()
+                },
             );
         }
         // 20 losers with connect_ms = 0..20 — they must not influence p50.
         for i in 0..20i64 {
             insert(
                 &conn,
-                &format!("l-{}", i),
-                &format!("lt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(i),
-                None,
-                0,
-                None,
-                1,
-                true, // race_lost
-                None,
+                TestUsageParams {
+                    request_id: &format!("l-{}", i),
+                    trace_id: &format!("lt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(i),
+                    race_lost: true,
+                    ..Default::default()
+                },
             );
         }
 
@@ -654,33 +606,31 @@ mod tests {
         for i in 0..5i64 {
             insert(
                 &conn,
-                &format!("n-{}", i),
-                &format!("nt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(50),
-                None, // ttft NULL
-                1000,
-                None,
-                1,
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &format!("n-{}", i),
+                    trace_id: &format!("nt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(50),
+                    total_ms: 1000,
+                    ..Default::default()
+                },
             );
         }
         for i in 0..5i64 {
             insert(
                 &conn,
-                &format!("v-{}", i),
-                &format!("vt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(50),
-                Some(200),
-                1000,
-                Some(10.0),
-                1,
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &format!("v-{}", i),
+                    trace_id: &format!("vt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(50),
+                    ttft_ms: Some(200),
+                    total_ms: 1000,
+                    tokens_per_sec: Some(10.0),
+                    ..Default::default()
+                },
             );
         }
 
@@ -723,48 +673,52 @@ mod tests {
 
         // 10 successful rows: connect_ms = 100..110
         for i in 0..10i64 {
-            insert_with_status(
+            insert(
                 &conn,
-                &format!("ok-{}", i),
-                &format!("t-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(100 + i),
-                Some(200 + i),
-                500 + i,
-                false,
-                200,
+                TestUsageParams {
+                    request_id: &format!("ok-{}", i),
+                    trace_id: &format!("t-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(100 + i),
+                    ttft_ms: Some(200 + i),
+                    total_ms: 500 + i,
+                    status_code: Some(200),
+                    ..Default::default()
+                },
             );
         }
         // 5 error rows (timeouts): connect_ms = 10000 — these must NOT
         // influence the percentiles even though race_lost=0.
         for i in 0..5i64 {
-            insert_with_status(
+            insert(
                 &conn,
-                &format!("err-{}", i),
-                &format!("et-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(10000),
-                None,
-                10000,
-                false,
-                502,
+                TestUsageParams {
+                    request_id: &format!("err-{}", i),
+                    trace_id: &format!("et-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(10000),
+                    total_ms: 10000,
+                    status_code: Some(502),
+                    ..Default::default()
+                },
             );
         }
         // 3 error rows (client disconnects): status_code=499
         for i in 0..3i64 {
-            insert_with_status(
+            insert(
                 &conn,
-                &format!("disc-{}", i),
-                &format!("dt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(5000),
-                None,
-                5000,
-                false,
-                499,
+                TestUsageParams {
+                    request_id: &format!("disc-{}", i),
+                    trace_id: &format!("dt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(5000),
+                    total_ms: 5000,
+                    status_code: Some(499),
+                    ..Default::default()
+                },
             );
         }
 
@@ -801,32 +755,32 @@ mod tests {
             // winner
             insert(
                 &conn,
-                &format!("r-{}", i),
-                &format!("wt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(50),
-                Some(200),
-                1000,
-                None,
-                2,
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &format!("r-{}", i),
+                    trace_id: &format!("wt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(50),
+                    ttft_ms: Some(200),
+                    total_ms: 1000,
+                    race_total: 2,
+                    ..Default::default()
+                },
             );
             // loser
             insert(
                 &conn,
-                &format!("r-{}", i),
-                &format!("lt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(60),
-                None,
-                1500,
-                None,
-                2,
-                true,
-                None,
+                TestUsageParams {
+                    request_id: &format!("r-{}", i),
+                    trace_id: &format!("lt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(60),
+                    total_ms: 1500,
+                    race_total: 2,
+                    race_lost: true,
+                    ..Default::default()
+                },
             );
         }
 
@@ -847,47 +801,46 @@ mod tests {
         for i in 0..5i64 {
             insert(
                 &conn,
-                &format!("seq-{}", i),
-                &format!("seqt-{}", i),
-                "openrouter",
-                "openai/gpt-4o",
-                Some(50),
-                Some(200),
-                1000,
-                None,
-                1, // not a race
-                false,
-                None,
+                TestUsageParams {
+                    request_id: &format!("seq-{}", i),
+                    trace_id: &format!("seqt-{}", i),
+                    provider: "openrouter",
+                    model: "openai/gpt-4o",
+                    connect_ms: Some(50),
+                    ttft_ms: Some(200),
+                    total_ms: 1000,
+                    ..Default::default()
+                },
             );
         }
         // 1 race to ensure the function returns non-zero when races exist.
         insert(
             &conn,
-            "race-only",
-            "race-only-w",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(50),
-            Some(200),
-            1000,
-            None,
-            2,
-            false,
-            None,
+            TestUsageParams {
+                request_id: "race-only",
+                trace_id: "race-only-w",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(50),
+                ttft_ms: Some(200),
+                total_ms: 1000,
+                race_total: 2,
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            "race-only",
-            "race-only-l",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(60),
-            None,
-            1500,
-            None,
-            2,
-            true,
-            None,
+            TestUsageParams {
+                request_id: "race-only",
+                trace_id: "race-only-l",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(60),
+                total_ms: 1500,
+                race_total: 2,
+                race_lost: true,
+                ..Default::default()
+            },
         );
 
         let s = race_stats(&conn, &UsageFilter::default()).expect("race_stats");
@@ -963,89 +916,95 @@ mod tests {
         // Race 1: target5 wins.
         insert(
             &conn,
-            "race-A",
-            "race-A-w",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(50),
-            Some(200),
-            1000,
-            None,
-            2,
-            false,
-            Some(target5),
+            TestUsageParams {
+                request_id: "race-A",
+                trace_id: "race-A-w",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(50),
+                ttft_ms: Some(200),
+                total_ms: 1000,
+                race_total: 2,
+                combo_target_id: Some(target5),
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            "race-A",
-            "race-A-l",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(60),
-            None,
-            1500,
-            None,
-            2,
-            true,
-            Some(target7),
+            TestUsageParams {
+                request_id: "race-A",
+                trace_id: "race-A-l",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(60),
+                total_ms: 1500,
+                race_total: 2,
+                race_lost: true,
+                combo_target_id: Some(target7),
+                ..Default::default()
+            },
         );
         // Race 2: target5 wins again.
         insert(
             &conn,
-            "race-B",
-            "race-B-w",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(50),
-            Some(200),
-            1000,
-            None,
-            2,
-            false,
-            Some(target5),
+            TestUsageParams {
+                request_id: "race-B",
+                trace_id: "race-B-w",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(50),
+                ttft_ms: Some(200),
+                total_ms: 1000,
+                race_total: 2,
+                combo_target_id: Some(target5),
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            "race-B",
-            "race-B-l",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(60),
-            None,
-            1500,
-            None,
-            2,
-            true,
-            Some(target7),
+            TestUsageParams {
+                request_id: "race-B",
+                trace_id: "race-B-l",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(60),
+                total_ms: 1500,
+                race_total: 2,
+                race_lost: true,
+                combo_target_id: Some(target7),
+                ..Default::default()
+            },
         );
         // Race 3: target7 wins.
         insert(
             &conn,
-            "race-C",
-            "race-C-w",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(50),
-            Some(200),
-            1000,
-            None,
-            2,
-            false,
-            Some(target7),
+            TestUsageParams {
+                request_id: "race-C",
+                trace_id: "race-C-w",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(50),
+                ttft_ms: Some(200),
+                total_ms: 1000,
+                race_total: 2,
+                combo_target_id: Some(target7),
+                ..Default::default()
+            },
         );
         insert(
             &conn,
-            "race-C",
-            "race-C-l",
-            "openrouter",
-            "openai/gpt-4o",
-            Some(60),
-            None,
-            1500,
-            None,
-            2,
-            true,
-            Some(target5),
+            TestUsageParams {
+                request_id: "race-C",
+                trace_id: "race-C-l",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(60),
+                total_ms: 1500,
+                race_total: 2,
+                race_lost: true,
+                combo_target_id: Some(target5),
+                ..Default::default()
+            },
         );
 
         let s = race_stats(&conn, &UsageFilter::default()).expect("race_stats");

@@ -106,19 +106,17 @@ fn resolve_routing_plan(
     Ok(plan)
 }
 
-#[allow(clippy::type_complexity)]
+pub type RoutingPlanTargets = (
+    ComboId,
+    Option<openproxy_types::Combo>,
+    Option<Vec<openproxy_types::ComboTarget>>,
+);
+
 fn translate_plan_to_targets(
     state: &AppState,
     plan: RoutingPlan,
     api_key_id: Option<ApiKeyId>,
-) -> Result<
-    (
-        ComboId,
-        Option<openproxy_types::Combo>,
-        Option<Vec<openproxy_types::ComboTarget>>,
-    ),
-    ApiError,
-> {
+) -> Result<RoutingPlanTargets, ApiError> {
     match plan {
         RoutingPlan::Combo {
             combo_id,

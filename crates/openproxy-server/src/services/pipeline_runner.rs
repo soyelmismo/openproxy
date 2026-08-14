@@ -23,6 +23,19 @@ pub struct PreparedPipelineRequest {
     pub stream_rx: mpsc::Receiver<Bytes>,
 }
 
+pub struct PrepareRequestParams<'a> {
+    pub state: &'a AppState,
+    pub headers: &'a HeaderMap,
+    pub cancel: CancelWatch,
+    pub openai_req: Arc<OpenAIRequest>,
+    pub raw_request_body: Bytes,
+    pub api_key_id: Option<ApiKeyId>,
+    pub combo_id: ComboId,
+    pub combo_override: Option<Combo>,
+    pub targets_override: Option<Vec<ComboTarget>>,
+    pub endpoint_kind: EndpointKind,
+}
+
 pub struct PipelineRunner;
 
 impl PipelineRunner {
@@ -97,19 +110,19 @@ impl PipelineRunner {
     }
 
     /// Prepare a [`PipelineRequest`] and wire watchdog + cancellation + streaming sinks.
-    #[allow(clippy::too_many_arguments)]
-    pub fn prepare_request(
-        state: &AppState,
-        headers: &HeaderMap,
-        cancel: CancelWatch,
-        openai_req: Arc<OpenAIRequest>,
-        raw_request_body: Bytes,
-        api_key_id: Option<ApiKeyId>,
-        combo_id: ComboId,
-        combo_override: Option<Combo>,
-        targets_override: Option<Vec<ComboTarget>>,
-        endpoint_kind: EndpointKind,
-    ) -> PreparedPipelineRequest {
+    pub fn prepare_request(params: PrepareRequestParams<'_>) -> PreparedPipelineRequest {
+        let PrepareRequestParams {
+            state,
+            headers,
+            cancel,
+            openai_req,
+            raw_request_body,
+            api_key_id,
+            combo_id,
+            combo_override,
+            targets_override,
+            endpoint_kind,
+        } = params;
         let request_id = RequestId::new();
         let trace_id = TraceId::new();
 

@@ -4,8 +4,7 @@
 
 pub mod capabilities;
 pub mod config;
-#[allow(unused_imports)]
-pub(crate) use openproxy_types::error::{self, CoreError, ErrorContext, Result};
+pub(crate) use openproxy_types::error;
 pub(crate) use openproxy_types::ids;
 pub mod routing;
 
@@ -32,8 +31,6 @@ pub mod quota_sync;
 pub mod race;
 
 pub use openproxy_db::batch;
-#[allow(unused_imports)]
-pub(crate) use openproxy_db::secrets;
 pub mod seed;
 pub mod smart_warmup;
 

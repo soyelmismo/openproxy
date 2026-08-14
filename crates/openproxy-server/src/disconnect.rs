@@ -387,12 +387,14 @@ mod tests {
         }
     }
 
+    type PollFrameResult<B> =
+        Poll<Option<Result<Frame<<B as HttpBody>::Data>, <B as HttpBody>::Error>>>;
+
     /// Pump a `DisconnectBody` once and return the result. Pulled
     /// out into a helper because both tests do exactly this.
-    #[allow(clippy::type_complexity)]
     fn poll_once<B: HttpBody + Unpin>(
         body: &mut DisconnectBody<B>,
-    ) -> Poll<Option<Result<Frame<B::Data>, B::Error>>> {
+    ) -> PollFrameResult<B> {
         let mut cx = Context::from_waker(futures::task::noop_waker_ref());
         Pin::new(body).poll_frame(&mut cx)
     }

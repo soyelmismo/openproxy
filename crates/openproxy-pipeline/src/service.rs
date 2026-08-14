@@ -517,16 +517,17 @@ impl tower::Service<PipelineState> for RoutingService {
 
                 let policy = crate::retry::RetryPolicy::from_config(&pipeline.config.retries);
                 let mut target_local_retry_count: u8 = 1;
+                let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();
                 let mut result = pipeline
-                    .execute_single(
-                        state.req.to_owned(),
-                        &combo,
-                        target,
-                        overall_attempt,
-                        race_size as u8,
-                        1,
-                        &openproxy_adapters::upstream::CancellationToken::new(),
-                    )
+                    .execute_single(crate::SingleExecutionParams {
+                        req: state.req.to_owned(),
+                        combo: &combo,
+                        resolved_target: target,
+                        attempt: overall_attempt,
+                        race_size: race_size as u8,
+                        total_targets: 1,
+                        race_cancel: &cancel_tok,
+                    })
                     .await;
 
                 while let Some(e) = &result.error {
@@ -591,16 +592,17 @@ impl tower::Service<PipelineState> for RoutingService {
                     tokio::time::sleep(delay).await;
                     target_local_retry_count = target_local_retry_count.saturating_add(1);
                     overall_attempt = overall_attempt.saturating_add(1);
+                    let retry_cancel = openproxy_adapters::upstream::CancellationToken::new();
                     result = pipeline
-                        .execute_single(
-                            state.req.to_owned(),
-                            &combo,
-                            target,
-                            overall_attempt,
-                            race_size as u8,
-                            1,
-                            &openproxy_adapters::upstream::CancellationToken::new(),
-                        )
+                        .execute_single(crate::SingleExecutionParams {
+                            req: state.req.to_owned(),
+                            combo: &combo,
+                            resolved_target: target,
+                            attempt: overall_attempt,
+                            race_size: race_size as u8,
+                            total_targets: 1,
+                            race_cancel: &retry_cancel,
+                        })
                         .await;
                 }
 

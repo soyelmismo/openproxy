@@ -237,9 +237,8 @@ impl CoreError {
             CoreError::UpstreamError { status, .. } => *status,
             CoreError::UpstreamTimeout { .. } => 529,
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
-            CoreError::Cancelled(CancelReason::ClientDisconnected) => 499,
+            CoreError::Cancelled(CancelReason::ClientDisconnected) | CoreError::RaceLost => 499,
             CoreError::Cancelled(CancelReason::WatchdogTimeout) => 504,
-            CoreError::RaceLost => 499,
             CoreError::Parse(_)
             | CoreError::Database { .. }
             | CoreError::Migration { .. }

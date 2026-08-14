@@ -79,17 +79,18 @@ impl PipelineStage for UpstreamExecutorStage {
 
             let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
             let mut target_local_retry_count: u8 = 1;
+            let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();
             let mut result = ctx
                 .pipeline
-                .execute_single(
-                    ctx.req.clone(),
+                .execute_single(crate::SingleExecutionParams {
+                    req: ctx.req.clone(),
                     combo,
-                    target,
-                    overall_attempt,
-                    race_size as u8,
-                    to_run.len() as u8,
-                    &openproxy_adapters::upstream::CancellationToken::new(),
-                )
+                    resolved_target: target,
+                    attempt: overall_attempt,
+                    race_size: race_size as u8,
+                    total_targets: to_run.len() as u8,
+                    race_cancel: &cancel_tok,
+                })
                 .await;
 
             while let Some(e) = &result.error {
@@ -181,17 +182,18 @@ impl PipelineStage for UpstreamExecutorStage {
                 tokio::time::sleep(delay).await;
                 target_local_retry_count = target_local_retry_count.saturating_add(1);
                 overall_attempt = overall_attempt.saturating_add(1);
+                let retry_cancel = openproxy_adapters::upstream::CancellationToken::new();
                 result = ctx
                     .pipeline
-                    .execute_single(
-                        ctx.req.clone(),
+                    .execute_single(crate::SingleExecutionParams {
+                        req: ctx.req.clone(),
                         combo,
-                        target,
-                        overall_attempt,
-                        race_size as u8,
-                        to_run.len() as u8,
-                        &openproxy_adapters::upstream::CancellationToken::new(),
-                    )
+                        resolved_target: target,
+                        attempt: overall_attempt,
+                        race_size: race_size as u8,
+                        total_targets: to_run.len() as u8,
+                        race_cancel: &retry_cancel,
+                    })
                     .await;
             }
 

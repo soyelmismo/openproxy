@@ -62,14 +62,16 @@ pub fn compute_diff<'a>(
     })
 }
 
-#[allow(clippy::type_complexity)]
+pub type SyncNotificationItem = (i64, &'static str, serde_json::Value);
+pub type SyncTransactionResult = (UpsertResult, Vec<SyncNotificationItem>);
+
 pub fn execute_sync_transaction(
     conn: &Connection,
     provider: &ProviderId,
     discovered: &[DiscoveredModel],
     diff: &SyncDiff,
     ttl: Duration,
-) -> Result<(UpsertResult, Vec<(i64, &'static str, serde_json::Value)>)> {
+) -> Result<SyncTransactionResult> {
     let mut total = 0usize;
     let mut new_model_ids: Vec<crate::ids::ModelId> = Vec::new();
     let ttl_secs = ttl.as_secs() as i64;

@@ -231,9 +231,7 @@ pub fn error_priority(err: &CoreError) -> u8 {
         RateLimited { .. } => 2,
         UpstreamError { status, .. } if (400..500).contains(status) => 3,
         UpstreamConnection(_) => 4,
-        UpstreamError { .. } => 5, // residual 1xx/3xx — shouldn't reach here
-        Parse(_) => 5,
-        RaceLost | Cancelled(_) => 6,
+        UpstreamError { .. } | Parse(_) => 5, // residual 1xx/3xx — shouldn't reach here
         _ => 6,
     }
 }

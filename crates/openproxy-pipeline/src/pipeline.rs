@@ -6,7 +6,7 @@ use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_compression::stats::CompressionStats;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::SelectionRegistry;
-use openproxy_types::combos::Combo;
+use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::config::{RacingConfig, RetriesConfig};
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ApiKeyId, ComboId, RequestId, TraceId};
@@ -76,6 +76,28 @@ pub struct FailureContext<'a> {
     pub status_code: u16,
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
+}
+
+pub struct SingleExecutionParams<'a> {
+    pub req: PipelineRequest,
+    pub combo: &'a Combo,
+    pub resolved_target: &'a crate::context::ResolvedTarget,
+    pub attempt: u8,
+    pub race_size: u8,
+    pub total_targets: u8,
+    pub race_cancel: &'a openproxy_adapters::upstream::CancellationToken,
+}
+
+pub struct PartialFailureParams<'a> {
+    pub req: PipelineRequest,
+    pub combo: &'a Combo,
+    pub target: &'a ComboTarget,
+    pub ctx: FailureContext<'a>,
+    pub trace_id: String,
+    pub acc: Option<&'a crate::sse_accumulator::ResponseAccumulator>,
+    pub chunk_id: Option<&'a str>,
+    pub created: u64,
+    pub model_name: &'a str,
 }
 
 #[derive(Clone)]

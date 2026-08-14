@@ -6,10 +6,9 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-#[allow(clippy::large_enum_variant)]
 pub enum BackgroundJob {
     RecordAttempt {
-        usage_input: UsageInput,
+        usage_input: Box<UsageInput>,
         target_id: ComboTargetId,
         combo_id: ComboId,
         error_msg: Option<String>,

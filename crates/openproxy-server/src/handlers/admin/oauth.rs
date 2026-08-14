@@ -122,14 +122,16 @@ pub async fn oauth_exchange(
                 openproxy_core::accounts::store_oauth_tokens(
                     &w,
                     account_id,
-                    &token.access_token,
-                    token.refresh_token.as_deref(),
                     s.master_key(),
-                    &token.token_type,
-                    expires_at.as_deref(),
-                    token.scope.as_deref(),
-                    provider_specific.as_deref(),
-                    email.as_deref(),
+                    openproxy_core::accounts::StoreOAuthTokensParams {
+                        access_token: &token.access_token,
+                        refresh_token: token.refresh_token.as_deref(),
+                        token_type: &token.token_type,
+                        expires_at: expires_at.as_deref(),
+                        scope: token.scope.as_deref(),
+                        provider_specific: provider_specific.as_deref(),
+                        email: email.as_deref(),
+                    },
                 )
             })?;
         }
@@ -324,14 +326,16 @@ pub async fn oauth_device_poll(
                         openproxy_core::accounts::store_oauth_tokens(
                             &w,
                             account_id,
-                            &token.access_token,
-                            token.refresh_token.as_deref(),
                             s.master_key(),
-                            &token.token_type,
-                            expires_at.as_deref(),
-                            token.scope.as_deref(),
-                            provider_specific.as_deref(),
-                            email.as_deref(),
+                            openproxy_core::accounts::StoreOAuthTokensParams {
+                                access_token: &token.access_token,
+                                refresh_token: token.refresh_token.as_deref(),
+                                token_type: &token.token_type,
+                                expires_at: expires_at.as_deref(),
+                                scope: token.scope.as_deref(),
+                                provider_specific: provider_specific.as_deref(),
+                                email: email.as_deref(),
+                            },
                         )
                     })?;
                 }
@@ -483,55 +487,36 @@ pub(crate) async fn refresh_oauth_if_needed(
         "oauth refresh-on-demand: refreshing expired/expiring token"
     );
 
+    execute_oauth_refresh(
+        s,
+        &account,
+        provider_id,
+        &refresh_token,
+        &provider,
+        access_token,
+    )
+    .await
+}
+
+async fn execute_oauth_refresh(
+    s: &AppState,
+    account: &core_accounts::Account,
+    provider_id: &ProviderId,
+    refresh_token: &str,
+    provider: &core_oauth::OAuthProviderEnum,
+    fallback_token: String,
+) -> String {
     let upstream_client = s.upstream_client();
-    match provider
+    let token = match provider
         .refresh_token(
-            &refresh_token,
+            refresh_token,
             upstream_client,
             account.id,
             openproxy_core::oauth::DbRef::Pool(s.db_pool().as_ref()),
         )
         .await
     {
-        Ok(token) => {
-            let expires_at = token.expires_in.map(|secs| {
-                (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-                    .format("%Y-%m-%dT%H:%M:%SZ")
-                    .to_string()
-            });
-
-            let conn = s.db_pool().writer();
-            match core_accounts::store_oauth_tokens(
-                &conn,
-                account.id,
-                &token.access_token,
-                token.refresh_token.as_deref(),
-                s.master_key().as_ref(),
-                &token.token_type,
-                expires_at.as_deref(),
-                token.scope.as_deref(),
-                account.oauth_provider_specific.as_deref(),
-                account.email.as_deref(),
-            ) {
-                Ok(()) => {
-                    tracing::info!(
-                        account = account.id.0,
-                        provider = %provider_id,
-                        "oauth refresh-on-demand: tokens refreshed successfully"
-                    );
-                    token.access_token
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        account = account.id.0,
-                        provider = %provider_id,
-                        error = %e,
-                        "oauth refresh-on-demand: failed to store refreshed tokens"
-                    );
-                    access_token
-                }
-            }
-        }
+        Ok(t) => t,
         Err(e) => {
             tracing::warn!(
                 account = account.id.0,
@@ -539,7 +524,47 @@ pub(crate) async fn refresh_oauth_if_needed(
                 error = %e,
                 "oauth refresh-on-demand: token refresh failed"
             );
-            access_token
+            return fallback_token;
+        }
+    };
+
+    let expires_at = token.expires_in.map(|secs| {
+        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    });
+
+    let conn = s.db_pool().writer();
+    match core_accounts::store_oauth_tokens(
+        &conn,
+        account.id,
+        s.master_key().as_ref(),
+        core_accounts::StoreOAuthTokensParams {
+            access_token: &token.access_token,
+            refresh_token: token.refresh_token.as_deref(),
+            token_type: &token.token_type,
+            expires_at: expires_at.as_deref(),
+            scope: token.scope.as_deref(),
+            provider_specific: account.oauth_provider_specific.as_deref(),
+            email: account.email.as_deref(),
+        },
+    ) {
+        Ok(()) => {
+            tracing::info!(
+                account = account.id.0,
+                provider = %provider_id,
+                "oauth refresh-on-demand: tokens refreshed successfully"
+            );
+            token.access_token
+        }
+        Err(e) => {
+            tracing::warn!(
+                account = account.id.0,
+                provider = %provider_id,
+                error = %e,
+                "oauth refresh-on-demand: failed to store refreshed tokens"
+            );
+            fallback_token
         }
     }
 }

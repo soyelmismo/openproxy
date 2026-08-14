@@ -190,6 +190,20 @@ pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
     Ok(())
 }
 
+/// Inputs for [`providers::update`]. Bundled as a struct to avoid excessive
+/// function arguments and improve API extensibility.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpdateProviderParams<'a> {
+    pub name: Option<&'a str>,
+    pub base_url: Option<&'a str>,
+    pub extra_headers_json: Option<&'a str>,
+    pub auto_activate_keyword: Option<Option<&'a str>>,
+    pub use_proxies: Option<bool>,
+    pub proxy_rotation_errors: Option<&'a str>,
+    pub proxy_rotation_mode: Option<&'a str>,
+    pub rate_limit_scope: Option<RateLimitScope>,
+}
+
 /// Partial update: only the fields the caller supplies are touched.
 /// `auth_type` and `format` are intentionally not updatable here — they are
 /// structural and changing them mid-flight would invalidate routing state.
@@ -200,20 +214,21 @@ pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
 /// * `None` — column is not part of this update (no-op).
 /// * `Some(None)` — set the column to `NULL` (clears any existing keyword).
 /// * `Some(Some(s))` — set the column to the literal string `s`.
-// ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-#[allow(clippy::too_many_arguments)]
 pub fn update(
     conn: &Connection,
     id: &ProviderId,
-    name: Option<&str>,
-    base_url: Option<&str>,
-    extra_headers_json: Option<&str>,
-    auto_activate_keyword: Option<Option<&str>>,
-    use_proxies: Option<bool>,
-    proxy_rotation_errors: Option<&str>,
-    proxy_rotation_mode: Option<&str>,
-    rate_limit_scope: Option<RateLimitScope>,
+    params: UpdateProviderParams<'_>,
 ) -> Result<()> {
+    let UpdateProviderParams {
+        name,
+        base_url,
+        extra_headers_json,
+        auto_activate_keyword,
+        use_proxies,
+        proxy_rotation_errors,
+        proxy_rotation_mode,
+        rate_limit_scope,
+    } = params;
     // Build the SET clause dynamically so we only touch the supplied columns.
     // Each branch adds a fragment plus its bound value to `bound_values`.
     let mut sets: Vec<&'static str> = Vec::new();
@@ -597,14 +612,10 @@ mod tests {
         update(
             &conn,
             &id,
-            Some("Renamed"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            UpdateProviderParams {
+                name: Some("Renamed"),
+                ..Default::default()
+            },
         )
         .expect("update name");
         let p = get(&conn, &id).expect("get").expect("present");
@@ -621,14 +632,12 @@ mod tests {
         update(
             &conn,
             &id,
-            None,
-            Some("https://new.example"),
-            Some(r#"{"new":true}"#),
-            Some(Some("claude")),
-            None,
-            None,
-            None,
-            None,
+            UpdateProviderParams {
+                base_url: Some("https://new.example"),
+                extra_headers_json: Some(r#"{"new":true}"#),
+                auto_activate_keyword: Some(Some("claude")),
+                ..Default::default()
+            },
         )
         .expect("update url+headers+keyword");
         let p = get(&conn, &id).expect("get").expect("present");
@@ -641,21 +650,17 @@ mod tests {
         update(
             &conn,
             &id,
-            None,
-            None,
-            None,
-            Some(None),
-            None,
-            None,
-            None,
-            None,
+            UpdateProviderParams {
+                auto_activate_keyword: Some(None),
+                ..Default::default()
+            },
         )
         .expect("clear keyword");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.auto_activate_keyword, None);
 
         // No-op update on an existing id: should not error and not touch row.
-        update(&conn, &id, None, None, None, None, None, None, None, None).expect("no-op");
+        update(&conn, &id, UpdateProviderParams::default()).expect("no-op");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.base_url, "https://new.example");
 
@@ -664,14 +669,10 @@ mod tests {
         let err = update(
             &conn,
             &missing,
-            Some("X"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            UpdateProviderParams {
+                name: Some("X"),
+                ..Default::default()
+            },
         )
         .expect_err("missing id must error");
         assert!(matches!(err, CoreError::ProviderNotFound(_)));

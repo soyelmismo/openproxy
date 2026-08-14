@@ -450,20 +450,21 @@ pub fn decrypt_oauth_provider_specific(
     }
 }
 
-// ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-#[allow(clippy::too_many_arguments)]
 pub fn store_oauth_tokens(
     conn: &Connection,
     id: AccountId,
-    access_token: &str,
-    refresh_token: Option<&str>,
     master_key: &MasterKey,
-    token_type: &str,
-    expires_at: Option<&str>,
-    scope: Option<&str>,
-    provider_specific: Option<&str>,
-    email: Option<&str>,
+    params: StoreOAuthTokensParams<'_>,
 ) -> Result<()> {
+    let StoreOAuthTokensParams {
+        access_token,
+        refresh_token,
+        token_type,
+        expires_at,
+        scope,
+        provider_specific,
+        email,
+    } = params;
     let access_blob = master_key.encrypt(access_token)?;
     let refresh_blob = match refresh_token {
         Some(rt) => Some(master_key.encrypt(rt)?),
@@ -1275,7 +1276,14 @@ mod tests {
 
         let access = "ya29.a0AfH6SMB_test-access-token_12345";
         store_oauth_tokens(
-            &conn, id, access, None, &mk, "Bearer", None, None, None, None,
+            &conn,
+            id,
+            &mk,
+            StoreOAuthTokensParams {
+                access_token: access,
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1306,14 +1314,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            access,
-            Some(refresh),
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: access,
+                refresh_token: Some(refresh),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1343,14 +1350,12 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "access-only",
-            None,
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "access-only",
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1376,8 +1381,17 @@ mod tests {
         )
         .expect("create");
 
-        store_oauth_tokens(&conn, id, "", None, &mk, "Bearer", None, None, None, None)
-            .expect("store empty access token");
+        store_oauth_tokens(
+            &conn,
+            id,
+            &mk,
+            StoreOAuthTokensParams {
+                access_token: "",
+                token_type: "Bearer",
+                ..Default::default()
+            },
+        )
+        .expect("store empty access token");
 
         let decrypted = decrypt_access_token(&conn, id, &mk).expect("decrypt");
         assert_eq!(decrypted, "");
@@ -1404,14 +1418,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "access",
-            Some(""),
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "access",
+                refresh_token: Some(""),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1442,14 +1455,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            &long_access,
-            Some(&long_refresh),
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: &long_access,
+                refresh_token: Some(&long_refresh),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store long tokens");
 
@@ -1482,14 +1494,12 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            unicode_access,
-            None,
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: unicode_access,
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store unicode");
 
@@ -1518,14 +1528,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "secret-token",
-            Some("secret-refresh"),
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "secret-token",
+                refresh_token: Some("secret-refresh"),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1560,14 +1569,12 @@ mod tests {
         let err = store_oauth_tokens(
             &conn,
             AccountId(99999),
-            "access",
-            None,
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "access",
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .unwrap_err();
         assert!(matches!(err, CoreError::AccountNotFound(99999)));
@@ -1595,14 +1602,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "old-access",
-            Some("old-refresh"),
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "old-access",
+                refresh_token: Some("old-refresh"),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store1");
 
@@ -1610,14 +1616,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "new-access",
-            Some("new-refresh"),
             &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "new-access",
+                refresh_token: Some("new-refresh"),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store2");
 
@@ -1650,14 +1655,13 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "access-token",
-            Some("refresh-token"),
             &mk,
-            "Bearer",
-            None, // expires_at intentionally omitted
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "access-token",
+                refresh_token: Some("refresh-token"),
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1698,14 +1702,14 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            "access-token",
-            Some("refresh-token"),
             &mk,
-            "Bearer",
-            Some(explicit),
-            None,
-            None,
-            None,
+            StoreOAuthTokensParams {
+                access_token: "access-token",
+                refresh_token: Some("refresh-token"),
+                token_type: "Bearer",
+                expires_at: Some(explicit),
+                ..Default::default()
+            },
         )
         .expect("store");
 
@@ -1871,21 +1875,29 @@ mod tests {
         store_oauth_tokens(
             &conn,
             id,
-            access1,
-            Some(refresh1),
             &mk,
-            "Bearer",
-            None,
-            None,
-            Some("initial-provider-spec"),
-            Some("user@domain.com"),
+            StoreOAuthTokensParams {
+                access_token: access1,
+                refresh_token: Some(refresh1),
+                token_type: "Bearer",
+                provider_specific: Some("initial-provider-spec"),
+                email: Some("user@domain.com"),
+                ..Default::default()
+            },
         )
         .expect("store initial");
 
         // 2. Perform a refresh passing None for refresh_token and other fields.
         let access2 = "access-2";
         store_oauth_tokens(
-            &conn, id, access2, None, &mk, "Bearer", None, None, None, None,
+            &conn,
+            id,
+            &mk,
+            StoreOAuthTokensParams {
+                access_token: access2,
+                token_type: "Bearer",
+                ..Default::default()
+            },
         )
         .expect("store refresh");
 

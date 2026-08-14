@@ -132,20 +132,21 @@ impl UsageTracker {
         }));
     }
 
-    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: PipelineRequest,
-        combo: &Combo,
-        target: &ComboTarget,
-        ctx: FailureContext<'_>,
-        trace_id: String,
-        acc: Option<&crate::sse_accumulator::ResponseAccumulator>,
-        chunk_id: Option<&str>,
-        created: u64,
-        model_name: &str,
+        params: crate::PartialFailureParams<'_>,
     ) -> PipelineResult {
+        let crate::PartialFailureParams {
+            req,
+            combo,
+            target,
+            ctx,
+            trace_id,
+            acc,
+            chunk_id,
+            created,
+            model_name,
+        } = params;
         let FailureContext {
             attempt,
             race_size,
@@ -534,7 +535,7 @@ impl<'a> UsageRecordBuilder<'a> {
         };
 
         let job = crate::worker::BackgroundJob::RecordAttempt {
-            usage_input: input,
+            usage_input: Box::new(input),
             target_id: self.target.id,
             combo_id: self.combo.id,
             error_msg: err_msg,

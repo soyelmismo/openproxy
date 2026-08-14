@@ -679,7 +679,24 @@ fn run_database_maintenance(
     compression_mode: &mut openproxy_compression::CompressionMode,
 ) -> anyhow::Result<()> {
     openproxy_db::migrations::run(w)?;
+    load_persisted_config_overrides(
+        w,
+        config,
+        recording_ttl_secs,
+        idle_chunk_retryable,
+        compression_mode,
+    )?;
+    seed_and_backfill_database(w)?;
+    Ok(())
+}
 
+fn load_persisted_config_overrides(
+    w: &openproxy_db::conn::WriterGuard<'_>,
+    config: &mut openproxy_core::AppConfig,
+    recording_ttl_secs: &mut i64,
+    idle_chunk_retryable: &mut bool,
+    compression_mode: &mut openproxy_compression::CompressionMode,
+) -> anyhow::Result<()> {
     if let Some(override_cfg) = openproxy_db::app_config::load_timeouts_override_from_db(w)? {
         tracing::info!(
             connect_ms = override_cfg.connect_ms,
@@ -730,6 +747,10 @@ fn run_database_maintenance(
         config.quota_protection = quota_cfg;
     }
 
+    Ok(())
+}
+
+fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
     let seeded = openproxy_core::seed::seed_builtin_providers(w)?;
     if seeded > 0 {
         tracing::info!(seeded, "auto-seeded built-in providers on first start");
@@ -932,54 +953,66 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                     m.usage_retention_days,
                 )
             };
-            let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
-            if retention_secs > 0 {
-                let _ = openproxy_core::usage::prune_expired_usage_rows(
-                    &prune_pool.writer(),
-                    retention_secs,
-                );
-            }
-            let _ = prune_pool
-                .writer()
-                .execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
+            prune_usage_and_dead_proxies(&prune_pool, retention_days);
             let interval_ticks = interval_hours.max(1);
             vacuum_counter = vacuum_counter.wrapping_add(1);
             if auto_vacuum && vacuum_counter >= interval_ticks {
                 vacuum_counter = 0;
-                {
-                    let mut st = vac_status.write();
-                    st.in_progress = true;
-                }
-                let vacuum_result = {
-                    let w = prune_pool.writer();
-                    let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-                    let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
-                    match inc_result {
-                        Ok(()) => Ok(()),
-                        Err(_) => w.execute_batch("VACUUM;"),
-                    }
-                };
-                let now = chrono::Utc::now().to_rfc3339();
-                let result_str = match vacuum_result {
-                    Ok(()) => "ok".to_string(),
-                    Err(e) => e.to_string(),
-                };
-                {
-                    let mut st = vac_status.write();
-                    st.in_progress = false;
-                    st.last_run = Some(now);
-                    st.last_result = Some(result_str);
-                    if auto_vacuum {
-                        let next =
-                            chrono::Utc::now() + chrono::Duration::hours(interval_hours as i64);
-                        st.next_scheduled = Some(next.to_rfc3339());
-                    } else {
-                        st.next_scheduled = None;
-                    }
-                }
+                execute_vacuum_cycle(&prune_pool, &vac_status, interval_hours, auto_vacuum);
             }
         }
     });
+}
+
+fn prune_usage_and_dead_proxies(prune_pool: &openproxy_db::DbPool, retention_days: u32) {
+    let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
+    if retention_secs > 0 {
+        let _ = openproxy_core::usage::prune_expired_usage_rows(
+            &prune_pool.writer(),
+            retention_secs,
+        );
+    }
+    let _ = prune_pool
+        .writer()
+        .execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
+}
+
+fn execute_vacuum_cycle(
+    prune_pool: &openproxy_db::DbPool,
+    vac_status: &RwLock<crate::state::VacuumStatus>,
+    interval_hours: u32,
+    auto_vacuum: bool,
+) {
+    {
+        let mut st = vac_status.write();
+        st.in_progress = true;
+    }
+    let vacuum_result = {
+        let w = prune_pool.writer();
+        let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+        let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
+        match inc_result {
+            Ok(()) => Ok(()),
+            Err(_) => w.execute_batch("VACUUM;"),
+        }
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let result_str = match vacuum_result {
+        Ok(()) => "ok".to_string(),
+        Err(e) => e.to_string(),
+    };
+    {
+        let mut st = vac_status.write();
+        st.in_progress = false;
+        st.last_run = Some(now);
+        st.last_result = Some(result_str);
+        if auto_vacuum {
+            let next = chrono::Utc::now() + chrono::Duration::hours(interval_hours as i64);
+            st.next_scheduled = Some(next.to_rfc3339());
+        } else {
+            st.next_scheduled = None;
+        }
+    }
 }
 
 async fn start_discovery_scheduler(

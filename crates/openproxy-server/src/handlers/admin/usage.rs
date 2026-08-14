@@ -610,13 +610,12 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                 }
                             }
                         }
-                        Some(Ok(Message::Close(_))) => break,
+                        Some(Ok(Message::Close(_))) | None => break,
                         Some(Ok(_)) => {}
                         Some(Err(e)) => {
                             tracing::debug!(error = %e, "stream_usage_rows: ws_receiver error");
                             break;
                         }
-                        None => break,
                     }
                 }
             }

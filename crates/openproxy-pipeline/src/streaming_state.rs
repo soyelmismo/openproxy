@@ -242,10 +242,9 @@ pub(crate) struct StreamContext<'a> {
     pub proxy_status: Option<String>,
 }
 
-#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChunkResult {
     Break,
-    Return(PipelineResult),
+    Return(Box<PipelineResult>),
 }
 
 impl StreamingState {
@@ -296,7 +295,7 @@ impl StreamingState {
             .is_some_and(|rc| rc.is_cancelled())
             && !processor.state.done_sent
         {
-            return Ok(ChunkResult::Return(
+            return Ok(ChunkResult::Return(Box::new(
                 dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
                         proxy_url: ctx.proxy_url.to_owned(),
@@ -317,7 +316,7 @@ impl StreamingState {
                         model_name: ctx.model_name,
                     },
                 ),
-            ));
+            )));
         }
         Ok(ChunkResult::Break)
     }
@@ -383,7 +382,7 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             .as_ref()
             .is_some_and(|rc| rc.is_cancelled())
         {
-            return Ok(crate::streaming::ChunkEvent::Return(
+            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
                         proxy_url: ctx.proxy_url.to_owned(),
@@ -404,7 +403,7 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
                         model_name: ctx.model_name,
                     },
                 ),
-            ));
+            )));
         }
 
         // ── Format dispatch ──
@@ -465,7 +464,7 @@ impl<'a> ChunkProcessor<'a> {
             // Race cancellation guard: if another target
             // already won, discard this chunk instantly.
             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                return Ok(crate::streaming::ChunkEvent::Return(
+                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
                             proxy_url: ctx.proxy_url.to_owned(),
@@ -486,12 +485,12 @@ impl<'a> ChunkProcessor<'a> {
                             model_name,
                         },
                     ),
-                ));
+                )));
             }
             if let Err(crate::race_sink::StreamSinkError::Lost) =
                 sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
             {
-                return Ok(crate::streaming::ChunkEvent::Return(
+                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_on_sink_send_error(
                         crate::race_sink::StreamSinkError::Lost,
                         crate::upstream_dispatcher::StreamFailureContext {
@@ -513,7 +512,7 @@ impl<'a> ChunkProcessor<'a> {
                             model_name,
                         },
                     ),
-                ));
+                )));
             }
             state.done_sent = true;
             return Ok(crate::streaming::ChunkEvent::Done);
@@ -579,30 +578,32 @@ impl<'a> ChunkProcessor<'a> {
                             }
                             None => None,
                         };
-                    return Ok(crate::streaming::ChunkEvent::Return(
+                    return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                         pipeline.record_and_fail_with_trace_id_and_partial(
-                            req.to_owned(),
-                            combo,
-                            target,
-                            FailureContext {
-                                proxy_url: ctx.proxy_url.to_owned(),
-                                proxy_status: ctx.proxy_status.to_owned(),
-                                attempt,
-                                race_size,
-                                err: &err,
-                                started,
-                                model: Some(model),
-                                connect_ms: Some(connect_and_send_ms),
-                                ttft_ms: state.ttft_ms,
-                                status_code: code,
+                            crate::PartialFailureParams {
+                                req: req.to_owned(),
+                                combo,
+                                target,
+                                ctx: FailureContext {
+                                    proxy_url: ctx.proxy_url.to_owned(),
+                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    attempt,
+                                    race_size,
+                                    err: &err,
+                                    started,
+                                    model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
+                                    ttft_ms: state.ttft_ms,
+                                    status_code: code,
+                                },
+                                trace_id: trace_id.to_string(),
+                                acc: acc_ref,
+                                chunk_id: Some(chunk_id),
+                                created,
+                                model_name,
                             },
-                            trace_id.to_string(),
-                            acc_ref,
-                            Some(chunk_id),
-                            created,
-                            model_name,
                         ),
-                    ));
+                    )));
                 }
             }
         }
@@ -668,7 +669,7 @@ impl<'a> ChunkProcessor<'a> {
                     // target won the race, discard this
                     // chunk to prevent interleaving.
                     if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                        return Ok(crate::streaming::ChunkEvent::Return(
+                        return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
                                     proxy_url: ctx.proxy_url.to_owned(),
@@ -689,7 +690,7 @@ impl<'a> ChunkProcessor<'a> {
                                     model_name,
                                 },
                             ),
-                        ));
+                        )));
                     }
                     // Mark this chunk as "real content" so the
                     // body stream switches from `total_deadline`
@@ -708,7 +709,7 @@ impl<'a> ChunkProcessor<'a> {
                         stream.note_content_chunk();
                     }
                     if let Err(e) = sink.send(sse_bytes).await {
-                        return Ok(crate::streaming::ChunkEvent::Return(
+                        return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
@@ -730,7 +731,7 @@ impl<'a> ChunkProcessor<'a> {
                                     model_name,
                                 },
                             ),
-                        ));
+                        )));
                     }
                 }
                 Ok(None) => {}
@@ -812,7 +813,7 @@ impl<'a> ChunkProcessor<'a> {
             // Race cancellation guard: check before
             // writing to the shared sink.
             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                return Ok(crate::streaming::ChunkEvent::Return(
+                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
                             proxy_url: ctx.proxy_url.to_owned(),
@@ -833,7 +834,7 @@ impl<'a> ChunkProcessor<'a> {
                             model_name,
                         },
                     ),
-                ));
+                )));
             }
             // Mark this chunk as "real content" so the body
             // stream switches from `total_deadline` to the
@@ -847,7 +848,7 @@ impl<'a> ChunkProcessor<'a> {
             // gate that metadata-only chunks must NOT reset.
             stream.note_content_chunk();
             if let Err(e) = sink.send(sse_bytes).await {
-                return Ok(crate::streaming::ChunkEvent::Return(
+                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_on_sink_send_error(
                         e,
                         crate::upstream_dispatcher::StreamFailureContext {
@@ -869,7 +870,7 @@ impl<'a> ChunkProcessor<'a> {
                             model_name,
                         },
                     ),
-                ));
+                )));
             }
         }
         Ok(crate::streaming::ChunkEvent::Skip)
@@ -962,7 +963,7 @@ impl<'a> ChunkProcessor<'a> {
                     // the upstream's [DONE] so the post-loop
                     // sentinel below does not double-emit.
                     if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                        return Ok(crate::streaming::ChunkEvent::Return(
+                        return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
                                     proxy_url: ctx.proxy_url.to_owned(),
@@ -983,12 +984,12 @@ impl<'a> ChunkProcessor<'a> {
                                     model_name,
                                 },
                             ),
-                        ));
+                        )));
                     }
                     if let Err(crate::race_sink::StreamSinkError::Lost) =
                         sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
                     {
-                        return Ok(crate::streaming::ChunkEvent::Return(
+                        return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_on_sink_send_error(
                                 crate::race_sink::StreamSinkError::Lost,
                                 crate::upstream_dispatcher::StreamFailureContext {
@@ -1010,7 +1011,7 @@ impl<'a> ChunkProcessor<'a> {
                                     model_name,
                                 },
                             ),
-                        ));
+                        )));
                     }
                     state.done_sent = true;
                     // CRITICAL FIX: break from the outer
@@ -1119,7 +1120,7 @@ impl<'a> ChunkProcessor<'a> {
                         // still goes into the row because
                         // `UsageRecordBuilder`
                         // accepts an `Option<u32>` pair.
-                        return Ok(crate::streaming::ChunkEvent::Return(
+                        return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
@@ -1141,7 +1142,7 @@ impl<'a> ChunkProcessor<'a> {
                                     model_name,
                                 },
                             ),
-                        ));
+                        )));
                     }
                 }
             }
@@ -1160,30 +1161,32 @@ impl<'a> ChunkProcessor<'a> {
                         }
                         None => None,
                     };
-                return Ok(crate::streaming::ChunkEvent::Return(
+                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.record_and_fail_with_trace_id_and_partial(
-                        req.to_owned(),
-                        combo,
-                        target,
-                        crate::FailureContext {
-                            proxy_url: ctx.proxy_url.to_owned(),
-                            proxy_status: ctx.proxy_status.to_owned(),
-                            attempt,
-                            race_size,
-                            err: &e,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: state.ttft_ms,
-                            status_code: e.http_status(),
+                        crate::PartialFailureParams {
+                            req: req.to_owned(),
+                            combo,
+                            target,
+                            ctx: crate::FailureContext {
+                                proxy_url: ctx.proxy_url.to_owned(),
+                                proxy_status: ctx.proxy_status.to_owned(),
+                                attempt,
+                                race_size,
+                                err: &e,
+                                started,
+                                model: Some(model),
+                                connect_ms: Some(connect_and_send_ms),
+                                ttft_ms: state.ttft_ms,
+                                status_code: e.http_status(),
+                            },
+                            trace_id: trace_id.to_string(),
+                            acc: acc_ref,
+                            chunk_id: Some(chunk_id),
+                            created,
+                            model_name,
                         },
-                        trace_id.to_string(),
-                        acc_ref,
-                        Some(chunk_id),
-                        created,
-                        model_name,
                     ),
-                ));
+                )));
             }
         }
 

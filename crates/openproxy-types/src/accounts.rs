@@ -58,6 +58,18 @@ pub struct Account {
     pub current_proxy_id: Option<String>,
 }
 
+/// Parameters for storing or updating OAuth tokens on an account.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StoreOAuthTokensParams<'a> {
+    pub access_token: &'a str,
+    pub refresh_token: Option<&'a str>,
+    pub token_type: &'a str,
+    pub expires_at: Option<&'a str>,
+    pub scope: Option<&'a str>,
+    pub provider_specific: Option<&'a str>,
+    pub email: Option<&'a str>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

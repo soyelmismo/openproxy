@@ -127,37 +127,34 @@ impl PipelineStage for FormattingStage {
         let current = ctx.current_target.as_ref().ok_or_else(|| {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
-        let adapter = match ctx
+        let Some(adapter) = ctx
             .pipeline
             .config
             .adapters
             .iter()
             .find(|a| a.id() == &current.target.provider_id)
-        {
-            Some(a) => a,
-            None => {
-                let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
-                let combo = ctx.combo.as_ref().ok_or_else(|| {
-                    CoreError::Internal("missing combo in pipeline context".into())
-                })?;
-                return Ok(ctx.pipeline.record_and_fail(
-                    ctx.req.clone(),
-                    combo,
-                    &current.target,
-                    FailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
-                        attempt: ctx.current_target_attempt,
-                        race_size: ctx.race_size,
-                        err: &err,
-                        started: ctx.started.unwrap_or_else(std::time::Instant::now),
-                        model: None,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ));
-            }
+        else {
+            let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
+            let combo = ctx.combo.as_ref().ok_or_else(|| {
+                CoreError::Internal("missing combo in pipeline context".into())
+            })?;
+            return Ok(ctx.pipeline.record_and_fail(
+                ctx.req.clone(),
+                combo,
+                &current.target,
+                FailureContext {
+                    proxy_url: None,
+                    proxy_status: None,
+                    attempt: ctx.current_target_attempt,
+                    race_size: ctx.race_size,
+                    err: &err,
+                    started: ctx.started.unwrap_or_else(std::time::Instant::now),
+                    model: None,
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+                },
+            ));
         };
 
         let target_format = match adapter.format() {
@@ -394,21 +391,21 @@ impl PipelineStage for DispatchStage {
         let result = ctx
             .pipeline
             .dispatcher
-            .dispatch_upstream(
+            .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
                 target,
                 combo,
-                ctx.req.clone(),
+                req: ctx.req.clone(),
                 model,
                 target_format,
-                &url,
-                &headers,
+                url: &url,
+                headers: &headers,
                 body_bytes,
-                &resolved_timeouts,
+                resolved_timeouts: &resolved_timeouts,
                 started,
                 attempt,
                 race_size,
                 trace_id,
-            )
+            })
             .await;
 
         if let Some(aid) = target.account_id {
