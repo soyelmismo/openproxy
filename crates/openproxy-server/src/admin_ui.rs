@@ -111,11 +111,7 @@ pub async fn serve_asset(uri: Uri) -> Response {
     // `strip_prefix("/admin/")` covers `/admin/dist/app.js` →
     // `dist/app.js`; the fallback handles `/admin` (no slash) by
     // returning the SPA shell.
-    let stripped = raw
-        .strip_prefix("/admin/")
-        .or_else(|| raw.strip_prefix("/admin"))
-        .unwrap_or(raw);
-    let path = stripped.trim_start_matches('/');
+    let path = raw.strip_prefix("/admin").unwrap_or(raw).trim_start_matches('/');
 
     if path.is_empty() || path.contains("..") {
         return index_html().await.into_response();
@@ -138,7 +134,7 @@ pub async fn serve_asset(uri: Uri) -> Response {
             headers.insert(header::CONTENT_TYPE, ct);
         }
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-        let body = Body::from(file.data.into_owned());
+        let body = Body::from(file.data);
         return (StatusCode::OK, headers, body).into_response();
     }
 
@@ -184,13 +180,7 @@ pub async fn serve_asset(uri: Uri) -> Response {
 /// is the most exotic shape we'd ship, and this guard keeps the
 /// lookup table closed.
 pub async fn serve_i18n(lang: Path<String>) -> Response {
-    let mut lang = lang.0;
-    // Strip the optional `.json` suffix so the route also accepts
-    // `/admin/i18n/en` (without the extension) — both URLs hit the
-    // same asset.
-    if lang.ends_with(".json") {
-        lang.truncate(lang.len() - ".json".len());
-    }
+    let lang = lang.0.strip_suffix(".json").unwrap_or(&lang.0);
     // Allow letters, digits, hyphen, underscore — covers every ISO 639-1
     // code plus regional variants (`pt-BR`, `zh-Hans`). Reject anything
     // else so the embedded-tree lookup can never be probed with a
@@ -212,7 +202,7 @@ pub async fn serve_i18n(lang: Path<String>) -> Response {
     }
     let filename = format!("{}.json", lang);
     if let Some(file) = I18nAssets::get(&filename) {
-        let body = Body::from(file.data.into_owned());
+        let body = Body::from(file.data);
         return (
             StatusCode::OK,
             [

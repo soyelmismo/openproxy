@@ -83,10 +83,6 @@ impl KiroAdapter {
 crate::adapters::derive_default_from_new!(KiroAdapter);
 
 impl ProviderAdapter for KiroAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -125,10 +121,6 @@ impl ProviderAdapter for KiroAdapter {
             region = m.as_str().to_string();
         }
         kiro_runtime_url(&region)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
 
     fn build_headers(

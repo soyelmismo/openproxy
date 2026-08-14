@@ -1478,24 +1478,25 @@ pub async fn fetch_custom_proxy_source(
 
         let (proto, host_port) = trimmed.split_once("://").unwrap_or(("http", trimmed));
 
-        let parts: Vec<&str> = host_port.split(':').collect();
-        if parts.len() >= 2 {
-            let host = parts[0].trim().to_string();
-            if let Ok(port) = parts[1].trim().parse::<u16>() {
-                let username = parts.get(2).map(|s| s.trim().to_string());
-                let password = parts.get(3).map(|s| s.trim().to_string());
-                if !host.is_empty() && port > 0 {
-                    list.push(ScrapedProxy {
-                        source: source_name.to_string(),
-                        host,
-                        port,
-                        r#type: proto.to_lowercase(),
-                        country_code: None,
-                        username,
-                        password,
-                        priority,
-                    });
-                }
+        let mut parts = host_port.split(':');
+        let Some(raw_host) = parts.next() else { continue; };
+        let Some(raw_port) = parts.next() else { continue; };
+
+        let host = raw_host.trim().to_string();
+        if let Ok(port) = raw_port.trim().parse::<u16>() {
+            let username = parts.next().map(|s| s.trim().to_string());
+            let password = parts.next().map(|s| s.trim().to_string());
+            if !host.is_empty() && port > 0 {
+                list.push(ScrapedProxy {
+                    source: source_name.to_string(),
+                    host,
+                    port,
+                    r#type: proto.to_lowercase(),
+                    country_code: None,
+                    username,
+                    password,
+                    priority,
+                });
             }
         }
     }

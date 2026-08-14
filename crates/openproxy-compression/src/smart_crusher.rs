@@ -95,13 +95,10 @@ pub fn smart_crush_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
         if msg.role != "tool" {
             continue;
         }
-        // Take ownership of the text so we can rebind `msg.content` afterwards
-        // without a dangling borrow.
-        let text = match msg.content.as_ref().and_then(|c| c.as_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
+        let Some(text) = msg.content.as_ref().and_then(|c| c.as_str()) else {
+            continue;
         };
-        if let Some((compressed, technique)) = crush_json_string(&text) {
+        if let Some((compressed, technique)) = crush_json_string(text) {
             msg.content = Some(Value::String(compressed));
             applied.push(technique);
         }

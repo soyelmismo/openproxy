@@ -103,13 +103,10 @@ pub fn compress_diffs(msgs: &mut Messages) -> Vec<&'static str> {
         if msg.role != "tool" && msg.role != "assistant" {
             continue;
         }
-        // Take ownership of the text so we can rebind `msg.content` afterwards
-        // without a dangling borrow.
-        let text = match msg.content.as_ref().and_then(|c| c.as_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
+        let Some(text) = msg.content.as_ref().and_then(|c| c.as_str()) else {
+            continue;
         };
-        if let Some(compressed) = compress_diff_content(&text) {
+        if let Some(compressed) = compress_diff_content(text) {
             msg.content = Some(Value::String(compressed));
             applied.push(TECHNIQUE);
         }
@@ -133,7 +130,7 @@ pub fn compress_diff_string(text: &str) -> Option<(String, &'static str)> {
 /// (too short, not a diff, nothing to compress, or compressed output is not
 /// strictly smaller than the original).
 fn compress_diff_content(text: &str) -> Option<String> {
-    let lines: Vec<&str> = text.split('\n').collect();
+    let lines: Vec<&str> = text.lines().collect();
     if lines.len() < MIN_DIFF_LINES {
         return None;
     }

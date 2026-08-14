@@ -20,7 +20,7 @@
 //! UUID generated once per process launch.
 
 use http::HeaderValue;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 /// Known stable Antigravity version (must be >= the version Google's
@@ -54,65 +54,64 @@ fn version() -> String {
 /// the hostname + OS. This mimics the `machine_uid` crate used by the
 /// Antigravity-Manager — it produces a stable-per-machine identifier
 /// that the API uses for rate-limiting and session tracking.
+static MACHINE_ID: LazyLock<String> = LazyLock::new(|| {
+    // Try to read a stable machine identifier from the OS.
+    // Fallback: hostname + OS arch.
+    let raw = hostname()
+        .map(String::from)
+        .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
+    // Hash to a fixed-length hex string for a clean header value.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    hasher.update(std::env::consts::OS.as_bytes());
+    hasher.update(std::env::consts::ARCH.as_bytes());
+    let hash = hasher.finalize();
+    // Take the first 32 hex chars (128 bits) — enough entropy
+    // for a machine fingerprint without being too long.
+    hash.iter()
+        .take(16)
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
+});
+
 fn machine_id() -> &'static str {
-    static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            // Try to read a stable machine identifier from the OS.
-            // Fallback: hostname + OS arch.
-            let raw = hostname()
-                .map(String::from)
-                .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
-            // Hash to a fixed-length hex string for a clean header value.
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(raw.as_bytes());
-            hasher.update(std::env::consts::OS.as_bytes());
-            hasher.update(std::env::consts::ARCH.as_bytes());
-            let hash = hasher.finalize();
-            // Take the first 32 hex chars (128 bits) — enough entropy
-            // for a machine fingerprint without being too long.
-            hash.iter()
-                .take(16)
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        })
-        .as_str()
+    &MACHINE_ID
 }
+
+static HOSTNAME: LazyLock<Option<String>> = LazyLock::new(|| {
+    // Try /etc/hostname first (Linux), then the HOSTNAME env var, then
+    // gethostname crate equivalent (std::env::var).
+    if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Ok(s) = std::env::var("HOSTNAME")
+        && !s.is_empty()
+    {
+        return Some(s);
+    }
+    if let Ok(s) = std::env::var("COMPUTERNAME")
+        && !s.is_empty()
+    {
+        return Some(s);
+    }
+    None
+});
 
 /// Best-effort hostname read. Returns `None` if the hostname can't be
 /// determined (e.g. in a container without hostname configured).
 fn hostname() -> Option<&'static str> {
-    static CACHE: OnceLock<Option<String>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            // Try /etc/hostname first (Linux), then the HOSTNAME env var, then
-            // gethostname crate equivalent (std::env::var).
-            if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-            if let Ok(s) = std::env::var("HOSTNAME")
-                && !s.is_empty()
-            {
-                return Some(s);
-            }
-            if let Ok(s) = std::env::var("COMPUTERNAME")
-                && !s.is_empty()
-            {
-                return Some(s);
-            }
-            None
-        })
-        .as_deref()
+    HOSTNAME.as_deref()
 }
+
+static SESSION_ID: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().to_string());
 
 /// Per-launch session ID. Generated once per process lifetime.
 fn session_id() -> &'static str {
-    static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE.get_or_init(|| Uuid::new_v4().to_string()).as_str()
+    &SESSION_ID
 }
 
 /// The full User-Agent string:

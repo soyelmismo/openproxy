@@ -48,81 +48,30 @@ pub struct UsageDetailResponse {
     pub row: core_usage::UsageDetailRow,
 }
 
-pub async fn usage_summary(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<core_usage::UsageSummary>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
-        core_usage::summary(conn, fl)
-    })?;
-    Ok(Json(result))
+macro_rules! analytics_handler {
+    ($fn_name:ident, $tag:literal, $core_fn:path, $res_ty:ty) => {
+        pub async fn $fn_name(
+            State(s): State<AppState>,
+            Query(q): Query<UsageQuery>,
+        ) -> Result<Json<$res_ty>, ApiError> {
+            let f = q.into_filter()?;
+            let result = run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| {
+                $core_fn(conn, fl)
+            })?;
+            Ok(Json(result))
+        }
+    };
 }
 
-pub async fn usage_by_model(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<Vec<core_usage::ByModelRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "by_model", |conn, fl| {
-        core_usage::by_model(conn, fl)
-    })?;
-    Ok(Json(result))
-}
-
-pub async fn usage_by_provider(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<Vec<core_usage::ByProviderRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "by_provider", |conn, fl| {
-        core_usage::by_provider(conn, fl)
-    })?;
-    Ok(Json(result))
-}
-
-pub async fn usage_monthly_by_provider(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<Vec<core_usage::MonthlyByProviderRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "monthly_by_provider", |conn, fl| {
-        core_usage::monthly_by_provider(conn, fl)
-    })?;
-    Ok(Json(result))
-}
-
-pub async fn usage_by_day(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<Vec<core_usage::ByDayRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result =
-        run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| core_usage::by_day(conn, fl))?;
-    Ok(Json(result))
-}
-
-pub async fn usage_by_account(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<Vec<core_usage::ByAccountRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "by_account", |conn, fl| {
-        core_usage::by_account(conn, fl)
-    })?;
-    Ok(Json(result))
-}
-
-pub async fn usage_by_status(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<Vec<core_usage::ByStatusRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "by_status", |conn, fl| {
-        core_usage::by_status(conn, fl)
-    })?;
-    Ok(Json(result))
-}
+analytics_handler!(usage_summary, "summary", core_usage::summary, core_usage::UsageSummary);
+analytics_handler!(usage_by_model, "by_model", core_usage::by_model, Vec<core_usage::ByModelRow>);
+analytics_handler!(usage_by_provider, "by_provider", core_usage::by_provider, Vec<core_usage::ByProviderRow>);
+analytics_handler!(usage_monthly_by_provider, "monthly_by_provider", core_usage::monthly_by_provider, Vec<core_usage::MonthlyByProviderRow>);
+analytics_handler!(usage_by_day, "by_day", core_usage::by_day, Vec<core_usage::ByDayRow>);
+analytics_handler!(usage_by_account, "by_account", core_usage::by_account, Vec<core_usage::ByAccountRow>);
+analytics_handler!(usage_by_status, "by_status", core_usage::by_status, Vec<core_usage::ByStatusRow>);
+analytics_handler!(usage_latency, "latency", analytics::latency_percentiles, analytics::LatencyPercentiles);
+analytics_handler!(usage_races, "races", analytics::race_stats, analytics::RaceStats);
 
 pub async fn usage_errors(
     State(s): State<AppState>,
@@ -131,28 +80,6 @@ pub async fn usage_errors(
     let f = q.into_filter()?;
     let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
         core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
-    })?;
-    Ok(Json(result))
-}
-
-pub async fn usage_latency(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<analytics::LatencyPercentiles>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "latency", |conn, fl| {
-        analytics::latency_percentiles(conn, fl)
-    })?;
-    Ok(Json(result))
-}
-
-pub async fn usage_races(
-    State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
-) -> Result<Json<analytics::RaceStats>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "races", |conn, fl| {
-        analytics::race_stats(conn, fl)
     })?;
     Ok(Json(result))
 }

@@ -33,35 +33,35 @@ impl ToolCallAccumulator {
     /// running total). If the upstream already sends fragments (the
     /// correct behavior), this is a no-op — the fragment is returned
     /// as-is and the running total is updated.
-    pub fn process(&mut self, index: u64, arguments: &str) -> String {
+    pub fn process<'a>(&mut self, index: u64, arguments: &'a str) -> &'a str {
         let prev = self.args_by_index.entry(index).or_default();
         if prev.is_empty() {
             // First chunk for this index — the arguments IS the
             // fragment (there's nothing before it).
             if arguments.len() > MAX_TOOL_CALL_ARGS_BYTES {
-                return String::new(); // Drop fragment, don't accumulate
+                return ""; // Drop fragment, don't accumulate
             }
             prev.push_str(arguments);
-            return arguments.to_string();
+            return arguments;
         }
         if arguments.starts_with(prev.as_str()) {
             // Running-total pattern: the upstream sent prev + new.
             // Extract just the new suffix.
             let new_fragment = &arguments[prev.len()..];
             if prev.len() + new_fragment.len() > MAX_TOOL_CALL_ARGS_BYTES {
-                return String::new(); // Drop fragment, don't accumulate
+                return ""; // Drop fragment, don't accumulate
             }
             prev.push_str(new_fragment);
-            new_fragment.to_string()
+            new_fragment
         } else {
             // Fragment pattern (correct OpenAI behavior): the
             // upstream sent just the new fragment. Update the
             // running total and pass it through.
             if prev.len() + arguments.len() > MAX_TOOL_CALL_ARGS_BYTES {
-                return String::new(); // Drop fragment, don't accumulate
+                return ""; // Drop fragment, don't accumulate
             }
             prev.push_str(arguments);
-            arguments.to_string()
+            arguments
         }
     }
 }
@@ -155,7 +155,7 @@ pub(crate) fn apply_reasoning_normalizations(
                         let index = tc.index.unwrap_or(0);
                         let new_fragment = tool_call_acc.process(index, arguments);
                         if new_fragment != *arguments {
-                            func.arguments = Some(std::borrow::Cow::Owned(new_fragment));
+                            func.arguments = Some(std::borrow::Cow::Owned(new_fragment.to_string()));
                             modified = true;
                         }
                     }

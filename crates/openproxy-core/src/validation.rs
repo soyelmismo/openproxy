@@ -16,8 +16,8 @@ pub fn validate_base_url(url: &str) -> Result<()> {
             "base_url must start with http:// or https://, got: {url}"
         )));
     }
-    let host_part = remainder.split('/').next().unwrap_or(remainder);
-    let host = host_part.split(':').next().unwrap_or(host_part);
+    let host_part = remainder.split_once('/').map_or(remainder, |(h, _)| h);
+    let host = host_part.split_once(':').map_or(host_part, |(h, _)| h);
     if host.is_empty() {
         return Err(CoreError::Validation(format!(
             "base_url must have a non-empty host, got: {url}"

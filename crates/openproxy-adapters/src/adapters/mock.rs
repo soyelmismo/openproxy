@@ -58,29 +58,11 @@ impl std::fmt::Debug for MockAdapter {
 }
 
 impl ProviderAdapter for MockAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         self.config.base_url.clone()
-    }
-    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-        Some(("Authorization".into(), format!("Bearer {}", api_key)))
-    }
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let mut headers = vec![("Content-Type".into(), "application/json".into())];
-        if let Some(auth) = self.build_auth_header(api_key) {
-            headers.push(auth);
-        }
-        headers
     }
     fn models_url(&self) -> Option<String> {
         None

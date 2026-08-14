@@ -58,10 +58,6 @@ impl ProviderAdapter for MiniMaxAdapter {
         format!("{}/anthropic/v1/messages?beta=true", self.config.base_url)
     }
 
-    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-        Some(("Authorization".to_string(), format!("Bearer {}", api_key)))
-    }
-
     fn models_url(&self) -> Option<String> {
         // MiniMax exposes its model catalogue at /v1/models (separate from
         // the /anthropic/v1/ chat surface). The auth scheme is the same

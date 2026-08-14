@@ -92,10 +92,6 @@ impl Default for CodexAdapter {
 }
 
 impl ProviderAdapter for CodexAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -109,14 +105,6 @@ impl ProviderAdapter for CodexAdapter {
             requires_oauth: true,
             oauth_refresh_lead_seconds: Some(300),
         }
-    }
-
-    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        format!("{}/responses", self.config.base_url)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
 
     fn build_headers(

@@ -80,7 +80,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     // Without this log, missing pricing was completely silent — rows
     // silently got `cost_usd = 0` with no signal to the operator.
     if price.is_none()
-        && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
+        && (input.prompt_tokens.is_some_and(|t| t > 0)
+            || input.completion_tokens.is_some_and(|t| t > 0))
     {
         tracing::warn!(
             provider_id = %input.provider_id,
@@ -91,7 +92,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     let (cost_usd, tps) = compute(price, input);
     let (error_msg_for_db, error_msg_redacted_for_db) = match &input.error_msg {
         Some(msg) => {
-            let (sanitized, _redacted) = redact_error_msg(msg);
+            let (sanitized, _) = redact_error_msg(msg);
             (Some(sanitized.clone()), Some(sanitized))
         }
         None => (None, None),

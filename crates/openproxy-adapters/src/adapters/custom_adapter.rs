@@ -31,21 +31,11 @@ impl CustomAdapter {
     pub fn from_provider_row(provider: &openproxy_types::Provider) -> Self {
         let auth_type = match provider.auth_type {
             // OAuth tokens are still passed as Bearer on the wire.
-            openproxy_types::AuthType::Bearer | openproxy_types::AuthType::OAuth => {
-                AdapterAuthType::Bearer
-            }
-            openproxy_types::AuthType::XApiKey => AdapterAuthType::XApiKey,
-            openproxy_types::AuthType::GoogApiKey => AdapterAuthType::GoogApiKey,
-            openproxy_types::AuthType::None => AdapterAuthType::None,
+            openproxy_types::AuthType::OAuth => AdapterAuthType::Bearer,
+            other => other,
         };
 
-        let format = match provider.format {
-            openproxy_types::ProviderFormat::Openai => AdapterFormat::Openai,
-            openproxy_types::ProviderFormat::Anthropic => AdapterFormat::Anthropic,
-            openproxy_types::ProviderFormat::Mixed => AdapterFormat::Mixed,
-            openproxy_types::ProviderFormat::Gemini => AdapterFormat::Gemini,
-            openproxy_types::ProviderFormat::Responses => AdapterFormat::Responses,
-        };
+        let format = provider.format;
 
         let extra_headers: Vec<(String, String)> = provider
             .extra_headers_json
@@ -76,68 +66,8 @@ impl CustomAdapter {
 }
 
 impl ProviderAdapter for CustomAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
-    }
-
-    fn build_chat_url(&self, target_format: TargetFormat, model: &ModelId) -> String {
-        match self.config.format {
-            AdapterFormat::Openai => format!("{}/chat/completions", self.config.base_url),
-            AdapterFormat::Anthropic => format!("{}/messages", self.config.base_url),
-            AdapterFormat::Gemini => {
-                format!(
-                    "{}/models/{}:streamGenerateContent?alt=sse",
-                    self.config.base_url,
-                    model.as_str()
-                )
-            }
-            AdapterFormat::Responses => format!("{}/responses", self.config.base_url),
-            AdapterFormat::Mixed => match target_format {
-                TargetFormat::Openai => format!("{}/chat/completions", self.config.base_url),
-                TargetFormat::Anthropic => format!("{}/messages", self.config.base_url),
-                TargetFormat::Gemini => format!("{}/chat/completions", self.config.base_url),
-                TargetFormat::Responses => format!("{}/responses", self.config.base_url),
-            },
-        }
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-        match self.config.auth_type {
-            AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                Some(("Authorization".into(), format!("Bearer {}", api_key)))
-            }
-            AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
-            AdapterAuthType::XApiKey => Some(("x-api-key".into(), api_key.to_string())),
-            AdapterAuthType::None => None,
-        }
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        if let Some((name, value)) = self.build_auth_header(api_key)
-            && !name.is_empty()
-            && !api_key.is_empty()
-        {
-            headers.push((name, value));
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        for (k, v) in &self.config.extra_headers {
-            headers.push((k.clone(), v.clone()));
-        }
-        headers
-    }
-
-    fn models_url(&self) -> Option<String> {
-        Some(format!("{}/models", self.config.base_url))
     }
 
     async fn fetch_models(

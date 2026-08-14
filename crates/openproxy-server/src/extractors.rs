@@ -85,14 +85,10 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let query_token = parts.uri.query().and_then(|q| {
-            for pair in q.split('&') {
-                if let Some((k, v)) = pair.split_once('=')
-                    && k == "token"
-                {
-                    return Some(v.to_string());
-                }
-            }
-            None
+            q.split('&')
+                .find_map(|pair| pair.split_once('='))
+                .filter(|(k, _)| *k == "token")
+                .map(|(_, v)| v.to_string())
         });
         authenticate_admin_ws(&app_state, &parts.headers, query_token.as_deref())?;
         Ok(AdminAuth)

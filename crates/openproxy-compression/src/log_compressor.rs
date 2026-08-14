@@ -77,13 +77,10 @@ pub fn compress_logs(msgs: &mut Messages) -> Vec<&'static str> {
         if msg.role != "tool" && msg.role != "assistant" {
             continue;
         }
-        // Take ownership of the text so we can rebind `msg.content` afterwards
-        // without a dangling borrow.
-        let text = match msg.content.as_ref().and_then(|c| c.as_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
+        let Some(text) = msg.content.as_ref().and_then(|c| c.as_str()) else {
+            continue;
         };
-        if let Some(compressed) = compress_log_content(&text)
+        if let Some(compressed) = compress_log_content(text)
             && compressed.len() < text.len()
         {
             msg.content = Some(Value::String(compressed));
@@ -110,7 +107,7 @@ pub fn compress_log_string(text: &str) -> Option<(String, &'static str)> {
 /// Compress a single content string. Returns `None` if not compressible
 /// (too short, no log format, no scoreable lines, or no lines selected).
 fn compress_log_content(text: &str) -> Option<String> {
-    let lines: Vec<&str> = text.split('\n').collect();
+    let lines: Vec<&str> = text.lines().collect();
     if lines.len() < MIN_LOG_LINES {
         return None;
     }

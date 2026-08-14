@@ -37,10 +37,6 @@ impl OpenRouterAdapter {
 crate::adapters::derive_default_from_new!(OpenRouterAdapter);
 
 impl ProviderAdapter for OpenRouterAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -52,36 +48,6 @@ impl ProviderAdapter for OpenRouterAdapter {
         meta.supports_quota = true;
         meta.quota_refresh_supported = true;
         meta
-    }
-
-    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        // OpenRouter is OpenAI-only; the target_format arg is ignored.
-        format!("{}/chat/completions", self.config.base_url)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-        Some(("Authorization".into(), format!("Bearer {}", api_key)))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        if let Some((name, value)) = self.build_auth_header(api_key) {
-            headers.push((name, value));
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        for (k, v) in &self.config.extra_headers {
-            headers.push((k.clone(), v.clone()));
-        }
-        headers
-    }
-
-    fn models_url(&self) -> Option<String> {
-        Some(format!("{}/models", self.config.base_url))
     }
 
     async fn fetch_models(
@@ -294,7 +260,7 @@ fn parse_openrouter_quota(
     let is_free = data
         .and_then(|d| d.get("is_free_tier"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .is_some_and(|b| b);
     let rate_limit = data.and_then(|d| d.get("rate_limit"));
 
     let session_used = raw_usage.filter(|u| *u >= 0.0).map(|u| (u * 100.0) as i64);
@@ -496,7 +462,7 @@ fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchite
 /// loop are preferred when present; this is the final fallback for
 /// upstreams that only supply the raw id.
 fn derive_family_from_id(id: &str) -> Option<String> {
-    let name = id.split('/').next_back()?;
+    let name = id.rsplit_once('/').map_or(id, |(_, tail)| tail);
     openproxy_types::capabilities::infer_family(name)
 }
 

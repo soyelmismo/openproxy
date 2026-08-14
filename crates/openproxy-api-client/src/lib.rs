@@ -365,30 +365,26 @@ impl Client {
     // Usage analytics
     // -----------------------------------------------------------------
 
-    /// `GET /admin/usage/summary?from=...&to=...&provider_id=...&...`.
-    pub async fn usage_summary(&self, f: &UsageFilter) -> Result<UsageSummary, ClientError> {
-        let url = format!(
-            "{}?{}",
-            self.url("/admin/usage/summary"),
-            usage_filter_query(f)
-        );
+    async fn get_analytics<T: serde::de::DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        filter: &UsageFilter,
+    ) -> Result<T, ClientError> {
+        let url = format!("{}?{}", self.url(endpoint), usage_filter_query(filter));
         let resp = self
             .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
 
+    /// `GET /admin/usage/summary?from=...&to=...&provider_id=...&...`.
+    pub async fn usage_summary(&self, f: &UsageFilter) -> Result<UsageSummary, ClientError> {
+        self.get_analytics("/admin/usage/summary", f).await
+    }
+
     /// `GET /admin/usage/by-model?from=...&...`.
     pub async fn usage_by_model(&self, f: &UsageFilter) -> Result<Vec<ByModelRow>, ClientError> {
-        let url = format!(
-            "{}?{}",
-            self.url("/admin/usage/by-model"),
-            usage_filter_query(f)
-        );
-        let resp = self
-            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
-            .await?;
-        parse_json(resp).await
+        self.get_analytics("/admin/usage/by-model", f).await
     }
 
     /// `GET /admin/usage/by-account?from=...&...`.
@@ -396,28 +392,12 @@ impl Client {
         &self,
         f: &UsageFilter,
     ) -> Result<Vec<ByAccountRow>, ClientError> {
-        let url = format!(
-            "{}?{}",
-            self.url("/admin/usage/by-account"),
-            usage_filter_query(f)
-        );
-        let resp = self
-            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
-            .await?;
-        parse_json(resp).await
+        self.get_analytics("/admin/usage/by-account", f).await
     }
 
     /// `GET /admin/usage/by-status?from=...&...`.
     pub async fn usage_by_status(&self, f: &UsageFilter) -> Result<Vec<ByStatusRow>, ClientError> {
-        let url = format!(
-            "{}?{}",
-            self.url("/admin/usage/by-status"),
-            usage_filter_query(f)
-        );
-        let resp = self
-            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
-            .await?;
-        parse_json(resp).await
+        self.get_analytics("/admin/usage/by-status", f).await
     }
 
     /// `GET /admin/usage/errors?from=...&...&limit=N`.
@@ -441,28 +421,12 @@ impl Client {
 
     /// `GET /admin/usage/latency?from=...&...`.
     pub async fn usage_latency(&self, f: &UsageFilter) -> Result<LatencyPercentiles, ClientError> {
-        let url = format!(
-            "{}?{}",
-            self.url("/admin/usage/latency"),
-            usage_filter_query(f)
-        );
-        let resp = self
-            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
-            .await?;
-        parse_json(resp).await
+        self.get_analytics("/admin/usage/latency", f).await
     }
 
     /// `GET /admin/usage/races?from=...&...`.
     pub async fn usage_races(&self, f: &UsageFilter) -> Result<RaceStats, ClientError> {
-        let url = format!(
-            "{}?{}",
-            self.url("/admin/usage/races"),
-            usage_filter_query(f)
-        );
-        let resp = self
-            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
-            .await?;
-        parse_json(resp).await
+        self.get_analytics("/admin/usage/races", f).await
     }
 }
 

@@ -293,10 +293,9 @@ fn strip_proxy_prefix<'a>(conn: &Connection, model_str: &'a str) -> (&'a str, Op
     if model_str.starts_with("combo:") {
         return (model_str, None);
     }
-    let Some(slash_idx) = model_str.find('/') else {
+    let Some((prefix, rest)) = model_str.split_once('/') else {
         return (model_str, None);
     };
-    let prefix = &model_str[..slash_idx];
     if prefix.is_empty() {
         return (model_str, None);
     }
@@ -310,7 +309,7 @@ fn strip_proxy_prefix<'a>(conn: &Connection, model_str: &'a str) -> (&'a str, Op
         .optional()
         .is_ok_and(|v| v.unwrap_or(0) != 0);
     if exists {
-        (&model_str[slash_idx + 1..], Some(prefix))
+        (rest, Some(prefix))
     } else {
         (model_str, None)
     }

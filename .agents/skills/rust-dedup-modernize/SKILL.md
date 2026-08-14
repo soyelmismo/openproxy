@@ -235,43 +235,65 @@ Guía operativa para auditar repositorios Rust, localizar código duplicado/boil
 
 ---
 
-## 3. Protocolo de Ejecución y Paralelización con Subagentes
+## 3. Protocolo de Ejecución: Pipeline de 3 Capas con Subagentes
 
-En workspaces multi-crate o refactorizaciones amplias, la tarea debe modularizarse y paralelizarse para maximizar velocidad y consistencia sin colisiones de contexto:
+Para evitar auditorías superficiales o pasadas incrementales incompletas, el proceso DEBE estructurarse de forma obligatoria en un pipeline de tres etapas especializadas con subagentes independientes:
 
 ```mermaid
 flowchart TD
-    A[Fase 1: Abstracciones Base y Tipos Comunes (Parent)] --> B[Fase 2: Paralelización por Crates/Módulos]
-    B --> C[Subagente A: Crates de Adaptadores / Providers]
-    B --> D[Subagente B: Crates de DB / Batching]
-    B --> E[Subagente C: Crates de Compresión / Pipeline]
-    B --> F[Subagente D: Crates de Servidor / Handlers]
-    C --> G[Fase 3: Integración, Lints y Verificación Global (Parent)]
-    D --> G
-    E --> G
-    F --> G
+    subgraph Capa 1: Exploración Exhaustiva
+        A[Parent: Mapeo de Workspace] --> B1[Subagente Explorador: openproxy-adapters]
+        A --> B2[Subagente Explorador: openproxy-core / pipeline]
+        A --> B3[Subagente Explorador: openproxy-db / compression / types]
+        A --> B4[Subagente Explorador: openproxy-server / api-client]
+    end
+
+    subgraph Capa 2: Ejecución y Deduplicación
+        B1 & B2 & B3 & B4 --> C[Parent: Consolidación de Inventario y Plan DRY]
+        C --> D1[Subagente Corrector: Módulos Base / Tipos]
+        C --> D2[Subagente Corrector: Pipelines / Handlers]
+        C --> D3[Subagente Corrector: DB / Adapters]
+    end
+
+    subgraph Capa 3: Auditoría y Verificación de Lógica
+        D1 & D2 & D3 --> E[Subagente Revisor: Auditoría Dual de Diff e Invariantes]
+        E --> F[Parent: Verificación Global de Lints y Test Suite]
+    end
 ```
 
-### 3.1 Criterios de Paralelización
+---
 
-- **¿Cuándo es necesario?**
-  - Workspaces con 3+ crates independientes o módulos desacoplados sin dependencias circulares directas.
-  - Tareas de migración sintáctica masiva (ej. `LazyLock`, `split_once`, `let-else`, dedup de endpoints) distribuidas en diferentes crates.
-- **¿Cuándo NO paralelizar?**
-  - Cambios destructivos de firmas públicas en tipos base (`openproxy-types`, `core`) que romperían el árbol de compilación en paralelo.
+### 3.1 Etapa 1: Exploración Exhaustiva Paralela (Subagentes `research`)
 
-### 3.2 Fases del Flujo de Trabajo
+- **Objetivo:** Cada subagente examina a fondo un conjunto de crates asignados y emite un **Inventario de Oportunidades** sin modificar código.
+- **Checklist de Búsqueda Obligatoria por Subagente:**
+  1. *Estructuras & Duplicaciones:* Enums repetidos entre crates, match arms idénticos en adaptadores/handlers, duplicación de queries/transformaciones.
+  2. *Control de Flujo:* Bloques `match` con retorno temprano candidatos a `let-else`, cadenas `is_some() && ...` a `is_some_and`.
+  3. *Strings & Slices:* `.split(...).next()` a `.split_once(...)`, `.split('\n')` a `.lines()`.
+  4. *Memoria & Concurrencia:* Reemplazo de `.clone()` innecesario por `Arc::unwrap_or_clone` o `Cow`, migración de `once_cell`/`lazy_static` a `std::sync::LazyLock`/`OnceLock`.
+  5. *Errores & Linter:* Conversiones manuales `.map_err()` candidatas a `From` o traits de extensión.
 
-1. **Fase 1: Auditoría y Base Central (Síncrono / Parent):**
-   - Detectar crates obsoletos (`lazy_static`, `atty`, `once_cell`).
-   - Crear traits comunes, macros base o re-exports en crates fundamentales (`types`, `core`).
-   - Verificar compilación base: `cargo check -p <base-crate>`.
+---
 
-2. **Fase 2: Ejecución Paralela Aislada (Subagentes `invoke_subagent`):**
-   - Lanzar subagentes con roles asignados por crate/módulo.
-   - Cada subagente aplica deduplicaciones, sintaxis moderna y valida sus tests unitarios específicos (`cargo test -p <crate>`).
+### 3.2 Etapa 2: Aplicación Quirúrgica (Subagentes `self`)
 
-3. **Fase 3: Verificación Global y Auditoría Final (Síncrono / Parent):**
-   - Limpieza de dependencias huérfanas: `cargo machete` (si aplica).
-   - Lints globales estrictos: `cargo clippy --workspace --all-targets -- -D warnings`.
-   - Suite completa de tests: `cargo test --workspace`.
+- **Objetivo:** Refactorizar el código siguiendo la jerarquía lazy (Stdlib > DRY local > macro zero-cost > cambio mínimo).
+- **Reglas de Ejecución:**
+  - Aplicar cambios con parches mínimos y anclas precisas.
+  - Compilar y validar el crate asignado en cada paso: `cargo test -p <crate>`.
+  - Prohibido alterar contratos públicos o semántica de errores salvo orden explícita.
+
+---
+
+### 3.3 Etapa 3: Revisión de Integridad Lógica (Subagente Auditor)
+
+- **Objetivo:** Auditar el `git diff` completo antes de dar por cerrada la tarea para garantizar **cero pérdida de lógica**.
+- **Preguntas Críticas de Auditoría:**
+  - ¿Algún `let-else` cambió la rama de escape alterando el tipo o mensaje de error original?
+  - ¿Algún `split_once` asumió separadores inexistentes rompiendo casos borde?
+  - ¿Alguna deduplicación de tipos introdujo acoplamiento circular o dependencias innecesarias?
+- **Validación Final:**
+  ```bash
+  cargo clippy --workspace --all-targets -- -D warnings
+  cargo test --workspace
+  ```

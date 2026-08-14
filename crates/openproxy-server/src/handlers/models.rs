@@ -70,15 +70,13 @@ pub async fn list_models(
         // Compute the effective context window: explicit override
         // on the combo row, or auto-compute (min across all
         // targets including sub-combos recursively).
-        let effective_cw = if c.context_window.is_some() {
-            c.context_window
-        } else {
+        let effective_cw = c.context_window.or_else(|| {
             state
                 .services()
                 .combos
                 .compute_effective_context_window(c.id)
                 .unwrap_or(None)
-        };
+        });
         data.push(build_combo_entry(c, effective_cw));
     }
 

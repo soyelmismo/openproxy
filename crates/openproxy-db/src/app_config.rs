@@ -27,35 +27,54 @@ pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = openproxy_types::IDLE_CHUNK_RETRY
 pub const PROXY_TEST_URL_KEY: &str = "proxy_test_url";
 pub const PROXY_TEST_URL_DEFAULT: &str = "https://cloudflare.com/cdn-cgi/trace";
 
-/// Read the persisted `compression` override, if any.
-pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<CompressionMode>> {
+fn load_config_val<T: serde::de::DeserializeOwned>(conn: &Connection, key: &str) -> Result<Option<T>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
         .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
-        .query(params![COMPRESSION_KEY])
+        .query(params![key])
         .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
             let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-            match serde_json::from_str::<CompressionMode>(&raw) {
+            match serde_json::from_str::<T>(&raw) {
                 Ok(cfg) => Ok(Some(cfg)),
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        key = COMPRESSION_KEY,
-                        "app_config row exists but JSON is corrupt; \
-                         ignoring and falling back to config default"
+                        key = key,
+                        "app_config row exists but JSON is corrupt; ignoring and falling back to default"
                     );
                     Ok(None)
                 }
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx(
-            "iterate load_compression_override",
-        )(e)),
+        Err(e) => Err(crate::error::map_db_error_ctx("iterate load_config_val")(e)),
     }
+}
+
+fn save_config_val<T: serde::Serialize>(
+    conn: &Connection,
+    key: &str,
+    val: &T,
+    now_unix_secs: i64,
+) -> Result<()> {
+    let json = serde_json::to_string(val)
+        .map_err(|e| CoreError::Parse(format!("serialize {key}: {e}")))?;
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                         updated_at = excluded.updated_at",
+        params![key, json, now_unix_secs],
+    )
+    .map_err(crate::error::map_db_error)?;
+    Ok(())
+}
+
+/// Read the persisted `compression` override, if any.
+pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<CompressionMode>> {
+    load_config_val(conn, COMPRESSION_KEY)
 }
 
 /// UPSERT the `compression` row.
@@ -64,47 +83,12 @@ pub fn save_compression_to_db(
     mode: &CompressionMode,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(mode)
-        .map_err(|e| CoreError::Parse(format!("serialize compression mode: {}", e)))?;
-    conn.execute(
-        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-                                         updated_at = excluded.updated_at",
-        params![COMPRESSION_KEY, json, now_unix_secs],
-    )
-    .map_err(crate::error::map_db_error)?;
-    Ok(())
+    save_config_val(conn, COMPRESSION_KEY, mode, now_unix_secs)
 }
 
 /// Read the persisted `idle_chunk_retryable` flag, if any.
 pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<bool>> {
-    let mut stmt = conn
-        .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(params![IDLE_CHUNK_RETRYABLE_KEY])
-        .map_err(crate::error::map_db_error)?;
-    match rows.next() {
-        Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-            match serde_json::from_str::<bool>(&raw) {
-                Ok(val) => Ok(Some(val)),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        key = IDLE_CHUNK_RETRYABLE_KEY,
-                        "app_config row exists but JSON is corrupt; \
-                         ignoring and falling back to default"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx(
-            "iterate load_idle_chunk_retryable",
-        )(e)),
-    }
+    load_config_val(conn, IDLE_CHUNK_RETRYABLE_KEY)
 }
 
 /// UPSERT the `idle_chunk_retryable` row.
@@ -113,47 +97,12 @@ pub fn save_idle_chunk_retryable_to_db(
     val: bool,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(&val)
-        .map_err(|e| CoreError::Parse(format!("serialize idle_chunk_retryable: {}", e)))?;
-    conn.execute(
-        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-                                         updated_at = excluded.updated_at",
-        params![IDLE_CHUNK_RETRYABLE_KEY, json, now_unix_secs],
-    )
-    .map_err(crate::error::map_db_error)?;
-    Ok(())
+    save_config_val(conn, IDLE_CHUNK_RETRYABLE_KEY, &val, now_unix_secs)
 }
 
 /// Read the persisted `timeouts` override, if any.
 pub fn load_timeouts_override_from_db(conn: &Connection) -> Result<Option<TimeoutsConfig>> {
-    let mut stmt = conn
-        .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(params![TIMEOUTS_KEY])
-        .map_err(crate::error::map_db_error)?;
-    match rows.next() {
-        Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-            match serde_json::from_str::<TimeoutsConfig>(&raw) {
-                Ok(cfg) => Ok(Some(cfg)),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        key = TIMEOUTS_KEY,
-                        "app_config row exists but JSON is corrupt; \
-                         ignoring and falling back to AppConfig defaults"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx(
-            "iterate load_timeouts_override",
-        )(e)),
-    }
+    load_config_val(conn, TIMEOUTS_KEY)
 }
 
 /// UPSERT the `timeouts` row.
@@ -162,45 +111,12 @@ pub fn save_timeouts_to_db(
     cfg: &TimeoutsConfig,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(cfg)
-        .map_err(|e| CoreError::Parse(format!("serialize timeouts: {}", e)))?;
-    conn.execute(
-        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-                                         updated_at = excluded.updated_at",
-        params![TIMEOUTS_KEY, json, now_unix_secs],
-    )
-    .map_err(crate::error::map_db_error)?;
-    Ok(())
+    save_config_val(conn, TIMEOUTS_KEY, cfg, now_unix_secs)
 }
 
 /// Read the persisted recording TTL, if any.
 pub fn load_recording_ttl_from_db(conn: &Connection) -> Result<Option<i64>> {
-    let mut stmt = conn
-        .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(params![RECORDING_TTL_KEY])
-        .map_err(crate::error::map_db_error)?;
-    match rows.next() {
-        Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-            match serde_json::from_str::<i64>(&raw) {
-                Ok(ttl) => Ok(Some(ttl)),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        key = RECORDING_TTL_KEY,
-                        "app_config row exists but JSON is corrupt; \
-                         ignoring and falling back to default recording TTL"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx("iterate load_recording_ttl")(e)),
-    }
+    load_config_val(conn, RECORDING_TTL_KEY)
 }
 
 /// UPSERT the `recording_ttl_secs` row.
@@ -209,48 +125,14 @@ pub fn save_recording_ttl_to_db(
     ttl_secs: i64,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(&ttl_secs)
-        .map_err(|e| CoreError::Parse(format!("serialize recording_ttl_secs: {}", e)))?;
-    conn.execute(
-        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-                                         updated_at = excluded.updated_at",
-        params![RECORDING_TTL_KEY, json, now_unix_secs],
-    )
-    .map_err(crate::error::map_db_error)?;
-    Ok(())
+    save_config_val(conn, RECORDING_TTL_KEY, &ttl_secs, now_unix_secs)
 }
 
 /// Read the persisted quota protection configuration, if any.
 pub fn load_quota_protection_override_from_db(
     conn: &Connection,
 ) -> Result<Option<QuotaProtectionConfig>> {
-    let mut stmt = conn
-        .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(params![QUOTA_PROTECTION_KEY])
-        .map_err(crate::error::map_db_error)?;
-    match rows.next() {
-        Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-            match serde_json::from_str::<QuotaProtectionConfig>(&raw) {
-                Ok(cfg) => Ok(Some(cfg)),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        key = QUOTA_PROTECTION_KEY,
-                        "app_config row exists but JSON is corrupt; ignoring and falling back to default quota protection"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx(
-            "iterate load_quota_protection",
-        )(e)),
-    }
+    load_config_val(conn, QUOTA_PROTECTION_KEY)
 }
 
 /// UPSERT the `quota_protection` config.
@@ -259,16 +141,7 @@ pub fn save_quota_protection_to_db(
     cfg: &QuotaProtectionConfig,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(cfg)
-        .map_err(|e| CoreError::Parse(format!("serialize quota_protection: {}", e)))?;
-    conn.execute(
-        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-                                         updated_at = excluded.updated_at",
-        params![QUOTA_PROTECTION_KEY, json, now_unix_secs],
-    )
-    .map_err(crate::error::map_db_error)?;
-    Ok(())
+    save_config_val(conn, QUOTA_PROTECTION_KEY, cfg, now_unix_secs)
 }
 
 pub fn load_proxy_test_url(conn: &Connection) -> Result<String> {

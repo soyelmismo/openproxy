@@ -38,60 +38,9 @@ pub struct ProviderAdapterConfig {
     pub rate_limit_scope: String,
 }
 
-/// How the adapter encodes the API key in the HTTP request.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AdapterAuthType {
-    /// `Authorization: Bearer <key>`
-    Bearer,
-    /// `x-api-key: <key>`
-    XApiKey,
-    /// `x-goog-api-key: <key>` (Google Gemini API)
-    GoogApiKey,
-    /// OAuth token flow
-    OAuth,
-    /// No auth header sent (anonymous access).
-    None,
-}
-
-impl AdapterAuthType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AdapterAuthType::Bearer => "bearer",
-            AdapterAuthType::XApiKey => "x-api-key",
-            AdapterAuthType::GoogApiKey => "goog-api-key",
-            AdapterAuthType::OAuth => "oauth",
-            AdapterAuthType::None => "none",
-        }
-    }
-}
-
-/// Native wire format the provider speaks for chat completions.
-///
-/// `Openai` -> `/chat/completions`, `Anthropic` -> `/messages`,
-/// `Gemini` -> `/models/{model}:generateContent`,
-/// `Mixed` -> depends on the model's stored `target_format`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AdapterFormat {
-    Openai,
-    Anthropic,
-    Mixed,
-    Gemini,
-    Responses,
-}
-
-impl AdapterFormat {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AdapterFormat::Openai => "openai",
-            AdapterFormat::Anthropic => "anthropic",
-            AdapterFormat::Mixed => "mixed",
-            AdapterFormat::Gemini => "gemini",
-            AdapterFormat::Responses => "responses",
-        }
-    }
-}
+// Re-export / alias types from `openproxy_types` to eliminate duplicated enum definitions
+pub type AdapterAuthType = openproxy_types::AuthType;
+pub type AdapterFormat = openproxy_types::ProviderFormat;
 
 /// Per-provider adapter. One concrete impl per upstream.
 ///

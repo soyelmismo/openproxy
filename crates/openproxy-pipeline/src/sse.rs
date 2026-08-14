@@ -548,9 +548,7 @@ pub fn translate_anthropic_sse_payload(
     created: u64,
     model: &str,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let (event_type, data_json) = if let Some(pos) = payload.find('\n') {
-        (&payload[..pos], &payload[pos + 1..])
-    } else {
+    let Some((event_type, data_json)) = payload.split_once('\n') else {
         return Ok(None);
     };
 
@@ -814,9 +812,8 @@ pub fn translate_anthropic_sse_event(
     tool_use_acc: &mut Option<AnthropicToolUseAccumulator>,
     tool_call_index_counter: &mut u32,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let (event_type, data_json) = match payload.find('\n') {
-        Some(pos) => (&payload[..pos], &payload[pos + 1..]),
-        None => return Ok(None),
+    let Some((event_type, data_json)) = payload.split_once('\n') else {
+        return Ok(None);
     };
 
     // Skip ping events.
