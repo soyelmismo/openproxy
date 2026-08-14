@@ -14,7 +14,7 @@ use openproxy_types::OpenAIMessage;
 /// Aplica compresión RTK a los mensajes. Retorna las técnicas aplicadas.
 ///
 /// Each builtin filter and the generic filter are looked up from
-/// `once_cell::sync::Lazy` statics (built once at first use, then shared
+/// `std::sync::LazyLock` statics (built once at first use, then shared
 /// via `Arc<CompiledFilter>`). `apply_line_filter` returns
 /// `Vec<&'static str>` rule names — converted to `Vec<String>` at this
 /// boundary to preserve the `Vec<String>` API expected by

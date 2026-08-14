@@ -17,7 +17,7 @@
 //! ## Performance
 //!
 //! The cl100k_base vocab (~1.6MB) is embedded at compile time and
-//! loaded once via `once_cell::Lazy`. Tokenization is ~1-5µs per
+//! loaded once via `std::sync::LazyLock`. Tokenization is ~1-5µs per
 //! token, so a 100K-token prompt takes ~100-500ms. For the hot path
 //! (compression savings), we only tokenize the *diff* (changed messages),
 //! not the full conversation — and the estimator runs after the request

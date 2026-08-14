@@ -13,7 +13,7 @@
 //! The module also owns the canonical in-process broadcast channel for newly
 //! inserted usage rows. After [`crate::cost::record`] inserts a row, it calls
 //! [`publish_usage_row`] to push the new row to all connected WebSocket
-//! clients. The sender is stored in a `once_cell::sync::OnceCell` so it is
+//! clients. The sender is stored in a `std::sync::OnceLock` so it is
 
 pub mod analytics;
 

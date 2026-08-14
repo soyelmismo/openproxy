@@ -217,7 +217,17 @@ pub fn infer_family(model_id: &str) -> Option<String> {
         "deepseek",
         "llama-3.3",
         "llama-3.1",
+        "qwen3",
         "qwen2.5",
+        "qwen2",
+        "gemma-3",
+        "gemma-2",
+        "mistral",
+        "mixtral",
+        "phi-3",
+        "nemotron",
+        "command-r",
+        "cogito",
     ];
     for f in FAMILIES {
         if lower.contains(f) {

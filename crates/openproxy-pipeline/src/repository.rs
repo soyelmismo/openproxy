@@ -1000,17 +1000,9 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {
         let conn = self.conn.lock();
-        let parts: Vec<&str> = url.split("://").collect();
-        if parts.len() != 2 {
-            return None;
-        }
-        let host_port = parts[1];
-        let host_port_parts: Vec<&str> = host_port.split(':').collect();
-        if host_port_parts.len() != 2 {
-            return None;
-        }
-        let host = host_port_parts[0];
-        let port: i64 = host_port_parts[1].parse().ok()?;
+        let (_, host_port) = url.split_once("://")?;
+        let (host, port_str) = host_port.split_once(':')?;
+        let port: i64 = port_str.parse().ok()?;
         conn.query_row(
             "SELECT status FROM free_proxies WHERE host = ?1 AND port = ?2",
             rusqlite::params![host, port],

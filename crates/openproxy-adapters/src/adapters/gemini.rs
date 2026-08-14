@@ -374,26 +374,20 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
 
     let content = candidate
         .and_then(|c| c.content.as_ref())
-        .and_then(|c| {
-            let text: String = c.parts.iter().filter_map(|p| p.text.as_deref()).collect();
-            if text.is_empty() { None } else { Some(text) }
-        })
+        .map(|c| c.parts.iter().filter_map(|p| p.text.as_deref()).collect::<String>())
+        .filter(|t| !t.is_empty())
         .unwrap_or_default();
 
     let finish_reason = candidate
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
 
-    let usage_metadata = if resp.usage_metadata.is_some() {
-        &resp.usage_metadata
-    } else if let Some(inner) = &resp.response {
-        &inner.usage_metadata
-    } else {
-        &None
-    };
+    let usage_metadata = resp
+        .usage_metadata
+        .as_ref()
+        .or_else(|| resp.response.as_ref().and_then(|inner| inner.usage_metadata.as_ref()));
 
     let usage = usage_metadata
-        .as_ref()
         .map(|u| openproxy_types::OpenAIUsage {
             prompt_tokens: u.prompt_token_count,
             completion_tokens: u.candidates_token_count,

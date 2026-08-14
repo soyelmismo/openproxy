@@ -5,26 +5,19 @@ pub trait Validatable {
     fn validate(&self) -> Result<()>;
 }
 
-/// Validate that a `base_url` is a well-formed HTTP(S) URL with a non-empty host.
 pub fn validate_base_url(url: &str) -> Result<()> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    let Some((scheme, remainder)) = url.split_once("://") else {
+        return Err(CoreError::Validation(format!(
+            "base_url must start with http:// or https://, got: {url}"
+        )));
+    };
+    if scheme != "http" && scheme != "https" {
         return Err(CoreError::Validation(format!(
             "base_url must start with http:// or https://, got: {url}"
         )));
     }
-    let Some(scheme_end) = url.find("://") else {
-        return Err(CoreError::Validation(format!(
-            "base_url must start with http:// or https://, got: {url}"
-        )));
-    };
-    let remainder = &url[scheme_end + 3..];
-    let host_end = remainder.find('/').unwrap_or(remainder.len());
-    let host_part = &remainder[..host_end];
-    let host = if let Some(colon_pos) = host_part.rfind(':') {
-        &host_part[..colon_pos]
-    } else {
-        host_part
-    };
+    let host_part = remainder.split('/').next().unwrap_or(remainder);
+    let host = host_part.split(':').next().unwrap_or(host_part);
     if host.is_empty() {
         return Err(CoreError::Validation(format!(
             "base_url must have a non-empty host, got: {url}"

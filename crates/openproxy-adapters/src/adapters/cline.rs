@@ -158,19 +158,13 @@ impl ProviderAdapter for ClineAdapter {
             .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
 
         if let Some(obj) = val.as_object_mut() {
-            if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model") {
-                if model_str.ends_with(":free") {
-                    *model_str = model_str.trim_end_matches(":free").to_string();
-                } else if model_str.ends_with("-free") {
-                    *model_str = model_str.trim_end_matches("-free").to_string();
-                }
+            if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model")
+                && let Some(stripped) = model_str.strip_suffix(":free").or_else(|| model_str.strip_suffix("-free"))
+            {
+                *model_str = stripped.to_string();
             }
             // Cline backend ALWAYS requires stream: true, else it returns HTTP 500 "empty response content"
-            if let Some(stream_val) = obj.get("stream") {
-                if stream_val.is_boolean() {
-                    obj.insert("stream".to_string(), serde_json::Value::Bool(true));
-                }
-            } else {
+            if obj.get("stream").is_none_or(|v| v.is_boolean()) {
                 obj.insert("stream".to_string(), serde_json::Value::Bool(true));
             }
         }

@@ -7,7 +7,7 @@ use super::smart_truncate::{CompiledTruncateConfig, smart_truncate};
 
 /// A filter with all patterns pre-compiled and rule names pre-computed.
 ///
-/// Built ONCE at startup (in a `once_cell::sync::Lazy` static) and shared
+/// Built ONCE at startup (in a `std::sync::LazyLock` static) and shared
 /// across all requests via `Arc<CompiledFilter>`. This eliminates the
 /// per-message `RtkFilter` reconstruction (≈15 `String` + ≈5 `Vec`
 /// allocations) and the per-message `regex::Regex::new` calls (5–15 per
