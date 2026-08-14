@@ -160,7 +160,11 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
                     .nth(MAX_TOOL_CHARS)
                     .map(|(i, _)| i)
                     .unwrap_or(text.len());
-                Some(format!("{}…[truncated {} chars]", &text[..cut], text.len() - cut))
+                Some(format!(
+                    "{}…[truncated {} chars]",
+                    &text[..cut],
+                    text.len() - cut
+                ))
             } else {
                 None
             }
@@ -267,11 +271,7 @@ pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
                 let cleaned = text
                     .replace("\r\n", "\n")
                     .replace('\r', "\n")
-                    .replace('\u{200B}', "")
-                    .replace('\u{200C}', "")
-                    .replace('\u{200D}', "")
-                    .replace('\u{FEFF}', "")
-                    .replace('\0', "");
+                    .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
                 if cleaned != text {
                     return Some(cleaned);
                 }
@@ -336,16 +336,14 @@ pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
     for msg in msgs.iter_mut() {
         if mutate_message_text(msg, |text| {
             let trimmed = text.trim();
-            if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-                || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+            if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+                && (trimmed.contains('\n') || trimmed.contains("  "))
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
             {
-                if trimmed.contains('\n') || trimmed.contains("  ") {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        let minified = val.to_string();
-                        if minified.len() < text.len() {
-                            return Some(minified);
-                        }
-                    }
+                let minified = val.to_string();
+                if minified.len() < text.len() {
+                    return Some(minified);
                 }
             }
             None
@@ -376,7 +374,7 @@ pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
 }
 
 fn collapse_separator_runs(s: &str) -> String {
-    let sep_chars = [b'-', b'=', b'*', b'#', b'_', b'~'];
+    let sep_chars = *b"-=*#_~";
     let bytes = s.as_bytes();
     let mut has_run = false;
     for &sep in &sep_chars {
@@ -611,7 +609,11 @@ mod tests {
         assert_eq!(msgs.len(), 3);
         // Tool result must be preserved verbatim (no truncation)
         let tool_content = msgs[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(tool_content.len(), 3000, "apply_lite must not truncate tool output");
+        assert_eq!(
+            tool_content.len(),
+            3000,
+            "apply_lite must not truncate tool output"
+        );
     }
 
     #[test]
@@ -665,7 +667,10 @@ mod tests {
 
     #[test]
     fn test_clean_invisible_unicode() {
-        let mut msgs = vec![msg("user", "Hello\u{FEFF}\u{200B} world!\r\nSecond line.\0")];
+        let mut msgs = vec![msg(
+            "user",
+            "Hello\u{FEFF}\u{200B} world!\r\nSecond line.\0",
+        )];
         let applied = clean_invisible_unicode(&mut msgs);
         assert!(!applied.is_empty());
         assert_eq!(
@@ -676,7 +681,10 @@ mod tests {
 
     #[test]
     fn test_strip_ansi_escapes() {
-        let mut msgs = vec![msg("tool", "\x1b[32mSuccess\x1b[0m: built target \x1b[1;34mfoo\x1b[0m")];
+        let mut msgs = vec![msg(
+            "tool",
+            "\x1b[32mSuccess\x1b[0m: built target \x1b[1;34mfoo\x1b[0m",
+        )];
         let applied = strip_ansi_escapes(&mut msgs);
         assert!(!applied.is_empty());
         assert_eq!(
@@ -687,17 +695,24 @@ mod tests {
 
     #[test]
     fn test_compact_json() {
-        let pretty = "{\n  \"name\": \"test\",\n  \"count\": 42,\n  \"nested\": {\n    \"ok\": true\n  }\n}";
+        let pretty =
+            "{\n  \"name\": \"test\",\n  \"count\": 42,\n  \"nested\": {\n    \"ok\": true\n  }\n}";
         let mut msgs = vec![msg("tool", pretty)];
         let applied = compact_json(&mut msgs);
         assert!(!applied.is_empty());
         let res = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert_eq!(res, "{\"count\":42,\"name\":\"test\",\"nested\":{\"ok\":true}}");
+        assert_eq!(
+            res,
+            "{\"count\":42,\"name\":\"test\",\"nested\":{\"ok\":true}}"
+        );
     }
 
     #[test]
     fn test_collapse_ascii_separators() {
-        let mut msgs = vec![msg("user", "Start\n------------------------------------------------------------\nEnd")];
+        let mut msgs = vec![msg(
+            "user",
+            "Start\n------------------------------------------------------------\nEnd",
+        )];
         let applied = collapse_ascii_separators(&mut msgs);
         assert!(!applied.is_empty());
         assert_eq!(

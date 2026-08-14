@@ -31,11 +31,7 @@ impl PipelineStage for RouterStage {
             Err(e) => return Err(e),
         };
 
-        let flat_targets = match ctx
-            .pipeline
-            .flatten_targets(&combo.id, targets)
-            .await
-        {
+        let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets).await {
             Ok(t) => t,
             Err(e) => return Err(e),
         };

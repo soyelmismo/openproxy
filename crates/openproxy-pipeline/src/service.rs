@@ -460,7 +460,8 @@ impl tower::Service<PipelineState> for RoutingService {
                 .await;
 
                 if race_result.error.is_none() {
-                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.to_owned()
+                    if let Some((request_id, attempt, target_id)) =
+                        race_result.usage_tuple.to_owned()
                     {
                         let job = crate::worker::BackgroundJob::MarkClientResponse {
                             request_id,
@@ -499,7 +500,8 @@ impl tower::Service<PipelineState> for RoutingService {
 
             for (idx, target) in to_run.iter().enumerate() {
                 let client_disconnected = {
-                    let mut rx = tokio::sync::watch::Receiver::clone(&state.req.client_disconnected);
+                    let mut rx =
+                        tokio::sync::watch::Receiver::clone(&state.req.client_disconnected);
                     pipeline.is_client_disconnected(&mut rx)
                 };
                 if let Some(reason) = client_disconnected {
@@ -543,7 +545,8 @@ impl tower::Service<PipelineState> for RoutingService {
                         break;
                     }
                     let client_disconnected = {
-                        let mut rx = tokio::sync::watch::Receiver::clone(&state.req.client_disconnected);
+                        let mut rx =
+                            tokio::sync::watch::Receiver::clone(&state.req.client_disconnected);
                         pipeline.is_client_disconnected(&mut rx)
                     };
                     if let Some(reason) = client_disconnected {

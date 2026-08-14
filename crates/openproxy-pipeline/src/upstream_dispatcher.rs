@@ -391,7 +391,9 @@ impl UpstreamDispatcher {
                 ),
             );
         }
-        let cancel_token = CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(&req.client_disconnected));
+        let cancel_token = CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(
+            &req.client_disconnected,
+        ));
         let req_proxy_url = upstream_request.proxy.to_owned();
         let req_proxy_status = upstream_request.proxy_status.to_owned();
         let result = self
@@ -1046,41 +1048,42 @@ impl UpstreamDispatcher {
         // apply the same scrubbing here for code paths
         // that don't go through `chat.rs`.
         let request_headers_btm: std::collections::BTreeMap<String, String> =
-            crate::redact::redact_btreemap_sensitive(headers.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect());
-        let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
-            &self.tracker,
-            req,
-            combo,
-            target,
-        )
-        .proxy_url(req_proxy_url)
-        .proxy_status(req_proxy_status)
-        .model_opt(Some(model))
-        .err_opt(None)
-        .connect_ms_opt(Some(connect_and_send_ms))
-        .ttft_ms_opt(Some(ttft_ms))
-        .total_ms(total_ms_now)
-        .status_code(status_code)
-        .attempt(attempt)
-        .race_size(race_size)
-        .trace_id(trace_id.to_string())
-        .prompt_tokens_opt(prompt_tokens)
-        .completion_tokens_opt(completion_tokens)
-        .cached_tokens(cached_tokens)
-        .response_body_json(Some(response_body_value))
-        .request_headers(Some(request_headers_btm))
-        .response_headers(response_headers)
-        .is_streaming(false)
-        .stream_complete(true)
-        .stop_reason(None)
-        .record()
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
-                None
-            }
-        };
+            crate::redact::redact_btreemap_sensitive(
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect(),
+            );
+        let usage_tuple =
+            match crate::usage_tracker::UsageRecordBuilder::new(&self.tracker, req, combo, target)
+                .proxy_url(req_proxy_url)
+                .proxy_status(req_proxy_status)
+                .model_opt(Some(model))
+                .err_opt(None)
+                .connect_ms_opt(Some(connect_and_send_ms))
+                .ttft_ms_opt(Some(ttft_ms))
+                .total_ms(total_ms_now)
+                .status_code(status_code)
+                .attempt(attempt)
+                .race_size(race_size)
+                .trace_id(trace_id.to_string())
+                .prompt_tokens_opt(prompt_tokens)
+                .completion_tokens_opt(completion_tokens)
+                .cached_tokens(cached_tokens)
+                .response_body_json(Some(response_body_value))
+                .request_headers(Some(request_headers_btm))
+                .response_headers(response_headers)
+                .is_streaming(false)
+                .stream_complete(true)
+                .stop_reason(None)
+                .record()
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
+                    None
+                }
+            };
 
         PipelineResult {
             status_code,
@@ -1361,7 +1364,9 @@ impl UpstreamDispatcher {
                 combo,
                 target,
                 dctx.fail_ctx_code(
-                    &CoreError::Internal("dispatch_upstream_streaming called without stream_sink".into()),
+                    &CoreError::Internal(
+                        "dispatch_upstream_streaming called without stream_sink".into(),
+                    ),
                     None,
                     None,
                     500,
@@ -1412,9 +1417,14 @@ impl UpstreamDispatcher {
             );
         }
         let cancel_token = if let Some(rc) = req.race_cancel.as_ref() {
-            CancellationToken::from_watch_and_token(tokio::sync::watch::Receiver::clone(&req.client_disconnected), openproxy_adapters::upstream::CancellationToken::clone(rc))
+            CancellationToken::from_watch_and_token(
+                tokio::sync::watch::Receiver::clone(&req.client_disconnected),
+                openproxy_adapters::upstream::CancellationToken::clone(rc),
+            )
         } else {
-            CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(&req.client_disconnected))
+            CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(
+                &req.client_disconnected,
+            ))
         };
         let req_proxy_url = upstream_request.proxy.to_owned();
         let req_proxy_status = upstream_request.proxy_status.to_owned();
@@ -1914,40 +1924,36 @@ impl UpstreamDispatcher {
         // re-serializing the typed struct when the raw body wasn't
         // captured (e.g., requests constructed internally without
         // going through the HTTP handler).
-        let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
-            &self.tracker,
-            req,
-            combo,
-            target,
-        )
-        .proxy_url(req_proxy_url)
-        .proxy_status(req_proxy_status)
-        .model_opt(Some(model))
-        .err_opt(None)
-        .connect_ms_opt(Some(connect_and_send_ms))
-        .ttft_ms_opt(ttft_ms)
-        .total_ms(total_ms)
-        .status_code(status_code)
-        .attempt(attempt)
-        .race_size(race_size)
-        .trace_id(trace_id.to_string())
-        .prompt_tokens_opt(prompt_tokens)
-        .completion_tokens_opt(completion_tokens)
-        .cached_tokens(cached_tokens)
-        .response_body_json(response_body_json)
-        .request_headers(None)
-        .response_headers(None)
-        .is_streaming(true)
-        .stream_complete(done_sent)
-        .stop_reason(stop_reason)
-        .record()
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
-                None
-            }
-        };
+        let usage_tuple =
+            match crate::usage_tracker::UsageRecordBuilder::new(&self.tracker, req, combo, target)
+                .proxy_url(req_proxy_url)
+                .proxy_status(req_proxy_status)
+                .model_opt(Some(model))
+                .err_opt(None)
+                .connect_ms_opt(Some(connect_and_send_ms))
+                .ttft_ms_opt(ttft_ms)
+                .total_ms(total_ms)
+                .status_code(status_code)
+                .attempt(attempt)
+                .race_size(race_size)
+                .trace_id(trace_id.to_string())
+                .prompt_tokens_opt(prompt_tokens)
+                .completion_tokens_opt(completion_tokens)
+                .cached_tokens(cached_tokens)
+                .response_body_json(response_body_json)
+                .request_headers(None)
+                .response_headers(None)
+                .is_streaming(true)
+                .stream_complete(done_sent)
+                .stop_reason(stop_reason)
+                .record()
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
+                    None
+                }
+            };
 
         PipelineResult {
             status_code,

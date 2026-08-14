@@ -305,7 +305,11 @@ impl OAuthProvider for KiroOAuthProvider {
             UpstreamRequest::post_json(DEVICE_AUTH_URL, bytes::Bytes::from(auth_body_bytes));
 
         let device_auth_response = upstream_client
-            .call(device_auth_req, TimeoutProfile::OAuth, CancellationToken::new())
+            .call(
+                device_auth_req,
+                TimeoutProfile::OAuth,
+                CancellationToken::new(),
+            )
             .await;
         let device_auth_response = device_auth_response.map_err(|e| match e {
             UpstreamError::Cancel => {

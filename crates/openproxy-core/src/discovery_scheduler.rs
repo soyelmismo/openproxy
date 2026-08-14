@@ -272,7 +272,8 @@ pub async fn start(
                 if !p.active {
                     continue;
                 }
-                let adapter = if let Some(a) = supervisor_adapters.iter().find(|a| a.id() == &p.id) {
+                let adapter = if let Some(a) = supervisor_adapters.iter().find(|a| a.id() == &p.id)
+                {
                     ProviderAdapterEnum::clone(a)
                 } else {
                     ProviderAdapterEnum::Custom(
@@ -615,9 +616,9 @@ async fn run_one_tick(
     };
     // Update CustomAdapter from the latest provider_row so endpoint edits take effect immediately
     let adapter = match (&adapter, &provider_row) {
-        (ProviderAdapterEnum::Custom(_), Some(row)) => {
-            ProviderAdapterEnum::Custom(openproxy_adapters::adapters::CustomAdapter::from_provider_row(row))
-        }
+        (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(
+            openproxy_adapters::adapters::CustomAdapter::from_provider_row(row),
+        ),
         _ => adapter,
     };
 
@@ -913,11 +914,9 @@ mod tests {
             "scheduler should have ticked at least twice in 2 virtual seconds, got {calls}",
         );
 
-        let active = models::list_active(
-            &pool.reader(),
-            &crate::ids::ProviderId::new("openrouter"),
-        )
-        .expect("list_active");
+        let active =
+            models::list_active(&pool.reader(), &crate::ids::ProviderId::new("openrouter"))
+                .expect("list_active");
         assert_eq!(active.len(), 3, "all 3 discovered models should be in DB");
 
         sched.cancel();

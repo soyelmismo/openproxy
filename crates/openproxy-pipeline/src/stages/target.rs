@@ -64,10 +64,9 @@ impl PipelineStage for TimeoutResolutionStage {
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx
-            .current_target
-            .as_ref()
-            .ok_or_else(|| CoreError::Internal("missing current_target in pipeline context".into()))?;
+        let current = ctx.current_target.as_ref().ok_or_else(|| {
+            CoreError::Internal("missing current_target in pipeline context".into())
+        })?;
         let model = &current.model;
         let attempt = ctx.current_target_attempt;
         let race_size = ctx.race_size;
@@ -77,10 +76,9 @@ impl PipelineStage for TimeoutResolutionStage {
             match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
                 Ok(o) => o,
                 Err(e) => {
-                    let combo = ctx
-                        .combo
-                        .as_ref()
-                        .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
+                    let combo = ctx.combo.as_ref().ok_or_else(|| {
+                        CoreError::Internal("missing combo in pipeline context".into())
+                    })?;
                     return Ok(ctx.pipeline.record_and_fail(
                         ctx.req.clone(),
                         combo,
@@ -126,10 +124,9 @@ impl PipelineStage for FormattingStage {
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx
-            .current_target
-            .as_ref()
-            .ok_or_else(|| CoreError::Internal("missing current_target in pipeline context".into()))?;
+        let current = ctx.current_target.as_ref().ok_or_else(|| {
+            CoreError::Internal("missing current_target in pipeline context".into())
+        })?;
         let adapter = match ctx
             .pipeline
             .config
@@ -140,10 +137,9 @@ impl PipelineStage for FormattingStage {
             Some(a) => a,
             None => {
                 let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
-                let combo = ctx
-                    .combo
-                    .as_ref()
-                    .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
+                let combo = ctx.combo.as_ref().ok_or_else(|| {
+                    CoreError::Internal("missing combo in pipeline context".into())
+                })?;
                 return Ok(ctx.pipeline.record_and_fail(
                     ctx.req.clone(),
                     combo,
@@ -165,11 +161,19 @@ impl PipelineStage for FormattingStage {
         };
 
         let target_format = match adapter.format() {
-            openproxy_adapters::adapters::AdapterFormat::Openai => openproxy_types::TargetFormat::Openai,
-            openproxy_adapters::adapters::AdapterFormat::Anthropic => openproxy_types::TargetFormat::Anthropic,
+            openproxy_adapters::adapters::AdapterFormat::Openai => {
+                openproxy_types::TargetFormat::Openai
+            }
+            openproxy_adapters::adapters::AdapterFormat::Anthropic => {
+                openproxy_types::TargetFormat::Anthropic
+            }
             openproxy_adapters::adapters::AdapterFormat::Mixed => current.model.target_format,
-            openproxy_adapters::adapters::AdapterFormat::Gemini => openproxy_types::TargetFormat::Gemini,
-            openproxy_adapters::adapters::AdapterFormat::Responses => openproxy_types::TargetFormat::Responses,
+            openproxy_adapters::adapters::AdapterFormat::Gemini => {
+                openproxy_types::TargetFormat::Gemini
+            }
+            openproxy_adapters::adapters::AdapterFormat::Responses => {
+                openproxy_types::TargetFormat::Responses
+            }
         };
 
         let stream = if !ctx.req.openai_request.stream && ctx.req.stream_sink.is_some() {
@@ -209,10 +213,9 @@ impl PipelineStage for FormattingStage {
             }) {
             Ok(b) => b,
             Err(e) => {
-                let combo = ctx
-                    .combo
-                    .as_ref()
-                    .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
+                let combo = ctx.combo.as_ref().ok_or_else(|| {
+                    CoreError::Internal("missing combo in pipeline context".into())
+                })?;
                 return Ok(ctx.pipeline.record_and_fail(
                     ctx.req.clone(),
                     combo,
@@ -248,10 +251,9 @@ impl PipelineStage for DispatchStage {
         ctx: &mut PipelineContext,
         _next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx
-            .current_target
-            .as_mut()
-            .ok_or_else(|| CoreError::Internal("missing current_target in pipeline context".into()))?;
+        let current = ctx.current_target.as_mut().ok_or_else(|| {
+            CoreError::Internal("missing current_target in pipeline context".into())
+        })?;
         let target = &current.target;
         let model = &current.model;
         let attempt = ctx.current_target_attempt;
@@ -358,9 +360,9 @@ impl PipelineStage for DispatchStage {
             .unwrap_or(current.api_key.as_str());
         let account_label_str = current.api_key_label.as_deref().unwrap_or("");
 
-        let target_format = ctx
-            .target_format
-            .ok_or_else(|| CoreError::Internal("missing target_format in pipeline context".into()))?;
+        let target_format = ctx.target_format.ok_or_else(|| {
+            CoreError::Internal("missing target_format in pipeline context".into())
+        })?;
         let url =
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let headers = adapter.build_headers(api_key, target_format, &model.model_id);
@@ -385,9 +387,9 @@ impl PipelineStage for DispatchStage {
             .body_bytes
             .take()
             .ok_or_else(|| CoreError::Internal("missing body_bytes in pipeline context".into()))?;
-        let resolved_timeouts = ctx
-            .resolved_timeouts
-            .ok_or_else(|| CoreError::Internal("missing resolved_timeouts in pipeline context".into()))?;
+        let resolved_timeouts = ctx.resolved_timeouts.ok_or_else(|| {
+            CoreError::Internal("missing resolved_timeouts in pipeline context".into())
+        })?;
 
         let result = ctx
             .pipeline
@@ -510,10 +512,9 @@ impl PipelineStage for CustomAdapterStage {
             Some(a) => a,
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
-                let combo = ctx
-                    .combo
-                    .as_ref()
-                    .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
+                let combo = ctx.combo.as_ref().ok_or_else(|| {
+                    CoreError::Internal("missing combo in pipeline context".into())
+                })?;
                 return Ok(ctx.pipeline.record_and_fail_with_trace_id(
                     ctx.req.clone(),
                     combo,

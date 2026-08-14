@@ -80,7 +80,8 @@ static HUNK_HEADER_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
 
 /// `^path:line:` pattern from grep / ripgrep output.
-static SEARCH_RESULT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("valid regex"));
+static SEARCH_RESULT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("valid regex"));
 
 /// Source-code structural keywords: `fn `, `func `, `def `, `class `, etc.
 static SOURCE_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
@@ -90,19 +91,22 @@ static SOURCE_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// Source-code import-like first line: `import `, `from `, `use `,
 /// `package `, `#include `, `require(`.
-static SOURCE_IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(import |from |use |package |#include |require\()").expect("valid regex"));
+static SOURCE_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(import |from |use |package |#include |require\()").expect("valid regex")
+});
 
 /// Generic error/warn/etc. token (case-insensitive) used by the
 /// "≥5 matching lines" sub-rule of BuildOutput detection.
-static GENERIC_ERROR_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").expect("valid regex"));
+static GENERIC_ERROR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").expect("valid regex")
+});
 
 /// `^make[N]:` (N is digits).
 static MAKE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^make\[\d+\]:").expect("valid regex"));
 
 /// `^running N tests` (cargo).
-static CARGO_RUNNING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^running \d+ tests").expect("valid regex"));
+static CARGO_RUNNING_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^running \d+ tests").expect("valid regex"));
 
 /// Maximum number of lines to scan for detection. The spec says "first 100
 /// lines" for the overall scan; sub-scans (git diff, build output, tabular)
@@ -187,11 +191,11 @@ pub fn apply_content_routing(messages: &mut [OpenAIMessage]) -> Vec<String> {
             if content_str.len() < 500 {
                 return None;
             }
-            if let Some((compressed, technique)) = route_content(content_str) {
-                if compressed.len() < content_str.len() {
-                    applied_tech = Some(technique.to_string());
-                    return Some(compressed);
-                }
+            if let Some((compressed, technique)) = route_content(content_str)
+                && compressed.len() < content_str.len()
+            {
+                applied_tech = Some(technique.to_string());
+                return Some(compressed);
             }
             None
         });

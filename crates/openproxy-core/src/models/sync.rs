@@ -80,8 +80,11 @@ pub fn execute_sync_transaction(
         .map_err(openproxy_db::error::map_db_error)?;
 
     {
-        let new_models_set: std::collections::HashSet<&str> =
-            diff.new_models.iter().map(|n| n.model_id.as_str()).collect();
+        let new_models_set: std::collections::HashSet<&str> = diff
+            .new_models
+            .iter()
+            .map(|n| n.model_id.as_str())
+            .collect();
 
         let mut stmt = tx
             .prepare(

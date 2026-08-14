@@ -67,7 +67,8 @@ impl OAuthProvider for ClineOAuthProvider {
             "provider": "cline"
         });
 
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req = UpstreamRequest::post_json(
             "https://api.cline.bot/api/v1/auth/token",
             bytes::Bytes::from(body_bytes),
@@ -164,7 +165,8 @@ impl OAuthProvider for ClineOAuthProvider {
             "grant_type": "refresh_token"
         });
 
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req = UpstreamRequest::post_json(
             "https://api.cline.bot/api/v1/auth/refresh",
             bytes::Bytes::from(body_bytes),

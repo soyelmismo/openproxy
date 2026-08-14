@@ -126,12 +126,14 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
                 .response_body_json
                 .as_ref()
                 .and_then(|j| serde_json::to_string(j).ok()),
-            input.request_headers.as_ref().and_then(|h| {
-                serde_json::to_string(h).ok()
-            }),
-            input.response_headers.as_ref().and_then(|h| {
-                serde_json::to_string(h).ok()
-            }),
+            input
+                .request_headers
+                .as_ref()
+                .and_then(|h| { serde_json::to_string(h).ok() }),
+            input
+                .response_headers
+                .as_ref()
+                .and_then(|h| { serde_json::to_string(h).ok() }),
             input.error_message,
             input.is_streaming as i64,
             input.stream_complete as i64,

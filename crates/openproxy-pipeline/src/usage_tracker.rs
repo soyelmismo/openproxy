@@ -158,7 +158,8 @@ impl UsageTracker {
             proxy_status,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
-        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.to_owned());
+        let request_headers =
+            crate::redact::redact_btreemap_sensitive(req.request_headers.to_owned());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");

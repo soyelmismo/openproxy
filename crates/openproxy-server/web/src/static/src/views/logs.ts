@@ -303,7 +303,7 @@ export async function mountLogs(): Promise<(() => void) | void> {
     columnsMenuOpen = false;
     requestUpdate();
   };
-  const w = window as unknown as { __logsColumnsDocClickBound?: boolean };
+  const w = window as Window & typeof globalThis & { __logsColumnsDocClickBound?: boolean };
   if (!w.__logsColumnsDocClickBound) {
     document.addEventListener("click", onDocClickForMenu);
     w.__logsColumnsDocClickBound = true;

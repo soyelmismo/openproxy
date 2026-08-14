@@ -12,9 +12,9 @@ pub mod providers;
 pub mod secrets;
 
 pub use batch::{
-    batch_insert, in_placeholders, query_in_chunks, query_in_chunks_by,
-    query_in_chunks_by_with_params, query_in_chunks_with_params, repeat_row_template,
-    values_placeholders, DEFAULT_CHUNK_SIZE, SQLITE_MAX_VARIABLE_NUMBER,
+    DEFAULT_CHUNK_SIZE, SQLITE_MAX_VARIABLE_NUMBER, batch_insert, in_placeholders, query_in_chunks,
+    query_in_chunks_by, query_in_chunks_by_with_params, query_in_chunks_with_params,
+    repeat_row_template, values_placeholders,
 };
 pub use conn::{DbPool, ReaderGuard, WriterGuard};
 pub use crud::FromRow;

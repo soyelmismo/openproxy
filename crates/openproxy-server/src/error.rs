@@ -176,7 +176,9 @@ mod tests {
 
     #[test]
     fn to_sse_error_frame_openai_format() {
-        let err = ApiError(CoreError::Validation("bad key sk-abcdef1234567890abcdef".into()));
+        let err = ApiError(CoreError::Validation(
+            "bad key sk-abcdef1234567890abcdef".into(),
+        ));
         let frame = err.to_sse_error_frame(openproxy_types::TargetFormat::Openai);
         let frame_str = std::str::from_utf8(&frame).unwrap();
 
@@ -189,7 +191,9 @@ mod tests {
 
     #[test]
     fn to_sse_error_frame_anthropic_format() {
-        let err = ApiError(CoreError::Validation("bad key Authorization: Bearer secret_token_12345".into()));
+        let err = ApiError(CoreError::Validation(
+            "bad key Authorization: Bearer secret_token_12345".into(),
+        ));
         let frame = err.to_sse_error_frame(openproxy_types::TargetFormat::Anthropic);
         let frame_str = std::str::from_utf8(&frame).unwrap();
 

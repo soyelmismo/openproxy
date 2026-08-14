@@ -16,38 +16,36 @@ where
     let mut mutated = false;
     match &mut msg.content {
         Some(Value::String(s)) => {
-            if let Some(new_s) = transform(s) {
-                if &new_s != s {
-                    *s = new_s;
-                    mutated = true;
-                }
+            if let Some(new_s) = transform(s)
+                && &new_s != s
+            {
+                *s = new_s;
+                mutated = true;
             }
         }
         Some(Value::Array(parts)) => {
             for part in parts.iter_mut() {
                 if let Some(obj) = part.as_object_mut() {
                     if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-                        if let Some(new_text) = transform(text) {
-                            if new_text != text {
-                                obj.insert("text".to_string(), Value::String(new_text));
-                                mutated = true;
-                            }
-                        }
-                    } else if let Some(content) = obj.get("content").and_then(|v| v.as_str()) {
-                        if let Some(new_text) = transform(content) {
-                            if new_text != content {
-                                obj.insert("content".to_string(), Value::String(new_text));
-                                mutated = true;
-                            }
-                        }
-                    }
-                } else if let Value::String(text) = part {
-                    if let Some(new_text) = transform(text) {
-                        if &new_text != text {
-                            *part = Value::String(new_text);
+                        if let Some(new_text) = transform(text)
+                            && new_text != text
+                        {
+                            obj.insert("text".to_string(), Value::String(new_text));
                             mutated = true;
                         }
+                    } else if let Some(content) = obj.get("content").and_then(|v| v.as_str())
+                        && let Some(new_text) = transform(content)
+                        && new_text != content
+                    {
+                        obj.insert("content".to_string(), Value::String(new_text));
+                        mutated = true;
                     }
+                } else if let Value::String(text) = part
+                    && let Some(new_text) = transform(text)
+                    && &new_text != text
+                {
+                    *part = Value::String(new_text);
+                    mutated = true;
                 }
             }
         }
@@ -74,10 +72,7 @@ mod tests {
 
         let changed = mutate_message_text(&mut msg, |text| Some(text.replace("   ", " ")));
         assert!(changed);
-        assert_eq!(
-            msg.content,
-            Some(Value::String("hello world".to_string()))
-        );
+        assert_eq!(msg.content, Some(Value::String("hello world".to_string())));
     }
 
     #[test]

@@ -791,11 +791,7 @@ mod tests {
     #[test]
     fn append_openai_tool_call_accumulates() {
         let mut acc = ResponseAccumulator::new();
-        acc.append_openai_tool_call(
-            Some("call_1"),
-            "get_time",
-            r#"{"zone":"UTC"}"#,
-        );
+        acc.append_openai_tool_call(Some("call_1"), "get_time", r#"{"zone":"UTC"}"#);
         let v = acc.finish("id", 0, "m");
         let tool_calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();
         assert_eq!(tool_calls.len(), 1);

@@ -548,7 +548,10 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
 
 pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
     let mut content = Vec::new();
-    let finish_reason = resp.choices.first().and_then(|c| c.finish_reason.as_deref());
+    let finish_reason = resp
+        .choices
+        .first()
+        .and_then(|c| c.finish_reason.as_deref());
     if let Some(first_choice) = resp.choices.first() {
         if let Some(msg_content) = first_choice.message.content.as_ref()
             && let Some(s) = msg_content.as_str()

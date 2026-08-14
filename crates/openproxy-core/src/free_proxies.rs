@@ -1844,8 +1844,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                             let w = pool.open_connection()?;
                             match test_res {
                                 Ok(latency) => {
-                                    let _ =
-                                        update_proxy_status(&w, &id, "alive", Some(latency));
+                                    let _ = update_proxy_status(&w, &id, "alive", Some(latency));
                                 }
                                 Err(_) => {
                                     // Only mark dead if status was not already alive
@@ -1939,16 +1938,7 @@ mod tests {
     fn test_crud_custom_proxy() {
         let conn = setup_test_db();
 
-        let p = add_custom_proxy(
-            &conn,
-            "1.2.3.4",
-            8080,
-            "http",
-            Some("US"),
-            None,
-            None,
-        )
-        .unwrap();
+        let p = add_custom_proxy(&conn, "1.2.3.4", 8080, "http", Some("US"), None, None).unwrap();
         assert_eq!(p.host, "1.2.3.4");
         assert_eq!(p.port, 8080);
         assert_eq!(p.r#type, "http");
@@ -2035,16 +2025,7 @@ mod tests {
         assert!(get_or_assign_provider_proxy(&conn, &provider_id, None).is_err());
 
         // 3. Add an alive proxy
-        let p = add_custom_proxy(
-            &conn,
-            "1.2.3.4",
-            8080,
-            "socks5",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let p = add_custom_proxy(&conn, "1.2.3.4", 8080, "socks5", None, None, None).unwrap();
         update_proxy_status(&conn, &p.id, "alive", Some(100)).unwrap();
 
         // Now it should assign and return this socks5 proxy!
@@ -2130,16 +2111,7 @@ mod tests {
     fn test_get_proxy_status_by_url() {
         let conn = setup_test_db();
 
-        let p = add_custom_proxy(
-            &conn,
-            "1.2.3.4",
-            8080,
-            "socks5",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let p = add_custom_proxy(&conn, "1.2.3.4", 8080, "socks5", None, None, None).unwrap();
 
         // 1. Initial status should be "unknown"
         assert_eq!(

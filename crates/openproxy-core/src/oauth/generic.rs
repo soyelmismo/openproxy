@@ -284,10 +284,7 @@ impl OAuthProvider for GenericOAuthProvider {
         }
         let client_id = self.spec.client_id()?;
         let mut params = vec![
-            (
-                "grant_type",
-                "urn:ietf:params:oauth:grant-type:device_code",
-            ),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ("device_code", device_code),
             ("client_id", client_id.as_str()),
         ];
@@ -471,7 +468,10 @@ pub(crate) fn urlencoded_string(params: &[(&str, &str)]) -> String {
 fn json_body(params: &[(&str, &str)]) -> Result<bytes::Bytes> {
     let mut obj = serde_json::Map::new();
     for (key, value) in params {
-        obj.insert((*key).to_string(), serde_json::Value::String((*value).to_string()));
+        obj.insert(
+            (*key).to_string(),
+            serde_json::Value::String((*value).to_string()),
+        );
     }
     serde_json::to_vec(&serde_json::Value::Object(obj))
         .map(bytes::Bytes::from)

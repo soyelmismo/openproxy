@@ -252,10 +252,7 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
 
     for msg in messages {
         if msg.role == "tool" {
-            let call_id = msg
-                .tool_call_id
-                .as_deref()
-                .unwrap_or("call_xyz");
+            let call_id = msg.tool_call_id.as_deref().unwrap_or("call_xyz");
             let content_str = content_to_text(msg.content.as_ref());
             input_items.push(json!({
                 "type": "function_call_output",
