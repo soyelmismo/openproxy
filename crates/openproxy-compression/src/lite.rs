@@ -271,11 +271,7 @@ pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
                 let cleaned = text
                     .replace("\r\n", "\n")
                     .replace('\r', "\n")
-                    .replace('\u{200B}', "")
-                    .replace('\u{200C}', "")
-                    .replace('\u{200D}', "")
-                    .replace('\u{FEFF}', "")
-                    .replace('\0', "");
+                    .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
                 if cleaned != text {
                     return Some(cleaned);
                 }
@@ -340,16 +336,14 @@ pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
     for msg in msgs.iter_mut() {
         if mutate_message_text(msg, |text| {
             let trimmed = text.trim();
-            if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-                || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+            if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+                && (trimmed.contains('\n') || trimmed.contains("  "))
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
             {
-                if trimmed.contains('\n') || trimmed.contains("  ") {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        let minified = val.to_string();
-                        if minified.len() < text.len() {
-                            return Some(minified);
-                        }
-                    }
+                let minified = val.to_string();
+                if minified.len() < text.len() {
+                    return Some(minified);
                 }
             }
             None

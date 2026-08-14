@@ -191,11 +191,11 @@ pub fn apply_content_routing(messages: &mut [OpenAIMessage]) -> Vec<String> {
             if content_str.len() < 500 {
                 return None;
             }
-            if let Some((compressed, technique)) = route_content(content_str) {
-                if compressed.len() < content_str.len() {
-                    applied_tech = Some(technique.to_string());
-                    return Some(compressed);
-                }
+            if let Some((compressed, technique)) = route_content(content_str)
+                && compressed.len() < content_str.len()
+            {
+                applied_tech = Some(technique.to_string());
+                return Some(compressed);
             }
             None
         });

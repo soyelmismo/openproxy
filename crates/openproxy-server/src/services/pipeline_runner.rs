@@ -97,6 +97,7 @@ impl PipelineRunner {
     }
 
     /// Prepare a [`PipelineRequest`] and wire watchdog + cancellation + streaming sinks.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_request(
         state: &AppState,
         headers: &HeaderMap,
