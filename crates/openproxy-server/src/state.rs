@@ -861,7 +861,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
     }
 
     let qs_pool = Arc::clone(&db_pool);
-    let qs_config = _config.to_owned();
+    let qs_config = _config;
     let qs_upstream = Arc::clone(&upstream_client);
     let qs_key = Arc::clone(&master_key);
     let qs_adapters = Arc::clone(&adapters);

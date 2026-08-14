@@ -31,7 +31,7 @@ impl PipelineStage for TelemetryRecorderStage {
                     && let Some(ref combo) = ctx.combo
                 {
                     ctx.pipeline.tracker.record_no_healthy_targets_row(
-                        ctx.req.clone(),
+                        &ctx.req,
                         combo,
                         started,
                     );

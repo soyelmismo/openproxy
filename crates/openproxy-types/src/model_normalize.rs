@@ -5,13 +5,15 @@
 //! `gemini-2.5-pro`) so that `anthropic/claude-3-5-sonnet-20241022`
 //! matches models.dev's `claude-3-5-sonnet`.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
-static DATE_SUFFIX_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").expect("valid regex"));
-static YYYYMM_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}$").expect("valid regex"));
-static VERSION_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-v\d+$").expect("valid regex"));
+static DATE_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").expect("valid regex"));
+static YYYYMM_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-\d{4}$").expect("valid regex"));
+static VERSION_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-v\d+$").expect("valid regex"));
 
 pub fn normalize_model_id(id: &str) -> String {
     let s: &str = id.rsplit('/').next().unwrap_or(id);

@@ -386,8 +386,8 @@ pub async fn set_recording(
     Ok(Json(serde_json::json!({ "recording": enabled })))
 }
 
-pub(crate) fn json_text(value: serde_json::Value) -> Result<String, ApiError> {
-    serde_json::to_string(&value).map_err(|e| {
+pub(crate) fn json_text(value: &serde_json::Value) -> Result<String, ApiError> {
+    serde_json::to_string(value).map_err(|e| {
         ApiError(CoreError::Internal(format!(
             "serialize websocket message: {e}"
         )))

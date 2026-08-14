@@ -174,7 +174,7 @@ pub async fn refresh_single_account_quota(
 
             let provider_str = acc.provider_id.to_string();
             let is_oauth = acc.auth_type == "oauth";
-            let provider_specific = acc.oauth_provider_specific.to_owned();
+            let provider_specific = acc.oauth_provider_specific;
 
             let (k, token) = if is_oauth {
                 let t = accounts::decrypt_access_token(&r, account_id, &master_key)?;

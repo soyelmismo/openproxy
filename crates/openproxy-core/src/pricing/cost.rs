@@ -4,8 +4,8 @@
 use crate::error::Result;
 use crate::ids::UsageId;
 use crate::pricing;
-use once_cell::sync::Lazy;
 use rusqlite::{Connection, params};
+use std::sync::LazyLock;
 
 pub use openproxy_types::usage::UsageInput;
 
@@ -37,12 +37,12 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
 ///
 /// Returns `(sanitized, redacted)`.
 pub fn redact_error_msg(raw: &str) -> (String, String) {
-    static RE_SK: Lazy<regex::Regex> =
-        Lazy::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
-    static RE_XAPIKEY: Lazy<regex::Regex> =
-        Lazy::new(|| regex::Regex::new(r"(?i)x-api-key:\s*\S+").expect("valid regex"));
-    static RE_BEARER: Lazy<regex::Regex> =
-        Lazy::new(|| regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex"));
+    static RE_SK: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
+    static RE_XAPIKEY: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)x-api-key:\s*\S+").expect("valid regex"));
+    static RE_BEARER: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex"));
 
     let mut sanitized = raw.to_string();
     // Only run replace_all if the pattern is present — avoids the

@@ -1,7 +1,7 @@
 use openproxy_types::{
     AuthType, CoreError, Provider, ProviderFormat, ProviderId, RateLimitScope, Result,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 #[derive(Debug)]
 struct FromStrError(String);
@@ -14,6 +14,7 @@ impl std::fmt::Display for FromStrError {
 
 impl std::error::Error for FromStrError {}
 
+#[derive(Debug, Clone, Copy)]
 pub struct NewProvider<'a> {
     pub id: &'a ProviderId,
     pub name: &'a str,
@@ -53,31 +54,32 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 
     match result {
         Ok(_) => Ok(()),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
-                Err(CoreError::Validation("provider id already exists".into()))
-            } else {
-                Err(crate::error::map_db_error_ctx(format!(
-                    "insert provider {}",
-                    id
-                ))(e))
-            }
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Err(CoreError::Validation("provider id already exists".into()))
         }
+        Err(e) => Err(crate::error::map_db_error_ctx("create provider")(e)),
     }
 }
 
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
-    let row = conn
-        .query_row(
+    let mut stmt = conn
+        .prepare(
             "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
              FROM providers WHERE id = ?1",
-            params![id.as_str()],
-            row_to_provider,
         )
-        .optional()
-        .map_err(crate::error::map_db_error_ctx(format!("get provider {}", id)))?;
-    Ok(row)
+        .map_err(crate::error::map_db_error_ctx("prepare get provider"))?;
+
+    let mut rows = stmt
+        .query_map(params![id.as_str()], row_to_provider)
+        .map_err(crate::error::map_db_error_ctx("query get provider"))?;
+
+    match rows.next() {
+        Some(Ok(p)) => Ok(Some(p)),
+        Some(Err(e)) => Err(crate::error::map_db_error_ctx("read provider row")(e)),
+        None => Ok(None),
+    }
 }
 
 pub fn update_current_proxy(
@@ -114,21 +116,21 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
     let format = ProviderFormat::parse(&format_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
     let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             12,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
 

@@ -835,7 +835,7 @@ pub(crate) fn iso_z(dt: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 pub(crate) async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: serde_json::Value) {
-    let text: String = match json_text(value) {
+    let text: String = match json_text(&value) {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(error = %e, "stream_usage_rows: json_text failed in outbox_send");
@@ -861,7 +861,7 @@ pub(crate) async fn outbox_try_send(
     tx: &tokio::sync::mpsc::Sender<String>,
     value: serde_json::Value,
 ) {
-    let text: String = match json_text(value) {
+    let text: String = match json_text(&value) {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(error = %e, "stream_usage_rows: json_text failed in outbox_try_send");

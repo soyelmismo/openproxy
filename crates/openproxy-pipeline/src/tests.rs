@@ -25,9 +25,9 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
-static STAGE_TX: once_cell::sync::Lazy<
+static STAGE_TX: std::sync::LazyLock<
     parking_lot::Mutex<Option<tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>>>,
-> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(None));
 
 fn global_publisher(event: openproxy_types::usage::StageEvent) {
     if let Some(tx) = STAGE_TX.lock().as_ref() {

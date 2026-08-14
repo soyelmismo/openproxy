@@ -22,6 +22,7 @@ pub use crate::seed::{builtin_provider_ids, is_builtin};
 /// can use field names instead of positional args; the DB row is keyed on
 /// `id` (PRIMARY KEY) and validates `auth_type` / `format` against the
 /// CHECK constraints, so a duplicate id surfaces as `CoreError::Validation`.
+#[derive(Debug, Clone, Copy)]
 pub struct NewProvider<'a> {
     pub id: &'a ProviderId,
     pub name: &'a str,
@@ -200,6 +201,7 @@ pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
 /// * `Some(None)` — set the column to `NULL` (clears any existing keyword).
 /// * `Some(Some(s))` — set the column to the literal string `s`.
 // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     conn: &Connection,
     id: &ProviderId,
@@ -326,21 +328,21 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
     let format = ProviderFormat::parse(&format).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
     let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             12,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
 

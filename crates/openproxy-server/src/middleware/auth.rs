@@ -39,7 +39,7 @@ pub(crate) fn authenticate(
     headers: &HeaderMap,
     requested_model: &str,
 ) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let token = match headers
+    let Some(token) = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
@@ -49,36 +49,34 @@ pub(crate) fn authenticate(
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.trim())
-        }) {
-        Some(t) => t,
-        None => {
-            // MEDIUM fix (audit finding #5): the previous behaviour
-            // silently admitted anonymous traffic, so an open proxy
-            // on the public internet would forward any client's
-            // prompts to paid upstreams — the operator would foot
-            // the bill with no visibility or per-key rate limits.
-            //
-            // Backward-compat path: if NO active API keys are
-            // configured, this is a fresh install (local-dev /
-            // docker / first run) and anonymous traffic is fine.
-            // As soon as the operator creates the first key, the
-            // chat endpoint requires that key. The transition is
-            // automatic — no config knob needed.
-            //
-            // `count_active` is a SELECT COUNT(*) — use the READER so
-            // the anonymous-fallback check doesn't serialize through
-            // the writer mutex (see `db::conn::DbPool::reader`).
-            let active =
-                core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-            if active == 0 {
-                tracing::debug!(
-                    target: "openproxy::auth",
-                    "anonymous request admitted (no active api keys configured)"
-                );
-                return Ok(None);
-            }
-            return Err(ApiError(CoreError::Auth("missing api key".into())));
+        })
+    else {
+        // MEDIUM fix (audit finding #5): the previous behaviour
+        // silently admitted anonymous traffic, so an open proxy
+        // on the public internet would forward any client's
+        // prompts to paid upstreams — the operator would foot
+        // the bill with no visibility or per-key rate limits.
+        //
+        // Backward-compat path: if NO active API keys are
+        // configured, this is a fresh install (local-dev /
+        // docker / first run) and anonymous traffic is fine.
+        // As soon as the operator creates the first key, the
+        // chat endpoint requires that key. The transition is
+        // automatic — no config knob needed.
+        //
+        // `count_active` is a SELECT COUNT(*) — use the READER so
+        // the anonymous-fallback check doesn't serialize through
+        // the writer mutex (see `db::conn::DbPool::reader`).
+        let active =
+            core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
+        if active == 0 {
+            tracing::debug!(
+                target: "openproxy::auth",
+                "anonymous request admitted (no active api keys configured)"
+            );
+            return Ok(None);
         }
+        return Err(ApiError(CoreError::Auth("missing api key".into())));
     };
     if token.is_empty() {
         // Same gate: a bare `Authorization: Bearer ` (empty
@@ -94,11 +92,8 @@ pub(crate) fn authenticate(
     // Auth is a SELECT by hash — use the READER so chat requests don't
     // serialize through the writer mutex (same fix as the admin path).
     let r = state.db_pool().reader();
-    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
-        Some(k) => k,
-        None => {
-            return Err(ApiError(CoreError::Auth("invalid api key".into())));
-        }
+    let Some(key) = core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? else {
+        return Err(ApiError(CoreError::Auth("invalid api key".into())));
     };
 
     if !key.is_active {

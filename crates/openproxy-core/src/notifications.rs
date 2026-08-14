@@ -26,9 +26,9 @@
 //! 6. The frontend handles the new kind in the notifications view.
 
 use anyhow::Result;
-use once_cell::sync::OnceCell;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use tokio::sync::broadcast;
 
 pub const KIND_MODEL_NEW: &str = "model_new";
@@ -91,7 +91,7 @@ pub const CODE_QUOTA_LOW: &str = "quota_low";
 
 /// Process-global broadcast channel for real-time push to WS clients.
 /// Subscribed by `stream_usage_rows` in handlers/admin.rs (see F2).
-pub static NOTIF_TX: OnceCell<broadcast::Sender<NotificationEvent>> = OnceCell::new();
+pub static NOTIF_TX: OnceLock<broadcast::Sender<NotificationEvent>> = OnceLock::new();
 
 /// Initialize the broadcast channel. Called once at server startup from
 /// state.rs. Idempotent — subsequent calls are no-ops and return the

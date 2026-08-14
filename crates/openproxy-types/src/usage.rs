@@ -94,8 +94,8 @@ pub struct InflightAttempt {
     pub source: String,
 }
 
-pub static STAGE_EVENT_PUBLISHER: once_cell::sync::OnceCell<fn(StageEvent)> =
-    once_cell::sync::OnceCell::new();
+pub static STAGE_EVENT_PUBLISHER: std::sync::OnceLock<fn(StageEvent)> =
+    std::sync::OnceLock::new();
 
 pub fn publish_stage_event(event: StageEvent) {
     if let Some(publisher) = STAGE_EVENT_PUBLISHER.get() {
@@ -159,8 +159,8 @@ pub struct RecentUsageRow {
     pub created_at: String,
 }
 
-pub static USAGE_ROW_PUBLISHER: once_cell::sync::OnceCell<fn(RecentUsageRow)> =
-    once_cell::sync::OnceCell::new();
+pub static USAGE_ROW_PUBLISHER: std::sync::OnceLock<fn(RecentUsageRow)> =
+    std::sync::OnceLock::new();
 
 pub fn publish_usage_row(row: RecentUsageRow) {
     if let Some(publisher) = USAGE_ROW_PUBLISHER.get() {

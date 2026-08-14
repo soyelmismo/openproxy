@@ -57,7 +57,7 @@ impl CancellationToken {
     }
     pub fn from_watch_and_token(
         _rx: tokio::sync::watch::Receiver<bool>,
-        _race_token: CancellationToken,
+        _race_token: &CancellationToken,
     ) -> Self {
         Self
     }

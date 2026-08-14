@@ -334,7 +334,7 @@ impl UpstreamClient {
     {
         let hyper: HyperClient<C, Full<Bytes>> = HyperClient::builder(TokioExecutor::new())
             .pool_max_idle_per_host(0)
-            .build(connector.clone());
+            .build(connector);
         let transport = Arc::new(TestTransport { hyper, phase_hint });
         Arc::new(Self {
             pool: Pool::new(),

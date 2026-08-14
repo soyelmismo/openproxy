@@ -68,7 +68,7 @@ impl TextCompressor for CompressionMode {
 /// returning unified `CompressionStats`.
 pub fn measure_compression<C: TextCompressor>(
     messages: &mut Vec<OpenAIMessage>,
-    compressor: C,
+    compressor: &C,
 ) -> CompressionStats {
     let original_chars = count_content_chars(messages);
     let original_tokens =
@@ -110,7 +110,7 @@ pub fn apply_compression(
     if mode == CompressionMode::Off {
         return CompressionStats::empty();
     }
-    measure_compression(messages, mode)
+    measure_compression(messages, &mode)
 }
 
 /// Cuenta chars totales del contenido textual de los mensajes.

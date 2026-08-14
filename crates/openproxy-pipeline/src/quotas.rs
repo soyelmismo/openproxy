@@ -61,7 +61,6 @@ pub(crate) fn get_account_remaining_fraction(
     account: &openproxy_types::accounts::Account,
     requested_model: &str,
 ) -> f64 {
-    #[allow(clippy::ptr_arg)]
     if let Some(ref details_val) = account.quota_model_details
         && let Ok(details) =
             <Vec<openproxy_types::quota::ModelQuotaDetail> as serde::Deserialize>::deserialize(

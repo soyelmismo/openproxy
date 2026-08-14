@@ -421,9 +421,8 @@ pub fn get_or_assign_provider_proxy(
     use rusqlite::OptionalExtension;
 
     // 1. Fetch provider details
-    let provider = match crate::providers::get(conn, provider_id)? {
-        Some(p) => p,
-        None => return Ok(None),
+    let Some(provider) = crate::providers::get(conn, provider_id)? else {
+        return Ok(None);
     };
 
     if !provider.use_proxies {
@@ -452,7 +451,7 @@ pub fn get_or_assign_provider_proxy(
             (None, None)
         }
     } else {
-        (provider.current_proxy_id.to_owned(), None)
+        (provider.current_proxy_id, None)
     };
 
     // 2. If current_proxy_id is set, verify it is still alive/valid and NOT in cooldown for this provider

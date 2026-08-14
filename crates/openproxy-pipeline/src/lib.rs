@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 pub mod pipeline;
 pub use pipeline::{
     ErrorPhase, FailureContext, Pipeline, PipelineConfig, PipelineRequest, PipelineResult,

@@ -200,9 +200,8 @@ pub fn decrypt_api_key_and_label(
             "select api_key+label for account {}",
             id.0
         )))?;
-    let (blob, label) = match row {
-        Some(r) => r,
-        None => return Err(CoreError::AccountNotFound(id.0)),
+    let Some((blob, label)) = row else {
+        return Err(CoreError::AccountNotFound(id.0));
     };
     let blob = blob
         .ok_or_else(|| CoreError::Validation("account has no API key (OAuth account?)".into()))?;
@@ -452,6 +451,7 @@ pub fn decrypt_oauth_provider_specific(
 }
 
 // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+#[allow(clippy::too_many_arguments)]
 pub fn store_oauth_tokens(
     conn: &Connection,
     id: AccountId,
@@ -716,7 +716,7 @@ fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::
         rusqlite::Error::FromSqlConversionFailure(
             5,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
 

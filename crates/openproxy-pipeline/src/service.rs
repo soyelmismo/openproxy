@@ -476,7 +476,7 @@ impl tower::Service<PipelineState> for RoutingService {
                             let repo = pipeline.repo();
                             let sel = Arc::clone(pipeline.selection_registry());
                             let _ = tokio::task::spawn_blocking(move || {
-                                crate::worker::process_job(&conn, repo.as_ref(), job, sel);
+                                crate::worker::process_job(&conn, repo.as_ref(), job, &sel);
                             })
                             .await;
                         }
@@ -750,7 +750,7 @@ impl tower::Service<PipelineState> for RoutingService {
                             let repo = pipeline.repo();
                             let sel = Arc::clone(pipeline.selection_registry());
                             let _ = tokio::task::spawn_blocking(move || {
-                                crate::worker::process_job(&conn, repo.as_ref(), job, sel);
+                                crate::worker::process_job(&conn, repo.as_ref(), job, &sel);
                             })
                             .await;
                         }

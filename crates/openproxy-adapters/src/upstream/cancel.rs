@@ -159,7 +159,7 @@ impl CancellationToken {
     /// stopping upstream token generation immediately.
     pub fn from_watch_and_token(
         mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
-        race_token: CancellationToken,
+        race_token: &CancellationToken,
     ) -> Self {
         let token = Self::new();
         if rx.borrow_and_update().is_some() || race_token.is_cancelled() {
@@ -348,7 +348,7 @@ mod tests {
     async fn from_watch_and_token_fires_on_watch_transition() {
         let (tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
-        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        let token = CancellationToken::from_watch_and_token(rx, &race_token);
         assert!(!token.is_cancelled());
 
         tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
@@ -366,8 +366,7 @@ mod tests {
     async fn from_watch_and_token_fires_on_race_token() {
         let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
-        let token =
-            CancellationToken::from_watch_and_token(rx, CancellationToken::clone(&race_token));
+        let token = CancellationToken::from_watch_and_token(rx, &race_token);
         assert!(!token.is_cancelled());
 
         race_token.cancel();
@@ -387,7 +386,7 @@ mod tests {
             .unwrap();
         rx.changed().await.unwrap();
         let race_token = CancellationToken::new();
-        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        let token = CancellationToken::from_watch_and_token(rx, &race_token);
         assert!(token.is_cancelled());
     }
 
@@ -396,7 +395,7 @@ mod tests {
         let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
         race_token.cancel();
-        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        let token = CancellationToken::from_watch_and_token(rx, &race_token);
         assert!(token.is_cancelled());
     }
 
@@ -410,7 +409,7 @@ mod tests {
         // check catches this. But also test the TOCTOU path by
         // cancelling between subscribe and the background task start.
         race_token.cancel();
-        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        let token = CancellationToken::from_watch_and_token(rx, &race_token);
         assert!(token.is_cancelled());
     }
 }

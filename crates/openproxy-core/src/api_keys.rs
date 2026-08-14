@@ -372,7 +372,7 @@ pub fn touch_last_used(conn: &Connection, id: ApiKeyId) -> Result<()> {
 /// `is_active = Some(false)` *also* stamps `revoked_at` (matching
 /// the soft-revoke semantics) so a dashboard "disable" toggle and
 /// the explicit revoke endpoint produce the same audit row.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct UpdateParams<'a> {
     pub label: Option<&'a str>,
     pub scopes: Option<&'a [String]>,

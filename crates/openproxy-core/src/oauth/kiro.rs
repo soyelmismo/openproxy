@@ -96,12 +96,7 @@ fn default_region() -> String {
     DEFAULT_REGION.to_string()
 }
 
-use once_cell::sync::Lazy;
-/// Most-recent OIDC client registration. The admin handler reads
-/// this back from `oauth_kiro::take_last_client` after
-/// `request_device_code` returns and stashes the credentials on
-/// the account row.
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 struct LastKiroClient {
     client_id: String,
@@ -109,7 +104,8 @@ struct LastKiroClient {
     stored_at: std::time::Instant,
 }
 
-static LAST_KIRO_CLIENT: Lazy<Mutex<Option<LastKiroClient>>> = Lazy::new(|| Mutex::new(None));
+static LAST_KIRO_CLIENT: LazyLock<Mutex<Option<LastKiroClient>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// Staleness window for the OIDC-credentials cache. After this
 /// many seconds a `take_last_client` call returns `None` so an

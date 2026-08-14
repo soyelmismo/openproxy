@@ -135,19 +135,20 @@ impl Pipeline {
 
             crate::credentials::CredentialManager::resolve_credentials(
                 eligible,
-                models_map,
-                accounts_map,
-                kiro_map,
-                antigravity_map,
-                providers_map,
-                master_key,
-                oauth_registry,
+                &models_map,
+                &accounts_map,
+                &kiro_map,
+                &antigravity_map,
+                &providers_map,
+                master_key.as_ref(),
+                oauth_registry.as_deref(),
             )
         })
         .await
         .unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_single(
         &self,
         req: PipelineRequest,
@@ -329,6 +330,7 @@ impl Pipeline {
     }
 
     // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         req: PipelineRequest,

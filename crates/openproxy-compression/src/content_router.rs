@@ -45,10 +45,10 @@
 
 use crate::visitor::mutate_message_text;
 use crate::{diff_compressor, log_compressor, smart_crusher};
-use once_cell::sync::Lazy;
 use openproxy_types::OpenAIMessage;
 use regex::Regex;
 use serde_json::Value;
+use std::sync::LazyLock;
 
 /// Detected content type based on content shape (not command).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,42 +71,43 @@ pub enum ContentType {
 
 // ─── Detection regexes ─────────────────────────────────────────────────────
 //
-// All regexes are compiled once via `once_cell::Lazy` and reused across
+// All regexes are compiled once via `std::sync::LazyLock` and reused across
 // calls. `^`-anchored patterns are applied per-line (the line is the whole
 // search string), so they don't need the `(?m)` flag.
 
 /// Strict hunk header: `^@@ -\d+,\d+ \+\d+,\d+ @@`.
-static HUNK_HEADER_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
+static HUNK_HEADER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
 
 /// `^path:line:` pattern from grep / ripgrep output.
-static SEARCH_RESULT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("valid regex"));
+static SEARCH_RESULT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("valid regex"));
 
 /// Source-code structural keywords: `fn `, `func `, `def `, `class `, etc.
-static SOURCE_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
+static SOURCE_KEYWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(fn |func |def |class |struct |enum |interface |public |private |protected )")
         .expect("valid regex")
 });
 
 /// Source-code import-like first line: `import `, `from `, `use `,
 /// `package `, `#include `, `require(`.
-static SOURCE_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
+static SOURCE_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(import |from |use |package |#include |require\()").expect("valid regex")
 });
 
 /// Generic error/warn/etc. token (case-insensitive) used by the
 /// "≥5 matching lines" sub-rule of BuildOutput detection.
-static GENERIC_ERROR_RE: Lazy<Regex> = Lazy::new(|| {
+static GENERIC_ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").expect("valid regex")
 });
 
 /// `^make[N]:` (N is digits).
-static MAKE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^make\[\d+\]:").expect("valid regex"));
+static MAKE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^make\[\d+\]:").expect("valid regex"));
 
 /// `^running N tests` (cargo).
-static CARGO_RUNNING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^running \d+ tests").expect("valid regex"));
+static CARGO_RUNNING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^running \d+ tests").expect("valid regex"));
 
 /// Maximum number of lines to scan for detection. The spec says "first 100
 /// lines" for the overall scan; sub-scans (git diff, build output, tabular)
@@ -488,12 +489,12 @@ src/utils.rs:25:    let x = 5;\n";
 
     #[test]
     fn test_route_git_diff() {
-        // 49-line diff (4 metadata + 5 hunks × 9 body lines): ≥ MIN_DIFF_LINES=30.
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("diff --git a/foo.rs b/foo.rs".to_string());
-        lines.push("index abc..def 100644".to_string());
-        lines.push("--- a/foo.rs".to_string());
-        lines.push("+++ b/foo.rs".to_string());
+        let mut lines: Vec<String> = vec![
+            "diff --git a/foo.rs b/foo.rs".to_string(),
+            "index abc..def 100644".to_string(),
+            "--- a/foo.rs".to_string(),
+            "+++ b/foo.rs".to_string(),
+        ];
         for h in 0..5u32 {
             let base = (h * 10 + 1) as usize;
             lines.push(format!("@@ -{},8 +{},8 @@", base, base));

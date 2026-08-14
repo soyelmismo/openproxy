@@ -32,12 +32,12 @@
 //! sufficient for cost tracking and compression savings.
 
 use crate::message::OpenAIMessage;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use tiktoken_rs::{CoreBPE, cl100k_base};
 
 /// Thread-safe singleton BPE encoder. Loaded once at first use.
 /// The cl100k_base vocab is ~50K tokens, embedded in the binary.
-static ENCODER: Lazy<Option<CoreBPE>> = Lazy::new(|| match cl100k_base() {
+static ENCODER: LazyLock<Option<CoreBPE>> = LazyLock::new(|| match cl100k_base() {
     Ok(bpe) => {
         tracing::info!("tiktoken cl100k_base BPE encoder initialized");
         Some(bpe)

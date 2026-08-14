@@ -269,8 +269,8 @@ mod tests {
         let key1 = HostKey::new(Scheme::Https, "example.com", 443);
         let key2 = HostKey::new(Scheme::Http, "test.com", 80);
 
-        pool.record_dial(key1.clone());
-        pool.record_dial(key2.clone());
+        pool.record_dial(key1);
+        pool.record_dial(key2);
 
         assert_eq!(pool.host_count(), 2);
 

@@ -1,8 +1,8 @@
-use once_cell::sync::Lazy;
 use openproxy_types::normalize_model_id;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Price {
@@ -26,7 +26,7 @@ impl Default for Price {
     }
 }
 
-static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy::new(|| {
+static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> = LazyLock::new(|| {
     let mut table: HashMap<(&'static str, &'static str), Price> = HashMap::new();
 
     // OpenRouter

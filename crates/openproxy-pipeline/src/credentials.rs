@@ -5,7 +5,6 @@ use openproxy_types::combos::ComboTarget;
 use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub struct CredentialManager;
 
@@ -24,28 +23,26 @@ impl CredentialManager {
             })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve_credentials(
         eligible: Vec<ComboTarget>,
-        models_map: HashMap<i64, Model>,
-        accounts_map: HashMap<i64, RawAccount>,
-        kiro_map: HashMap<i64, KiroMeta>,
-        antigravity_map: HashMap<i64, String>,
-        providers_map: HashMap<String, String>,
-        master_key: Arc<MasterKey>,
-        oauth_registry: Option<Arc<dyn crate::oauth::PipelineOAuthRegistry>>,
+        models_map: &HashMap<i64, Model>,
+        accounts_map: &HashMap<i64, RawAccount>,
+        kiro_map: &HashMap<i64, KiroMeta>,
+        antigravity_map: &HashMap<i64, String>,
+        providers_map: &HashMap<String, String>,
+        master_key: &MasterKey,
+        oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
     ) -> Vec<ResolvedTarget> {
         let mut resolved = Vec::with_capacity(eligible.len());
         for t in eligible {
-            let model_row_id = match t.model_row_id {
-                Some(m) => m,
-                None => {
-                    let err = CoreError::Internal(format!(
-                        "execute_single called on a sub-combo target (id={})",
-                        t.id.0
-                    ));
-                    tracing::error!(error=%err);
-                    continue;
-                }
+            let Some(model_row_id) = t.model_row_id else {
+                let err = CoreError::Internal(format!(
+                    "execute_single called on a sub-combo target (id={})",
+                    t.id.0
+                ));
+                tracing::error!(error=%err);
+                continue;
             };
 
             let model = match models_map.get(&model_row_id.0) {
@@ -62,15 +59,12 @@ impl CredentialManager {
 
             let (api_key, api_key_label, custom_meta) = match t.account_id {
                 Some(account_id) => {
-                    let raw_account = match accounts_map.get(&account_id.0) {
-                        Some(r) => r,
-                        None => {
-                            tracing::error!(
-                                "account {} not found during decryption phase",
-                                account_id.0
-                            );
-                            continue;
-                        }
+                    let Some(raw_account) = accounts_map.get(&account_id.0) else {
+                        tracing::error!(
+                            "account {} not found during decryption phase",
+                            account_id.0
+                        );
+                        continue;
                     };
 
                     let (key, has_api_key) = match &raw_account.api_key_encrypted {

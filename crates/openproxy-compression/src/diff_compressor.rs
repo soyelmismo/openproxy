@@ -16,10 +16,10 @@
 //! - Only applies the compressed output when it is strictly smaller than
 //!   the original (never produces a larger message).
 
-use once_cell::sync::Lazy;
 use openproxy_types::OpenAIMessage;
 use regex::Regex;
 use serde_json::Value;
+use std::sync::LazyLock;
 
 type Messages = Vec<OpenAIMessage>;
 
@@ -32,13 +32,13 @@ const MIN_DIFF_LINES: usize = 30;
 pub const TECHNIQUE: &str = "lite::diff_compressor";
 
 /// Strict hunk header regex (for detection): `^@@ -\d+,\d+ \+\d+,\d+ @@`.
-static HUNK_HEADER_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
+static HUNK_HEADER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
 
 /// Lenient hunk header regex (for parsing): allows optional counts
 /// (e.g. `@@ -1 +1 @@` for single-line hunks).
-static HUNK_HEADER_LENIENT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@").expect("valid regex"));
+static HUNK_HEADER_LENIENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@").expect("valid regex"));
 
 /// A single parsed diff file.
 struct DiffFile {
@@ -428,11 +428,12 @@ mod tests {
 
     /// Build a ~49-line diff with 5 hunks, each with 3 context + 1 del + 1 add + 3 context.
     fn make_basic_diff() -> String {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("diff --git a/foo.rs b/foo.rs".to_string());
-        lines.push("index abc..def 100644".to_string());
-        lines.push("--- a/foo.rs".to_string());
-        lines.push("+++ b/foo.rs".to_string());
+        let mut lines: Vec<String> = vec![
+            "diff --git a/foo.rs b/foo.rs".to_string(),
+            "index abc..def 100644".to_string(),
+            "--- a/foo.rs".to_string(),
+            "+++ b/foo.rs".to_string(),
+        ];
         for h in 0..5u32 {
             let base = (h * 10 + 1) as usize;
             lines.push(format!("@@ -{},8 +{},8 @@", base, base));
@@ -502,11 +503,12 @@ mod tests {
     #[test]
     fn test_compress_diff_caps_hunks() {
         // 1 file with 15 hunks, each with a change. Only 10 should be kept.
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("diff --git a/foo.rs b/foo.rs".to_string());
-        lines.push("index abc..def 100644".to_string());
-        lines.push("--- a/foo.rs".to_string());
-        lines.push("+++ b/foo.rs".to_string());
+        let mut lines: Vec<String> = vec![
+            "diff --git a/foo.rs b/foo.rs".to_string(),
+            "index abc..def 100644".to_string(),
+            "--- a/foo.rs".to_string(),
+            "+++ b/foo.rs".to_string(),
+        ];
         for h in 0..15u32 {
             let base = (h * 5 + 1) as usize;
             lines.push(format!("@@ -{},3 +{},3 @@", base, base));
@@ -574,12 +576,13 @@ mod tests {
 
     #[test]
     fn test_compress_diff_preserves_additions_deletions() {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("diff --git a/foo.rs b/foo.rs".to_string());
-        lines.push("index abc..def 100644".to_string());
-        lines.push("--- a/foo.rs".to_string());
-        lines.push("+++ b/foo.rs".to_string());
-        lines.push("@@ -1,12 +1,12 @@".to_string());
+        let mut lines: Vec<String> = vec![
+            "diff --git a/foo.rs b/foo.rs".to_string(),
+            "index abc..def 100644".to_string(),
+            "--- a/foo.rs".to_string(),
+            "+++ b/foo.rs".to_string(),
+            "@@ -1,12 +1,12 @@".to_string(),
+        ];
         for i in 0..5u32 {
             lines.push(format!(" ctx_before_{}", i));
         }
@@ -673,12 +676,13 @@ index abc..def 100644\n\
     fn test_compress_diff_never_produces_larger_output() {
         // 31-line diff with no context (all +/- lines) — nothing to compress,
         // so the compressed output (header + same body) would be larger.
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("diff --git a/foo.rs b/foo.rs".to_string());
-        lines.push("index abc..def 100644".to_string());
-        lines.push("--- a/foo.rs".to_string());
-        lines.push("+++ b/foo.rs".to_string());
-        lines.push("@@ -1,13 +1,13 @@".to_string());
+        let mut lines: Vec<String> = vec![
+            "diff --git a/foo.rs b/foo.rs".to_string(),
+            "index abc..def 100644".to_string(),
+            "--- a/foo.rs".to_string(),
+            "+++ b/foo.rs".to_string(),
+            "@@ -1,13 +1,13 @@".to_string(),
+        ];
         for i in 0..13u32 {
             lines.push(format!("-old_{}", i));
             lines.push(format!("+new_{}", i));

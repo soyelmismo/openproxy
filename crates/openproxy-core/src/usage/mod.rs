@@ -18,6 +18,168 @@
 pub mod analytics;
 
 pub use analytics::*;
+pub use analytics::prune_expired_recording_bodies;
+pub use analytics::prune_expired_usage_rows;
+
+use std::sync::{LazyLock, OnceLock};
+
+// Globals for broadcast
+static USAGE_SENDER: OnceLock<
+    tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow>,
+> = OnceLock::new();
+static STAGE_SENDER: OnceLock<
+    tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
+> = OnceLock::new();
+
+pub static INFLIGHT_REGISTRY: LazyLock<
+    dashmap::DashMap<String, openproxy_types::usage::InflightAttempt>,
+> = LazyLock::new(dashmap::DashMap::new);
+
+pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAttempt> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Retain only fresh inflight attempts (<60s)
+    INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 60_000);
+
+    let mut list: Vec<_> = INFLIGHT_REGISTRY
+        .iter()
+        .map(|r| r.value().to_owned())
+        .collect();
+    list.sort_by_key(|b| std::cmp::Reverse(b.started_at_ms));
+    list
+}
+
+fn stage_rank(stage: &str) -> u8 {
+    match stage {
+        "started" => 0,
+        "connecting" => 1,
+        "waiting_ttft" => 2,
+        "streaming" => 3,
+        "completed" | "failed" | "cancelled" => 4,
+        _ => 0,
+    }
+}
+
+pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow> {
+    let (tx, _rx) = tokio::sync::broadcast::channel(1024);
+    let _ = USAGE_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
+    let _ = openproxy_types::usage::USAGE_ROW_PUBLISHER.set(publish_usage_global);
+    tx
+}
+
+pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>
+{
+    let (tx, _rx) = tokio::sync::broadcast::channel(200);
+    let _ = STAGE_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
+    let _ = openproxy_types::usage::STAGE_EVENT_PUBLISHER.set(publish_stage_global);
+    tx
+}
+
+fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
+    if !row.trace_id.is_empty() {
+        INFLIGHT_REGISTRY.remove(&row.trace_id);
+    } else {
+        let key = format!("{}:unknown", row.request_id);
+        INFLIGHT_REGISTRY.remove(&key);
+    }
+
+    if let Some(tx) = USAGE_SENDER.get() {
+        let _ = tx.send(openproxy_types::usage::redact_for_broadcast(row));
+    }
+}
+
+fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
+    let attempt_key = if !event.trace_id.is_empty() {
+        event.trace_id.to_owned()
+    } else {
+        format!("{}:unknown", event.request_id)
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let is_terminal = event.stage == "completed"
+        || event.stage == "failed"
+        || event.stage == "cancelled"
+        || event
+            .status_code
+            .map(|s| s >= 400 && s != 0)
+            .unwrap_or(false)
+        || event.error.is_some();
+
+    if is_terminal {
+        INFLIGHT_REGISTRY.remove(&attempt_key);
+    } else {
+        let rank = stage_rank(&event.stage);
+        let started_at = now_ms.saturating_sub(event.elapsed_ms);
+        let status_opt = event.status_code;
+
+        INFLIGHT_REGISTRY
+            .entry(attempt_key.to_owned())
+            .and_modify(|item| {
+                item.stage = event.stage.to_owned();
+                item.stage_rank = rank;
+                item.updated_at_ms = now_ms;
+                item.elapsed_ms_at_event = event.elapsed_ms;
+                if let Some(c) = event.connect_ms {
+                    item.connect_ms = Some(c);
+                }
+                if let Some(t) = event.ttft_ms {
+                    item.ttft_ms = Some(t);
+                }
+                if status_opt.is_some() {
+                    item.status_code = status_opt;
+                }
+                if event.error.is_some() {
+                    item.error = event.error.to_owned();
+                }
+                if let Some(p) = &event.provider_id
+                    && !p.is_empty()
+                {
+                    item.provider_id = p.to_owned();
+                }
+                if let Some(m) = &event.upstream_model_id
+                    && !m.is_empty()
+                {
+                    item.upstream_model_id = m.to_owned();
+                }
+            })
+            .or_insert_with(|| openproxy_types::usage::InflightAttempt {
+                attempt_key: attempt_key.to_owned(),
+                request_id: event.request_id.to_owned(),
+                trace_id: event.trace_id.to_owned(),
+                provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
+                upstream_model_id: event
+                    .upstream_model_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
+                started_at_ms: started_at,
+                updated_at_ms: now_ms,
+                stage: event.stage.to_owned(),
+                stage_seq: event.elapsed_ms as u32,
+                stage_rank: rank,
+                elapsed_ms_at_event: event.elapsed_ms,
+                connect_ms: event.connect_ms,
+                ttft_ms: event.ttft_ms,
+                status_code: status_opt,
+                terminal: false,
+                terminal_kind: None,
+                error: event.error.to_owned(),
+                row_id: None,
+                source: "live".into(),
+            });
+    }
+
+    if let Some(tx) = STAGE_SENDER.get() {
+        let _ = tx.send(event);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -59,6 +221,7 @@ mod tests {
     /// Counts start at 0/200ms ttft/1200ms total to make aggregate assertions
     /// easy to write by inspection.
     // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+    #[allow(clippy::too_many_arguments)]
     fn insert(
         conn: &Connection,
         request_id: &str,
@@ -1537,163 +1700,3 @@ mod tests {
         assert_eq!(s_other.total_rows, 0);
     }
 }
-
-// Globals for broadcast
-static USAGE_SENDER: once_cell::sync::OnceCell<
-    tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow>,
-> = once_cell::sync::OnceCell::new();
-static STAGE_SENDER: once_cell::sync::OnceCell<
-    tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
-> = once_cell::sync::OnceCell::new();
-
-pub static INFLIGHT_REGISTRY: once_cell::sync::Lazy<
-    dashmap::DashMap<String, openproxy_types::usage::InflightAttempt>,
-> = once_cell::sync::Lazy::new(dashmap::DashMap::new);
-
-pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAttempt> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    // Retain only fresh inflight attempts (<60s)
-    INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 60_000);
-
-    let mut list: Vec<_> = INFLIGHT_REGISTRY
-        .iter()
-        .map(|r| r.value().to_owned())
-        .collect();
-    list.sort_by_key(|b| std::cmp::Reverse(b.started_at_ms));
-    list
-}
-
-fn stage_rank(stage: &str) -> u8 {
-    match stage {
-        "started" => 0,
-        "connecting" => 1,
-        "waiting_ttft" => 2,
-        "streaming" => 3,
-        "completed" | "failed" | "cancelled" => 4,
-        _ => 0,
-    }
-}
-
-pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow> {
-    let (tx, _rx) = tokio::sync::broadcast::channel(1024);
-    let _ = USAGE_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
-    let _ = openproxy_types::usage::USAGE_ROW_PUBLISHER.set(publish_usage_global);
-    tx
-}
-
-pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>
-{
-    let (tx, _rx) = tokio::sync::broadcast::channel(200);
-    let _ = STAGE_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
-    let _ = openproxy_types::usage::STAGE_EVENT_PUBLISHER.set(publish_stage_global);
-    tx
-}
-
-fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
-    if !row.trace_id.is_empty() {
-        INFLIGHT_REGISTRY.remove(&row.trace_id);
-    } else {
-        let key = format!("{}:unknown", row.request_id);
-        INFLIGHT_REGISTRY.remove(&key);
-    }
-
-    if let Some(tx) = USAGE_SENDER.get() {
-        let _ = tx.send(openproxy_types::usage::redact_for_broadcast(row));
-    }
-}
-
-fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
-    let attempt_key = if !event.trace_id.is_empty() {
-        event.trace_id.to_owned()
-    } else {
-        format!("{}:unknown", event.request_id)
-    };
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    let is_terminal = event.stage == "completed"
-        || event.stage == "failed"
-        || event.stage == "cancelled"
-        || event
-            .status_code
-            .map(|s| s >= 400 && s != 0)
-            .unwrap_or(false)
-        || event.error.is_some();
-
-    if is_terminal {
-        INFLIGHT_REGISTRY.remove(&attempt_key);
-    } else {
-        let rank = stage_rank(&event.stage);
-        let started_at = now_ms.saturating_sub(event.elapsed_ms);
-        let status_opt = event.status_code;
-
-        INFLIGHT_REGISTRY
-            .entry(attempt_key.to_owned())
-            .and_modify(|item| {
-                item.stage = event.stage.to_owned();
-                item.stage_rank = rank;
-                item.updated_at_ms = now_ms;
-                item.elapsed_ms_at_event = event.elapsed_ms;
-                if let Some(c) = event.connect_ms {
-                    item.connect_ms = Some(c);
-                }
-                if let Some(t) = event.ttft_ms {
-                    item.ttft_ms = Some(t);
-                }
-                if status_opt.is_some() {
-                    item.status_code = status_opt;
-                }
-                if event.error.is_some() {
-                    item.error = event.error.to_owned();
-                }
-                if let Some(p) = &event.provider_id
-                    && !p.is_empty()
-                {
-                    item.provider_id = p.to_owned();
-                }
-                if let Some(m) = &event.upstream_model_id
-                    && !m.is_empty()
-                {
-                    item.upstream_model_id = m.to_owned();
-                }
-            })
-            .or_insert_with(|| openproxy_types::usage::InflightAttempt {
-                attempt_key: attempt_key.to_owned(),
-                request_id: event.request_id.to_owned(),
-                trace_id: event.trace_id.to_owned(),
-                provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
-                upstream_model_id: event
-                    .upstream_model_id
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_string(),
-                started_at_ms: started_at,
-                updated_at_ms: now_ms,
-                stage: event.stage.to_owned(),
-                stage_seq: event.elapsed_ms as u32,
-                stage_rank: rank,
-                elapsed_ms_at_event: event.elapsed_ms,
-                connect_ms: event.connect_ms,
-                ttft_ms: event.ttft_ms,
-                status_code: status_opt,
-                terminal: false,
-                terminal_kind: None,
-                error: event.error.to_owned(),
-                row_id: None,
-                source: "live".into(),
-            });
-    }
-
-    if let Some(tx) = STAGE_SENDER.get() {
-        let _ = tx.send(event);
-    }
-}
-pub use analytics::prune_expired_recording_bodies;
-pub use analytics::prune_expired_usage_rows;

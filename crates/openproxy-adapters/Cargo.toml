@@ -28,7 +28,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 ahash = "0.8.12"
-once_cell = { workspace = true }
 regex = { workspace = true }
 dashmap = { workspace = true }
 tower-service = "0.3"

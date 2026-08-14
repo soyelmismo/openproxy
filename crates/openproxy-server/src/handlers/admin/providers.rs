@@ -83,14 +83,13 @@ pub async fn create_provider(
     }
 
     if is_anonymous {
-        let s_clone = s.clone();
         let pid_str = id.to_string();
         tokio::spawn(async move {
             let q = ProviderRefreshQuery {
                 account_id: None,
                 ttl_seconds: None,
             };
-            let _ = run_provider_refresh(s_clone, &pid_str, q).await;
+            let _ = run_provider_refresh(s, &pid_str, q).await;
         });
     }
 

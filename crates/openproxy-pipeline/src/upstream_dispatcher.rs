@@ -226,6 +226,7 @@ impl UpstreamDispatcher {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         req: PipelineRequest,
@@ -244,6 +245,7 @@ impl UpstreamDispatcher {
     }
 
     // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn dispatch_upstream(
         &self,
         target: &ComboTarget,
@@ -1121,8 +1123,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
-            proxy_url: proxy_url.to_owned(),
-            proxy_status: proxy_status.to_owned(),
+            proxy_url,
+            proxy_status,
         };
 
         let has_partial_content = acc.as_ref().is_some_and(|a| !a.is_empty());
@@ -1223,8 +1225,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
-            proxy_url: proxy_url.to_owned(),
-            proxy_status: proxy_status.to_owned(),
+            proxy_url,
+            proxy_status,
         };
 
         let err = match e {
@@ -1335,6 +1337,7 @@ impl UpstreamDispatcher {
     /// the upstream response and forwards each translated chunk through
     /// the stream_sink channel in real-time.
     // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn dispatch_upstream_streaming(
         &self,
         target: &ComboTarget,
@@ -1419,15 +1422,15 @@ impl UpstreamDispatcher {
         let cancel_token = if let Some(rc) = req.race_cancel.as_ref() {
             CancellationToken::from_watch_and_token(
                 tokio::sync::watch::Receiver::clone(&req.client_disconnected),
-                openproxy_adapters::upstream::CancellationToken::clone(rc),
+                rc,
             )
         } else {
             CancellationToken::from_watch(tokio::sync::watch::Receiver::clone(
                 &req.client_disconnected,
             ))
         };
-        let req_proxy_url = upstream_request.proxy.to_owned();
-        let req_proxy_status = upstream_request.proxy_status.to_owned();
+        let req_proxy_url = upstream_request.proxy.clone();
+        let req_proxy_status = upstream_request.proxy_status.clone();
         let result = self
             .config
             .upstream_client

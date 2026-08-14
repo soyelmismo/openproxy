@@ -1118,7 +1118,7 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         rusqlite::Error::FromSqlConversionFailure(
             2,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(e.to_string())),
+            Box::new(FromStrError(e)),
         )
     })?;
 

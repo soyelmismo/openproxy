@@ -1,6 +1,5 @@
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use super::smart_truncate::{CompiledTruncateConfig, smart_truncate};
 
@@ -112,8 +111,8 @@ macro_rules! filter_skeleton {
 // `filter_stderr_prefixes` was previously compiling this regex on every
 // call. Phase B already moved `strip_ansi` to memchr; this finishes the
 // job for the stderr-prefix path.
-static STDERR_RE: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("valid regex"));
+static STDERR_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("valid regex"));
 
 fn filter_stderr_prefixes(text: &str) -> String {
     STDERR_RE.replace_all(text, "").into_owned()
@@ -125,7 +124,7 @@ fn filter_stderr_prefixes(text: &str) -> String {
 // Insertion order does not matter — `get_builtin_filter` does a single
 // `HashMap::get` lookup.
 
-pub static BUILTIN_FILTERS: Lazy<HashMap<&'static str, Arc<CompiledFilter>>> = Lazy::new(|| {
+pub static BUILTIN_FILTERS: LazyLock<HashMap<&'static str, Arc<CompiledFilter>>> = LazyLock::new(|| {
     let mut m = HashMap::with_capacity(8);
     m.insert("git-status", Arc::new(make_git_status_filter()));
     m.insert("git-diff", Arc::new(make_git_diff_filter()));
@@ -138,8 +137,8 @@ pub static BUILTIN_FILTERS: Lazy<HashMap<&'static str, Arc<CompiledFilter>>> = L
     m
 });
 
-pub static GENERIC_FILTER: Lazy<Arc<CompiledFilter>> =
-    Lazy::new(|| Arc::new(make_generic_filter()));
+pub static GENERIC_FILTER: LazyLock<Arc<CompiledFilter>> =
+    LazyLock::new(|| Arc::new(make_generic_filter()));
 
 /// Obtiene el filtro built-in para un tipo de comando detectado.
 ///

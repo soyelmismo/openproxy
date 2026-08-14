@@ -314,9 +314,9 @@ impl ProviderAdapter for AntigravityAdapter {
     }
 }
 
-static PLAN_CACHE: once_cell::sync::Lazy<
+static PLAN_CACHE: std::sync::LazyLock<
     parking_lot::Mutex<std::collections::HashMap<String, String>>,
-> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
 
 impl AntigravityAdapter {
     async fn fetch_antigravity_quota_local(

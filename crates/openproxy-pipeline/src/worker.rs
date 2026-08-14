@@ -44,7 +44,7 @@ pub fn spawn_worker(
                     &conn_clone,
                     repo_clone.as_ref(),
                     job,
-                    selection_registry_clone,
+                    &selection_registry_clone,
                 );
             })
             .await;
@@ -56,7 +56,7 @@ pub fn process_job(
     conn_clone: &Arc<parking_lot::Mutex<Connection>>,
     repo: &dyn crate::repository::PipelineRepository,
     job: BackgroundJob,
-    selection_registry: Arc<SelectionRegistry>,
+    selection_registry: &SelectionRegistry,
 ) {
     match job {
         BackgroundJob::RecordAttempt {

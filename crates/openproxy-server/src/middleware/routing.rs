@@ -149,7 +149,7 @@ fn translate_plan_to_targets(
             }
         }
         RoutingPlan::NotFound { model, hint } => {
-            let _ = record_model_not_found_usage_row(state, RequestId::new(), api_key_id, &model);
+            record_model_not_found_usage_row(state, RequestId::new(), api_key_id, &model);
             let mut msg = format!("model not found: {}", model);
             if let Some(h) = hint {
                 msg.push_str(&format!(" (hint: {})", h));
@@ -167,7 +167,7 @@ fn record_model_not_found_usage_row(
     request_id: RequestId,
     api_key_id: Option<ApiKeyId>,
     upstream_model: &str,
-) -> std::result::Result<(), ApiError> {
+) {
     use openproxy_types::UsageInput;
     use openproxy_types::ids::{ProviderId, TraceId};
     let input = UsageInput {
@@ -210,16 +210,12 @@ fn record_model_not_found_usage_row(
         completion_tokens_estimated: false,
         endpoint_kind: openproxy_types::EndpointKind::Chat,
     };
-    let w = match state
+    let Some(w) = state
         .db_pool()
         .try_writer_for(std::time::Duration::from_millis(100))
-    {
-        Some(w) => w,
-        None => {
-            tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");
-            return Ok(());
-        }
+    else {
+        tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");
+        return;
     };
-    let _ = openproxy_db::cost::record(&w, &input).map_err(ApiError);
-    Ok(())
+    let _ = openproxy_db::cost::record(&w, &input);
 }

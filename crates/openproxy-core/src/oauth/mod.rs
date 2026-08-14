@@ -9,12 +9,11 @@
 use crate::accounts::HealthStatus;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use once_cell::sync::Lazy;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 
 // Re-export account-level OAuth helpers for convenience.
@@ -523,7 +522,7 @@ impl TokenRefreshCoordinator {
     }
 
     pub fn global() -> &'static Self {
-        static COORDINATOR: Lazy<TokenRefreshCoordinator> = Lazy::new(TokenRefreshCoordinator::new);
+        static COORDINATOR: LazyLock<TokenRefreshCoordinator> = LazyLock::new(TokenRefreshCoordinator::new);
         &COORDINATOR
     }
 
@@ -535,6 +534,7 @@ impl TokenRefreshCoordinator {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn refresh_and_store(
         &self,
         provider_id: &str,

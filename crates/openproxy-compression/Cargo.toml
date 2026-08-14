@@ -14,7 +14,6 @@ regex = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 memchr = "2"
-once_cell = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }

@@ -210,7 +210,7 @@ pub async fn transcribe(
 
         // Success! Record usage and return.
         let total_ms = started.elapsed().as_millis() as u64;
-        let _ = record_audio_usage_row(AudioUsageArgs {
+        record_audio_usage_row(AudioUsageArgs {
             state: &state,
             request_id: RequestId::new(),
             api_key_id,
@@ -225,7 +225,11 @@ pub async fn transcribe(
         });
 
         tracing::info!("Audio request succeeded after {} attempts", attempt);
-        return build_audio_response(status_code.as_u16(), &content_type, body_bytes);
+        return Ok(build_audio_response(
+            status_code.as_u16(),
+            &content_type,
+            body_bytes,
+        ));
     }
 
     Err(last_error
@@ -358,7 +362,7 @@ fn resolve_audio_targets(
             Ok(audio_targets)
         }
         RoutingPlan::NotFound { model, hint } => {
-            let _ = record_audio_usage_row(AudioUsageArgs {
+            record_audio_usage_row(AudioUsageArgs {
                 state,
                 request_id: RequestId::new(),
                 api_key_id,
@@ -469,23 +473,27 @@ async fn dispatch_audio_request(
         })
 }
 
+// =====================================================================
+// Helpers
+// =====================================================================
+
 fn build_audio_response(
     status_code: u16,
     content_type: &str,
     body: bytes::Bytes,
-) -> Result<Response, ApiError> {
+) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     if let Ok(v) = HeaderValue::from_str(content_type) {
         builder = builder.header(axum::http::header::CONTENT_TYPE, v);
     }
-    Ok(builder
+    builder
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| {
             let mut res = Response::new(axum::body::Body::empty());
             *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             res
-        }))
+        })
 }
 
 /// Resolve the upstream API key for an audio transcription request.
@@ -518,7 +526,7 @@ fn resolve_api_key(
             match providers::get(&r, provider_id).map_err(ApiError)? {
                 Some(p) if matches!(p.auth_type, providers::AuthType::None) => Ok(String::new()),
                 _ => Err(ApiError(CoreError::Auth(format!(
-                    "no healthy account with credentials for provider '{}'",
+                    "no api key available for provider '{}'",
                     provider_id
                 )))),
             }
@@ -553,7 +561,7 @@ struct AudioUsageArgs<'a> {
     total_ms: u64,
 }
 
-fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
+fn record_audio_usage_row(args: AudioUsageArgs<'_>) {
     let AudioUsageArgs {
         state,
         request_id,
@@ -613,16 +621,12 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
         completion_tokens_estimated: false,
         endpoint_kind: openproxy_types::EndpointKind::Audio,
     };
-    let w = match state
+    let Some(w) = state
         .db_pool()
         .try_writer_for(std::time::Duration::from_millis(100))
-    {
-        Some(w) => w,
-        None => {
-            tracing::warn!("hot-path writer lock timeout on audio usage row; dropping");
-            return Ok(());
-        }
+    else {
+        tracing::warn!("hot-path writer lock timeout on audio usage row; dropping");
+        return;
     };
-    let _ = cost::record(&w, &input).map_err(ApiError);
-    Ok(())
+    let _ = cost::record(&w, &input);
 }

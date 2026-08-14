@@ -456,13 +456,12 @@ impl PipelineStage for DispatchStage {
                             },
                         });
                         let repo = ctx.pipeline.repo();
-                        let provider_id_str_clone = provider_id_str.clone();
                         tokio::task::spawn_blocking(move || {
                             let _ = repo.insert_and_broadcast_notification(
                                 "system",
                                 &payload,
                                 Some(&dedup_key),
-                                Some(&provider_id_str_clone),
+                                Some(&provider_id_str),
                             );
                         });
                     }

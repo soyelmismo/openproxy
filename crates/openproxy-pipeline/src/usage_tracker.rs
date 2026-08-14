@@ -68,7 +68,7 @@ impl UsageTracker {
                 let repo = Arc::clone(&self.repo);
                 let selection_registry = Arc::clone(&self.selection_registry);
                 drop(tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
+                    crate::worker::process_job(&conn, repo.as_ref(), job, &selection_registry);
                 }));
             } else {
                 tracing::warn!(
@@ -81,7 +81,7 @@ impl UsageTracker {
 
     pub(crate) fn record_no_healthy_targets_row(
         &self,
-        req: PipelineRequest,
+        req: &PipelineRequest,
         combo: &Combo,
         started: std::time::Instant,
     ) {
@@ -133,6 +133,7 @@ impl UsageTracker {
     }
 
     // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         req: PipelineRequest,
@@ -560,7 +561,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 let repo = Arc::clone(&self.tracker.repo);
                 let selection_registry = Arc::clone(&self.tracker.selection_registry);
                 drop(tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
+                    crate::worker::process_job(&conn, repo.as_ref(), job, &selection_registry);
                 }));
             } else {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);

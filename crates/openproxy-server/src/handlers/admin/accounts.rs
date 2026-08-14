@@ -37,13 +37,12 @@ pub async fn create_account(
         .accounts
         .create(s.master_key().as_ref(), input)?;
 
-    let s_clone = s.clone();
     tokio::spawn(async move {
         let q = ProviderRefreshQuery {
             account_id: Some(id.0),
             ttl_seconds: None,
         };
-        let _ = super::providers::run_provider_refresh(s_clone, &provider_id, q).await;
+        let _ = super::providers::run_provider_refresh(s, &provider_id, q).await;
     });
 
     Ok(Json(serde_json::json!({ "id": id.0 })))
@@ -95,13 +94,12 @@ pub async fn update_account_api_key(
         .update_api_key(s.master_key().as_ref(), acc_id, body)?;
 
     if let Some(pid) = provider_id {
-        let s_clone = s.clone();
         tokio::spawn(async move {
             let q = ProviderRefreshQuery {
                 account_id: Some(id),
                 ttl_seconds: None,
             };
-            let _ = super::providers::run_provider_refresh(s_clone, &pid, q).await;
+            let _ = super::providers::run_provider_refresh(s, &pid, q).await;
         });
     }
 

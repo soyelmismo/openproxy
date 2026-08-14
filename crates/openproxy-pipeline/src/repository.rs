@@ -867,7 +867,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                 (None, None)
             }
         } else {
-            (provider.current_proxy_id.clone(), None)
+            (provider.current_proxy_id, None)
         };
 
         if let Some(ref proxy_id) = current_proxy_id
