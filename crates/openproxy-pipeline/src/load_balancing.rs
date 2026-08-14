@@ -105,7 +105,7 @@ fn resolve_lkgp(
         let total: u64 = n * (n + 1) / 2;
         let mut pick = rng.random_range(0..total);
         let mut idx = 0;
-        for i in 0..targets.len() {
+        for (i, _) in targets.iter().enumerate() {
             // Weight for position i (0-indexed) = N - i.
             let w = n - i as u64;
             if pick < w {

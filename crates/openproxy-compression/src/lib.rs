@@ -1,5 +1,4 @@
 #![allow(clippy::ptr_arg)]
-#![allow(clippy::needless_range_loop)]
 #![allow(clippy::vec_init_then_push)]
 
 mod compression;

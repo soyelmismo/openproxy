@@ -681,11 +681,11 @@ fn log_anthropic_translation_diagnostics(conversation: &[AnthropicMessage]) {
         );
     }
     // Warn on consecutive same-role messages.
-    for i in 1..conversation.len() {
-        if conversation[i].role == conversation[i - 1].role {
+    for (i, window) in conversation.windows(2).enumerate() {
+        if window[0].role == window[1].role {
             tracing::warn!(
-                idx = i,
-                role = %conversation[i].role,
+                idx = i + 1,
+                role = %window[1].role,
                 "translation: consecutive same-role messages — Anthropic/MiniMax rejects this with (2013)"
             );
         }

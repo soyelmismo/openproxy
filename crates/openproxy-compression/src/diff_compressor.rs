@@ -333,7 +333,7 @@ fn cap_hunks(hunks: &[Hunk]) -> (Vec<&Hunk>, usize) {
     }
     kept_indices.sort_unstable();
     let truncated = hunks.len() - kept_indices.len();
-    let kept: Vec<&Hunk> = kept_indices.into_iter().map(|i| &hunks[i]).collect();
+    let kept: Vec<&Hunk> = kept_indices.into_iter().filter_map(|i| hunks.get(i)).collect();
     (kept, truncated)
 }
 
@@ -392,8 +392,8 @@ fn reduce_context(lines: &[DiffLine]) -> Vec<String> {
     }
 
     let mut out = Vec::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if keep[idx] {
+    for (line, &should_keep) in lines.iter().zip(&keep) {
+        if should_keep {
             out.push(line.as_str().to_string());
         }
     }

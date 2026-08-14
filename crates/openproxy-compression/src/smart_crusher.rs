@@ -243,13 +243,9 @@ fn try_lossy(arr: &[Value]) -> Option<String> {
     // BTreeSet gives us deterministic, ascending iteration order so the
     // dedup pass below preserves original array order.
     let mut kept_indices: BTreeSet<usize> = BTreeSet::new();
-    for i in 0..first_n.min(n) {
-        kept_indices.insert(i);
-    }
+    kept_indices.extend(0..first_n.min(n));
     let last_start = n.saturating_sub(last_n);
-    for i in last_start..n {
-        kept_indices.insert(i);
-    }
+    kept_indices.extend(last_start..n);
     for (i, item) in arr.iter().enumerate() {
         if item_has_error_token(item) {
             kept_indices.insert(i);
@@ -262,9 +258,11 @@ fn try_lossy(arr: &[Value]) -> Option<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut kept_items: Vec<Value> = Vec::new();
     for &i in &kept_indices {
-        let serialized = arr[i].to_string();
-        if seen.insert(serialized) {
-            kept_items.push(arr[i].to_owned());
+        if let Some(item) = arr.get(i) {
+            let serialized = item.to_string();
+            if seen.insert(serialized) {
+                kept_items.push(item.to_owned());
+            }
         }
     }
 

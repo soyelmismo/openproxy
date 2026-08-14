@@ -57,12 +57,11 @@ pub(crate) async fn run_race(
     let (race_sink, worker_tokens) =
         crate::race_sink::RaceSink::new(original_tx, num_workers as usize);
 
-    #[allow(clippy::needless_range_loop)]
-    for worker_idx in 0..num_workers as usize {
+    for (worker_idx, token) in worker_tokens.iter().enumerate() {
         let mut req = req.clone();
         let handle = race_sink.handle(worker_idx);
         req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
-        req.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(&worker_tokens[worker_idx]));
+        req.race_cancel = Some(openproxy_adapters::upstream::CancellationToken::clone(token));
 
         let combo = combo.clone();
         let p = pipeline.clone();

@@ -976,15 +976,15 @@ fn minimax_tool_result_then_user_merges_into_single_user_message() {
     );
 
     // CRITICAL: verify NO two consecutive messages have the same role.
-    for i in 1..out.messages.len() {
+    for (i, window) in out.messages.windows(2).enumerate() {
         assert_ne!(
-            out.messages[i].role,
-            out.messages[i - 1].role,
+            window[1].role,
+            window[0].role,
             "consecutive messages [{}] and [{}] both have role '{}' — \
                  Anthropic/MiniMax rejects this with (2013)",
-            i - 1,
             i,
-            out.messages[i].role
+            i + 1,
+            window[1].role
         );
     }
 

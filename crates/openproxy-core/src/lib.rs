@@ -1,6 +1,5 @@
 #![allow(
     clippy::too_many_arguments,
-    clippy::needless_range_loop,
     clippy::ptr_arg
 )]
 #![allow(

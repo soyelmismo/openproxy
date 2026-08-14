@@ -84,12 +84,9 @@ fn normalize_message_whitespace(s: &str) -> String {
 /// 3+ newline run OR any line with trailing whitespace (space/tab before
 /// a newline or end-of-string). Single pass, no allocation.
 fn needs_normalization(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    let mut i = 0;
     let mut newline_run = 0;
     let mut line_has_trailing_ws = false;
-    while i < bytes.len() {
-        let b = bytes[i];
+    for &b in s.as_bytes() {
         if b == b'\n' {
             if line_has_trailing_ws {
                 return true;
@@ -107,7 +104,6 @@ fn needs_normalization(s: &str) -> bool {
             // it in the newline-run branch above).
             line_has_trailing_ws = b == b' ' || b == b'\t';
         }
-        i += 1;
     }
     // Check trailing whitespace on the last line (no newline at EOF).
     line_has_trailing_ws

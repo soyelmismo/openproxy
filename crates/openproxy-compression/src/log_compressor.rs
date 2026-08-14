@@ -136,11 +136,13 @@ fn compress_log_content(text: &str) -> Option<String> {
     }
     let mut first = true;
     for &idx in &selected {
-        if !first {
-            out.push('\n');
+        if let Some(line) = lines.get(idx) {
+            if !first {
+                out.push('\n');
+            }
+            out.push_str(line);
+            first = false;
         }
-        out.push_str(lines[idx]);
-        first = false;
     }
     Some(out)
 }
@@ -317,8 +319,8 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
 
     // 1. Errors + context.
     let mut error_count = 0;
-    for i in 0..n {
-        if kinds[i] == LineKind::Error {
+    for (i, kind) in kinds.iter().enumerate() {
+        if *kind == LineKind::Error {
             if error_count >= MAX_ERRORS {
                 continue;
             }
@@ -357,9 +359,9 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
     // 3. Warnings (top MAX_WARNINGS, deduped).
     let mut warning_seen: HashSet<String> = HashSet::new();
     let mut warnings_kept = 0;
-    for i in 0..n {
-        if kinds[i] == LineKind::Warning && warnings_kept < MAX_WARNINGS {
-            let key = dedup_key(lines[i]);
+    for (i, (kind, line)) in kinds.iter().zip(lines.iter()).enumerate() {
+        if *kind == LineKind::Warning && warnings_kept < MAX_WARNINGS {
+            let key = dedup_key(line);
             if warning_seen.insert(key) {
                 selected.insert(i);
                 warnings_kept += 1;
@@ -368,8 +370,8 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
     }
 
     // 4. All Summary + Header lines.
-    for i in 0..n {
-        if kinds[i] == LineKind::Summary || kinds[i] == LineKind::Header {
+    for (i, kind) in kinds.iter().enumerate() {
+        if *kind == LineKind::Summary || *kind == LineKind::Header {
             selected.insert(i);
         }
     }

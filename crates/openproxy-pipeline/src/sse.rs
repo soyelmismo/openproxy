@@ -2326,11 +2326,8 @@ impl SseParser {
 }
 
 pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
-    let mut i = 0;
-    while i < bytes.len() && bytes[i] == b' ' {
-        i += 1;
-    }
-    &bytes[i..]
+    let pos = bytes.iter().position(|&b| b != b' ').unwrap_or(bytes.len());
+    &bytes[pos..]
 }
 
 pub fn sse_payload_needs_parse(payload: &str) -> bool {

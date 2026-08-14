@@ -256,9 +256,9 @@ pub fn insert_many(
 
         sql.push_str(" RETURNING id, dedup_key");
 
-        for (i, row) in chunk.iter().enumerate() {
+        for (row, payload) in chunk.iter().zip(payload_strings.iter()) {
             params.push(Box::new(kind.to_string()) as Box<dyn rusqlite::ToSql>);
-            params.push(Box::new(payload_strings[i].to_owned()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(payload.to_owned()) as Box<dyn rusqlite::ToSql>);
             params.push(Box::new(row.1.to_owned()) as Box<dyn rusqlite::ToSql>);
             params.push(Box::new(row.2.to_owned()) as Box<dyn rusqlite::ToSql>);
         }

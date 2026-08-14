@@ -2365,16 +2365,16 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
         }
         let combo_id =
             combos::create_combo(&w, "adv-bug4", Strategy::Priority, 1).expect("create combo");
-        for (i, prio) in [10_i32, 20].iter().enumerate() {
+        for (&prio, &account_id) in [10_i32, 20].iter().zip(&account_ids) {
             combos::add_target(
                 &w,
                 AddTargetInput {
                     combo_id,
                     provider_id: ProviderId::new("adv-mock"),
-                    account_id: Some(account_ids[i]),
+                    account_id: Some(account_id),
                     model_row_id: Some(model_id),
                     sub_combo_id: None,
-                    priority_order: *prio as i64,
+                    priority_order: prio as i64,
                 },
             )
             .expect("add target");
