@@ -43,8 +43,10 @@
 //!
 //! [`GitDiff`]: ContentType::GitDiff
 
+use crate::visitor::mutate_message_text;
 use crate::{diff_compressor, log_compressor, smart_crusher};
 use once_cell::sync::Lazy;
+use openproxy_types::OpenAIMessage;
 use regex::Regex;
 use serde_json::Value;
 
@@ -167,6 +169,38 @@ pub fn route_content(content: &str) -> Option<(String, &'static str)> {
         ContentType::SourceCode => None,
         ContentType::PlainText => None,
     }
+}
+
+/// Content-shape routing: for each tool/assistant message, detect the
+/// content type and dispatch to the appropriate compressor (SmartCrusher
+/// for JSON arrays, LogCompressor for build logs, DiffCompressor for
+/// git diffs).
+pub fn apply_content_routing(messages: &mut [OpenAIMessage]) -> Vec<String> {
+    let mut techniques: Vec<String> = Vec::new();
+    for msg in messages.iter_mut() {
+        if msg.role != "tool" && msg.role != "assistant" {
+            continue;
+        }
+
+        let mut applied_tech = None;
+        let mutated = mutate_message_text(msg, |content_str| {
+            if content_str.len() < 500 {
+                return None;
+            }
+            if let Some((compressed, technique)) = route_content(content_str) {
+                if compressed.len() < content_str.len() {
+                    applied_tech = Some(technique.to_string());
+                    return Some(compressed);
+                }
+            }
+            None
+        });
+
+        if mutated && let Some(tech) = applied_tech {
+            techniques.push(tech);
+        }
+    }
+    techniques
 }
 
 // ─── Per-type detectors ────────────────────────────────────────────────────

@@ -15,23 +15,90 @@ use stats::CompressionStats;
 pub use openproxy_types::CompressionMode;
 use openproxy_types::OpenAIMessage;
 
+/// Trait for applying compression to a collection of messages.
+pub trait TextCompressor {
+    /// Compresses `messages` in-place and returns the list of technique identifiers applied.
+    fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String>;
+}
+
+pub struct LiteCompressor;
+impl TextCompressor for LiteCompressor {
+    fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
+        lite::apply_lite(messages)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+}
+
+pub struct RtkCompressor;
+impl TextCompressor for RtkCompressor {
+    fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
+        let mut techniques = content_router::apply_content_routing(messages);
+        techniques.extend(rtk::apply_rtk(messages));
+        techniques
+    }
+}
+
+pub struct LiteRtkCompressor;
+impl TextCompressor for LiteRtkCompressor {
+    fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
+        let mut techniques = lite::apply_lite(messages)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        techniques.extend(content_router::apply_content_routing(messages));
+        techniques.extend(rtk::apply_rtk(messages));
+        techniques
+    }
+}
+
+impl TextCompressor for CompressionMode {
+    fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
+        match self {
+            CompressionMode::Off => Vec::new(),
+            CompressionMode::Lite => LiteCompressor.compress(messages),
+            CompressionMode::Rtk => RtkCompressor.compress(messages),
+            CompressionMode::LiteRtk => LiteRtkCompressor.compress(messages),
+        }
+    }
+}
+
+/// Helper that measures character and token counts before and after running a `TextCompressor`,
+/// returning unified `CompressionStats`.
+pub fn measure_compression<C: TextCompressor>(
+    messages: &mut Vec<OpenAIMessage>,
+    compressor: C,
+) -> CompressionStats {
+    let original_chars = count_content_chars(messages);
+    let original_tokens =
+        openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
+
+    let techniques = compressor.compress(messages);
+
+    let compressed_chars = count_content_chars(messages);
+    let compressed_tokens =
+        openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
+
+    CompressionStats::new(
+        original_chars,
+        compressed_chars,
+        original_tokens,
+        compressed_tokens,
+        techniques,
+    )
+}
+
 /// Aplica compresión a los mensajes del request según el modo.
 ///
 /// Modifica `messages` in-place y retorna estadísticas de la compresión.
 /// Retorna true si la compresión aplicaría algún cambio. Evita clonación profunda.
 pub fn would_compress(messages: &[OpenAIMessage], mode: CompressionMode) -> bool {
-    // Para simplificar, asumimos que RTK siempre podría comprimir si hay logs,
-    // y Lite si hay espacios en blanco, etc.
-    // Una implementación completa verificaría sin mutar, pero por ahora
-    // delegamos a una validación rápida. Si el modo no es Off, asumimos true
-    // si el contenido es grande.
     match mode {
         CompressionMode::Off => false,
         _ => {
-            // Implementación simplificada: evitar clonación si los mensajes son pequeños
-            // o si no contienen patrones de compresión conocidos.
             let chars = count_content_chars(messages);
-            chars > 1000 // Sólo clonar e intentar comprimir si hay más de 1000 caracteres.
+            chars > 1000
         }
     }
 }
@@ -40,119 +107,15 @@ pub fn apply_compression(
     messages: &mut Vec<OpenAIMessage>,
     mode: CompressionMode,
 ) -> CompressionStats {
-    match mode {
-        CompressionMode::Off => CompressionStats::empty(),
-        CompressionMode::Lite => {
-            let original_chars = count_content_chars(messages);
-            let original_tokens =
-                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            // Lite mode is 100% strictly lossless (whitespace normalization, dedup system, dedup identical text).
-            // Zero tool truncation, zero image stripping, zero content crushing.
-            let techniques = lite::apply_lite(messages)
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>();
-            let compressed_chars = count_content_chars(messages);
-            let compressed_tokens =
-                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            CompressionStats::new(
-                original_chars,
-                compressed_chars,
-                original_tokens,
-                compressed_tokens,
-                techniques,
-            )
-        }
-        CompressionMode::Rtk => {
-            let original_chars = count_content_chars(messages);
-            let original_tokens =
-                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            let mut techniques = apply_content_routing(messages);
-            techniques.extend(rtk::apply_rtk(messages));
-            let compressed_chars = count_content_chars(messages);
-            let compressed_tokens =
-                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            CompressionStats::new(
-                original_chars,
-                compressed_chars,
-                original_tokens,
-                compressed_tokens,
-                techniques,
-            )
-        }
-        CompressionMode::LiteRtk => {
-            let original_chars = count_content_chars(messages);
-            let original_tokens =
-                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            // Lossless lite normalization first, then smart content routing, then rtk command filters.
-            let mut techniques = lite::apply_lite(messages)
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>();
-            techniques.extend(apply_content_routing(messages));
-            techniques.extend(rtk::apply_rtk(messages));
-            let compressed_chars = count_content_chars(messages);
-            let compressed_tokens =
-                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
-            CompressionStats::new(
-                original_chars,
-                compressed_chars,
-                original_tokens,
-                compressed_tokens,
-                techniques,
-            )
-        }
+    if mode == CompressionMode::Off {
+        return CompressionStats::empty();
     }
-}
-
-/// Content-shape routing: for each tool/assistant message, detect the
-/// content type and dispatch to the appropriate compressor (SmartCrusher
-/// for JSON arrays, LogCompressor for build logs, DiffCompressor for
-/// git diffs). Runs BEFORE lite's basic normalization so the smart
-/// compressors see the full content. Lite's `compress_tool_results`
-/// truncation then acts as a fallback for anything the router couldn't
-/// handle (or that's still too large after smart compression).
-///
-/// This is called by `apply_compression` for both `Lite` and `LiteRtk`
-/// modes. It operates on `role == "tool"` and `role == "assistant"`
-/// messages whose content is a plain string (not array-of-parts).
-fn apply_content_routing(messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
-    let mut techniques: Vec<String> = Vec::new();
-    for msg in messages.iter_mut() {
-        // Only route tool results and assistant messages — user/system
-        // messages are the operator's intent and must not be compressed
-        // by the content router.
-        if msg.role != "tool" && msg.role != "assistant" {
-            continue;
-        }
-        // Only route string content (not array-of-parts with images/etc).
-        let content_str = match msg.content.as_ref().and_then(|c| c.as_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        // Skip tiny content — not worth the detection overhead.
-        if content_str.len() < 500 {
-            continue;
-        }
-        // Route to the appropriate compressor based on content shape.
-        if let Some((compressed, technique)) = content_router::route_content(content_str) {
-            // Safety: only apply if the compressor actually reduced the size.
-            if compressed.len() < content_str.len() {
-                msg.content = Some(serde_json::Value::String(compressed));
-                techniques.push(technique.to_string());
-            }
-        }
-    }
-    techniques
+    measure_compression(messages, mode)
 }
 
 /// Cuenta chars totales del contenido textual de los mensajes.
 fn count_content_chars(msgs: &[OpenAIMessage]) -> usize {
-    msgs.iter()
-        .filter_map(|m| m.content.as_ref())
-        .filter_map(|c| c.as_str())
-        .map(|s| s.len())
-        .sum()
+    msgs.iter().map(|m| m.extract_text().len()).sum()
 }
 
 #[cfg(test)]

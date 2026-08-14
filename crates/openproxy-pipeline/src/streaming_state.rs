@@ -3,6 +3,7 @@ use crate::race_sink::StreamSink;
 use crate::sse::AnthropicToolUseAccumulator;
 use crate::sse::SseParser;
 use crate::sse_accumulator::ResponseAccumulator;
+use crate::streaming::{StreamAction, StreamingChunkStage};
 use crate::think_extractor::ThinkStreamExtractor;
 use crate::{PipelineRequest, PipelineResult, SSE_DONE_BYTES};
 use openproxy_types::combos::{Combo, ComboTarget};
@@ -17,13 +18,13 @@ use crate::translation::OpenAIUsage;
 const MAX_TOOL_CALL_ARGS_BYTES: usize = 1_048_576; // 1 MiB
 
 #[derive(Default)]
-pub(crate) struct ToolCallAccumulator {
+pub struct ToolCallAccumulator {
     /// Map of tool_call index → running total of arguments seen so far.
     args_by_index: std::collections::HashMap<u64, String>,
 }
 
 impl ToolCallAccumulator {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -32,7 +33,7 @@ impl ToolCallAccumulator {
     /// running total). If the upstream already sends fragments (the
     /// correct behavior), this is a no-op — the fragment is returned
     /// as-is and the running total is updated.
-    pub(crate) fn process(&mut self, index: u64, arguments: &str) -> String {
+    pub fn process(&mut self, index: u64, arguments: &str) -> String {
         let prev = self.args_by_index.entry(index).or_default();
         if prev.is_empty() {
             // First chunk for this index — the arguments IS the
@@ -170,14 +171,49 @@ pub(crate) fn apply_reasoning_normalizations(
     normalized
 }
 
+/// Modular streaming stage that normalizes non-standard reasoning fields,
+/// extracts `<think>` blocks into `reasoning_content`, and normalizes tool call arguments.
+#[derive(Default)]
+pub struct ReasoningNormalizer {
+    pub think_extractor: ThinkStreamExtractor,
+    pub tool_call_acc: ToolCallAccumulator,
+}
+
+impl ReasoningNormalizer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl StreamingChunkStage for ReasoningNormalizer {
+    fn process_chunk(&mut self, payload: &str) -> StreamAction {
+        match apply_reasoning_normalizations(
+            payload,
+            &mut self.think_extractor,
+            &mut self.tool_call_acc,
+        ) {
+            Some(modified) => StreamAction::Mutate(modified),
+            None => StreamAction::Passthrough,
+        }
+    }
+
+    fn finalize(&mut self) -> Option<String> {
+        let (clean_content, _) = self.think_extractor.flush();
+        if !clean_content.is_empty() {
+            Some(clean_content)
+        } else {
+            None
+        }
+    }
+}
+
 pub(crate) struct StreamingState {
     pub sse_parser: SseParser,
     pub usage: Option<OpenAIUsage>,
     pub ttft_ms: Option<u64>,
     pub stop_reason: Option<String>,
     pub first_chunk_time: Instant,
-    pub think_extractor: ThinkStreamExtractor,
-    pub tool_call_acc: ToolCallAccumulator,
+    pub normalizer: ReasoningNormalizer,
     pub tool_use_acc: Option<AnthropicToolUseAccumulator>,
     pub tool_call_index_counter: u32,
     pub current_event_type: Option<String>,
@@ -220,8 +256,7 @@ impl StreamingState {
             ttft_ms: None,
             stop_reason: None,
             first_chunk_time: Instant::now(),
-            think_extractor: ThinkStreamExtractor::new(),
-            tool_call_acc: ToolCallAccumulator::new(),
+            normalizer: ReasoningNormalizer::new(),
             tool_use_acc: None,
             tool_call_index_counter: 0,
             current_event_type: None,
@@ -608,18 +643,11 @@ impl<'a> ChunkProcessor<'a> {
                     // reasoning panel via the `reasoning` field,
                     // once in the visible response via the
                     // `<think>` tags).
-                    let effective_payload = apply_reasoning_normalizations(
-                        json_payload,
-                        &mut state.think_extractor,
-                        &mut state.tool_call_acc,
-                    );
+                    let effective_payload = match state.normalizer.process_chunk(json_payload) {
+                        StreamAction::Mutate(s) => Some(s),
+                        _ => None,
+                    };
                     let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
-                    // G1 fix: feed the accumulator so the
-                    // persisted `response_body_json` carries
-                    // the full assistant message. Slow path:
-                    // we have a parsed chunk in hand, so push
-                    // the per-chunk metadata + (normalized)
-                    // payload.
                     if let Some(a) = state.acc.as_mut() {
                         if let Some(u) = &state.usage {
                             a.set_usage(u.to_owned());
@@ -627,34 +655,7 @@ impl<'a> ChunkProcessor<'a> {
                         if let Some(sr) = &state.stop_reason {
                             a.set_stop_reason(sr);
                         }
-                        a.append_openai_raw(payload_str);
-                        // Extract reasoning_content from the
-                        // (possibly normalized) payload and
-                        // feed it to the accumulator. We do
-                        // this instead of using
-                        // `chunk.delta_reasoning` because:
-                        //   - `chunk.delta_reasoning` only
-                        //     catches `reasoning_content`
-                        //     from the raw upstream payload,
-                        //     missing upstream `reasoning`
-                        //     (which we just normalized) and
-                        //     `<think>` tags (which we just
-                        //     extracted to reasoning_content).
-                        //   - `payload_str` is the source of
-                        //     truth after normalization.
-                        if payload_str.contains("\"reasoning_content\"")
-                            && let Some(rc) =
-                                crate::sse_accumulator::extract_reasoning_content(payload_str)
-                            && !rc.is_empty()
-                        {
-                            a.append_reasoning(rc);
-                        }
-                        // Drop `chunk.delta_reasoning` — we
-                        // extracted reasoning from the
-                        // normalized payload above. Using
-                        // both would double-count when the
-                        // upstream sent `reasoning_content`
-                        // natively.
+                        a.process_chunk(payload_str);
                         let _ = chunk.delta_reasoning.take();
                     }
                     // Build the SSE frame from the
@@ -776,52 +777,15 @@ impl<'a> ChunkProcessor<'a> {
             // up to 16 KiB above. Even on the rare case where it
             // does realloc, the cost is amortized across the
             // buffer's lifetime, not per chunk.
-            let effective_payload = apply_reasoning_normalizations(
-                json_payload,
-                &mut state.think_extractor,
-                &mut state.tool_call_acc,
-            );
+            let effective_payload = match state.normalizer.process_chunk(json_payload) {
+                StreamAction::Mutate(s) => Some(s),
+                _ => None,
+            };
 
-            // Accumulator work — scoped so the borrows on
-            // `line_bytes` (via `line` -> `json_payload`) are
-            // released before we move `line_bytes` for the
-            // in-place reframe below. NLL releases the borrow at
-            // the end of this block.
-            //
-            // IMPORTANT: feed the accumulator from
-            // `effective_payload` (the post-normalization
-            // payload), NOT from `json_payload` (the raw
-            // upstream payload). Previously this block fed
-            // `normalized` (which only applied the
-            // `reasoning` → `reasoning_content` rename) and
-            // then computed `effective_payload` (which also
-            // applied `<think>` extraction) but only used
-            // `effective_payload` for the outgoing SSE frame
-            // — so the persisted `response_body_json` had
-            // raw `<think>` tags in `content` while the
-            // client saw the cleaned version. Using
-            // `effective_payload` for both paths makes the
-            // persisted body match the client-visible body.
             {
                 let payload = effective_payload.as_deref().unwrap_or(json_payload);
                 if let Some(a) = state.acc.as_mut() {
-                    a.append_openai_raw(payload);
-                    // PERF (single-scan guard): gate the
-                    // `extract_reasoning_content` call (which does
-                    // a full `memchr::memmem::find` scan for
-                    // `"reasoning_content":"`) behind a cheaper
-                    // `contains("\"reasoning_content\"")` check.
-                    // Most streaming chunks (content deltas,
-                    // role-only, finish, etc.) do NOT carry this
-                    // field, so this saves one full-payload scan
-                    // per chunk on the recording path. The guard
-                    // itself short-circuits on first non-match.
-                    if payload.contains("\"reasoning_content\"")
-                        && let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload)
-                        && !rc.is_empty()
-                    {
-                        a.append_reasoning(rc);
-                    }
+                    a.process_chunk(payload);
                 }
             }
 
@@ -1225,5 +1189,41 @@ impl<'a> ChunkProcessor<'a> {
 
         // Fallback catch-all for unknown formats or unhandled branches
         Ok(crate::streaming::ChunkEvent::Skip)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reasoning_normalizer_stage_mutates_think_tags() {
+        let mut normalizer = ReasoningNormalizer::new();
+        let payload = r#"{"choices":[{"delta":{"content":"<think>reasoning</think>answer"}}]}"#;
+        let action = normalizer.process_chunk(payload);
+        match action {
+            StreamAction::Mutate(mutated) => {
+                assert!(mutated.contains("\"reasoning_content\":\"reasoning\""));
+                assert!(mutated.contains("\"content\":\"answer\""));
+            }
+            other => panic!("expected StreamAction::Mutate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_reasoning_normalizer_stage_passthrough_clean_chunk() {
+        let mut normalizer = ReasoningNormalizer::new();
+        let payload = r#"{"choices":[{"delta":{"content":"clean chunk"}}]}"#;
+        let action = normalizer.process_chunk(payload);
+        assert_eq!(action, StreamAction::Passthrough);
+    }
+
+    #[test]
+    fn test_tool_call_accumulator_handles_fragments() {
+        let mut acc = ToolCallAccumulator::new();
+        let f1 = acc.process(0, "{\"location\":");
+        assert_eq!(f1, "{\"location\":");
+        let f2 = acc.process(0, " \"Paris\"}");
+        assert_eq!(f2, " \"Paris\"}");
     }
 }

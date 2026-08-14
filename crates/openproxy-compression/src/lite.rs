@@ -1,8 +1,8 @@
 /// 5 técnicas deterministas de compresión ligera (zero semantic change).
 ///
 /// Cada técnica opera sobre `Vec<OpenAIMessage>` y reporta si aplicó cambios.
+use crate::visitor::mutate_message_text;
 use openproxy_types::OpenAIMessage;
-use serde_json::Value;
 
 type Messages = Vec<OpenAIMessage>;
 
@@ -11,25 +11,15 @@ type Messages = Vec<OpenAIMessage>;
 pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let normalized = normalize_message_whitespace(text);
-                if normalized != text {
-                    *content = Value::String(normalized);
-                    applied.push("lite::collapse_whitespace");
-                }
-            } else if let Some(parts) = content.as_array_mut() {
-                for part in parts.iter_mut() {
-                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                        let normalized = normalize_message_whitespace(text);
-                        if normalized != text {
-                            part.as_object_mut()
-                                .and_then(|o| o.insert("text".into(), Value::String(normalized)));
-                            applied.push("lite::collapse_whitespace");
-                        }
-                    }
-                }
+        if mutate_message_text(msg, |text| {
+            let normalized = normalize_message_whitespace(text);
+            if normalized != text {
+                Some(normalized)
+            } else {
+                None
             }
+        }) {
+            applied.push("lite::collapse_whitespace");
         }
     }
     applied
@@ -163,19 +153,18 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
         if msg.role != "tool" {
             continue;
         }
-        if let Some(ref mut content) = msg.content
-            && let Some(text) = content.as_str()
-            && text.len() > MAX_TOOL_CHARS
-        {
-            // Find the byte offset of the char at position MAX_TOOL_CHARS,
-            // so we don't slice in the middle of a multi-byte UTF-8 sequence.
-            let cut = text
-                .char_indices()
-                .nth(MAX_TOOL_CHARS)
-                .map(|(i, _)| i)
-                .unwrap_or(text.len());
-            let truncated = format!("{}…[truncated {} chars]", &text[..cut], text.len() - cut);
-            *content = Value::String(truncated);
+        if mutate_message_text(msg, |text| {
+            if text.len() > MAX_TOOL_CHARS {
+                let cut = text
+                    .char_indices()
+                    .nth(MAX_TOOL_CHARS)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len());
+                Some(format!("{}…[truncated {} chars]", &text[..cut], text.len() - cut))
+            } else {
+                None
+            }
+        }) {
             applied.push("lite::compress_tool_results");
         }
     }
@@ -267,29 +256,29 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.contains('\u{200B}')
-                    || text.contains('\u{200C}')
-                    || text.contains('\u{200D}')
-                    || text.contains('\u{FEFF}')
-                    || text.contains('\0')
-                    || text.contains('\r')
-                {
-                    let cleaned: String = text
-                        .replace("\r\n", "\n")
-                        .replace('\r', "\n")
-                        .replace('\u{200B}', "")
-                        .replace('\u{200C}', "")
-                        .replace('\u{200D}', "")
-                        .replace('\u{FEFF}', "")
-                        .replace('\0', "");
-                    if cleaned != text {
-                        *content = Value::String(cleaned);
-                        applied.push("lite::clean_unicode");
-                    }
+        if mutate_message_text(msg, |text| {
+            if text.contains('\u{200B}')
+                || text.contains('\u{200C}')
+                || text.contains('\u{200D}')
+                || text.contains('\u{FEFF}')
+                || text.contains('\0')
+                || text.contains('\r')
+            {
+                let cleaned = text
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .replace('\u{200B}', "")
+                    .replace('\u{200C}', "")
+                    .replace('\u{200D}', "")
+                    .replace('\u{FEFF}', "")
+                    .replace('\0', "");
+                if cleaned != text {
+                    return Some(cleaned);
                 }
             }
+            None
+        }) {
+            applied.push("lite::clean_unicode");
         }
     }
     applied
@@ -300,16 +289,16 @@ pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn strip_ansi_escapes(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.contains('\x1b') {
-                    let stripped = strip_ansi_string(text);
-                    if stripped != text {
-                        *content = Value::String(stripped);
-                        applied.push("lite::strip_ansi");
-                    }
+        if mutate_message_text(msg, |text| {
+            if text.contains('\x1b') {
+                let stripped = strip_ansi_string(text);
+                if stripped != text {
+                    return Some(stripped);
                 }
             }
+            None
+        }) {
+            applied.push("lite::strip_ansi");
         }
     }
     applied
@@ -345,23 +334,23 @@ fn strip_ansi_string(text: &str) -> String {
 pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let trimmed = text.trim();
-                if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-                    || (trimmed.starts_with('[') && trimmed.ends_with(']'))
-                {
-                    if trimmed.contains('\n') || trimmed.contains("  ") {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                            let minified = val.to_string();
-                            if minified.len() < text.len() {
-                                *content = Value::String(minified);
-                                applied.push("lite::compact_json");
-                            }
+        if mutate_message_text(msg, |text| {
+            let trimmed = text.trim();
+            if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+            {
+                if trimmed.contains('\n') || trimmed.contains("  ") {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        let minified = val.to_string();
+                        if minified.len() < text.len() {
+                            return Some(minified);
                         }
                     }
                 }
             }
+            None
+        }) {
+            applied.push("lite::compact_json");
         }
     }
     applied
@@ -372,14 +361,15 @@ pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                let collapsed = collapse_separator_runs(text);
-                if collapsed != text {
-                    *content = Value::String(collapsed);
-                    applied.push("lite::collapse_separators");
-                }
+        if mutate_message_text(msg, |text| {
+            let collapsed = collapse_separator_runs(text);
+            if collapsed != text {
+                Some(collapsed)
+            } else {
+                None
             }
+        }) {
+            applied.push("lite::collapse_separators");
         }
     }
     applied
@@ -469,7 +459,7 @@ pub fn apply_lite(msgs: &mut Messages) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn msg(role: &str, content: &str) -> OpenAIMessage {
         OpenAIMessage {

@@ -7,6 +7,7 @@ pub mod command_detector;
 pub mod line_filter;
 pub mod smart_truncate;
 
+use crate::visitor::mutate_message_text;
 use line_filter::{apply_line_filter, get_builtin_filter, get_generic_filter};
 use openproxy_types::OpenAIMessage;
 
@@ -27,36 +28,39 @@ pub fn apply_rtk(msgs: &mut [OpenAIMessage]) -> Vec<String> {
             continue;
         }
 
-        let content_str = match msg.content.as_ref().and_then(|c| c.as_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-
-        if content_str.trim().is_empty() || content_str.len() < 20 {
-            continue;
-        }
-
-        // Detectar comando
-        let detection = command_detector::detect(&content_str);
-
-        // Seleccionar filtro
-        if detection.id != "unknown"
-            && let Some(filter) = get_builtin_filter(&detection.id)
-        {
-            let (filtered, rules) = apply_line_filter(&content_str, &filter);
-            if filtered != content_str {
-                msg.content = Some(serde_json::Value::String(filtered));
-                all_techniques.extend(rules.into_iter().map(String::from));
-                continue; // ya aplicamos filtro específico, no aplicar el genérico
+        let mut msg_techniques = Vec::new();
+        let mutated = mutate_message_text(msg, |content_str| {
+            if content_str.trim().is_empty() || content_str.len() < 20 {
+                return None;
             }
-        }
 
-        // Fallback: filtro genérico (strip ANSI + dedup + truncate)
-        let generic = get_generic_filter();
-        let (filtered, rules) = apply_line_filter(&content_str, &generic);
-        if filtered != content_str {
-            msg.content = Some(serde_json::Value::String(filtered));
-            all_techniques.extend(rules.into_iter().map(String::from));
+            // Detectar comando
+            let detection = command_detector::detect(content_str);
+
+            // Seleccionar filtro
+            if detection.id != "unknown"
+                && let Some(filter) = get_builtin_filter(&detection.id)
+            {
+                let (filtered, rules) = apply_line_filter(content_str, &filter);
+                if filtered != content_str {
+                    msg_techniques.extend(rules.into_iter().map(String::from));
+                    return Some(filtered);
+                }
+            }
+
+            // Fallback: filtro genérico (strip ANSI + dedup + truncate)
+            let generic = get_generic_filter();
+            let (filtered, rules) = apply_line_filter(content_str, &generic);
+            if filtered != content_str {
+                msg_techniques.extend(rules.into_iter().map(String::from));
+                return Some(filtered);
+            }
+
+            None
+        });
+
+        if mutated {
+            all_techniques.extend(msg_techniques);
         }
     }
 

@@ -7,6 +7,8 @@ pub use pipeline::{
 };
 pub mod race_sink;
 pub use race_sink::{StreamSink, StreamSinkError};
+pub use streaming::{StreamAction, StreamingChunkStage, StreamingStagePipeline};
+pub use streaming_state::ReasoningNormalizer;
 
 // Crate modules
 pub mod circuit_breaker;

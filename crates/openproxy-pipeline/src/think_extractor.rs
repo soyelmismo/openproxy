@@ -340,6 +340,29 @@ impl ThinkStreamExtractor {
             (buffered, String::new())
         }
     }
+}
+
+impl crate::streaming::StreamingChunkStage for ThinkStreamExtractor {
+    fn process_chunk(&mut self, payload: &str) -> crate::streaming::StreamAction {
+        let (clean, reasoning) = self.process(payload);
+        if clean != payload || !reasoning.is_empty() {
+            crate::streaming::StreamAction::Mutate(clean)
+        } else {
+            crate::streaming::StreamAction::Passthrough
+        }
+    }
+
+    fn finalize(&mut self) -> Option<String> {
+        let (clean, _) = self.flush();
+        if !clean.is_empty() {
+            Some(clean)
+        } else {
+            None
+        }
+    }
+}
+
+impl ThinkStreamExtractor {
 
     fn process_outside_think(&mut self, input: &str) -> (String, String) {
         let lower = input.to_ascii_lowercase();

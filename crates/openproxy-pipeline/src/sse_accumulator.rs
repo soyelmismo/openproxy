@@ -638,6 +638,19 @@ impl ResponseAccumulator {
     }
 }
 
+impl crate::streaming::StreamingChunkStage for ResponseAccumulator {
+    fn process_chunk(&mut self, payload: &str) -> crate::streaming::StreamAction {
+        self.append_openai_raw(payload);
+        if payload.contains("\"reasoning_content\"")
+            && let Some(rc) = extract_reasoning_content(payload)
+            && !rc.is_empty()
+        {
+            self.append_reasoning(rc);
+        }
+        crate::streaming::StreamAction::Passthrough
+    }
+}
+
 impl Default for ResponseAccumulator {
     fn default() -> Self {
         Self::new()
