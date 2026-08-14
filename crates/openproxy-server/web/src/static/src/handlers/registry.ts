@@ -54,7 +54,7 @@ import {
   refreshProvider, refreshAllProviders,
   showCreateProvider, closeCreateProvider, createProvider,
   confirmDeleteProvider, deleteProvider,
-  toggleProviderActive, renameProviderPrompt, bulkToggleModels,
+  toggleProviderActive, renameProviderPrompt, editProviderEndpointPrompt, bulkToggleModels,
   setHealth, refreshAccountQuota, refreshAllQuotas,
 } from "./provider-handlers.js";
 import { exportConfig } from "./config-handlers.js";
@@ -185,6 +185,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   deleteProvider,
   toggleProviderActive,   // (providerId, newActive)
   renameProviderPrompt,   // (providerId, currentName)
+  editProviderEndpointPrompt, // (providerId, currentBaseUrl)
   bulkToggleModels,       // (providerId, active)
 
   // Account health / quota (per-account actions exposed on the

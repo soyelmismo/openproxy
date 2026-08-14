@@ -313,6 +313,29 @@ export async function renameProviderPrompt(providerId: string, currentName: stri
   }
 }
 
+export async function editProviderEndpointPrompt(providerId: string, currentBaseUrl: string): Promise<void> {
+  const newUrl = prompt(`Edit endpoint (base URL) for provider "${providerId}":\n(e.g., https://api.openai.com/v1)`, currentBaseUrl);
+  if (newUrl == null) return; // cancel
+  const trimmed = newUrl.trim();
+  if (trimmed === "") {
+    showToast("Base URL cannot be empty", "error");
+    return;
+  }
+  if (trimmed === currentBaseUrl) return; // no-op
+
+  try {
+    await api("/providers/" + encodeURIComponent(providerId), {
+      method: "PATCH",
+      body: JSON.stringify({ base_url: trimmed }),
+    });
+    state.providers = await api("/providers") as typeof state.providers;
+    showToast("Provider endpoint updated", "success");
+    navigate();
+  } catch (err: unknown) {
+    showApiError(err, "Error");
+  }
+}
+
 // ===== Bulk toggle (enable/disable all non-custom models) =====
 
 export async function bulkToggleModels(providerId: string, active: boolean): Promise<void> {
