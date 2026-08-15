@@ -40,9 +40,7 @@
 
 ---
 
-<!-- PLACEHOLDER: Real-Time Telemetry & Charts -->
-<!-- Replace with telemetry screenshot, e.g. docs/images/live-charts.png -->
-> ![openproxy Real-Time Charts & Live Logs](docs/images/live-charts.png)
+![openproxy Real-Time Charts & Live Logs](docs/live-charts.png)
 
 ---
 
