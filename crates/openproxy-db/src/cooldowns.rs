@@ -108,23 +108,25 @@ pub fn is_provider_proxy_in_cooldown(
     provider_id: &str,
     proxy_id: &str,
 ) -> bool {
-    let res: rusqlite::Result<Option<String>> = conn
+    let Ok(Some(until_str)) = conn
         .query_row(
             "SELECT cooldown_until FROM provider_proxy_cooldowns \
              WHERE provider_id = ?1 AND proxy_id = ?2",
             rusqlite::params![provider_id, proxy_id],
-            |row| row.get(0),
+            |row| row.get::<_, String>(0),
         )
-        .optional();
+        .optional()
+    else {
+        return false;
+    };
 
-    if let Ok(Some(until_str)) = res {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&until_str) {
-            return chrono::Utc::now() < dt.with_timezone(&chrono::Utc);
-        }
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&until_str, "%Y-%m-%d %H:%M:%S") {
-            let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
-            return chrono::Utc::now() < dt;
-        }
+    let now = chrono::Utc::now();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&until_str) {
+        return now < dt.with_timezone(&chrono::Utc);
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&until_str, "%Y-%m-%d %H:%M:%S") {
+        let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
+        return now < dt;
     }
     false
 }

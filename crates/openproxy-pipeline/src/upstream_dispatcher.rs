@@ -165,6 +165,12 @@ impl UpstreamDispatcher {
                             .map(std::time::Duration::from_millis)
                             .unwrap_or_else(|| std::time::Duration::from_secs(15 * 60));
 
+                        // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
+                        // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
+                        if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
+                            let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
+                        }
+
                         let conn = conn_clone.lock();
                         // NEW-2 fix: proxy rotations triggered by rate-limit get dynamic cooldown
                         let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
@@ -173,11 +179,6 @@ impl UpstreamDispatcher {
                             bad_proxy_id,
                             cooldown_duration,
                         );
-                        // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
-                        // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
-                        if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
-                            let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
-                        }
                         let _ = openproxy_db::providers::update_current_proxy(
                             &conn,
                             &provider_id,
