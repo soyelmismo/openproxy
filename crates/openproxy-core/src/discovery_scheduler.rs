@@ -428,14 +428,9 @@ async fn run_one_tick(
     };
 
     let is_anonymous = matches!(p_row.auth_type, AuthType::None);
-    let Some((api_key, account_label)) = resolve_account_credentials(
-        db_pool,
-        &provider,
-        &accounts_list,
-        is_anonymous,
-        master_key,
-    )
-    .await
+    let Some((api_key, account_label)) =
+        resolve_account_credentials(db_pool, &provider, &accounts_list, is_anonymous, master_key)
+            .await
     else {
         return;
     };
@@ -476,7 +471,9 @@ async fn run_one_tick(
     if let Some(ref p) = provider_row
         && p.favicon_base64.is_none()
     {
-        let _ = providers::fetch_and_cache_favicon(db_pool, &provider, &p.base_url, upstream_client).await;
+        let _ =
+            providers::fetch_and_cache_favicon(db_pool, &provider, &p.base_url, upstream_client)
+                .await;
     }
 }
 
@@ -553,7 +550,8 @@ async fn resolve_account_credentials(
                     error = %e,
                     "discovery tick: failed to decrypt oauth access token; skipping cycle",
                 );
-                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string()).await;
+                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string())
+                    .await;
                 None
             }
         }
@@ -571,7 +569,8 @@ async fn resolve_account_credentials(
                     error = %e,
                     "discovery tick: failed to decrypt api key; skipping cycle",
                 );
-                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string()).await;
+                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string())
+                    .await;
                 None
             }
         }

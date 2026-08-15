@@ -466,9 +466,7 @@ pub fn store_oauth_tokens(
         email,
     } = params;
     let access_blob = master_key.encrypt(access_token)?;
-    let refresh_blob = refresh_token
-        .map(|rt| master_key.encrypt(rt))
-        .transpose()?;
+    let refresh_blob = refresh_token.map(|rt| master_key.encrypt(rt)).transpose()?;
 
     // Encrypt oauth_provider_specific with master_key (base64 for TEXT column).
     let provider_specific_encrypted = provider_specific

@@ -316,7 +316,13 @@ pub(crate) async fn run_provider_refresh(
         if let Some(p) = p_opt
             && p.favicon_base64.is_none()
         {
-            let _ = core_providers::fetch_and_cache_favicon(&pool_clone, &pid_clone, &p.base_url, &upstream_clone).await;
+            let _ = core_providers::fetch_and_cache_favicon(
+                &pool_clone,
+                &pid_clone,
+                &p.base_url,
+                &upstream_clone,
+            )
+            .await;
         }
     });
 

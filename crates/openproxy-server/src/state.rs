@@ -862,8 +862,8 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
 
     let sync_pool = Arc::clone(&db_pool);
     let sync_upstream = Arc::clone(&upstream_client);
-    let models_dev_enabled = std::env::var("MODELS_DEV_SYNC_ENABLED")
-        .is_ok_and(|v| v == "1" || v == "true");
+    let models_dev_enabled =
+        std::env::var("MODELS_DEV_SYNC_ENABLED").is_ok_and(|v| v == "1" || v == "true");
     if models_dev_enabled {
         let interval_secs: u64 = std::env::var("MODELS_DEV_SYNC_INTERVAL_SECS")
             .ok()
@@ -965,10 +965,8 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
 fn prune_usage_and_dead_proxies(prune_pool: &openproxy_db::DbPool, retention_days: u32) {
     let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
     if retention_secs > 0 {
-        let _ = openproxy_core::usage::prune_expired_usage_rows(
-            &prune_pool.writer(),
-            retention_secs,
-        );
+        let _ =
+            openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
     }
     let _ = prune_pool
         .writer()

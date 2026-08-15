@@ -135,9 +135,10 @@ impl PipelineStage for FormattingStage {
             .find(|a| a.id() == &current.target.provider_id)
         else {
             let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
-            let combo = ctx.combo.as_ref().ok_or_else(|| {
-                CoreError::Internal("missing combo in pipeline context".into())
-            })?;
+            let combo = ctx
+                .combo
+                .as_ref()
+                .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
             return Ok(ctx.pipeline.record_and_fail(
                 ctx.req.clone(),
                 combo,

@@ -349,7 +349,9 @@ impl KiroAdapter {
                                                 p.get("arn")
                                                     .or_else(|| p.get("profileArn"))
                                                     .and_then(|v| v.as_str())
-                                                    .is_some_and(|s| s.contains(&format!(":{region}:")))
+                                                    .is_some_and(|s| {
+                                                        s.contains(&format!(":{region}:"))
+                                                    })
                                             })
                                             .or_else(|| arr.first())
                                     })

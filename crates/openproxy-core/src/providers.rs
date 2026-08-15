@@ -247,7 +247,9 @@ pub async fn fetch_favicon_data_uri(
         url: &str,
         mime: &str,
     ) -> Option<String> {
-        let bytes = openproxy_adapters::adapters::upstream_get_bytes(upstream_client, url, &[]).await.ok()?;
+        let bytes = openproxy_adapters::adapters::upstream_get_bytes(upstream_client, url, &[])
+            .await
+            .ok()?;
         if bytes.len() > 100 {
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -342,11 +344,7 @@ pub struct UpdateProviderParams<'a> {
 /// * `None` — column is not part of this update (no-op).
 /// * `Some(None)` — set the column to `NULL` (clears any existing keyword).
 /// * `Some(Some(s))` — set the column to the literal string `s`.
-pub fn update(
-    conn: &Connection,
-    id: &ProviderId,
-    params: UpdateProviderParams<'_>,
-) -> Result<()> {
+pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'_>) -> Result<()> {
     let UpdateProviderParams {
         name,
         base_url,

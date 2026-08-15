@@ -111,7 +111,10 @@ pub async fn serve_asset(uri: Uri) -> Response {
     // `strip_prefix("/admin/")` covers `/admin/dist/app.js` →
     // `dist/app.js`; the fallback handles `/admin` (no slash) by
     // returning the SPA shell.
-    let path = raw.strip_prefix("/admin").unwrap_or(raw).trim_start_matches('/');
+    let path = raw
+        .strip_prefix("/admin")
+        .unwrap_or(raw)
+        .trim_start_matches('/');
 
     if path.is_empty() || path.contains("..") {
         return index_html().await.into_response();

@@ -26,235 +26,236 @@ impl Default for Price {
     }
 }
 
-static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> = LazyLock::new(|| {
-    let mut table: HashMap<(&'static str, &'static str), Price> = HashMap::new();
+static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> =
+    LazyLock::new(|| {
+        let mut table: HashMap<(&'static str, &'static str), Price> = HashMap::new();
 
-    // OpenRouter
-    table.insert(
-        ("openrouter", "anthropic/claude-sonnet-4"),
-        Price {
-            input_per_1m: 3.0,
-            output_per_1m: 15.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "anthropic/claude-3-5-sonnet"),
-        Price {
-            input_per_1m: 3.0,
-            output_per_1m: 15.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "anthropic/claude-3-haiku"),
-        Price {
-            input_per_1m: 0.25,
-            output_per_1m: 1.25,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "openai/gpt-4o"),
-        Price {
-            input_per_1m: 2.5,
-            output_per_1m: 10.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "openai/gpt-4o-mini"),
-        Price {
-            input_per_1m: 0.15,
-            output_per_1m: 0.6,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "openai/gpt-4.1"),
-        Price {
-            input_per_1m: 2.0,
-            output_per_1m: 8.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "openai/gpt-4.1-mini"),
-        Price {
-            input_per_1m: 0.4,
-            output_per_1m: 1.6,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "google/gemini-2.5-pro"),
-        Price {
-            input_per_1m: 1.25,
-            output_per_1m: 10.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "google/gemini-2.5-flash"),
-        Price {
-            input_per_1m: 0.075,
-            output_per_1m: 0.30,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "meta-llama/llama-3.3-70b-instruct"),
-        Price {
-            input_per_1m: 0.59,
-            output_per_1m: 0.79,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "deepseek/deepseek-chat"),
-        Price {
-            input_per_1m: 0.14,
-            output_per_1m: 0.28,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "deepseek/deepseek-r1"),
-        Price {
-            input_per_1m: 0.55,
-            output_per_1m: 2.19,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "qwen/qwen-2.5-72b-instruct"),
-        Price {
-            input_per_1m: 0.23,
-            output_per_1m: 0.40,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "mistralai/mistral-large"),
-        Price {
-            input_per_1m: 2.0,
-            output_per_1m: 6.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("openrouter", "x-ai/grok-2"),
-        Price {
-            input_per_1m: 2.0,
-            output_per_1m: 10.0,
-            ..Default::default()
-        },
-    );
+        // OpenRouter
+        table.insert(
+            ("openrouter", "anthropic/claude-sonnet-4"),
+            Price {
+                input_per_1m: 3.0,
+                output_per_1m: 15.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "anthropic/claude-3-5-sonnet"),
+            Price {
+                input_per_1m: 3.0,
+                output_per_1m: 15.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "anthropic/claude-3-haiku"),
+            Price {
+                input_per_1m: 0.25,
+                output_per_1m: 1.25,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "openai/gpt-4o"),
+            Price {
+                input_per_1m: 2.5,
+                output_per_1m: 10.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "openai/gpt-4o-mini"),
+            Price {
+                input_per_1m: 0.15,
+                output_per_1m: 0.6,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "openai/gpt-4.1"),
+            Price {
+                input_per_1m: 2.0,
+                output_per_1m: 8.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "openai/gpt-4.1-mini"),
+            Price {
+                input_per_1m: 0.4,
+                output_per_1m: 1.6,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "google/gemini-2.5-pro"),
+            Price {
+                input_per_1m: 1.25,
+                output_per_1m: 10.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "google/gemini-2.5-flash"),
+            Price {
+                input_per_1m: 0.075,
+                output_per_1m: 0.30,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "meta-llama/llama-3.3-70b-instruct"),
+            Price {
+                input_per_1m: 0.59,
+                output_per_1m: 0.79,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "deepseek/deepseek-chat"),
+            Price {
+                input_per_1m: 0.14,
+                output_per_1m: 0.28,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "deepseek/deepseek-r1"),
+            Price {
+                input_per_1m: 0.55,
+                output_per_1m: 2.19,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "qwen/qwen-2.5-72b-instruct"),
+            Price {
+                input_per_1m: 0.23,
+                output_per_1m: 0.40,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "mistralai/mistral-large"),
+            Price {
+                input_per_1m: 2.0,
+                output_per_1m: 6.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("openrouter", "x-ai/grok-2"),
+            Price {
+                input_per_1m: 2.0,
+                output_per_1m: 10.0,
+                ..Default::default()
+            },
+        );
 
-    // MiniMax
-    table.insert(
-        ("minimax", "minimax-m2.1"),
-        Price {
-            input_per_1m: 0.2,
-            output_per_1m: 0.2,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("minimax", "MiniMax-M2"),
-        Price {
-            input_per_1m: 0.2,
-            output_per_1m: 0.2,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("minimax", "MiniMax-M3"),
-        Price {
-            input_per_1m: 1.0,
-            output_per_1m: 1.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("nvidia-nim", "minimaxai/minimax-m3"),
-        Price {
-            input_per_1m: 1.0,
-            output_per_1m: 1.0,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("tokenrouter", "MiniMax-M3"),
-        Price {
-            input_per_1m: 1.0,
-            output_per_1m: 1.0,
-            ..Default::default()
-        },
-    );
+        // MiniMax
+        table.insert(
+            ("minimax", "minimax-m2.1"),
+            Price {
+                input_per_1m: 0.2,
+                output_per_1m: 0.2,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("minimax", "MiniMax-M2"),
+            Price {
+                input_per_1m: 0.2,
+                output_per_1m: 0.2,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("minimax", "MiniMax-M3"),
+            Price {
+                input_per_1m: 1.0,
+                output_per_1m: 1.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("nvidia-nim", "minimaxai/minimax-m3"),
+            Price {
+                input_per_1m: 1.0,
+                output_per_1m: 1.0,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("tokenrouter", "MiniMax-M3"),
+            Price {
+                input_per_1m: 1.0,
+                output_per_1m: 1.0,
+                ..Default::default()
+            },
+        );
 
-    // NVIDIA NIM
-    table.insert(
-        ("nvidia-nim", "meta/llama-3.3-70b-instruct"),
-        Price {
-            input_per_1m: 0.77,
-            output_per_1m: 0.77,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("nvidia-nim", "meta/llama-3.1-8b-instruct"),
-        Price {
-            input_per_1m: 0.18,
-            output_per_1m: 0.18,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"),
-        Price {
-            input_per_1m: 0.77,
-            output_per_1m: 0.77,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("nvidia-nim", "moonshotai/kimi-k2.6"),
-        Price {
-            input_per_1m: 0.60,
-            output_per_1m: 2.50,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("nvidia-nim", "z-ai/glm-5.1"),
-        Price {
-            input_per_1m: 0.14,
-            output_per_1m: 0.28,
-            ..Default::default()
-        },
-    );
-    table.insert(
-        ("nvidia-nim", "z-ai/glm-4.6"),
-        Price {
-            input_per_1m: 0.14,
-            output_per_1m: 0.28,
-            ..Default::default()
-        },
-    );
+        // NVIDIA NIM
+        table.insert(
+            ("nvidia-nim", "meta/llama-3.3-70b-instruct"),
+            Price {
+                input_per_1m: 0.77,
+                output_per_1m: 0.77,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("nvidia-nim", "meta/llama-3.1-8b-instruct"),
+            Price {
+                input_per_1m: 0.18,
+                output_per_1m: 0.18,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"),
+            Price {
+                input_per_1m: 0.77,
+                output_per_1m: 0.77,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("nvidia-nim", "moonshotai/kimi-k2.6"),
+            Price {
+                input_per_1m: 0.60,
+                output_per_1m: 2.50,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("nvidia-nim", "z-ai/glm-5.1"),
+            Price {
+                input_per_1m: 0.14,
+                output_per_1m: 0.28,
+                ..Default::default()
+            },
+        );
+        table.insert(
+            ("nvidia-nim", "z-ai/glm-4.6"),
+            Price {
+                input_per_1m: 0.14,
+                output_per_1m: 0.28,
+                ..Default::default()
+            },
+        );
 
-    // z.ai GLM
-    table.insert(
-        ("zenmux", "z-ai/glm-5.2"),
-        Price {
-            input_per_1m: 0.14,
-            output_per_1m: 0.28,
-            ..Default::default()
-        },
-    );
+        // z.ai GLM
+        table.insert(
+            ("zenmux", "z-ai/glm-5.2"),
+            Price {
+                input_per_1m: 0.14,
+                output_per_1m: 0.28,
+                ..Default::default()
+            },
+        );
 
-    table
-});
+        table
+    });
 
 pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     if let Some(price) = PRICING_TABLE.get(&(provider, model)) {

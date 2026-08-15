@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 // Re-export account-level OAuth helpers for convenience.
 pub use crate::accounts::{
-    decrypt_access_token, decrypt_refresh_token, list_expiring_oauth_accounts, store_oauth_tokens,
-    StoreOAuthTokensParams,
+    StoreOAuthTokensParams, decrypt_access_token, decrypt_refresh_token,
+    list_expiring_oauth_accounts, store_oauth_tokens,
 };
 
 pub(crate) fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
@@ -544,7 +544,8 @@ impl TokenRefreshCoordinator {
     }
 
     pub fn global() -> &'static Self {
-        static COORDINATOR: std::sync::OnceLock<TokenRefreshCoordinator> = std::sync::OnceLock::new();
+        static COORDINATOR: std::sync::OnceLock<TokenRefreshCoordinator> =
+            std::sync::OnceLock::new();
         COORDINATOR.get_or_init(TokenRefreshCoordinator::new)
     }
 
@@ -556,10 +557,7 @@ impl TokenRefreshCoordinator {
         )
     }
 
-    pub async fn refresh_and_store(
-        &self,
-        params: OAuthRefreshParams<'_>,
-    ) -> Result<TokenResponse> {
+    pub async fn refresh_and_store(&self, params: OAuthRefreshParams<'_>) -> Result<TokenResponse> {
         let OAuthRefreshParams {
             provider_id,
             provider,
@@ -595,7 +593,9 @@ impl TokenRefreshCoordinator {
                             token_type: &token.token_type,
                             expires_at: expires_at.as_deref(),
                             scope: token.scope.as_deref(),
-                            provider_specific: provider.provider_specific_from_token(&token).as_deref(),
+                            provider_specific: provider
+                                .provider_specific_from_token(&token)
+                                .as_deref(),
                             email: provider.email_from_token(&token).as_deref(),
                         },
                     )
@@ -624,7 +624,9 @@ impl TokenRefreshCoordinator {
                             token_type: &token.token_type,
                             expires_at: expires_at.as_deref(),
                             scope: token.scope.as_deref(),
-                            provider_specific: provider.provider_specific_from_token(&token).as_deref(),
+                            provider_specific: provider
+                                .provider_specific_from_token(&token)
+                                .as_deref(),
                             email: provider.email_from_token(&token).as_deref(),
                         },
                     )

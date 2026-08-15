@@ -76,8 +76,7 @@ pub(crate) fn authenticate(
         // `count_active` is a SELECT COUNT(*) — use the READER so
         // the anonymous-fallback check doesn't serialize through
         // the writer mutex (see `db::conn::DbPool::reader`).
-        let active =
-            core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
+        let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
         if active == 0 {
             tracing::debug!(
                 target: "openproxy::auth",

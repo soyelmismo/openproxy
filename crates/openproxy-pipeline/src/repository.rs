@@ -320,7 +320,10 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<()> {
         let conn = self.conn.lock();
         let access_token_encrypted = master_key.encrypt(params.access_token)?;
-        let refresh_token_encrypted = params.refresh_token.map(|rt| master_key.encrypt(rt)).transpose()?;
+        let refresh_token_encrypted = params
+            .refresh_token
+            .map(|rt| master_key.encrypt(rt))
+            .transpose()?;
         conn.execute(
             "UPDATE accounts SET access_token_encrypted = ?1, refresh_token_encrypted = ?2, expires_at = ?3 WHERE id = ?4",
             rusqlite::params![access_token_encrypted, refresh_token_encrypted, params.expires_at, account_id.0]

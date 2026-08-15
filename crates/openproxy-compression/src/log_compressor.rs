@@ -242,10 +242,7 @@ fn classify_line(line: &str) -> LineKind {
         }
         // #NN pattern: '#' followed by at least one digit.
         if let Some(rest) = trimmed_start.strip_prefix('#')
-            && rest
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
+            && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
         {
             return LineKind::StackTrace;
         }

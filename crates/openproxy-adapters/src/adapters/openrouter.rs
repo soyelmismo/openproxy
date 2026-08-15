@@ -366,14 +366,11 @@ fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCa
     let mut caps = ModelCapabilities::empty();
 
     // vision: from architecture.input_modalities.
-    let has_image_input = entry
-        .architecture
-        .as_ref()
-        .is_some_and(|a| {
-            a.input_modalities
-                .iter()
-                .any(|m| m == "image" || m == "video")
-        });
+    let has_image_input = entry.architecture.as_ref().is_some_and(|a| {
+        a.input_modalities
+            .iter()
+            .any(|m| m == "image" || m == "video")
+    });
     if has_image_input {
         caps.vision = Some(true);
         caps.attachment = Some(true);

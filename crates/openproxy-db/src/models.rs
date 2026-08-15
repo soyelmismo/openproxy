@@ -134,9 +134,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
-    let mut stmt = conn
-        .prepare(model_select!())
-        .map_err(map_db_error)?;
+    let mut stmt = conn.prepare(model_select!()).map_err(map_db_error)?;
 
     let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
 
@@ -184,11 +182,7 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
 
 pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Model>> {
     let res = conn
-        .query_row(
-            model_select!("WHERE id = ?"),
-            [row_id.0],
-            map_row,
-        )
+        .query_row(model_select!("WHERE id = ?"), [row_id.0], map_row)
         .optional()
         .map_err(map_db_error)?;
     Ok(res)
@@ -226,7 +220,9 @@ pub fn find_active_by_provider_and_name(
     model_id: &str,
 ) -> Result<Option<Model>> {
     conn.query_row(
-        model_select!("WHERE provider_id = ?1 AND model_id = ?2 AND active = 1 ORDER BY id ASC LIMIT 1"),
+        model_select!(
+            "WHERE provider_id = ?1 AND model_id = ?2 AND active = 1 ORDER BY id ASC LIMIT 1"
+        ),
         params![provider_id.as_str(), model_id],
         map_row,
     )

@@ -135,8 +135,8 @@ async fn run_pipeline(
     let pipeline = PipelineRunner::build_pipeline(&state);
     let is_stream = resolved_route.openai_req.stream;
 
-    let prepared = PipelineRunner::prepare_request(
-        crate::services::pipeline_runner::PrepareRequestParams {
+    let prepared =
+        PipelineRunner::prepare_request(crate::services::pipeline_runner::PrepareRequestParams {
             state: &state,
             headers: &headers,
             cancel,
@@ -147,8 +147,7 @@ async fn run_pipeline(
             combo_override: resolved_route.combo_override,
             targets_override: resolved_route.targets_override,
             endpoint_kind: openproxy_types::EndpointKind::Chat,
-        },
-    );
+        });
 
     if is_stream {
         return handle_streaming_response(

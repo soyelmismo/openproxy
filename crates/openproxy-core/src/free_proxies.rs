@@ -1479,8 +1479,12 @@ pub async fn fetch_custom_proxy_source(
         let (proto, host_port) = trimmed.split_once("://").unwrap_or(("http", trimmed));
 
         let mut parts = host_port.split(':');
-        let Some(raw_host) = parts.next() else { continue; };
-        let Some(raw_port) = parts.next() else { continue; };
+        let Some(raw_host) = parts.next() else {
+            continue;
+        };
+        let Some(raw_port) = parts.next() else {
+            continue;
+        };
 
         let host = raw_host.trim().to_string();
         if let Ok(port) = raw_port.trim().parse::<u16>() {

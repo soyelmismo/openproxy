@@ -728,9 +728,7 @@ async fn run_phased_connect(
                 // to HTTP/1.1 and fails with `invalid HTTP version
                 // parsed` when the server responds in HTTP/2.
                 let (_, client_conn) = tls_stream.get_ref();
-                let negotiated_h2 = client_conn
-                    .alpn_protocol()
-                    .is_some_and(|p| p == b"h2");
+                let negotiated_h2 = client_conn.alpn_protocol().is_some_and(|p| p == b"h2");
                 return Ok(PhasedConnection::Tls {
                     io: Box::new(TokioIo::new(tls_stream)),
                     negotiated_h2,
@@ -908,7 +906,9 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
         .port_u16()
         .ok_or_else(|| "Missing proxy port".to_string())?;
     let auth = uri.authority().and_then(|a| {
-        a.as_str().split_once('@').map(|(user_pass, _)| user_pass.to_string())
+        a.as_str()
+            .split_once('@')
+            .map(|(user_pass, _)| user_pass.to_string())
     });
 
     Ok(ProxyConfig {

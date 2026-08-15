@@ -152,10 +152,7 @@ impl Pipeline {
         .unwrap_or_default()
     }
 
-    pub(crate) async fn execute_single(
-        &self,
-        params: SingleExecutionParams<'_>,
-    ) -> PipelineResult {
+    pub(crate) async fn execute_single(&self, params: SingleExecutionParams<'_>) -> PipelineResult {
         let SingleExecutionParams {
             req,
             combo,
@@ -347,6 +344,7 @@ impl Pipeline {
         &self,
         params: PartialFailureParams<'_>,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(params)
+        self.tracker
+            .record_and_fail_with_trace_id_and_partial(params)
     }
 }

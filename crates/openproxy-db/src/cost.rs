@@ -25,8 +25,9 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
         LazyLock::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
     static RE_XAPIKEY: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"(?i)x-api-key:\s*\S+").expect("valid regex"));
-    static RE_BEARER: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex"));
+    static RE_BEARER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex")
+    });
 
     let mut sanitized = raw.to_string();
     if RE_SK.is_match(&sanitized) {

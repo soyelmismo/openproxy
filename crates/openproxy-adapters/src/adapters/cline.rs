@@ -159,7 +159,9 @@ impl ProviderAdapter for ClineAdapter {
 
         if let Some(obj) = val.as_object_mut() {
             if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model")
-                && let Some(stripped) = model_str.strip_suffix(":free").or_else(|| model_str.strip_suffix("-free"))
+                && let Some(stripped) = model_str
+                    .strip_suffix(":free")
+                    .or_else(|| model_str.strip_suffix("-free"))
             {
                 *model_str = stripped.to_string();
             }

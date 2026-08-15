@@ -355,8 +355,7 @@ fn sanitize_schema_fields(
         }
     }
 
-    let looks_like_schema =
-        (is_schema_node || has_standard_keyword) && !is_not_schema_payload;
+    let looks_like_schema = (is_schema_node || has_standard_keyword) && !is_not_schema_payload;
     if !looks_like_schema {
         return false;
     }
@@ -364,8 +363,7 @@ fn sanitize_schema_fields(
     move_constraints_to_description(map);
     map.retain(|k, _| allowed_fields.contains(&k.as_str()));
 
-    if map.get("type").and_then(|t| t.as_str()) == Some("object")
-        && !map.contains_key("properties")
+    if map.get("type").and_then(|t| t.as_str()) == Some("object") && !map.contains_key("properties")
     {
         map.insert("properties".to_string(), serde_json::json!({}));
     }
@@ -373,9 +371,7 @@ fn sanitize_schema_fields(
     if let Some(mut required_val) = map.remove("required") {
         if let Some(req_arr) = required_val.as_array_mut() {
             if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
-                req_arr.retain(|k| {
-                    k.as_str().is_some_and(|s| props.contains_key(s))
-                });
+                req_arr.retain(|k| k.as_str().is_some_and(|s| props.contains_key(s)));
             } else {
                 req_arr.clear();
             }

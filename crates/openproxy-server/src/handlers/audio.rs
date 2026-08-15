@@ -475,11 +475,7 @@ async fn dispatch_audio_request(
 // Helpers
 // =====================================================================
 
-fn build_audio_response(
-    status_code: u16,
-    content_type: &str,
-    body: bytes::Bytes,
-) -> Response {
+fn build_audio_response(status_code: u16, content_type: &str, body: bytes::Bytes) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     if let Ok(v) = HeaderValue::from_str(content_type) {

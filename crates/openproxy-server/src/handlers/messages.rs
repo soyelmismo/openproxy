@@ -43,8 +43,8 @@ pub async fn anthropic_messages(
     let is_stream = openai_req.stream;
     let model = openai_req.model.clone();
 
-    let prepared = PipelineRunner::prepare_request(
-        crate::services::pipeline_runner::PrepareRequestParams {
+    let prepared =
+        PipelineRunner::prepare_request(crate::services::pipeline_runner::PrepareRequestParams {
             state: &state,
             headers: &headers,
             cancel,
@@ -55,8 +55,7 @@ pub async fn anthropic_messages(
             combo_override: resolved_route.combo_override,
             targets_override: resolved_route.targets_override,
             endpoint_kind: openproxy_types::EndpointKind::Chat,
-        },
-    );
+        });
 
     let request_id = prepared.req.request_id;
 

@@ -55,23 +55,67 @@ macro_rules! analytics_handler {
             Query(q): Query<UsageQuery>,
         ) -> Result<Json<$res_ty>, ApiError> {
             let f = q.into_filter()?;
-            let result = run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| {
-                $core_fn(conn, fl)
-            })?;
+            let result =
+                run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| $core_fn(conn, fl))?;
             Ok(Json(result))
         }
     };
 }
 
-analytics_handler!(usage_summary, "summary", core_usage::summary, core_usage::UsageSummary);
-analytics_handler!(usage_by_model, "by_model", core_usage::by_model, Vec<core_usage::ByModelRow>);
-analytics_handler!(usage_by_provider, "by_provider", core_usage::by_provider, Vec<core_usage::ByProviderRow>);
-analytics_handler!(usage_monthly_by_provider, "monthly_by_provider", core_usage::monthly_by_provider, Vec<core_usage::MonthlyByProviderRow>);
-analytics_handler!(usage_by_day, "by_day", core_usage::by_day, Vec<core_usage::ByDayRow>);
-analytics_handler!(usage_by_account, "by_account", core_usage::by_account, Vec<core_usage::ByAccountRow>);
-analytics_handler!(usage_by_status, "by_status", core_usage::by_status, Vec<core_usage::ByStatusRow>);
-analytics_handler!(usage_latency, "latency", analytics::latency_percentiles, analytics::LatencyPercentiles);
-analytics_handler!(usage_races, "races", analytics::race_stats, analytics::RaceStats);
+analytics_handler!(
+    usage_summary,
+    "summary",
+    core_usage::summary,
+    core_usage::UsageSummary
+);
+analytics_handler!(
+    usage_by_model,
+    "by_model",
+    core_usage::by_model,
+    Vec<core_usage::ByModelRow>
+);
+analytics_handler!(
+    usage_by_provider,
+    "by_provider",
+    core_usage::by_provider,
+    Vec<core_usage::ByProviderRow>
+);
+analytics_handler!(
+    usage_monthly_by_provider,
+    "monthly_by_provider",
+    core_usage::monthly_by_provider,
+    Vec<core_usage::MonthlyByProviderRow>
+);
+analytics_handler!(
+    usage_by_day,
+    "by_day",
+    core_usage::by_day,
+    Vec<core_usage::ByDayRow>
+);
+analytics_handler!(
+    usage_by_account,
+    "by_account",
+    core_usage::by_account,
+    Vec<core_usage::ByAccountRow>
+);
+analytics_handler!(
+    usage_by_status,
+    "by_status",
+    core_usage::by_status,
+    Vec<core_usage::ByStatusRow>
+);
+analytics_handler!(
+    usage_latency,
+    "latency",
+    analytics::latency_percentiles,
+    analytics::LatencyPercentiles
+);
+analytics_handler!(
+    usage_races,
+    "races",
+    analytics::race_stats,
+    analytics::RaceStats
+);
 
 pub async fn usage_errors(
     State(s): State<AppState>,

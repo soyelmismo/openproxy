@@ -30,11 +30,9 @@ impl PipelineStage for TelemetryRecorderStage {
                 if let CoreError::NoHealthyTargets(_) = e
                     && let Some(ref combo) = ctx.combo
                 {
-                    ctx.pipeline.tracker.record_no_healthy_targets_row(
-                        &ctx.req,
-                        combo,
-                        started,
-                    );
+                    ctx.pipeline
+                        .tracker
+                        .record_no_healthy_targets_row(&ctx.req, combo, started);
                 }
 
                 Ok(ctx.pipeline.failure(e, ctx.attempt, phase))

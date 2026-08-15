@@ -111,8 +111,9 @@ macro_rules! filter_skeleton {
 // `filter_stderr_prefixes` was previously compiling this regex on every
 // call. Phase B already moved `strip_ansi` to memchr; this finishes the
 // job for the stderr-prefix path.
-static STDERR_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("valid regex"));
+static STDERR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("valid regex")
+});
 
 fn filter_stderr_prefixes(text: &str) -> String {
     STDERR_RE.replace_all(text, "").into_owned()
@@ -124,18 +125,19 @@ fn filter_stderr_prefixes(text: &str) -> String {
 // Insertion order does not matter — `get_builtin_filter` does a single
 // `HashMap::get` lookup.
 
-pub static BUILTIN_FILTERS: LazyLock<HashMap<&'static str, Arc<CompiledFilter>>> = LazyLock::new(|| {
-    let mut m = HashMap::with_capacity(8);
-    m.insert("git-status", Arc::new(make_git_status_filter()));
-    m.insert("git-diff", Arc::new(make_git_diff_filter()));
-    m.insert("cargo-test", Arc::new(make_cargo_test_filter()));
-    m.insert("npm-test", Arc::new(make_npm_test_filter()));
-    m.insert("docker-ps", Arc::new(make_docker_ps_filter()));
-    m.insert("error-stacktrace", Arc::new(make_error_stacktrace_filter()));
-    m.insert("shell-ls", Arc::new(make_shell_ls_filter()));
-    m.insert("generic-error", Arc::new(make_generic_error_filter()));
-    m
-});
+pub static BUILTIN_FILTERS: LazyLock<HashMap<&'static str, Arc<CompiledFilter>>> =
+    LazyLock::new(|| {
+        let mut m = HashMap::with_capacity(8);
+        m.insert("git-status", Arc::new(make_git_status_filter()));
+        m.insert("git-diff", Arc::new(make_git_diff_filter()));
+        m.insert("cargo-test", Arc::new(make_cargo_test_filter()));
+        m.insert("npm-test", Arc::new(make_npm_test_filter()));
+        m.insert("docker-ps", Arc::new(make_docker_ps_filter()));
+        m.insert("error-stacktrace", Arc::new(make_error_stacktrace_filter()));
+        m.insert("shell-ls", Arc::new(make_shell_ls_filter()));
+        m.insert("generic-error", Arc::new(make_generic_error_filter()));
+        m
+    });
 
 pub static GENERIC_FILTER: LazyLock<Arc<CompiledFilter>> =
     LazyLock::new(|| Arc::new(make_generic_filter()));
@@ -446,10 +448,7 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
     // 4. Match output (short-circuit) — patterns pre-compiled
     for rule in &filter.match_output {
         if rule.re.is_match(&result) {
-            let should_skip = rule
-                .unless
-                .as_ref()
-                .is_some_and(|u| u.is_match(&result));
+            let should_skip = rule.unless.as_ref().is_some_and(|u| u.is_match(&result));
             if !should_skip {
                 applied_rules.push(filter.rule_match_output);
                 return (rule.message.to_string(), applied_rules);

@@ -27,7 +27,10 @@ pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = openproxy_types::IDLE_CHUNK_RETRY
 pub const PROXY_TEST_URL_KEY: &str = "proxy_test_url";
 pub const PROXY_TEST_URL_DEFAULT: &str = "https://cloudflare.com/cdn-cgi/trace";
 
-fn load_config_val<T: serde::de::DeserializeOwned>(conn: &Connection, key: &str) -> Result<Option<T>> {
+fn load_config_val<T: serde::de::DeserializeOwned>(
+    conn: &Connection,
+    key: &str,
+) -> Result<Option<T>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
         .map_err(crate::error::map_db_error)?;

@@ -253,30 +253,29 @@ impl UpstreamDispatcher {
         ctx: FailureContext<'_>,
         trace_id: String,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
-            req,
-            combo,
-            target,
-            ctx,
-            trace_id,
-            acc: None,
-            chunk_id: None,
-            created: 0,
-            model_name: "",
-        })
+        self.tracker
+            .record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
+                req,
+                combo,
+                target,
+                ctx,
+                trace_id,
+                acc: None,
+                chunk_id: None,
+                created: 0,
+                model_name: "",
+            })
     }
 
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         params: crate::PartialFailureParams<'_>,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(params)
+        self.tracker
+            .record_and_fail_with_trace_id_and_partial(params)
     }
 
-    pub(crate) async fn dispatch_upstream(
-        &self,
-        params: DispatchParams<'_>,
-    ) -> PipelineResult {
+    pub(crate) async fn dispatch_upstream(&self, params: DispatchParams<'_>) -> PipelineResult {
         let DispatchParams {
             target,
             combo,
@@ -1304,17 +1303,19 @@ impl UpstreamDispatcher {
                                 None => None,
                             };
                         let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-                        self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
-                            req,
-                            combo,
-                            target,
-                            ctx: fail_ctx,
-                            trace_id,
-                            acc: acc_ref,
-                            chunk_id: Some(chunk_id),
-                            created,
-                            model_name,
-                        })
+                        self.record_and_fail_with_trace_id_and_partial(
+                            crate::PartialFailureParams {
+                                req,
+                                combo,
+                                target,
+                                ctx: fail_ctx,
+                                trace_id,
+                                acc: acc_ref,
+                                chunk_id: Some(chunk_id),
+                                created,
+                                model_name,
+                            },
+                        )
                     };
                 }
                 let is_watchdog_fired = watchdog_fired.is_some();

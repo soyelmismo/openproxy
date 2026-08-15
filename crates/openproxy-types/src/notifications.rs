@@ -10,9 +10,8 @@ pub struct NotificationEvent {
 
 use std::sync::OnceLock;
 
-pub static NOTIFICATION_PUBLISHER: OnceLock<
-    Box<dyn Fn(NotificationEvent) + Send + Sync>,
-> = OnceLock::new();
+pub static NOTIFICATION_PUBLISHER: OnceLock<Box<dyn Fn(NotificationEvent) + Send + Sync>> =
+    OnceLock::new();
 
 pub fn publish_notification(event: NotificationEvent) {
     if let Some(publisher) = NOTIFICATION_PUBLISHER.get() {

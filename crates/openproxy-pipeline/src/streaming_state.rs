@@ -155,7 +155,8 @@ pub(crate) fn apply_reasoning_normalizations(
                         let index = tc.index.unwrap_or(0);
                         let new_fragment = tool_call_acc.process(index, arguments);
                         if new_fragment != *arguments {
-                            func.arguments = Some(std::borrow::Cow::Owned(new_fragment.to_string()));
+                            func.arguments =
+                                Some(std::borrow::Cow::Owned(new_fragment.to_string()));
                             modified = true;
                         }
                     }

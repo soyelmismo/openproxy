@@ -176,10 +176,9 @@ impl Client {
     ) -> Result<ProviderId, ClientError> {
         let resp = self.post_json("/admin/providers", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| missing_field_err("missing \"id\" string in create_provider response"))?;
+        let id = body.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+            missing_field_err("missing \"id\" string in create_provider response")
+        })?;
         Ok(ProviderId::new(id.to_string()))
     }
 
@@ -217,10 +216,9 @@ impl Client {
     ) -> Result<AccountId, ClientError> {
         let resp = self.post_json("/admin/accounts", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| missing_field_err("missing numeric \"id\" in create_account response"))?;
+        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
+            missing_field_err("missing numeric \"id\" in create_account response")
+        })?;
         Ok(AccountId::new(id))
     }
 

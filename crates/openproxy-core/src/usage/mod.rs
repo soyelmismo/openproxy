@@ -17,19 +17,17 @@
 
 pub mod analytics;
 
-pub use analytics::*;
 pub use analytics::prune_expired_recording_bodies;
 pub use analytics::prune_expired_usage_rows;
+pub use analytics::*;
 
 use std::sync::{LazyLock, OnceLock};
 
 // Globals for broadcast
-static USAGE_SENDER: OnceLock<
-    tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow>,
-> = OnceLock::new();
-static STAGE_SENDER: OnceLock<
-    tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
-> = OnceLock::new();
+static USAGE_SENDER: OnceLock<tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow>> =
+    OnceLock::new();
+static STAGE_SENDER: OnceLock<tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>> =
+    OnceLock::new();
 
 pub static INFLIGHT_REGISTRY: LazyLock<
     dashmap::DashMap<String, openproxy_types::usage::InflightAttempt>,
@@ -106,9 +104,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
     let is_terminal = event.stage == "completed"
         || event.stage == "failed"
         || event.stage == "cancelled"
-        || event
-            .status_code
-            .is_some_and(|s| s >= 400 && s != 0)
+        || event.status_code.is_some_and(|s| s >= 400 && s != 0)
         || event.error.is_some();
 
     if is_terminal {

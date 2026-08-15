@@ -94,8 +94,7 @@ pub struct InflightAttempt {
     pub source: String,
 }
 
-pub static STAGE_EVENT_PUBLISHER: std::sync::OnceLock<fn(StageEvent)> =
-    std::sync::OnceLock::new();
+pub static STAGE_EVENT_PUBLISHER: std::sync::OnceLock<fn(StageEvent)> = std::sync::OnceLock::new();
 
 pub fn publish_stage_event(event: StageEvent) {
     if let Some(publisher) = STAGE_EVENT_PUBLISHER.get() {

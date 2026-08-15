@@ -374,7 +374,12 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
 
     let content = candidate
         .and_then(|c| c.content.as_ref())
-        .map(|c| c.parts.iter().filter_map(|p| p.text.as_deref()).collect::<String>())
+        .map(|c| {
+            c.parts
+                .iter()
+                .filter_map(|p| p.text.as_deref())
+                .collect::<String>()
+        })
         .filter(|t| !t.is_empty())
         .unwrap_or_default();
 
@@ -382,22 +387,22 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
 
-    let usage_metadata = resp
-        .usage_metadata
-        .as_ref()
-        .or_else(|| resp.response.as_ref().and_then(|inner| inner.usage_metadata.as_ref()));
+    let usage_metadata = resp.usage_metadata.as_ref().or_else(|| {
+        resp.response
+            .as_ref()
+            .and_then(|inner| inner.usage_metadata.as_ref())
+    });
 
-    let usage = usage_metadata
-        .map(|u| openproxy_types::OpenAIUsage {
-            prompt_tokens: u.prompt_token_count,
-            completion_tokens: u.candidates_token_count,
-            total_tokens: u.total_token_count,
-            prompt_tokens_details: u.cached_content_token_count.map(|c| {
-                openproxy_types::message::PromptTokensDetails {
-                    cached_tokens: Some(c),
-                }
-            }),
-        });
+    let usage = usage_metadata.map(|u| openproxy_types::OpenAIUsage {
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+        total_tokens: u.total_token_count,
+        prompt_tokens_details: u.cached_content_token_count.map(|c| {
+            openproxy_types::message::PromptTokensDetails {
+                cached_tokens: Some(c),
+            }
+        }),
+    });
 
     openproxy_types::OpenAIResponse {
         id: format!("gemini-{}", chrono::Utc::now().timestamp_millis()),

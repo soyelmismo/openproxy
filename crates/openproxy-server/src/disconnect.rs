@@ -392,9 +392,7 @@ mod tests {
 
     /// Pump a `DisconnectBody` once and return the result. Pulled
     /// out into a helper because both tests do exactly this.
-    fn poll_once<B: HttpBody + Unpin>(
-        body: &mut DisconnectBody<B>,
-    ) -> PollFrameResult<B> {
+    fn poll_once<B: HttpBody + Unpin>(body: &mut DisconnectBody<B>) -> PollFrameResult<B> {
         let mut cx = Context::from_waker(futures::task::noop_waker_ref());
         Pin::new(body).poll_frame(&mut cx)
     }
