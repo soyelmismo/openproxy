@@ -146,10 +146,20 @@ impl ProviderAdapter for AtomesusAdapter {
         Ok(vec![
             // Atomesus 1.5
             base("atomesus-1-5-fast", "Atomesus 1.5 Fast", 128_000, 8_192),
-            base("atomesus-1-5-thinking", "Atomesus 1.5 Thinking", 128_000, 16_384),
+            base(
+                "atomesus-1-5-thinking",
+                "Atomesus 1.5 Thinking",
+                128_000,
+                16_384,
+            ),
             // Atomesus 2
             base("atomesus-2-fast", "Atomesus 2 Fast", 128_000, 8_192),
-            base("atomesus-2-thinking", "Atomesus 2 Thinking", 128_000, 16_384),
+            base(
+                "atomesus-2-thinking",
+                "Atomesus 2 Thinking",
+                128_000,
+                16_384,
+            ),
             // Cipher (paid)
             base("cipher-fast", "Cipher Fast", 128_000, 8_192),
             base("cipher-thinking", "Cipher Thinking", 128_000, 16_384),

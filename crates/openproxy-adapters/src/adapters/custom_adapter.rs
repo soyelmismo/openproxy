@@ -84,7 +84,8 @@ impl ProviderAdapter for CustomAdapter {
 
         // Build headers: auth header + extra headers configured for this provider.
         let bearer_auth = format!("Bearer {api_key}");
-        let mut headers: Vec<(&str, &str)> = Vec::with_capacity(1 + self.config.extra_headers.len());
+        let mut headers: Vec<(&str, &str)> =
+            Vec::with_capacity(1 + self.config.extra_headers.len());
         if !api_key.is_empty() {
             match self.config.auth_type {
                 AdapterAuthType::Bearer | AdapterAuthType::OAuth => {

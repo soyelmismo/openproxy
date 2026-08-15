@@ -2828,8 +2828,16 @@ mod atomesus_sse_tests {
     #[test]
     fn atomesus_skips_heartbeat_and_comments() {
         let comment = ": ping";
-        assert!(parse_atomesus_sse_line(comment, "cmpl_1", 100, "atomesus").unwrap().is_none());
+        assert!(
+            parse_atomesus_sse_line(comment, "cmpl_1", 100, "atomesus")
+                .unwrap()
+                .is_none()
+        );
         let heartbeat = r#"data: {"type":"heartbeat"}"#;
-        assert!(parse_atomesus_sse_line(heartbeat, "cmpl_1", 100, "atomesus").unwrap().is_none());
+        assert!(
+            parse_atomesus_sse_line(heartbeat, "cmpl_1", 100, "atomesus")
+                .unwrap()
+                .is_none()
+        );
     }
 }
