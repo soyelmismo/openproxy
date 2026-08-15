@@ -42,14 +42,44 @@ openproxy/
 
 ---
 
-## 3. Directivas de Rust Moderno (Rust 1.80+ / Edition 2024)
+## 3. Criterios de ROI, Deduplicación y Reglas de Parada (`rust-dedup-modernize`)
 
-### 3.1 Primitivos Contemporáneos de la Stdlib
+### 3.1 Clasificación de Prioridad por Retorno de Inversión (ROI)
+| Prioridad | Categoría | Condición de Ejecución |
+| :--- | :--- | :--- |
+| **P1** | Eliminar dependencia externa (`once_cell` $\to$ `LazyLock`, etc.) | **Siempre ejecutar** |
+| **P2** | Deduplicar lógica real ($>10$ líneas idénticas entre módulos) | **Siempre ejecutar** |
+| **P3** | Extraer funciones monolíticas ($>100$ líneas) | Solo si se agrega al menos 1 test unitario para la función extraída |
+| **P4** | Modernización de sintaxis (`let-else`, `is_some_and`, `split_once`) | Solo si reduce $\ge 3$ líneas netas por sitio de aplicación |
+| **P5** | Reducción de `.clone()` innecesario | Solo con evidencia en hot paths medidos o bucles de alto tráfico |
+
+### 3.2 Reglas de Parada y Anti-Bucle
+- P1-P2 se ejecutan siempre. P3 exige tests unitarios de la función extraída.
+- P4-P5 se agrupan como cleanup cosmético. Si el diff de P1-P3 supera 300 líneas, descartar P4-P5 de la sesión.
+- **NUNCA mezclar prioridades distintas en el mismo commit.**
+- Si un cambio cosmético de P4-P5 falla en compilar o testear al 2do intento, **descartarlo inmediatamente**.
+
+### 3.3 Técnicas de Deduplicación Zero-Cost
+1. **Extension Traits (Blanket Implementations):** Para transformaciones comunes sin envolver tipos en nuevos structs (`pub trait ResponseExt`).
+2. **Macros Declarativas (`macro_rules!`):** Para deduplicar implementaciones de adapters o dispatchers.
+3. **Traits con Métodos por Defecto:** Para endpoints base y URLs de upstream APIs.
+4. **Copy-on-Write y Zero-Alloc:**
+   - Usar `std::borrow::Cow<'a, T>` para transformaciones que raramente requieren mutar la entrada.
+   - Usar `Arc::unwrap_or_clone(arc)` para evitar clonar el contenido si el `Arc` es el único dueño.
+   - Usar `write!(buf, ...)` con buffer reutilizado en hot paths para evitar allocaciones de formato intermedias.
+
+---
+
+## 4. Directivas de Rust Moderno (Rust 1.80+ / Edition 2024)
+
+### 4.1 Primitivos Contemporáneos de la Stdlib
 - **`std::sync::LazyLock<T>` y `std::sync::OnceLock<T>`:** Primitivos nativos obligatorios para inicialización estática. Prohibido el uso de `lazy_static!` o `once_cell`.
+- **`std::num::NonZero<T>`:** Usar el tipo genérico nativo de la stdlib (en lugar de `NonZeroU32`, etc.).
 - **`std::io::IsTerminal`:** Para detección nativa de terminales (nunca `atty` ni `is-terminal`).
-- **`std::path::absolute`:** Para normalización canónica de rutas del sistema de archivos.
+- **`std::path::absolute`:** Para normalización canónica de rutas.
+- **`std::fs::exists(&path)`:** Detección segura que retorna `io::Result<bool>`.
 
-### 3.2 Control de Flujo Idiomático
+### 4.2 Control de Flujo Idiomático
 - **`let-else`:** Para validación temprana y desempaquetado sin anidamiento excesivo:
   ```rust
   let Some(value) = opt else {
@@ -57,11 +87,14 @@ openproxy/
   };
   ```
 - **Predicados con `is_some_and` / `is_ok_and`:** Evitar `if opt.is_some() && opt.unwrap() ...`.
+- **Inspección de Flujo con `inspect` / `inspect_err`:** Para logging/trazas intermedias sin alterar el `Result`/`Option`.
 - **División con `str::split_once`:** Usar `if let Some((k, v)) = s.split_once(':')` en lugar de colecciones intermedias con `.split()`.
 - **Rangos Exclusivos (Half-Open Ranges):** `match status { 200..300 => ..., 400..500 => ... }`.
+- **Inline Const Expressions (`const { ... }`):** Para inicialización de arrays sin `Copy` o aserciones en tiempo de compilación.
 
-### 3.3 Concurrencia, Memoria y Prevención de Deadlocks
-- **Zero-Copy con `Cow<'a, T>`:** Para transformaciones donde comúnmente no se requiere mutar la entrada.
+### 4.3 Concurrencia, Async y Prevención de Deadlocks
+- **Async Closures (`async || {}`) & `AsyncFn / AsyncFnMut`:** Para operaciones asíncronas reusables sin boxing de futures.
+- **AFIT & RPITIT con Captura Precisa `use<..>`:** Async traits nativos sin dependencias externas.
 - **Prevención Estricta de Deadlocks con Mutex:**
   - `parking_lot::Mutex` y `std::sync::Mutex` **NO son reentrantes**.
   - **REGLA DE ORO:** Jamás invocar métodos del repositorio (`repo.*`) ni funciones que soliciten `self.conn.lock()` mientras se mantiene un guard activo (`let conn = conn_clone.lock()`) en el mismo hilo.
@@ -70,7 +103,7 @@ openproxy/
 
 ---
 
-## 4. Remediación de Malas Prácticas (Clean Refactor)
+## 5. Remediación de Malas Prácticas (Clean Refactor)
 
 | Mala Práctica | Remediación Obligatoria |
 | :--- | :--- |
@@ -83,7 +116,7 @@ openproxy/
 
 ---
 
-## 5. Base de Datos SQLite, Cifrado y Migraciones
+## 6. Base de Datos SQLite, Cifrado y Migraciones
 
 1. **Migraciones Secuenciales:**
    - Todo cambio de esquema requiere un nuevo script numerado en `crates/openproxy-db/migrations/` (ej. `000060_feature_name.sql`).
@@ -95,7 +128,7 @@ openproxy/
 
 ---
 
-## 6. Directivas del Frontend Web (Dashboard SPA)
+## 7. Directivas del Frontend Web (Dashboard SPA)
 
 1. **Stack Tecnológico:**
    - TypeScript + Lit-HTML + Vanilla CSS (usando los Design Tokens de `tokens.css` y `themes.css`).
@@ -108,8 +141,14 @@ openproxy/
 
 ---
 
-## 7. Protocolo Obligatorio de Verificación Pre-Commit
+## 8. Protocolo de Auditoría y Verificación Pre-Commit
 
+### 8.1 Preguntas Críticas de Auditoría Lógica
+- ¿Algún `let-else` cambió la rama de escape alterando el tipo o mensaje de error original?
+- ¿Algún `split_once` asumió separadores inexistentes rompiendo casos borde?
+- ¿Se agregaron tests unitarios para toda función extraída de $>20$ líneas?
+
+### 8.2 Comandos de Verificación
 Antes de emitir cualquier commit:
 1. **Linter Estricto:**
    ```bash
