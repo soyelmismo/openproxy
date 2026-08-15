@@ -169,7 +169,7 @@ function buildOptions(
     // `Select` extends `BBox` which requires left/top/width/height —
     // we provide zeros alongside `show: false` to satisfy the type.
     select: { show: false, left: 0, top: 0, width: 0, height: 0 },
-    padding: [34, 10, 2, 4],
+    padding: [32, 20, 10, 14],
     series,
     scales,
     axes,
@@ -518,7 +518,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         stroke: CHART_COLORS.blue,
         font: "10px 'Courier New', monospace",
         values: compactNumber,
-        size: 40,
+        size: 44,
       },
       {
         scale: "tps",
@@ -527,7 +527,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         stroke: CHART_COLORS.green,
         font: "10px 'Courier New', monospace",
         values: compactNumber,
-        size: 40,
+        size: 52,
       },
     ],
   });

@@ -177,12 +177,17 @@ function bucketIndexFromNow(windowSecs: number, totalBuckets: number): number {
  *  (resetting stale buckets before calling this). */
 function incrementBucket(b: Bucket, row: RecentUsageRow): void {
   b.count++;
-  b.tokens_in += row.prompt_tokens ?? 0;
-  b.tokens_out += row.completion_tokens ?? 0;
-  b.cost_usd += row.cost_usd ?? 0;
-  if (row.status_code >= 200 && row.status_code < 300) b.status_2xx++;
-  else if (row.status_code >= 400 && row.status_code < 500) b.status_4xx++;
-  else if (row.status_code >= 500) b.status_5xx++;
+  const isSuccess = row.status_code >= 200 && row.status_code < 400;
+  if (isSuccess) {
+    b.tokens_in += row.prompt_tokens ?? 0;
+    b.tokens_out += row.completion_tokens ?? 0;
+    b.cost_usd += row.cost_usd ?? 0;
+    b.status_2xx++;
+  } else if (row.status_code >= 400 && row.status_code < 500) {
+    b.status_4xx++;
+  } else if (row.status_code >= 500) {
+    b.status_5xx++;
+  }
   if (b.latencies.length < MAX_LATENCIES_PER_BUCKET) {
     b.latencies.push(row.total_ms || 0);
   }

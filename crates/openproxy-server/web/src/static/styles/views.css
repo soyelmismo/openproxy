@@ -1954,7 +1954,7 @@ abbr {
 .home-chart-container {
   height: 270px;
   width: 100%;
-  padding: 0 var(--space-2) var(--space-2);
+  padding: 0;
   min-width: 0;
   overflow: hidden;
   /* The uPlot instance is mounted inside this div. `width: 100%` +
@@ -2410,7 +2410,7 @@ abbr {
 .analytics-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); padding: var(--space-4) var(--space-4) var(--space-2); }
 .analytics-card-heading h3 { margin: 0; font-size: var(--fs-md); }
 .analytics-card-heading p { margin: 0.2rem 0 0; color: var(--color-text-muted); font-size: var(--fs-xs); }
-.analytics-chart-container { height: 310px; padding: 0 var(--space-2) var(--space-2); }
+.analytics-chart-container { height: 310px; padding: 0; }
 
 .analytics-health-label { flex: none; padding: 0.2rem 0.5rem; border-radius: var(--radius-pill); background: var(--color-success-soft); color: var(--color-success); font-size: var(--fs-xs); font-weight: 700; }
 .analytics-health-label.warn { background: var(--color-warn-soft); color: var(--color-warn); }
