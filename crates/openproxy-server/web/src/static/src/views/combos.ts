@@ -161,6 +161,40 @@ async function onResetCooldown(targetId: number): Promise<void> {
   } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
 }
 
+async function onUpdateTargetCooldownMode(targetId: number, e: Event): Promise<void> {
+  const select = e.target as HTMLSelectElement;
+  const val = select.value || null;
+  try {
+    await api(`/combos/${detailComboId}/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ cooldown_mode: val }),
+    });
+    const t = detailTargets.find((x) => x.id === targetId);
+    if (t) t.cooldown_mode = val as CooldownMode | null;
+    requestUpdate();
+  } catch (err: unknown) {
+    showToast("Error updating target cooldown: " + (err instanceof Error ? err.message : String(err)), "error");
+  }
+}
+
+async function onUpdateTargetCooldownBase(targetId: number, e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement;
+  const raw = input.value.trim();
+  const val = raw === "" ? null : parseInt(raw, 10);
+  if (val != null && (Number.isNaN(val) || val < 0)) return;
+  try {
+    await api(`/combos/${detailComboId}/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ cooldown_base_secs: val }),
+    });
+    const t = detailTargets.find((x) => x.id === targetId);
+    if (t) t.cooldown_base_secs = val;
+    requestUpdate();
+  } catch (err: unknown) {
+    showToast("Error updating target cooldown base: " + (err instanceof Error ? err.message : String(err)), "error");
+  }
+}
+
 // `onTestAllTargets` is now a thin shim into `testAllTargets` from
 // combo-handlers.ts. That handler:
 //   1. Disables the button and sets text to "🧪 Testing..."
@@ -290,6 +324,17 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
   const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);
   const weightCell = showWeight ? (isSub ? html`<td><em>n/a</em></td>` : html`<td><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
+  const cooldownCell = isSub ? html`<td><em>sub-combo</em></td>` : html`<td>
+    <div style="display:flex;align-items:center;gap:4px">
+      <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:95px" @change=${(e: Event) => onUpdateTargetCooldownMode(t.id, e)}>
+        <option value="" ?selected=${!t.cooldown_mode && t.cooldown_base_secs == null}>Inherit</option>
+        <option value="none" ?selected=${t.cooldown_mode === "none" || t.cooldown_base_secs === 0}>Disabled</option>
+        <option value="flat" ?selected=${t.cooldown_mode === "flat" && t.cooldown_base_secs !== 0}>Flat</option>
+        <option value="exponential" ?selected=${t.cooldown_mode === "exponential" && t.cooldown_base_secs !== 0}>Exponential</option>
+      </select>
+      ${(t.cooldown_mode === "flat" || t.cooldown_mode === "exponential") ? html`<input type="number" min="0" placeholder="sec" style="width:48px;font-size:0.75rem;padding:2px 4px" .value=${t.cooldown_base_secs != null ? String(t.cooldown_base_secs) : ""} @change=${(e: Event) => onUpdateTargetCooldownBase(t.id, e)} class="cw-input" title="Base seconds (0 = disabled)">` : html``}
+    </div>
+  </td>`;
   // Look up the latest test-all result for this target row. The
   // cache is keyed by combo id (see `testAllTargets` in
   // combo-handlers.ts); we fall back to `—` when the user hasn't
@@ -355,7 +400,7 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
       } catch (err: unknown) { showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
     }}
   >
-    <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}<td class="last-test-cell">${lastTestCell}</td>
+    <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}${cooldownCell}<td class="last-test-cell">${lastTestCell}</td>
     <td>
       ${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}
       <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸" : "▶"}</button>
@@ -394,7 +439,7 @@ function renderComboDetail(): TemplateResult {
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
       <div class="actions"><button @click=${onTestAllTargets}>🧪 Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<table>
-        <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Last test</th><th>Actions</th></tr></thead>
+        <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Cooldown</th><th>Last test</th><th>Actions</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table>`}
     </section>`;
 }

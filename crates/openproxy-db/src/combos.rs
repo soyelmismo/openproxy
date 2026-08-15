@@ -506,7 +506,8 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
+                    ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
@@ -577,7 +578,11 @@ pub fn list_targets_with_model(
                     m.max_output_tokens, \
                     ct.weight, \
                     COALESCE(p.active, 0) as provider_active, \
-                    ct.active \
+                    ct.active, \
+                    ct.cooldown_mode, \
+                    ct.cooldown_base_secs, \
+                    ct.cooldown_max_secs, \
+                    ct.cooldown_factor \
              FROM combo_targets ct \
              LEFT JOIN providers p ON p.id = ct.provider_id \
              LEFT JOIN models m ON m.id = ct.model_row_id \
@@ -598,7 +603,8 @@ pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTa
     let row = conn
         .query_row(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
+                    ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.id = ?1",
@@ -687,6 +693,77 @@ pub fn update_target_active(
     )
     .map_err(crate::error::map_db_error_ctx(format!(
         "update active for combo_target {}",
+        target_id.0
+    )))?;
+    Ok(())
+}
+
+pub fn update_target_cooldown_mode(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    mode: Option<&str>,
+) -> Result<()> {
+    let mode_str = match mode {
+        Some(s) if !s.is_empty() => {
+            let parsed = CooldownMode::parse(s).map_err(CoreError::Validation)?;
+            Some(parsed.as_str().to_string())
+        }
+        _ => None,
+    };
+    conn.execute(
+        "UPDATE combo_targets SET cooldown_mode = ?1 WHERE id = ?2",
+        params![mode_str, target_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update cooldown_mode for combo_target {}",
+        target_id.0
+    )))?;
+    Ok(())
+}
+
+pub fn update_target_cooldown_base(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    base: Option<u64>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE combo_targets SET cooldown_base_secs = ?1 WHERE id = ?2",
+        params![base.map(|v| v as i64), target_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update cooldown_base_secs for combo_target {}",
+        target_id.0
+    )))?;
+    Ok(())
+}
+
+pub fn update_target_cooldown_max(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    max: Option<u64>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE combo_targets SET cooldown_max_secs = ?1 WHERE id = ?2",
+        params![max.map(|v| v as i64), target_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update cooldown_max_secs for combo_target {}",
+        target_id.0
+    )))?;
+    Ok(())
+}
+
+pub fn update_target_cooldown_factor(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    factor: Option<u32>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
+        params![factor.map(|v| v as i64), target_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update cooldown_factor for combo_target {}",
         target_id.0
     )))?;
     Ok(())
@@ -1151,14 +1228,16 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
     let model_row_id: Option<i64> = row.get(4)?;
     let sub_combo_id: Option<i64> = row.get(5)?;
     let priority_order: i32 = row.get(6)?;
-    // Column 7 (migration 000035): per-target weight. The column is
-    // `INTEGER NOT NULL DEFAULT 1`; we still defend against NULL
-    // with `unwrap_or(1)` so a hand-rolled SELECT that drops the
-    // `NOT NULL` guarantee (or a row inserted before the migration
-    // backfilled defaults) does not poison the routing layer.
     let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
     let rate_limit_scope: String = row.get(8)?;
     let active: i64 = row.get::<_, Option<i64>>(9)?.unwrap_or(1);
+    let cooldown_mode_str: Option<String> = row.get(10).ok().flatten();
+    let cooldown_mode = cooldown_mode_str
+        .as_deref()
+        .and_then(|s| CooldownMode::parse(s).ok());
+    let cooldown_base_secs: Option<u64> = row.get::<_, Option<i64>>(11)?.map(|v| v as u64);
+    let cooldown_max_secs: Option<u64> = row.get::<_, Option<i64>>(12)?.map(|v| v as u64);
+    let cooldown_factor: Option<u32> = row.get::<_, Option<i64>>(13)?.map(|v| v as u32);
 
     Ok(ComboTarget {
         id: ComboTargetId(id),
@@ -1172,6 +1251,10 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         active: active != 0,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
             .unwrap_or_default(),
+        cooldown_mode,
+        cooldown_base_secs,
+        cooldown_max_secs,
+        cooldown_factor,
     })
 }
 
@@ -1183,32 +1266,24 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
     let model_row_id: Option<i64> = row.get(4)?;
     let sub_combo_id: Option<i64> = row.get(5)?;
     let sub_combo_name: Option<String> = row.get(6)?;
-    // `model_id` is COALESCEd in the SELECT, so a NULL is never observed
-    // here in practice; the empty string is the documented fallback.
     let model_id: String = row.get(7)?;
     let model_display_name: Option<String> = row.get(8)?;
     let priority_order: i32 = row.get(9)?;
-    // The cooldown columns come from a `LEFT JOIN`; missing rows
-    // surface as `None` / `0` here. `in_cooldown` is the 0/1
-    // collapse of the `cooldown_until > now` expression in the
-    // SELECT — we trust the DB to do the timestamp compare so the
-    // dashboard doesn't have to redo it client-side.
     let cooldown_until: Option<String> = row.get(10)?;
     let in_cooldown: i64 = row.get(11)?;
     let cooldown_reason: Option<String> = row.get(12)?;
-    // Columns 13-14: model context_length + max_output_tokens from
-    // the `LEFT JOIN models m`. `None` for sub-combo targets or
-    // models without metadata.
     let context_length: Option<i64> = row.get(13)?;
     let max_output_tokens: Option<i64> = row.get(14)?;
-    // Column 15 (migration 000035): per-target weight.
     let weight: i32 = row.get::<_, Option<i64>>(15)?.unwrap_or(1) as i32;
-    // Column 16: `provider_active` from `COALESCE(p.active, 0)`. This
-    // is `0` when the provider was deactivated (or the LEFT JOIN
-    // didn't match — which shouldn't happen because `provider_id` is
-    // NOT NULL, but COALESCE defends against it anyway).
     let provider_active: i64 = row.get(16)?;
     let active: i64 = row.get::<_, Option<i64>>(17)?.unwrap_or(1);
+    let cooldown_mode_str: Option<String> = row.get(18).ok().flatten();
+    let cooldown_mode = cooldown_mode_str
+        .as_deref()
+        .and_then(|s| CooldownMode::parse(s).ok());
+    let cooldown_base_secs: Option<u64> = row.get::<_, Option<i64>>(19)?.map(|v| v as u64);
+    let cooldown_max_secs: Option<u64> = row.get::<_, Option<i64>>(20)?.map(|v| v as u64);
+    let cooldown_factor: Option<u32> = row.get::<_, Option<i64>>(21)?.map(|v| v as u32);
 
     Ok(ComboTargetWithModel {
         id: ComboTargetId(id),
@@ -1229,6 +1304,10 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
         context_length,
         max_output_tokens,
         provider_active: provider_active != 0,
+        cooldown_mode,
+        cooldown_base_secs,
+        cooldown_max_secs,
+        cooldown_factor,
     })
 }
 

@@ -433,13 +433,74 @@ pub async fn update_combo_target(
         let w = s.db_pool().writer();
         core_combos::update_target_active(&w, ComboTargetId(target_id), active_val)?;
     }
-    // Backwards-compat: if neither field was present, surface
-    // the historical "missing 'priority_order'" error so a
-    // legacy caller still gets a useful 400 instead of a silent
-    // 200 with no work done.
-    if priority_order.is_none() && body.get("weight").is_none() && active.is_none() {
+    // Optional per-target `cooldown_mode`
+    if let Some(v) = body.get("cooldown_mode") {
+        let mode = match v {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) => Some(s.as_str()),
+            other => {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "cooldown_mode must be a string or null, got {}",
+                    other
+                ))));
+            }
+        };
+        let w = s.db_pool().writer();
+        core_combos::update_target_cooldown_mode(&w, ComboTargetId(target_id), mode)?;
+    }
+    // Optional per-target `cooldown_base_secs`
+    if let Some(v) = body.get("cooldown_base_secs") {
+        let base = if v.is_null() {
+            None
+        } else {
+            Some(v.as_u64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "cooldown_base_secs must be a non-negative integer or null".into(),
+                ))
+            })?)
+        };
+        let w = s.db_pool().writer();
+        core_combos::update_target_cooldown_base(&w, ComboTargetId(target_id), base)?;
+    }
+    // Optional per-target `cooldown_max_secs`
+    if let Some(v) = body.get("cooldown_max_secs") {
+        let max = if v.is_null() {
+            None
+        } else {
+            Some(v.as_u64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "cooldown_max_secs must be a non-negative integer or null".into(),
+                ))
+            })?)
+        };
+        let w = s.db_pool().writer();
+        core_combos::update_target_cooldown_max(&w, ComboTargetId(target_id), max)?;
+    }
+    // Optional per-target `cooldown_factor`
+    if let Some(v) = body.get("cooldown_factor") {
+        let factor = if v.is_null() {
+            None
+        } else {
+            Some(v.as_u64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "cooldown_factor must be a non-negative integer or null".into(),
+                ))
+            })? as u32)
+        };
+        let w = s.db_pool().writer();
+        core_combos::update_target_cooldown_factor(&w, ComboTargetId(target_id), factor)?;
+    }
+    // Backwards-compat: if no known field was present, surface validation error
+    if priority_order.is_none()
+        && body.get("weight").is_none()
+        && active.is_none()
+        && body.get("cooldown_mode").is_none()
+        && body.get("cooldown_base_secs").is_none()
+        && body.get("cooldown_max_secs").is_none()
+        && body.get("cooldown_factor").is_none()
+    {
         return Err(ApiError(CoreError::Validation(
-            "missing 'priority_order', 'weight', or 'active'".into(),
+            "missing update fields in request body".into(),
         )));
     }
     Ok(Json(serde_json::json!({
@@ -448,6 +509,8 @@ pub async fn update_combo_target(
         "priority_order": priority_order,
         "weight": body.get("weight").and_then(|v| v.as_i64()),
         "active": active,
+        "cooldown_mode": body.get("cooldown_mode"),
+        "cooldown_base_secs": body.get("cooldown_base_secs"),
     })))
 }
 

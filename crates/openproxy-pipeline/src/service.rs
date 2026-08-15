@@ -631,21 +631,30 @@ impl tower::Service<PipelineState> for RoutingService {
                             .await;
                         }
                         "record" => {
-                            let reason = result
-                                .error
-                                .as_ref()
-                                .map(|e| e.to_string())
-                                .unwrap_or_else(|| "retryable failure".to_string());
-                            let mode = combo.cooldown_mode;
-                            let base_secs = combo
+                            let mode = target.target.cooldown_mode.unwrap_or(combo.cooldown_mode);
+                            let base_secs = target
+                                .target
                                 .cooldown_base_secs
+                                .or(combo.cooldown_base_secs)
                                 .unwrap_or(pipeline.config.cooldown_secs);
-                            let max_secs = combo
-                                .cooldown_max_secs
-                                .unwrap_or(pipeline.config.cooldown_max_secs);
-                            let factor = combo
-                                .cooldown_factor
-                                .unwrap_or(pipeline.config.cooldown_factor);
+                            if mode == openproxy_types::config::CooldownMode::None || base_secs == 0 {
+                                // Cooldown is disabled for this target / combo
+                            } else {
+                                let reason = result
+                                    .error
+                                    .as_ref()
+                                    .map(|e| e.to_string())
+                                    .unwrap_or_else(|| "retryable failure".to_string());
+                                let max_secs = target
+                                    .target
+                                    .cooldown_max_secs
+                                    .or(combo.cooldown_max_secs)
+                                    .unwrap_or(pipeline.config.cooldown_max_secs);
+                                let factor = target
+                                    .target
+                                    .cooldown_factor
+                                    .or(combo.cooldown_factor)
+                                    .unwrap_or(pipeline.config.cooldown_factor);
                             let is_rate_limited = matches!(
                                 result.error,
                                 Some(openproxy_types::error::CoreError::RateLimited { .. })
@@ -707,6 +716,7 @@ impl tower::Service<PipelineState> for RoutingService {
                                     factor,
                                 );
                             }).await;
+                            }
                         }
                         _ => {}
                     }

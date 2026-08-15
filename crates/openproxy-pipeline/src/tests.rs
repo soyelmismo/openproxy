@@ -2554,6 +2554,53 @@ async fn pipeline_clears_cooldown_on_success_path() {
     let _ = combo_id;
 }
 
+#[tokio::test]
+async fn test_cooldown_disabled_modes() {
+    let pool = TestPool::new();
+    let conn = Arc::new(parking_lot::Mutex::new(pool.writer()));
+    let repo = SqlitePipelineRepository::new(Arc::clone(&conn));
+    let (_combo_id, target_id, _account_id, _model_id) = {
+        let w = pool.writer();
+        seed_target_with_account(&w, &MasterKey::generate())
+    };
+
+    // 1. CooldownMode::None should not insert any row into target_cooldowns
+    repo.record_cooldown(
+        target_id,
+        "mode-none",
+        openproxy_types::config::CooldownMode::None,
+        60,
+        60,
+        1,
+    )
+    .expect("record with None");
+
+    let count: i64 = pool.writer().query_row(
+        "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1",
+        rusqlite::params![target_id.0],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 0);
+
+    // 2. CooldownMode::Flat with base_secs = 0 should not insert any row
+    repo.record_cooldown(
+        target_id,
+        "base-zero",
+        openproxy_types::config::CooldownMode::Flat,
+        0,
+        60,
+        1,
+    )
+    .expect("record with base 0");
+
+    let count: i64 = pool.writer().query_row(
+        "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1",
+        rusqlite::params![target_id.0],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 0);
+}
+
 // -------------------------------------------------------------------
 // Circuit-breaker regression
 //
@@ -5542,6 +5589,10 @@ fn test_quota_routing_and_protection() {
         weight: 1,
         active: true,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+        cooldown_mode: None,
+        cooldown_base_secs: None,
+        cooldown_max_secs: None,
+        cooldown_factor: None,
     };
 
     let to_resolved = |t: ComboTarget| crate::context::ResolvedTarget {
@@ -5723,6 +5774,10 @@ fn test_opencode_zen_no_account_proxy_rotation() {
         weight: 1,
         active: true,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+        cooldown_mode: None,
+        cooldown_base_secs: None,
+        cooldown_max_secs: None,
+        cooldown_factor: None,
     };
 
     // 3. Enable use_proxies on opencode-zen and insert an alive proxy

@@ -120,6 +120,14 @@ pub struct ComboTarget {
     pub active: bool,
     #[serde(default)]
     pub rate_limit_scope: crate::providers::RateLimitScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_mode: Option<crate::config::CooldownMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_base_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_max_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_factor: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +158,14 @@ pub struct ComboTargetWithModel {
     pub active: bool,
     #[serde(default = "default_true")]
     pub provider_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_mode: Option<crate::config::CooldownMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_base_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_max_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_factor: Option<u32>,
 }
 
 #[cfg(test)]

@@ -215,6 +215,10 @@ mod tests {
                 weight: 100,
                 active: true,
                 rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
             },
             model: openproxy_types::Model {
                 row_id: openproxy_types::ModelRowId(1),

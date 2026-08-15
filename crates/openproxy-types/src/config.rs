@@ -271,6 +271,7 @@ pub enum CooldownMode {
     #[default]
     Flat,
     Exponential,
+    None,
 }
 
 impl CooldownMode {
@@ -278,18 +279,21 @@ impl CooldownMode {
         match self {
             Self::Flat => "flat",
             Self::Exponential => "exponential",
+            Self::None => "none",
         }
     }
     pub fn parse(s: &str) -> std::result::Result<Self, String> {
         match s {
             "flat" => Ok(Self::Flat),
             "exponential" => Ok(Self::Exponential),
+            "none" | "disabled" | "off" => Ok(Self::None),
             other => Err(format!("invalid cooldown_mode: {}", other)),
         }
     }
     pub fn from_db(s: Option<&str>) -> Self {
         match s {
             Some("exponential") => Self::Exponential,
+            Some("none") | Some("disabled") | Some("off") => Self::None,
             _ => Self::Flat,
         }
     }
@@ -303,6 +307,7 @@ mod tests {
     fn test_cooldown_mode_as_str() {
         assert_eq!(CooldownMode::Flat.as_str(), "flat");
         assert_eq!(CooldownMode::Exponential.as_str(), "exponential");
+        assert_eq!(CooldownMode::None.as_str(), "none");
     }
 
     #[test]
@@ -312,6 +317,9 @@ mod tests {
             CooldownMode::parse("exponential"),
             Ok(CooldownMode::Exponential)
         );
+        assert_eq!(CooldownMode::parse("none"), Ok(CooldownMode::None));
+        assert_eq!(CooldownMode::parse("disabled"), Ok(CooldownMode::None));
+        assert_eq!(CooldownMode::parse("off"), Ok(CooldownMode::None));
         assert!(CooldownMode::parse("unknown").is_err());
         assert_eq!(
             CooldownMode::parse("invalid"),
@@ -325,6 +333,9 @@ mod tests {
             CooldownMode::from_db(Some("exponential")),
             CooldownMode::Exponential
         );
+        assert_eq!(CooldownMode::from_db(Some("none")), CooldownMode::None);
+        assert_eq!(CooldownMode::from_db(Some("disabled")), CooldownMode::None);
+        assert_eq!(CooldownMode::from_db(Some("off")), CooldownMode::None);
         assert_eq!(CooldownMode::from_db(Some("flat")), CooldownMode::Flat);
         assert_eq!(CooldownMode::from_db(Some("unknown")), CooldownMode::Flat);
         assert_eq!(CooldownMode::from_db(None), CooldownMode::Flat);

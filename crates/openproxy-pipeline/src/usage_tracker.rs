@@ -540,18 +540,24 @@ impl<'a> UsageRecordBuilder<'a> {
             combo_id: self.combo.id,
             error_msg: err_msg,
             is_upstream_health_issue: is_health_issue,
-            cooldown_mode: self.combo.cooldown_mode,
+            cooldown_mode: self
+                .target
+                .cooldown_mode
+                .unwrap_or(self.combo.cooldown_mode),
             cooldown_base_secs: self
-                .combo
+                .target
                 .cooldown_base_secs
+                .or(self.combo.cooldown_base_secs)
                 .unwrap_or(self.tracker.cooldown_secs),
             cooldown_max_secs: self
-                .combo
+                .target
                 .cooldown_max_secs
+                .or(self.combo.cooldown_max_secs)
                 .unwrap_or(self.tracker.cooldown_max_secs),
             cooldown_factor: self
-                .combo
+                .target
                 .cooldown_factor
+                .or(self.combo.cooldown_factor)
                 .unwrap_or(self.tracker.cooldown_factor),
         };
 

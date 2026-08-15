@@ -539,6 +539,10 @@ impl PipelineRepository for SqlitePipelineRepository {
         max_secs: u64,
         factor: u32,
     ) -> Result<()> {
+        if mode == CooldownMode::None || base_secs == 0 {
+            return Ok(());
+        }
+
         let conn = self.conn.lock();
         let current_count: u32 = conn
             .query_row(
@@ -551,6 +555,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         let new_count = current_count + 1;
 
         let cooldown_secs = match mode {
+            CooldownMode::None => return Ok(()),
             CooldownMode::Flat => base_secs,
             CooldownMode::Exponential => {
                 let mut exp_secs =
@@ -1024,7 +1029,8 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
+                    ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
@@ -1046,6 +1052,13 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
             let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
             let rate_limit_scope: String = row.get(8)?;
             let active: i64 = row.get::<_, Option<i64>>(9)?.unwrap_or(1);
+            let cooldown_mode_str: Option<String> = row.get(10).ok().flatten();
+            let cooldown_mode = cooldown_mode_str
+                .as_deref()
+                .and_then(|s| openproxy_types::config::CooldownMode::parse(s).ok());
+            let cooldown_base_secs: Option<u64> = row.get::<_, Option<i64>>(11)?.map(|v| v as u64);
+            let cooldown_max_secs: Option<u64> = row.get::<_, Option<i64>>(12)?.map(|v| v as u64);
+            let cooldown_factor: Option<u32> = row.get::<_, Option<i64>>(13)?.map(|v| v as u32);
 
             Ok(ComboTarget {
                 id: openproxy_types::ids::ComboTargetId(id),
@@ -1061,6 +1074,10 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
                     &rate_limit_scope,
                 )
                 .unwrap_or_default(),
+                cooldown_mode,
+                cooldown_base_secs,
+                cooldown_max_secs,
+                cooldown_factor,
             })
         })
         .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;

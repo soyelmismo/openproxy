@@ -82,6 +82,7 @@ export const PRIORITY_MODE_TOOLTIPS: Record<PriorityMode, string> = {
 export const COOLDOWN_MODE_TOOLTIPS: Record<CooldownMode, string> = {
   flat: "Fixed cooldown duration after each failure. The target is parked for the same amount of time regardless of how many times it has failed.",
   exponential: "Cooldown grows with each failure: base × factor^(failures-1), capped at max. A flapping target gets progressively longer cooldowns, giving it time to recover.",
+  none: "Cooldown is disabled. Targets will not be parked in cooldown on failures.",
 };
 
 // Localised status -> CSS class for the status-pill component.

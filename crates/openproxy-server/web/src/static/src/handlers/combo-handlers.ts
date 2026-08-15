@@ -33,6 +33,7 @@ export const PARAM_TOOLTIPS = {
 const COOLDOWN_MODE_LABELS: Record<CooldownMode, string> = {
   flat: "Flat",
   exponential: "Exponential",
+  none: "Disabled (None)",
 };
 
 /** Render the priority-mode `<option>`s with the given value preselected. */
@@ -43,7 +44,7 @@ export function priorityModeOptions(selected: PriorityMode): TemplateResult {
 
 /** Render the cooldown-mode `<option>`s with the given value preselected. */
 export function cooldownModeOptions(selected: CooldownMode): TemplateResult {
-  const modes: CooldownMode[] = ["flat", "exponential"];
+  const modes: CooldownMode[] = ["flat", "exponential", "none"];
   return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${COOLDOWN_MODE_LABELS[m]}</option>`)}`;
 }
 

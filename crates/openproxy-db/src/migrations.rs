@@ -292,6 +292,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000056_add_provider_favicon",
         sql: include_str!("../migrations/000056_add_provider_favicon.sql"),
     },
+    Migration {
+        version: 57,
+        name: "000057_add_cooldown_to_combo_targets",
+        sql: include_str!("../migrations/000057_add_cooldown_to_combo_targets.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

@@ -87,7 +87,7 @@ export type PriorityMode = "strict" | "lkgp" | "weighted" | "least_used" | "p2c"
  *  `cooldown_base_secs`); `"exponential"` grows as
  *  `base * factor^(failures-1)`, capped at `max` (migration 000035).
  *  @see crates/openproxy-core/src/combos.rs:129 */
-export type CooldownMode = "flat" | "exponential";
+export type CooldownMode = "flat" | "exponential" | "none";
 
 /** `#[serde(rename_all = "lowercase")]`.
  *  @see crates/openproxy-core/src/models.rs:22 */
@@ -333,6 +333,8 @@ export interface ComboTarget {
    *  still parse — the dashboard treats `undefined` as `1`. */
   weight?: number;
   active: boolean;
+  cooldown_mode?: CooldownMode | null;
+  cooldown_base_secs?: number | null;
 }
 
 /** `ComboTarget` enriquecido con metadata del model (display name, etc.)
