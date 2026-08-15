@@ -99,23 +99,23 @@ pub fn process_job(
                             tracing::warn!("cooldown::clear failed in background: {}", e);
                         }
                     }
-                    "record" => {
+                    "record"
                         if cooldown_mode != openproxy_types::config::CooldownMode::None
-                            && cooldown_base_secs > 0
-                        {
-                            let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
-                            if let Err(e) = repo.record_cooldown(
-                                target_id,
-                                &reason,
-                                cooldown_mode,
-                                cooldown_base_secs,
-                                cooldown_max_secs,
-                                cooldown_factor,
-                            ) {
-                                tracing::warn!("cooldown::record failed in background: {}", e);
-                            }
+                            && cooldown_base_secs > 0 =>
+                    {
+                        let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
+                        if let Err(e) = repo.record_cooldown(
+                            target_id,
+                            &reason,
+                            cooldown_mode,
+                            cooldown_base_secs,
+                            cooldown_max_secs,
+                            cooldown_factor,
+                        ) {
+                            tracing::warn!("cooldown::record failed in background: {}", e);
                         }
                     }
+                    "record" => {}
                     _ => {}
                 }
             }
