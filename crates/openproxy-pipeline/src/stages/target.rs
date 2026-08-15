@@ -172,6 +172,9 @@ impl PipelineStage for FormattingStage {
             openproxy_adapters::adapters::AdapterFormat::Responses => {
                 openproxy_types::TargetFormat::Responses
             }
+            openproxy_adapters::adapters::AdapterFormat::Atomesus => {
+                openproxy_types::TargetFormat::Atomesus
+            }
         };
 
         let stream = if !ctx.req.openai_request.stream && ctx.req.stream_sink.is_some() {

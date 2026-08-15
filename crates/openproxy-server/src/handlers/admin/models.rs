@@ -469,23 +469,7 @@ pub(crate) async fn run_test_for_model(
         extra: serde_json::Map::new(),
     };
 
-    // 6. Custom providers (kiro) are not supported by the simple test path yet.
-    // antigravity is supported via wrap_request_body.
-    let is_custom_provider = matches!(model.provider_id.as_str(), "kiro");
-
-    if is_custom_provider {
-        return (
-            TestResult {
-                row_id: model_row_id,
-                status: 501,
-                elapsed_ms: 0,
-                error_msg: Some("Test not supported for custom providers yet".into()),
-                skipped: true,
-                skip_reason: Some("Test not supported for custom providers yet".into()),
-            },
-            None,
-        );
-    }
+    // 6. Test supported for all providers via standard or wrap_request_body path.
 
     // 7. Standard adapter path: translate to the row's native format
     //    and assemble the URL. This works for all non-custom providers
@@ -498,6 +482,7 @@ pub(crate) async fn run_test_for_model(
         adapters::AdapterFormat::Mixed => model.target_format,
         adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
         adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
+        adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
     };
     let (url, body_value): (String, serde_json::Value) = if effective_target_format
         == openproxy_core::models::TargetFormat::Anthropic
@@ -685,6 +670,31 @@ pub(crate) async fn run_test_for_model(
             kiro_region: None,
             kiro_profile_arn: None,
             antigravity_project: project,
+            antigravity_metadata: None,
+            codex_workspace_id: None,
+        });
+    } else if model.provider_id.as_str() == "kiro" {
+        let (region, profile_arn) = raw_account_opt
+            .as_ref()
+            .and_then(|a| a.oauth_provider_specific.as_ref())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .map(|v| {
+                let r = v.get("region").and_then(|x| x.as_str()).map(String::from);
+                let p = v
+                    .get("profileArn")
+                    .or_else(|| v.get("profile_arn"))
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+                (r, p)
+            })
+            .unwrap_or((None, None));
+
+        custom_meta = Some(openproxy_types::context::CustomProviderMeta {
+            access_token: api_key.clone(),
+            maybe_refresh: None,
+            kiro_region: region,
+            kiro_profile_arn: profile_arn,
+            antigravity_project: None,
             antigravity_metadata: None,
             codex_workspace_id: None,
         });

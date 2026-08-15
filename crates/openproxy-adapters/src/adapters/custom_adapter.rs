@@ -82,22 +82,24 @@ impl ProviderAdapter for CustomAdapter {
             ))
         })?;
 
-        // Build auth header based on the provider's auth type.
+        // Build headers: auth header + extra headers configured for this provider.
         let bearer_auth = format!("Bearer {api_key}");
-        let auth_headers: &[(&str, &str)] = if api_key.is_empty() {
-            &[]
-        } else {
+        let mut headers: Vec<(&str, &str)> = Vec::with_capacity(1 + self.config.extra_headers.len());
+        if !api_key.is_empty() {
             match self.config.auth_type {
                 AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                    &[("Authorization", bearer_auth.as_str())]
+                    headers.push(("Authorization", bearer_auth.as_str()));
                 }
-                AdapterAuthType::XApiKey => &[("x-api-key", api_key)],
-                AdapterAuthType::GoogApiKey => &[("x-goog-api-key", api_key)],
-                AdapterAuthType::None => &[],
+                AdapterAuthType::XApiKey => headers.push(("x-api-key", api_key)),
+                AdapterAuthType::GoogApiKey => headers.push(("x-goog-api-key", api_key)),
+                AdapterAuthType::None => {}
             }
-        };
+        }
+        for (k, v) in &self.config.extra_headers {
+            headers.push((k.as_str(), v.as_str()));
+        }
 
-        let body = upstream_get_json(upstream_client, &url, auth_headers)
+        let body = upstream_get_json(upstream_client, &url, &headers)
             .await
             .map_err(|e| {
                 CoreError::UpstreamConnection(format!("{} /models: {e}", self.config.id))
@@ -110,6 +112,7 @@ impl ProviderAdapter for CustomAdapter {
                 AdapterFormat::Anthropic => TargetFormat::Anthropic,
                 AdapterFormat::Gemini => TargetFormat::Gemini,
                 AdapterFormat::Responses => TargetFormat::Responses,
+                AdapterFormat::Atomesus => TargetFormat::Atomesus,
                 // For Mixed providers, default to Openai; the model's
                 // stored target_format in the DB will be used at routing
                 // time.

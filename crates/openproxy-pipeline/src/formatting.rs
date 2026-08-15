@@ -87,7 +87,7 @@ impl TargetFormatter for GeminiFormatter {
 
 pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatter {
     match target_format {
-        TargetFormat::Openai => &OpenaiFormatter,
+        TargetFormat::Openai | TargetFormat::Atomesus => &OpenaiFormatter,
         TargetFormat::Anthropic => &AnthropicFormatter,
         TargetFormat::Gemini => &GeminiFormatter,
         TargetFormat::Responses => &ResponsesFormatter,

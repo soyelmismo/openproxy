@@ -1019,6 +1019,38 @@ impl UpstreamDispatcher {
                     }
                 }
             }
+            openproxy_types::TargetFormat::Atomesus => {
+                let text = response_body_raw
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.get("content"))
+                    .and_then(|s| s.as_str())
+                    .or_else(|| response_body_raw.get("content").and_then(|s| s.as_str()))
+                    .unwrap_or("");
+                OpenAIResponse {
+                    id: format!("chatcmpl_{}", uuid::Uuid::new_v4()),
+                    object: "chat.completion".to_string(),
+                    created: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    model: req.openai_request.model.clone(),
+                    choices: vec![openproxy_types::OpenAIChoice {
+                        index: 0,
+                        message: openproxy_types::OpenAIMessage {
+                            role: "assistant".to_string(),
+                            content: Some(serde_json::Value::String(text.to_string())),
+                            name: None,
+                            tool_call_id: None,
+                            tool_calls: None,
+                            extra: Default::default(),
+                        },
+                        finish_reason: Some("stop".to_string()),
+                    }],
+                    usage: None,
+                }
+            }
         };
 
         // Think-tag extraction: some providers (DeepSeek, Qwen, vLLM)

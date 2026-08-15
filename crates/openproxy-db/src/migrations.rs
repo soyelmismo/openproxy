@@ -297,6 +297,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000057_add_cooldown_to_combo_targets",
         sql: include_str!("../migrations/000057_add_cooldown_to_combo_targets.sql"),
     },
+    Migration {
+        version: 58,
+        name: "000058_add_atomesus_format",
+        sql: include_str!("../migrations/000058_add_atomesus_format.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

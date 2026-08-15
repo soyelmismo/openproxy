@@ -252,10 +252,11 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 14, "first call inserts all fourteen");
+        assert_eq!(n, 15, "first call inserts all fifteen");
 
-        // All twelve are present and reachable by id.
+        // All fifteen are present and reachable by id.
         for id in [
+            "atomesus",
             "openrouter",
             "minimax",
             "opencode-zen",
@@ -283,21 +284,21 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 14);
+        assert_eq!(first, 15);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 14, "still exactly fourteen rows");
+        assert_eq!(count, 15, "still exactly fifteen rows");
     }
 
     #[test]
     fn partial_state_only_seeds_missing() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        // Pre-seed one of the ten manually.
+        // Pre-seed one of the builtins manually.
         providers::create(
             &conn,
             providers::NewProvider {
@@ -314,7 +315,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 13, "only the thirteen missing ones");
+        assert_eq!(n, 14, "only the fourteen missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -328,6 +329,12 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         seed_builtin_providers(&conn).expect("seed");
+
+        let atomesus = providers::get(&conn, &ProviderId::new("atomesus"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(atomesus.auth_type, AuthType::Bearer);
+        assert_eq!(atomesus.format, ProviderFormat::Atomesus);
 
         let openrouter = providers::get(&conn, &ProviderId::new("openrouter"))
             .expect("get")
@@ -379,12 +386,9 @@ mod tests {
 
     #[test]
     fn builtin_provider_ids_lists_twelve() {
-        // The list is the source of truth for "is this provider
-        // protected from delete?" — guard it with a test so a future
-        // addition to `BUILTINS` (e.g. a new seeded provider) gets
-        // remembered here.
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 14);
+        assert_eq!(ids.len(), 15);
+        assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
         assert!(ids.iter().any(|s| s == "opencode-zen"));

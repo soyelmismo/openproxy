@@ -36,7 +36,7 @@ pub fn build_opencode_headers(
                 headers.push(("x-api-key".into(), api_key.to_string()));
                 headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
             }
-            TargetFormat::Openai | TargetFormat::Gemini => {
+            TargetFormat::Openai | TargetFormat::Gemini | TargetFormat::Atomesus => {
                 if let Some(auth) = adapter.build_auth_header(api_key) {
                     headers.push(auth);
                 }

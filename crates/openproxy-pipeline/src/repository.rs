@@ -387,6 +387,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                     "anthropic" => openproxy_types::message::TargetFormat::Anthropic,
                     "gemini" => openproxy_types::message::TargetFormat::Gemini,
                     "responses" => openproxy_types::message::TargetFormat::Responses,
+                    "atomesus" => openproxy_types::message::TargetFormat::Atomesus,
                     other => {
                         return Err(rusqlite::Error::FromSqlConversionFailure(
                             4,

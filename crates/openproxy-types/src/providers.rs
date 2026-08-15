@@ -48,6 +48,7 @@ pub enum ProviderFormat {
     Mixed,
     Gemini,
     Responses,
+    Atomesus,
 }
 
 impl ProviderFormat {
@@ -58,6 +59,7 @@ impl ProviderFormat {
             ProviderFormat::Mixed => "mixed",
             ProviderFormat::Gemini => "gemini",
             ProviderFormat::Responses => "responses",
+            ProviderFormat::Atomesus => "atomesus",
         }
     }
 
@@ -68,6 +70,7 @@ impl ProviderFormat {
             "mixed" => Ok(ProviderFormat::Mixed),
             "gemini" => Ok(ProviderFormat::Gemini),
             "responses" => Ok(ProviderFormat::Responses),
+            "atomesus" => Ok(ProviderFormat::Atomesus),
             other => Err(format!("invalid provider format: {}", other)),
         }
     }
@@ -181,6 +184,7 @@ mod tests {
         assert_eq!(ProviderFormat::Mixed.as_str(), "mixed");
         assert_eq!(ProviderFormat::Gemini.as_str(), "gemini");
         assert_eq!(ProviderFormat::Responses.as_str(), "responses");
+        assert_eq!(ProviderFormat::Atomesus.as_str(), "atomesus");
     }
 
     #[test]
@@ -204,6 +208,10 @@ mod tests {
         assert_eq!(
             ProviderFormat::parse("responses").unwrap(),
             ProviderFormat::Responses
+        );
+        assert_eq!(
+            ProviderFormat::parse("atomesus").unwrap(),
+            ProviderFormat::Atomesus
         );
 
         assert!(ProviderFormat::parse("invalid").is_err());

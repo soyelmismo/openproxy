@@ -10,6 +10,7 @@ pub enum TargetFormat {
     Anthropic,
     Gemini,
     Responses,
+    Atomesus,
 }
 
 impl TargetFormat {
@@ -19,6 +20,7 @@ impl TargetFormat {
             TargetFormat::Anthropic => "anthropic",
             TargetFormat::Gemini => "gemini",
             TargetFormat::Responses => "responses",
+            TargetFormat::Atomesus => "atomesus",
         }
     }
 
@@ -28,6 +30,7 @@ impl TargetFormat {
             "anthropic" => Ok(TargetFormat::Anthropic),
             "gemini" => Ok(TargetFormat::Gemini),
             "responses" => Ok(TargetFormat::Responses),
+            "atomesus" => Ok(TargetFormat::Atomesus),
             other => Err(CoreError::Validation(format!(
                 "invalid target_format: {}",
                 other
@@ -331,5 +334,19 @@ mod tests {
         assert_eq!(extract_content_part_text(&json!("str")), "str");
         assert_eq!(extract_content_part_text(&json!(null)), "");
         assert_eq!(extract_content_part_text(&json!(123)), "123");
+    }
+
+    #[test]
+    fn test_target_format_as_str_and_parse() {
+        for fmt in [
+            TargetFormat::Openai,
+            TargetFormat::Anthropic,
+            TargetFormat::Gemini,
+            TargetFormat::Responses,
+            TargetFormat::Atomesus,
+        ] {
+            assert_eq!(TargetFormat::parse(fmt.as_str()).unwrap(), fmt);
+        }
+        assert!(TargetFormat::parse("unknown").is_err());
     }
 }

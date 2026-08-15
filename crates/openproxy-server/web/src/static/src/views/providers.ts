@@ -24,7 +24,7 @@ import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { flashButton, showApiError } from "../lib/ui-utils.js";
-import { showCreateProvider, editProviderEndpointPrompt } from "../handlers/provider-handlers.js";
+import { showCreateProvider, editProviderEndpointPrompt, editProviderHeadersPrompt } from "../handlers/provider-handlers.js";
 import { showCreateAccount, showUpdateAccountKey, updateAccountLabel, copyAccountApiKey } from "../handlers/account-handlers.js";
 import { showCustomModelForm } from "../components/model-custom-form.js";
 import { OAuthLogin } from "../handlers/oauth-handlers.js";
@@ -205,6 +205,11 @@ async function onRenameProvider(providerId: string, currentName: string): Promis
 
 async function onEditBaseUrl(providerId: string, currentBaseUrl: string): Promise<void> {
   await editProviderEndpointPrompt(providerId, currentBaseUrl);
+  requestUpdate();
+}
+
+async function onEditHeaders(providerId: string, currentHeadersJson: string | null | undefined): Promise<void> {
+  await editProviderHeadersPrompt(providerId, currentHeadersJson);
   requestUpdate();
 }
 
@@ -828,11 +833,15 @@ function renderDetailHeader(provider: Provider): TemplateResult {
           <span class="chip">${provider.auth_type}</span>
           <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
           <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎</small>
+          ${provider.extra_headers_json
+            ? html`<span class="chip" title=${provider.extra_headers_json} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>headers (${Object.keys(JSON.parse(provider.extra_headers_json || "{}")).length})</span>`
+            : html``}
           ${provider.active ? html`` : html`<span class="chip inactive-chip">inactive</span>`}
         </div>
       </div>
       <div class="actions">
         <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎ Edit endpoint</button>
+        <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>✎ Edit headers</button>
         <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>↻ Refresh models</button>
         <button class="primary" @click=${() => onToggleProviderActive(provider.id, !provider.active)}>
           ${provider.active ? "Deactivate" : "Activate"}

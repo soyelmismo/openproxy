@@ -98,12 +98,14 @@ pub trait ProviderAdapter: Send + Sync {
                 )
             }
             AdapterFormat::Responses => format!("{}/responses", self.config().base_url),
+            AdapterFormat::Atomesus => format!("{}/chat/atomesus", self.config().base_url),
             AdapterFormat::Mixed => match target_format {
                 TargetFormat::Openai | TargetFormat::Gemini => {
                     format!("{}/chat/completions", self.config().base_url)
                 }
                 TargetFormat::Anthropic => format!("{}/messages", self.config().base_url),
                 TargetFormat::Responses => format!("{}/responses", self.config().base_url),
+                TargetFormat::Atomesus => format!("{}/chat/atomesus", self.config().base_url),
             },
         }
     }
@@ -239,6 +241,7 @@ pub trait ProviderAdapter: Send + Sync {
                 AdapterFormat::Anthropic => TargetFormat::Anthropic,
                 AdapterFormat::Gemini => TargetFormat::Gemini,
                 AdapterFormat::Responses => TargetFormat::Responses,
+                AdapterFormat::Atomesus => TargetFormat::Atomesus,
                 AdapterFormat::Mixed => TargetFormat::Openai,
             };
             fetch_openai_models(
@@ -612,6 +615,7 @@ define_provider_adapter! {
     pub enum ProviderAdapterEnum {
         builtins {
             Antigravity(crate::adapters::antigravity::AntigravityAdapter),
+            Atomesus(crate::adapters::atomesus::AtomesusAdapter),
             Cline(crate::adapters::cline::ClineAdapter),
             CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
             Codex(crate::adapters::codex::CodexAdapter),
@@ -745,6 +749,7 @@ macro_rules! declare_openai_adapter {
 pub use declare_openai_adapter;
 
 pub mod antigravity;
+pub mod atomesus;
 pub mod cline;
 pub mod cloudflare_workers_ai;
 pub mod codex;
@@ -768,6 +773,7 @@ pub mod openrouter;
 pub use mock::MockAdapter;
 
 pub use antigravity::AntigravityAdapter;
+pub use atomesus::AtomesusAdapter;
 pub use cline::ClineAdapter;
 pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
 pub use codex::CodexAdapter;
@@ -1193,10 +1199,11 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_fourteen() {
+    fn builtin_adapters_returns_fifteen() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 14);
+        assert_eq!(v.len(), 15);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
+        assert!(ids.contains(&"atomesus"));
         assert!(ids.contains(&"cline"));
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));

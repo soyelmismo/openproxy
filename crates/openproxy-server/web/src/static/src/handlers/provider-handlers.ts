@@ -142,6 +142,10 @@ function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
                 <option value="mixed">mixed</option>
               </select>
             </div>
+            <div class="field">
+              <label for="provider-extra-headers">Extra Headers (JSON)</label>
+              <textarea id="provider-extra-headers" name="extra_headers_json" rows="3" placeholder='{"User-Agent": "Mozilla/5.0...", "Origin": "https://..."}' style="width: 100%; font-family: monospace; font-size: 0.85em; resize: vertical;"></textarea>
+            </div>
           </div>
           <div class="modal-footer">
             <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
@@ -174,10 +178,15 @@ export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<v
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
+  const entries = Object.fromEntries(f);
+  const extraHeaders = entries["extra_headers_json"];
+  if (typeof extraHeaders === "string" && extraHeaders.trim() === "") {
+    delete entries["extra_headers_json"];
+  }
   try {
     await api("/providers", {
       method: "POST",
-      body: JSON.stringify(Object.fromEntries(f)),
+      body: JSON.stringify(entries),
     });
     // Close the modal FIRST — the POST succeeded, the provider is
     // persisted. If the subsequent GET refresh fails (transient
@@ -330,6 +339,35 @@ export async function editProviderEndpointPrompt(providerId: string, currentBase
     });
     state.providers = await api("/providers") as typeof state.providers;
     showToast("Provider endpoint updated", "success");
+    navigate();
+  } catch (err: unknown) {
+    showApiError(err, "Error");
+  }
+}
+
+export async function editProviderHeadersPrompt(providerId: string, currentHeadersJson: string | null | undefined): Promise<void> {
+  const newHeaders = prompt(
+    `Edit Extra Headers (JSON) for provider "${providerId}":\n(Leave empty to remove)`,
+    currentHeadersJson || ""
+  );
+  if (newHeaders == null) return; // cancel
+  const trimmed = newHeaders.trim();
+  if (trimmed !== "") {
+    try {
+      JSON.parse(trimmed);
+    } catch {
+      showToast("Invalid JSON format for headers", "error");
+      return;
+    }
+  }
+
+  try {
+    await api("/providers/" + encodeURIComponent(providerId), {
+      method: "PATCH",
+      body: JSON.stringify({ extra_headers_json: trimmed === "" ? null : trimmed }),
+    });
+    state.providers = await api("/providers") as typeof state.providers;
+    showToast("Provider extra headers updated", "success");
     navigate();
   } catch (err: unknown) {
     showApiError(err, "Error");
