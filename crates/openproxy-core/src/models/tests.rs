@@ -2309,3 +2309,47 @@ fn count_targets_for(conn: &Connection, combo_id: i64) -> i64 {
     )
     .expect("count targets")
 }
+
+#[test]
+fn upsert_many_does_not_duplicate_notifications_on_rediscovery() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    openproxy_db::migrations::run(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('p1', 'Provider 1', 'https://example.com', 'none', 'openai')",
+        [],
+    )
+    .unwrap();
+    let provider = ProviderId::new("p1");
+
+    // First discovery creates notification
+    let d = [discovered("m1", TargetFormat::Openai)];
+    upsert_many(&conn, &provider, &d, Duration::from_secs(3600)).unwrap();
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM notifications WHERE kind = 'model_new' AND dedup_key = 'p1:m1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // Model temporarily disappears (upstream flap)
+    upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).unwrap();
+
+    // Model reappears
+    upsert_many(&conn, &provider, &d, Duration::from_secs(3600)).unwrap();
+
+    // Notification count must still be 1 (never re-notified)
+    let count_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM notifications WHERE kind = 'model_new' AND dedup_key = 'p1:m1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count_after, 1);
+}
+
+

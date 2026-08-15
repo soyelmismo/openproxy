@@ -430,10 +430,8 @@ export function initNotificationsStore(): void {
       void refreshUnreadCount();
     }, 500);
     // Transient toast. Suppressed during DnD so a fresh notification
-    // mid-drag doesn't yank focus. We show the toast for rebroadcasts
-    // too — the user-perceived event ("discovery failed again") is
-    // new even if the underlying row isn't.
-    if (!suppressToasts) {
+    // mid-drag doesn't yank focus. Only show toasts for novel events.
+    if (!suppressToasts && isNovel) {
       const title: string = t("notifications.kind." + (evt.kind as NotificationKind));
       const body: string = notificationBody(evt);
       const text: string = body ? (title + " — " + body) : title;

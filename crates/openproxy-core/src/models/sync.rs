@@ -248,10 +248,30 @@ pub fn generate_events(
         return Ok(events);
     }
 
+    let already_notified: std::collections::HashSet<String> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT dedup_key FROM notifications \
+                 WHERE kind = ?1 AND provider_id = ?2 AND dedup_key IS NOT NULL",
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![crate::notifications::KIND_MODEL_NEW, provider.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+        rows.filter_map(std::result::Result::ok).collect()
+    };
+
     let new_models_rows: Vec<_> = diff
         .new_models
         .iter()
-        .map(|d| {
+        .filter_map(|d| {
+            let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
+            if already_notified.contains(&dedup) {
+                return None;
+            }
             let payload = serde_json::json!({
                 "provider_id": provider.as_str(),
                 "model_id": d.model_id.as_str(),
@@ -259,16 +279,17 @@ pub fn generate_events(
                 "target_format": d.target_format.as_str(),
                 "context_length": d.context_length,
             });
-            let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
-            (payload, Some(dedup), Some(provider.as_str().to_string()))
+            Some((payload, Some(dedup), Some(provider.as_str().to_string())))
         })
         .collect();
 
-    if let Ok(results) = crate::notifications::insert_many(
-        tx,
-        crate::notifications::KIND_MODEL_NEW,
-        &new_models_rows,
-    ) {
+    if !new_models_rows.is_empty()
+        && let Ok(results) = crate::notifications::insert_many(
+            tx,
+            crate::notifications::KIND_MODEL_NEW,
+            &new_models_rows,
+        )
+    {
         for (id, payload) in results {
             events.push((id, crate::notifications::KIND_MODEL_NEW, payload));
         }

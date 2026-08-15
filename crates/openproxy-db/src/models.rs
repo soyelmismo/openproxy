@@ -394,30 +394,53 @@ pub fn apply_auto_activation(
         .is_ok_and(|n| n != 0);
 
     if notifications_present && !newly_active.is_empty() {
-        let _ = crate::batch::batch_insert(
-            &tx,
-            "INSERT OR IGNORE INTO",
-            "notifications",
-            &["kind", "payload_json", "dedup_key", "provider_id"],
-            &newly_active,
-            None,
-            |(model_id, display_name), query_params| {
-                let payload = serde_json::json!({
-                    "provider_id": provider.as_str(),
-                    "model_id": model_id,
-                    "display_name": display_name,
-                    "matched_keyword": keyword,
-                });
-                let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+        let already_notified: std::collections::HashSet<String> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT dedup_key FROM notifications \
+                     WHERE kind = 'model_auto_activated' AND provider_id = ?1 AND dedup_key IS NOT NULL",
+                )
+                .map_err(map_db_error)?;
+            let rows = stmt
+                .query_map(params![provider.as_str()], |r| r.get::<_, String>(0))
+                .map_err(map_db_error)?;
+            rows.filter_map(std::result::Result::ok).collect()
+        };
 
-                query_params.push(rusqlite::types::Value::Text(
-                    "model_auto_activated".to_string(),
-                ));
-                query_params.push(rusqlite::types::Value::Text(payload.to_string()));
-                query_params.push(rusqlite::types::Value::Text(dedup));
-                query_params.push(rusqlite::types::Value::Text(provider.as_str().to_string()));
-            },
-        );
+        let to_notify: Vec<_> = newly_active
+            .into_iter()
+            .filter(|(model_id, _)| {
+                let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+                !already_notified.contains(&dedup)
+            })
+            .collect();
+
+        if !to_notify.is_empty() {
+            let _ = crate::batch::batch_insert(
+                &tx,
+                "INSERT OR IGNORE INTO",
+                "notifications",
+                &["kind", "payload_json", "dedup_key", "provider_id"],
+                &to_notify,
+                None,
+                |(model_id, display_name), query_params| {
+                    let payload = serde_json::json!({
+                        "provider_id": provider.as_str(),
+                        "model_id": model_id,
+                        "display_name": display_name,
+                        "matched_keyword": keyword,
+                    });
+                    let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+
+                    query_params.push(rusqlite::types::Value::Text(
+                        "model_auto_activated".to_string(),
+                    ));
+                    query_params.push(rusqlite::types::Value::Text(payload.to_string()));
+                    query_params.push(rusqlite::types::Value::Text(dedup));
+                    query_params.push(rusqlite::types::Value::Text(provider.as_str().to_string()));
+                },
+            );
+        }
     }
 
     tx.commit().map_err(map_db_error)?;
