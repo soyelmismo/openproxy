@@ -18,20 +18,20 @@
 - Optional admin API and dashboard (feature-gated).
 - Headless by default — server runs without a UI.
 
-### Out of scope (MVP) & Estado de Implementación
-- [x] **Tool calling & function-calling translation**: Implementado (soporte y traducción bidireccional de esquemas de tools y llamadas entre OpenAI, Anthropic y Gemini).
-- [ ] **Responses API & Assistants API**: Post-MVP (fuera del alcance actual).
-- [ ] **Compresión HTTP de respuestas (`gzip` / `br`)**: Post-MVP (compresión a nivel transporte para assets estáticos y endpoints JSON; la compresión de prompts/payloads sí está implementada en `openproxy-compression`).
-- [x] **Prompt payload compression**: Implementado en crate `openproxy-compression` (modos Lite y RTK command filtering).
+### Out of scope (MVP) & Implementation Status
+- [x] **Tool calling & function-calling translation**: Implemented (bidirectional schema mapping and translation for tool calls between OpenAI, Anthropic, and Gemini).
+- [ ] **Responses API & Assistants API**: Post-MVP (out of current scope).
+- [ ] **HTTP response compression (`gzip` / `br`)**: Post-MVP (transport-level compression for static assets and JSON endpoints; prompt/payload compression is implemented in `openproxy-compression`).
+- [x] **Prompt payload compression**: Implemented in `openproxy-compression` crate (Lite and RTK command filtering modes).
 - [ ] **MCP (Model Context Protocol), A2A, agent frameworks**: Post-MVP.
 - [ ] **Persistent memory, conversation history, vector stores**: Post-MVP.
 - [ ] **Guardrails, content filters, evals, benchmarking**: Post-MVP.
-- [ ] **Desktop app, system tray, installers nativos**: Post-MVP.
-- [x] **i18n / l10n**: Implementado (soporte multi-idioma ES/EN en el dashboard web y sistema de traducción).
-- [x] **OAuth & flujos interactivos**: Implementado (soporte de OAuth 2.0 y Device Code flows en `openproxy-core::oauth`).
-- [x] **Modelos de precios personalizados (Custom pricing)**: Implementado (overrides de tarifas por modelo y proveedor, soporte de tokens de caché en DB y admin API).
-- [x] **Rate limiting por cliente/usuario**: Implementado (limitación de tasa y cuotas por API key/cliente con token bucket).
-- [ ] **Horizontal scaling (multi-instance)**: Post-MVP (soporte distribuido para contadores round-robin, circuit breakers y estado de rate limiting entre múltiples instancias).
+- [ ] **Desktop app, system tray, native installers**: Post-MVP.
+- [x] **i18n / l10n**: Implemented (multi-language ES/EN support in web dashboard and translation engine).
+- [x] **OAuth & interactive flows**: Implemented (OAuth 2.0 and Device Code flow support in `openproxy-core::oauth`).
+- [x] **Custom pricing models**: Implemented (per-model and per-provider rate overrides, cache token accounting in DB and admin API).
+- [x] **Client/user rate limiting**: Implemented (token-bucket rate and quota limiting per API key/client).
+- [ ] **Horizontal scaling (multi-instance)**: Post-MVP (distributed support for round-robin counters, circuit breakers, and rate-limiting state across multiple instances).
 
 ## 2. HTTP Endpoints
 

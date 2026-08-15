@@ -1,125 +1,125 @@
 # openproxy — Post-MVP Roadmap & Backlog
 
-Este documento define la hoja de ruta técnica y la lista estructurada de tareas (To-Do List) para las capacidades y características planificadas posteriores al MVP de **openproxy**.
+This document defines the technical roadmap and structured task list (To-Do List) for planned post-MVP capabilities and features of **openproxy**.
 
 ---
 
-## 1. Matriz de Priorización de Capacidades
+## 1. Capability Prioritization Matrix
 
-| Nivel | Área / Característica | Estado | Complejidad | Impacto |
+| Tier | Area / Feature | Status | Complexity | Impact |
 | :--- | :--- | :--- | :--- | :--- |
-| **P1** | **Compresión HTTP de Transporte (`gzip` / `br` / `zstd`)** | 📋 Pendiente | Baja | Alto |
-| **P2** | **MCP (Model Context Protocol) & Gateway de Herramientas** | 📋 Pendiente | Media | Alto |
-| **P3** | **Escalabilidad Horizontal & Estado Distribuido** | 📋 Pendiente | Alta | Alto |
-| **P4** | **Memoria Persistente & Conversation Stores** | 📋 Pendiente | Media | Medio |
-| **P5** | **Assistants API & Endpoints Stateful** | 📋 Pendiente | Alta | Medio |
-| **P6** | **Guardrails, Evals & Content Filtering** | 📋 Pendiente | Media | Medio |
-| **P7** | **Desktop App, System Tray & Distribución Nativa** | 📋 Pendiente | Alta | Bajo |
+| **P1** | **HTTP Transport Compression (`gzip` / `br` / `zstd`)** | 📋 Pending | Low | High |
+| **P2** | **MCP (Model Context Protocol) & Tool Gateway** | 📋 Pending | Medium | High |
+| **P3** | **Horizontal Scalability & Distributed State** | 📋 Pending | High | High |
+| **P4** | **Persistent Memory & Conversation Stores** | 📋 Pending | Medium | Medium |
+| **P5** | **Assistants API & Stateful Endpoints** | 📋 Pending | High | Medium |
+| **P6** | **Guardrails, Evals & Content Filtering** | 📋 Pending | Medium | Medium |
+| **P7** | **Desktop App, System Tray & Native Packaging** | 📋 Pending | High | Low |
 
 ---
 
-## 2. To-Do List Detallada por Capacidad
+## 2. Detailed To-Do List by Capability
 
-### 🚀 P1: Compresión HTTP de Transporte (Assets & JSON)
+### 🚀 P1: HTTP Transport Compression (Assets & JSON)
 
-*Objetivo:* Reducir significativamente el ancho de banda y los tiempos de transferencia en la carga de assets embebidos del dashboard SPA y en respuestas JSON voluminosas (catálogo de modelos, logs históricos, analíticas), sin afectar la latencia TTFT de los streams SSE.
+*Objective:* Significantly reduce bandwidth and transfer times when loading embedded SPA dashboard assets and bulky JSON responses (model catalog, historical logs, analytics), without impacting TTFT latency on SSE streams.
 
-- [ ] **Middleware de Compresión en `openproxy-server`**
-  - [ ] Integrar `tower-http::compression::CompressionLayer` con soporte para `gzip`, `brotli` (`br`) y `zstd`.
-  - [ ] Configurar umbral mínimo de tamaño (ej. solo comprimir payloads $\ge 1\,\text{KB}$).
-- [ ] **Compresión de Assets Estáticos Embebidos**
-  - [ ] Habilitar compresión al vuelo o pre-compresión en tiempo de build (`.gz` / `.br`) para los bundles del frontend (`/admin/dist/*`, CSS, JS, favicons).
-  - [ ] Configurar headers de caché (`Cache-Control: public, max-age=31536000, immutable` para assets hasheados).
-- [ ] **Compresión de Endpoints de Datos JSON**
-  - [ ] Comprimir respuestas de `GET /v1/models` (catálogos grandes de cientos de modelos).
-  - [ ] Comprimir respuestas de `/admin/api/usage/*`, `/admin/api/logs` y `/admin/api/models`.
-- [ ] **Bypass para Streams SSE (`text/event-stream`)**
-  - [ ] Asegurar que el stream de SSE (`/v1/chat/completions` con `stream: true`) no sufra buffering de compresión para preservar la métrica de TTFT y baja latencia chunk a chunk.
-
----
-
-### 🧩 P2: Soporte para MCP (Model Context Protocol) & Agentes
-
-*Objetivo:* Conectar openproxy con el ecosistema de herramientas e interoperabilidad de agentes basados en Model Context Protocol (MCP).
-
-- [ ] **Cliente MCP Integrado**
-  - [ ] Conector para servidores MCP locales (stdio) y remotos (SSE/HTTP).
-  - [ ] Descubrimiento dinámico de herramientas y recursos provistos por servidores MCP configurados.
-- [ ] **Inyección y Enrutamiento de Herramientas**
-  - [ ] Mapeo automático de herramientas MCP hacia el esquema `tools` de OpenAI / Anthropic / Gemini.
-  - [ ] Intercepción y ejecución de `tool_calls` dirigidas a servidores MCP registrados antes de devolver la respuesta al cliente.
-- [ ] **Administración en Dashboard**
-  - [ ] Vista en el dashboard web para registrar y monitorear servidores MCP activos y su inventario de herramientas.
+- [ ] **Compression Middleware in `openproxy-server`**
+  - [ ] Integrate `tower-http::compression::CompressionLayer` with support for `gzip`, `brotli` (`br`), and `zstd`.
+  - [ ] Configure minimum size threshold (e.g. only compress payloads $\ge 1\,\text{KB}$).
+- [ ] **Compression of Embedded Static Assets**
+  - [ ] Enable on-the-fly or build-time pre-compression (`.gz` / `.br`) for frontend bundles (`/admin/dist/*`, CSS, JS, favicons).
+  - [ ] Configure cache headers (`Cache-Control: public, max-age=31536000, immutable` for hashed assets).
+- [ ] **Compression of JSON Data Endpoints**
+  - [ ] Compress `GET /v1/models` responses (large catalogs with hundreds of models).
+  - [ ] Compress responses for `/admin/api/usage/*`, `/admin/api/logs`, and `/admin/api/models`.
+- [ ] **Bypass for SSE Streams (`text/event-stream`)**
+  - [ ] Ensure that the SSE stream (`/v1/chat/completions` with `stream: true`) is not subject to compression buffering, preserving the TTFT metric and low chunk-by-chunk latency.
 
 ---
 
-### 🌐 P3: Escalabilidad Horizontal & Estado Compartido
+### 🧩 P2: MCP (Model Context Protocol) & Agent Support
 
-*Objetivo:* Permitir el despliegue de múltiples réplicas del binario `openproxy` detrás de un balanceador de carga L7.
+*Objective:* Connect openproxy to the ecosystem of tools and agent interoperability based on the Model Context Protocol (MCP).
 
-- [ ] **Backend de Estado Distribuido (Opcional / Conectable)**
-  - [ ] Abstracción de estado con backend pluggable: `Memory` (monoproceso local) vs `Redis` / `Key-Value Store`.
-  - [ ] Sincronización de contadores atómicos de `round_robin` entre instancias.
-- [ ] **Circuit Breaker y Cooldowns Distribuidos**
-  - [ ] Publicación y suscripción (Pub/Sub) de eventos de degradación de cuentas y estados de salud.
-  - [ ] Sincronización de ventanas de rate-limiting upstream (429 `Retry-After`).
-- [ ] **Rate Limiting Distribuido de Clientes**
-  - [ ] Algoritmo de token bucket / leaky bucket respaldado por Redis para cuotas por API key en cluster.
-
----
-
-### 🧠 P4: Memoria Persistente, Context Stores & Vector Cache
-
-*Objetivo:* Gestionar contexto conversacional y almacenamiento semántico en el proxy.
-
-- [ ] **Almacenamiento de Conversaciones (`session_id` / `thread_id`)**
-  - [ ] Almacenamiento persistente de historiales de chat en SQLite / base de datos externa.
-  - [ ] Ventana deslizante automática de contexto y truncamiento inteligente de mensajes antiguos.
-- [ ] **Semantic Caching (Caché Semántica de Prompts)**
-  - [ ] Almacenamiento y búsqueda de embeddings para respuestas cacheadas frente a preguntas idénticas o semánticamente similares.
-  - [ ] Invalidador de caché configurable por TTL y umbral de similitud coseno.
+- [ ] **Integrated MCP Client**
+  - [ ] Connector for local (stdio) and remote (SSE/HTTP) MCP servers.
+  - [ ] Dynamic discovery of tools and resources provided by configured MCP servers.
+- [ ] **Tool Injection and Routing**
+  - [ ] Automatic mapping of MCP tools to OpenAI / Anthropic / Gemini `tools` schemas.
+  - [ ] Intercept and execute `tool_calls` targeting registered MCP servers before returning the response to the client.
+- [ ] **Dashboard Administration**
+  - [ ] Web dashboard view to register and monitor active MCP servers and their tool inventory.
 
 ---
 
-### 🤖 P5: Soporte Stateful — Assistants API & Threads
+### 🌐 P3: Horizontal Scalability & Shared State
 
-*Objetivo:* Ampliar la compatibilidad con el estándar OpenAI Assistants API.
+*Objective:* Enable deployment of multiple `openproxy` binary replicas behind an L7 load balancer.
 
-- [ ] **Endpoints de Asistentes & Hilos**
+- [ ] **Distributed State Backend (Optional / Pluggable)**
+  - [ ] State abstraction with pluggable backend: `Memory` (local single-process) vs `Redis` / `Key-Value Store`.
+  - [ ] Synchronization of atomic `round_robin` counters across instances.
+- [ ] **Distributed Circuit Breaker and Cooldowns**
+  - [ ] Publish/Subscribe (Pub/Sub) for account degradation events and health status.
+  - [ ] Synchronization of upstream rate-limiting windows (429 `Retry-After`).
+- [ ] **Distributed Client Rate Limiting**
+  - [ ] Redis-backed token bucket / leaky bucket algorithm for per-API-key quotas across the cluster.
+
+---
+
+### 🧠 P4: Persistent Memory, Context Stores & Vector Cache
+
+*Objective:* Manage conversational context and semantic storage in the proxy.
+
+- [ ] **Conversation Storage (`session_id` / `thread_id`)**
+  - [ ] Persistent chat history storage in SQLite / external database.
+  - [ ] Automatic sliding context window and intelligent truncation of older messages.
+- [ ] **Semantic Caching (Prompt Semantic Cache)**
+  - [ ] Embedding storage and search for cached responses to identical or semantically similar queries.
+  - [ ] Configurable cache invalidation via TTL and cosine similarity threshold.
+
+---
+
+### 🤖 P5: Stateful Support — Assistants API & Threads
+
+*Objective:* Expand compatibility with the OpenAI Assistants API standard.
+
+- [ ] **Assistants & Threads Endpoints**
   - [ ] `POST /v1/assistants`, `GET /v1/assistants/{id}`.
   - [ ] `POST /v1/threads`, `POST /v1/threads/{id}/messages`.
-  - [ ] `POST /v1/threads/{id}/runs` con ciclo de polling o streaming.
-- [ ] **Motor de Ejecución de Runs**
-  - [ ] Máquina de estados para gestionar el ciclo de vida del Run (`queued` $\to$ `in_progress` $\to$ `requires_action` $\to$ `completed`).
+  - [ ] `POST /v1/threads/{id}/runs` with polling or streaming cycle.
+- [ ] **Run Execution Engine**
+  - [ ] State machine to manage the Run lifecycle (`queued` $\to$ `in_progress` $\to$ `requires_action` $\to$ `completed`).
 
 ---
 
-### 🛡️ P6: Guardrails, Evals & Filtrado de Contenido
+### 🛡️ P6: Guardrails, Evals & Content Filtering
 
-*Objetivo:* Seguridad de capa de proxy y evaluación continua de calidad.
+*Objective:* Proxy-layer security and continuous quality evaluation.
 
-- [ ] **Guardrails & Filtros de Seguridad**
-  - [ ] Detección de prompt injections y jailbreaks en requests entrantes.
-  - [ ] Enmascaramiento / Redacción de PII (Personally Identifiable Information) configurable en prompts y outputs.
-- [ ] **Evaluaciones y Benchmarking en Producción**
-  - [ ] Shadow traffic / Shadow evaluation (ejecución en paralelo silenciosa contra un modelo de control).
-  - [ ] A/B Testing controlado por pesos porcentuales en combos de modelos.
-
----
-
-### 🖥️ P7: Aplicación de Escritorio & Empaquetado Nativo
-
-*Objetivo:* Proveer una experiencia standalone con interfaz nativa para desarrolladores en estaciones de trabajo locales.
-
-- [ ] **Empaquetado de Escritorio**
-  - [ ] Integración con Tauri para proveer un binario liviano multiplataforma (Linux, macOS, Windows).
-  - [ ] System Tray con control de inicio/parada, logs rápidos y estado de salud.
-- [ ] **Instaladores y Paquetes de Sistema**
-  - [ ] Homebrew formula para macOS/Linux.
-  - [ ] Paquetes Debian (`.deb`) / Arch (`PKGBUILD`) / Windows (`winget`, `.msi`).
+- [ ] **Guardrails & Safety Filters**
+  - [ ] Detection of prompt injections and jailbreaks in incoming requests.
+  - [ ] Configurable PII (Personally Identifiable Information) masking / redaction in prompts and outputs.
+- [ ] **Production Evaluations and Benchmarking**
+  - [ ] Shadow traffic / Shadow evaluation (silent parallel execution against a control model).
+  - [ ] A/B Testing controlled by percentage weights in model combos.
 
 ---
 
-## 3. Registro de Control de Cambios
+### 🖥️ P7: Desktop Application & Native Packaging
 
-- **2026-08-15**: Creación inicial del roadmap post-MVP con priorización de compresión HTTP (`gzip`/`br`), MCP y escalabilidad distribuida.
+*Objective:* Provide a standalone experience with a native interface for developers on local workstations.
+
+- [ ] **Desktop Packaging**
+  - [ ] Tauri integration to provide a lightweight cross-platform binary (Linux, macOS, Windows).
+  - [ ] System Tray with start/stop control, quick logs, and health status.
+- [ ] **System Installers and Packages**
+  - [ ] Homebrew formula for macOS/Linux.
+  - [ ] Debian (`.deb`) / Arch (`PKGBUILD`) / Windows (`winget`, `.msi`) packages.
+
+---
+
+## 3. Change Log
+
+- **2026-08-15**: Initial post-MVP roadmap creation with prioritization of HTTP compression (`gzip`/`br`), MCP, and distributed scalability.
