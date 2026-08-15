@@ -448,7 +448,7 @@ pub fn get_or_assign_provider_proxy(
 
     // 2. If current_proxy_id is set, verify it is still alive/valid and NOT in cooldown for this provider
     if let Some(ref proxy_id) = current_proxy_id
-        && !is_provider_proxy_in_cooldown(provider_id.as_str(), proxy_id)
+        && !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), proxy_id)
     {
         let exists_and_alive = conn
             .query_row(
@@ -539,7 +539,7 @@ pub fn get_or_assign_provider_proxy(
     let mut fallback_proxy = None;
 
     for item in candidate_rows.flatten() {
-        if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0)
+        if !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0)
             && !in_use_by_others.contains(&item.0)
         {
             selected_proxy = Some(item);
@@ -1921,6 +1921,13 @@ mod tests {
               provider_id TEXT NOT NULL,
               current_proxy_id TEXT
             );
+            CREATE TABLE provider_proxy_cooldowns (
+              provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+              proxy_id TEXT NOT NULL REFERENCES free_proxies(id) ON DELETE CASCADE,
+              cooldown_until TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              PRIMARY KEY (provider_id, proxy_id)
+            );
             ",
         )
         .unwrap();
@@ -2027,10 +2034,12 @@ mod tests {
 
         // Add 15m cooldown for this proxy on test-provider
         openproxy_db::cooldowns::add_provider_proxy_cooldown(
+            &conn,
             "test-provider",
             &p.id,
             std::time::Duration::from_secs(900),
-        );
+        )
+        .unwrap();
 
         // When in cooldown, get_or_assign_provider_proxy should not assign it if other alive proxy exists or returns err if no other exists
         let proxy_after_cooldown = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();

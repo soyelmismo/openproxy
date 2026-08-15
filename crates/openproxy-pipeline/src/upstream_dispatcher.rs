@@ -165,8 +165,10 @@ impl UpstreamDispatcher {
                             .map(std::time::Duration::from_millis)
                             .unwrap_or_else(|| std::time::Duration::from_secs(15 * 60));
 
+                        let conn = conn_clone.lock();
                         // NEW-2 fix: proxy rotations triggered by rate-limit get dynamic cooldown
-                        openproxy_db::cooldowns::add_provider_proxy_cooldown(
+                        let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
+                            &conn,
                             provider_id.as_str(),
                             bad_proxy_id,
                             cooldown_duration,
@@ -176,7 +178,6 @@ impl UpstreamDispatcher {
                         if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
                             let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
                         }
-                        let conn = conn_clone.lock();
                         let _ = openproxy_db::providers::update_current_proxy(
                             &conn,
                             &provider_id,

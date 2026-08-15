@@ -5746,6 +5746,13 @@ fn test_opencode_zen_no_account_proxy_rotation() {
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
               UNIQUE(host, port)
+            );
+            CREATE TABLE provider_proxy_cooldowns (
+              provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+              proxy_id TEXT NOT NULL REFERENCES free_proxies(id) ON DELETE CASCADE,
+              cooldown_until TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              PRIMARY KEY (provider_id, proxy_id)
             );",
     )
     .unwrap();

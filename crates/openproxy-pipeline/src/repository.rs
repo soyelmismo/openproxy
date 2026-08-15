@@ -862,7 +862,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         };
 
         if let Some(ref proxy_id) = current_proxy_id
-            && !is_provider_proxy_in_cooldown(provider_id.as_str(), proxy_id)
+            && !is_provider_proxy_in_cooldown(&conn, provider_id.as_str(), proxy_id)
         {
             let exists_and_alive = conn
                 .query_row(
@@ -957,7 +957,7 @@ impl PipelineRepository for SqlitePipelineRepository {
             if fallback_proxy.is_none() {
                 fallback_proxy = Some(item.clone());
             }
-            if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0)
+            if !is_provider_proxy_in_cooldown(&conn, provider_id.as_str(), &item.0)
                 && !in_use_by_others.contains(&item.0)
             {
                 selected_proxy = Some(item);

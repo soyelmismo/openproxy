@@ -76,33 +76,108 @@ pub fn clear_cooldown(
     Ok(())
 }
 
-use std::sync::{LazyLock, RwLock};
-use std::time::Instant;
-
-static PROVIDER_PROXY_COOLDOWNS: LazyLock<
-    RwLock<std::collections::HashMap<(String, String), Instant>>,
-> = LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+use rusqlite::OptionalExtension;
 
 pub fn add_provider_proxy_cooldown(
+    conn: &rusqlite::Connection,
     provider_id: &str,
     proxy_id: &str,
     duration: std::time::Duration,
-) {
-    if let Ok(mut map) = PROVIDER_PROXY_COOLDOWNS.write() {
-        map.insert(
-            (provider_id.to_string(), proxy_id.to_string()),
-            Instant::now() + duration,
-        );
-    }
+) -> openproxy_types::error::Result<()> {
+    let until = chrono::Utc::now()
+        + chrono::Duration::from_std(duration)
+            .unwrap_or_else(|_| chrono::Duration::seconds(900));
+    let until_str = until.to_rfc3339();
+    conn.execute(
+        "INSERT INTO provider_proxy_cooldowns (provider_id, proxy_id, cooldown_until) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(provider_id, proxy_id) DO UPDATE SET \
+            cooldown_until = excluded.cooldown_until, \
+            created_at = datetime('now')",
+        rusqlite::params![provider_id, proxy_id, until_str],
+    )
+    .map_err(|e| openproxy_types::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
 }
 
-pub fn is_provider_proxy_in_cooldown(provider_id: &str, proxy_id: &str) -> bool {
-    if let Ok(map) = PROVIDER_PROXY_COOLDOWNS.read()
-        && let Some((_, until)) = map
-            .iter()
-            .find(|((p, px), _)| p == provider_id && px == proxy_id)
-    {
-        return Instant::now() < *until;
+pub fn is_provider_proxy_in_cooldown(
+    conn: &rusqlite::Connection,
+    provider_id: &str,
+    proxy_id: &str,
+) -> bool {
+    let res: rusqlite::Result<Option<String>> = conn
+        .query_row(
+            "SELECT cooldown_until FROM provider_proxy_cooldowns \
+             WHERE provider_id = ?1 AND proxy_id = ?2",
+            rusqlite::params![provider_id, proxy_id],
+            |row| row.get(0),
+        )
+        .optional();
+
+    if let Ok(Some(until_str)) = res {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&until_str) {
+            return chrono::Utc::now() < dt.with_timezone(&chrono::Utc);
+        }
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&until_str, "%Y-%m-%d %H:%M:%S") {
+            let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
+            return chrono::Utc::now() < dt;
+        }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn fresh_db() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::migrations::run(&mut conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_provider_proxy_cooldown_persistence_and_isolation() {
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO providers (id, name, base_url, auth_type, format) \
+             VALUES ('opencode-zen', 'Zen', 'https://example.com', 'none', 'openai'), \
+                    ('cline', 'Cline', 'https://example.com', 'none', 'openai')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status) \
+             VALUES ('proxy-1', 'test', '1.1.1.1', 8080, 'http', 'alive')",
+            [],
+        )
+        .unwrap();
+
+        assert!(!is_provider_proxy_in_cooldown(&conn, "opencode-zen", "proxy-1"));
+        assert!(!is_provider_proxy_in_cooldown(&conn, "cline", "proxy-1"));
+
+        // Put proxy-1 in cooldown for opencode-zen only
+        add_provider_proxy_cooldown(
+            &conn,
+            "opencode-zen",
+            "proxy-1",
+            std::time::Duration::from_secs(900),
+        )
+        .unwrap();
+
+        // opencode-zen is in cooldown, cline is NOT
+        assert!(is_provider_proxy_in_cooldown(&conn, "opencode-zen", "proxy-1"));
+        assert!(!is_provider_proxy_in_cooldown(&conn, "cline", "proxy-1"));
+
+        // Cascade delete on proxy removal
+        conn.execute("DELETE FROM free_proxies WHERE id = 'proxy-1'", [])
+            .unwrap();
+
+        assert!(!is_provider_proxy_in_cooldown(&conn, "opencode-zen", "proxy-1"));
+    }
 }

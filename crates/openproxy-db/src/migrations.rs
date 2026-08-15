@@ -302,6 +302,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000058_add_atomesus_format",
         sql: include_str!("../migrations/000058_add_atomesus_format.sql"),
     },
+    Migration {
+        version: 59,
+        name: "000059_provider_proxy_cooldowns",
+        sql: include_str!("../migrations/000059_provider_proxy_cooldowns.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.
