@@ -44,6 +44,8 @@ interface ProviderDetailUiState {
   filter: "all" | "active" | "inactive";
   search: string;
   sort: ModelSort | null;
+  page: number;
+  pageSize: number;
 }
 
 // ---- Module-local state ----
@@ -59,6 +61,8 @@ function getProviderUi(providerId: string): ProviderDetailUiState {
     filter: raw?.filter ?? "all",
     search: raw?.search ?? "",
     sort: raw?.sort ?? null,
+    page: raw?.page ?? 1,
+    pageSize: raw?.pageSize ?? 50,
   };
 }
 
@@ -238,7 +242,8 @@ async function onRefreshProvider(providerId: string, e: Event | null): Promise<v
         : ` New: ${newIds.slice(0, 3).join(", ")} (+${newIds.length - 3} more).`;
     showToast(summary + newSuffix, "success");
     state.providers = await api("/providers") as typeof state.providers;
-    state.models = await api("/models") as typeof state.models;
+    state.models = await api("/models?provider_id=" + encodeURIComponent(providerId)) as typeof state.models;
+    state.modelsComplete = false;
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
@@ -429,7 +434,8 @@ async function onBulkToggleModels(providerId: string, active: boolean): Promise<
       method: "POST",
       body: JSON.stringify({ provider_id: providerId, active }),
     });
-    state.models = await api("/models") as typeof state.models;
+    state.models = await api("/models?provider_id=" + encodeURIComponent(providerId)) as typeof state.models;
+    state.modelsComplete = false;
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
@@ -519,6 +525,7 @@ function onUpdateProviderSearch(providerId: string, e: Event): void {
   const value = target instanceof HTMLInputElement ? target.value : "";
   const ui = getProviderUi(providerId);
   ui.search = value;
+  ui.page = 1;
   setProviderUi(providerId, ui);
   requestUpdate();
 }
@@ -526,6 +533,7 @@ function onUpdateProviderSearch(providerId: string, e: Event): void {
 function onUpdateProviderFilter(providerId: string, filter: "all" | "active" | "inactive"): void {
   const ui = getProviderUi(providerId);
   ui.filter = filter;
+  ui.page = 1;
   setProviderUi(providerId, ui);
   requestUpdate();
 }
@@ -542,6 +550,14 @@ function onCycleProviderSort(providerId: string, sortKey: string): void {
     next = null;
   }
   ui.sort = next;
+  ui.page = 1;
+  setProviderUi(providerId, ui);
+  requestUpdate();
+}
+
+function onSetProviderPage(providerId: string, page: number): void {
+  const ui = getProviderUi(providerId);
+  ui.page = Math.max(1, page);
   setProviderUi(providerId, ui);
   requestUpdate();
 }
@@ -586,7 +602,6 @@ function onClearModelSelection(): void {
 }
 
 async function onBulkSetSelected(providerId: string, active: boolean): Promise<void> {
-  void providerId; // kept for handler-shape parity with the other bulk actions
   const ids = Array.from(state.selectedModels).map((n) => Number(n));
   if (ids.length === 0) return;
   if (!confirm(`${active ? "Enable" : "Disable"} ${ids.length} models?`)) return;
@@ -597,7 +612,8 @@ async function onBulkSetSelected(providerId: string, active: boolean): Promise<v
         body: JSON.stringify({ active }),
       }).catch((err: unknown) => console.error("Failed toggle", rowId, err))
     ));
-    state.models = await api("/models") as Model[];
+    state.models = await api("/models?provider_id=" + encodeURIComponent(providerId)) as Model[];
+    state.modelsComplete = false;
     state.selectedModels.clear();
     requestUpdate();
   } catch (err: unknown) {
@@ -657,7 +673,6 @@ async function onBulkTestSelected(providerId: string): Promise<void> {
 }
 
 async function onBulkDeleteSelected(providerId: string): Promise<void> {
-  void providerId; // providerId unused — kept for handler-shape parity
   const ids = Array.from(state.selectedModels).map((n) => Number(n));
   if (ids.length === 0) return;
   if (!confirm(`Delete ${ids.length} models? This cannot be undone.`)) return;
@@ -666,7 +681,8 @@ async function onBulkDeleteSelected(providerId: string): Promise<void> {
       api("/models/" + rowId, { method: "DELETE" })
         .catch((err: unknown) => console.error("Failed delete", rowId, err))
     ));
-    state.models = await api("/models") as Model[];
+    state.models = await api("/models?provider_id=" + encodeURIComponent(providerId)) as Model[];
+    state.modelsComplete = false;
     state.selectedModels.clear();
     requestUpdate();
   } catch (err: unknown) {
@@ -943,11 +959,18 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
     return true;
   });
   const sorted = applySort(filtered, ui.sort);
+  const totalFiltered = sorted.length;
+  const pageSize = ui.pageSize || 50;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+  const currentPage = Math.min(Math.max(1, ui.page || 1), totalPages);
+  const startIdx = (currentPage - 1) * pageSize;
+  const paginatedModels = sorted.slice(startIdx, startIdx + pageSize);
+
   // Compute the master "select all" checkbox state from the visible
   // rows so a re-render (filter change, sort, poll) keeps it in sync
   // with reality — checked if all visible rows are selected,
   // indeterminate if only some.
-  const visibleRowIds: number[] = sorted.map((m) => m.row_id);
+  const visibleRowIds: number[] = paginatedModels.map((m) => m.row_id);
   const selectedVisible: number = visibleRowIds.filter((id) => (state.selectedModels as Set<number>).has(id)).length;
   const allSelected: boolean = visibleRowIds.length > 0 && selectedVisible === visibleRowIds.length;
   const indeterminate: boolean = selectedVisible > 0 && !allSelected;
@@ -961,6 +984,21 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
         <button class="link" @click=${onClearModelSelection}>Clear selection</button>
       </div>`
     : html``;
+
+  const paginationBar: TemplateResult = totalFiltered > pageSize
+    ? html`
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.5rem; margin-top: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted);">
+        <div>Showing ${startIdx + 1}–${Math.min(startIdx + pageSize, totalFiltered)} of ${totalFiltered} models</div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, 1)}>« First</button>
+          <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, currentPage - 1)}>‹ Prev</button>
+          <span style="padding: 0 0.5rem; font-weight: bold; color: var(--color-text);">Page ${currentPage} / ${totalPages}</span>
+          <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, currentPage + 1)}>Next ›</button>
+          <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, totalPages)}>Last »</button>
+        </div>
+      </div>`
+    : html``;
+
   return html`
     <section class="detail-section">
       <div class="section-header">
@@ -1041,11 +1079,12 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
           <th>Capabilities</th><th>Status</th><th>Last test</th><th>Actions</th>
         </tr></thead>
         <tbody id="models-tbody">
-          ${sorted.length === 0
+          ${paginatedModels.length === 0
             ? html`<tr><td colspan="10" class="empty-row">No models match the filter.</td></tr>`
-            : html`${sorted.map((m: Model) => renderModelRow(m))}`}
+            : html`${paginatedModels.map((m: Model) => renderModelRow(m))}`}
         </tbody>
       </table>
+      ${paginationBar}
     </section>
   `;
 }
@@ -1140,10 +1179,10 @@ function renderProviderDetail(): TemplateResult {
   // Per-provider UI state. Default to "all" / empty search on first
   // visit; keep the user's previous selection on subsequent visits.
   if (!state.providerDetail[detailProviderId]) {
-    setProviderUi(detailProviderId, { filter: "all", search: "", sort: null });
+    setProviderUi(detailProviderId, { filter: "all", search: "", sort: null, page: 1, pageSize: 50 });
   } else if ((state.providerDetail[detailProviderId] as Partial<ProviderDetailUiState>).sort === undefined) {
     const existing = state.providerDetail[detailProviderId] as Partial<ProviderDetailUiState>;
-    setProviderUi(detailProviderId, { filter: existing.filter ?? "all", search: existing.search ?? "", sort: null });
+    setProviderUi(detailProviderId, { filter: existing.filter ?? "all", search: existing.search ?? "", sort: null, page: existing.page ?? 1, pageSize: existing.pageSize ?? 50 });
   }
   const ui = getProviderUi(detailProviderId);
   return html`

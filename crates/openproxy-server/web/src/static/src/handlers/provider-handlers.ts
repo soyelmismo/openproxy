@@ -67,8 +67,8 @@ export async function refreshProvider(providerId: string, e: Event | null): Prom
     // Force a refetch instead of relying on the polling interval —
     // the user explicitly asked for fresh data.
     state.providers = await api("/providers") as typeof state.providers;
-    state.models = await api("/models") as typeof state.models;
-    state.modelsComplete = true;
+    state.models = await api("/models?provider_id=" + encodeURIComponent(providerId)) as typeof state.models;
+    state.modelsComplete = false;
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
