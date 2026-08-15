@@ -326,7 +326,7 @@ pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
 pub struct UpdateProviderParams<'a> {
     pub name: Option<&'a str>,
     pub base_url: Option<&'a str>,
-    pub extra_headers_json: Option<&'a str>,
+    pub extra_headers_json: Option<Option<&'a str>>,
     pub auto_activate_keyword: Option<Option<&'a str>>,
     pub use_proxies: Option<bool>,
     pub proxy_rotation_errors: Option<&'a str>,
@@ -339,10 +339,10 @@ pub struct UpdateProviderParams<'a> {
 /// structural and changing them mid-flight would invalidate routing state.
 /// CHECK constraints in the schema validate `auth_type` / `format` on read.
 ///
-/// `auto_activate_keyword` uses a three-state encoding so the caller can
+/// `auto_activate_keyword` and `extra_headers_json` use a three-state encoding so the caller can
 /// distinguish "leave it alone" from "set it to NULL":
 /// * `None` — column is not part of this update (no-op).
-/// * `Some(None)` — set the column to `NULL` (clears any existing keyword).
+/// * `Some(None)` — set the column to `NULL` (clears any existing value).
 /// * `Some(Some(s))` — set the column to the literal string `s`.
 pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'_>) -> Result<()> {
     let UpdateProviderParams {
@@ -370,7 +370,7 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
     }
     if let Some(v) = extra_headers_json {
         sets.push("extra_headers_json = ?");
-        bound_values.push(Box::new(v.to_string()));
+        bound_values.push(Box::new(v.map(|s| s.to_string())));
     }
     if let Some(v) = auto_activate_keyword {
         sets.push("auto_activate_keyword = ?");
@@ -762,7 +762,7 @@ mod tests {
             &id,
             UpdateProviderParams {
                 base_url: Some("https://new.example"),
-                extra_headers_json: Some(r#"{"new":true}"#),
+                extra_headers_json: Some(Some(r#"{"new":true}"#)),
                 auto_activate_keyword: Some(Some("claude")),
                 ..Default::default()
             },

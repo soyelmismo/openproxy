@@ -427,6 +427,14 @@ async fn run_one_tick(
         return;
     };
 
+    if !p_row.active {
+        tracing::debug!(
+            provider = %provider,
+            "discovery tick: provider inactive; skipping cycle",
+        );
+        return;
+    }
+
     let is_anonymous = matches!(p_row.auth_type, AuthType::None);
     let Some((api_key, account_label)) =
         resolve_account_credentials(db_pool, &provider, &accounts_list, is_anonymous, master_key)

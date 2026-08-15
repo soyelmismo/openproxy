@@ -154,7 +154,7 @@ pub fn set_provider_active(conn: &Connection, id: &ProviderId, active: bool) -> 
 pub struct UpdateProviderInput {
     pub name: Option<String>,
     pub base_url: Option<String>,
-    pub extra_headers_json: Option<String>,
+    pub extra_headers_json: Option<Option<String>>,
     pub auto_activate_keyword: Option<Option<String>>,
     pub use_proxies: Option<bool>,
     pub proxy_rotation_errors: Option<String>,
@@ -206,7 +206,19 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                     match key {
                         Field::Name => out.name = Some(map.next_value()?),
                         Field::BaseUrl => out.base_url = Some(map.next_value()?),
-                        Field::ExtraHeadersJson => out.extra_headers_json = Some(map.next_value()?),
+                        Field::ExtraHeadersJson => {
+                            let raw: serde_json::Value = map.next_value()?;
+                            out.extra_headers_json = Some(match raw {
+                                serde_json::Value::Null => None,
+                                serde_json::Value::String(s) => Some(s),
+                                other => {
+                                    return Err(serde::de::Error::custom(format!(
+                                        "extra_headers_json must be string or null, got {}",
+                                        other
+                                    )));
+                                }
+                            });
+                        }
                         Field::UseProxies => out.use_proxies = Some(map.next_value()?),
                         Field::ProxyRotationErrors => {
                             out.proxy_rotation_errors = Some(map.next_value()?)
@@ -244,8 +256,8 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
 }
 
 /// Apply a partial update to an existing provider. The three-state
-/// `auto_activate_keyword` lets the caller clear the column without
-/// sending an empty string (which would be a different semantic).
+/// `auto_activate_keyword` and `extra_headers_json` let the caller clear the column
+/// without sending an empty string.
 pub fn update_provider(
     conn: &Connection,
     id: &ProviderId,
@@ -257,13 +269,14 @@ pub fn update_provider(
         validate_base_url(url)?;
     }
     let keyword = input.auto_activate_keyword.as_ref().map(|o| o.as_deref());
+    let extra_headers = input.extra_headers_json.as_ref().map(|o| o.as_deref());
     providers::update(
         conn,
         id,
         providers::UpdateProviderParams {
             name: input.name.as_deref(),
             base_url: input.base_url.as_deref(),
-            extra_headers_json: input.extra_headers_json.as_deref(),
+            extra_headers_json: extra_headers,
             auto_activate_keyword: keyword,
             use_proxies: input.use_proxies,
             proxy_rotation_errors: input.proxy_rotation_errors.as_deref(),
