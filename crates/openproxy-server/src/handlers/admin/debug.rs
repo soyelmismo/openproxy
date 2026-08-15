@@ -289,8 +289,10 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                 tracing::warn!(table = %table, "Skipping table with invalid name characters");
                 continue;
             }
+            let safe_table = table.replace('"', "\"\"");
+
             let count_result: rusqlite::Result<i64> = w.query_row(
-                &format!("SELECT COUNT(*) FROM \"{}\"", table),
+                &format!("SELECT COUNT(*) FROM \"{}\"", safe_table),
                 [],
                 |r| r.get(0),
             );
