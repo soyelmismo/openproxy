@@ -285,12 +285,9 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         let mut table_stats: Vec<serde_json::Value> = Vec::new();
         let mut total_rows_recovered: u64 = 0;
         for table in &table_names {
-            if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                tracing::warn!(table = %table, "Skipping table with invalid name characters");
-                continue;
-            }
+            let safe_table = table.replace('"', "\"\"");
             let count_result: rusqlite::Result<i64> = w.query_row(
-                &format!("SELECT COUNT(*) FROM \"{}\"", table),
+                &format!("SELECT COUNT(*) FROM \"{}\"", safe_table),
                 [],
                 |r| r.get(0),
             );

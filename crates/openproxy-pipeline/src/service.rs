@@ -637,7 +637,8 @@ impl tower::Service<PipelineState> for RoutingService {
                                 .cooldown_base_secs
                                 .or(combo.cooldown_base_secs)
                                 .unwrap_or(pipeline.config.cooldown_secs);
-                            if mode == openproxy_types::config::CooldownMode::None || base_secs == 0 {
+                            if mode == openproxy_types::config::CooldownMode::None || base_secs == 0
+                            {
                                 // Cooldown is disabled for this target / combo
                             } else {
                                 let reason = result
@@ -655,16 +656,16 @@ impl tower::Service<PipelineState> for RoutingService {
                                     .cooldown_factor
                                     .or(combo.cooldown_factor)
                                     .unwrap_or(pipeline.config.cooldown_factor);
-                            let is_rate_limited = matches!(
-                                result.error,
-                                Some(openproxy_types::error::CoreError::RateLimited { .. })
-                            );
-                            let repo = pipeline.repo();
-                            let target_id = target.target.id;
-                            let account_id_opt = target.target.account_id;
-                            let req_model = target.model.model_id.0.to_owned();
-                            let _combo_id = combo.id.0;
-                            let _ = tokio::task::spawn_blocking(move || {
+                                let is_rate_limited = matches!(
+                                    result.error,
+                                    Some(openproxy_types::error::CoreError::RateLimited { .. })
+                                );
+                                let repo = pipeline.repo();
+                                let target_id = target.target.id;
+                                let account_id_opt = target.target.account_id;
+                                let req_model = target.model.model_id.0.to_owned();
+                                let _combo_id = combo.id.0;
+                                let _ = tokio::task::spawn_blocking(move || {
                                 let mut final_base_secs = base_secs;
                                 if is_rate_limited && let Some(account_id) = account_id_opt {
                                     let override_secs = (|| -> Option<u64> {
