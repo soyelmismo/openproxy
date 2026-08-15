@@ -25,7 +25,10 @@ impl TransportCompressionPredicate {
             return false;
         }
 
-        let Some(content_type) = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) else {
+        let Some(content_type) = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+        else {
             // If Content-Type is absent, do not compress by default
             return false;
         };
@@ -77,8 +80,8 @@ pub fn transport_compression_layer() -> CompressionLayer<TransportCompressionPre
 mod tests {
     use super::*;
     use axum::http::{Response, StatusCode};
-    use http_body_util::Empty;
     use bytes::Bytes;
+    use http_body_util::Empty;
 
     #[test]
     fn test_sse_strict_bypass() {
@@ -125,7 +128,10 @@ mod tests {
                 .body(Empty::<Bytes>::new())
                 .unwrap();
 
-            assert!(predicate.should_compress(&response), "Expected {mime} to be compressed");
+            assert!(
+                predicate.should_compress(&response),
+                "Expected {mime} to be compressed"
+            );
         }
     }
 

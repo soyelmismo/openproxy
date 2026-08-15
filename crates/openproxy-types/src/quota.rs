@@ -65,3 +65,24 @@ pub fn parse_reset_time(s: &str) -> Option<u64> {
     let total = total_secs.ceil() as u64;
     if total > 0 { Some(total) } else { None }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_reset_time() {
+        assert_eq!(parse_reset_time("60"), Some(60));
+        assert_eq!(parse_reset_time("60.5"), Some(61));
+        assert_eq!(parse_reset_time("1h"), Some(3600));
+        assert_eq!(parse_reset_time("1.5h"), Some(5400));
+        assert_eq!(parse_reset_time("2m"), Some(120));
+        assert_eq!(parse_reset_time("2.5m"), Some(150));
+        assert_eq!(parse_reset_time("30s"), Some(30));
+        assert_eq!(parse_reset_time("30.2s"), Some(31));
+        assert_eq!(parse_reset_time("1h30m"), Some(5400));
+        assert_eq!(parse_reset_time("1h 30m"), Some(5400));
+        assert_eq!(parse_reset_time("invalid"), None);
+        assert_eq!(parse_reset_time(""), None);
+    }
+}

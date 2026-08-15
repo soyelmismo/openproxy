@@ -760,7 +760,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response.headers().get("content-encoding").and_then(|v| v.to_str().ok()),
+            response
+                .headers()
+                .get("content-encoding")
+                .and_then(|v| v.to_str().ok()),
             Some("gzip")
         );
     }
@@ -783,7 +786,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response.headers().get("content-encoding").and_then(|v| v.to_str().ok()),
+            response
+                .headers()
+                .get("content-encoding")
+                .and_then(|v| v.to_str().ok()),
             Some("zstd")
         );
     }

@@ -85,8 +85,7 @@ pub fn add_provider_proxy_cooldown(
     duration: std::time::Duration,
 ) -> openproxy_types::error::Result<()> {
     let until = chrono::Utc::now()
-        + chrono::Duration::from_std(duration)
-            .unwrap_or_else(|_| chrono::Duration::seconds(900));
+        + chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::seconds(900));
     let until_str = until.to_rfc3339();
     conn.execute(
         "INSERT INTO provider_proxy_cooldowns (provider_id, proxy_id, cooldown_until) \
@@ -160,7 +159,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!is_provider_proxy_in_cooldown(&conn, "opencode-zen", "proxy-1"));
+        assert!(!is_provider_proxy_in_cooldown(
+            &conn,
+            "opencode-zen",
+            "proxy-1"
+        ));
         assert!(!is_provider_proxy_in_cooldown(&conn, "cline", "proxy-1"));
 
         // Put proxy-1 in cooldown for opencode-zen only
@@ -173,13 +176,21 @@ mod tests {
         .unwrap();
 
         // opencode-zen is in cooldown, cline is NOT
-        assert!(is_provider_proxy_in_cooldown(&conn, "opencode-zen", "proxy-1"));
+        assert!(is_provider_proxy_in_cooldown(
+            &conn,
+            "opencode-zen",
+            "proxy-1"
+        ));
         assert!(!is_provider_proxy_in_cooldown(&conn, "cline", "proxy-1"));
 
         // Cascade delete on proxy removal
         conn.execute("DELETE FROM free_proxies WHERE id = 'proxy-1'", [])
             .unwrap();
 
-        assert!(!is_provider_proxy_in_cooldown(&conn, "opencode-zen", "proxy-1"));
+        assert!(!is_provider_proxy_in_cooldown(
+            &conn,
+            "opencode-zen",
+            "proxy-1"
+        ));
     }
 }

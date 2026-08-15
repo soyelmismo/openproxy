@@ -2351,5 +2351,3 @@ fn upsert_many_does_not_duplicate_notifications_on_rediscovery() {
         .unwrap();
     assert_eq!(count_after, 1);
 }
-
-

@@ -158,6 +158,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 - [`docs/architecture.md`](docs/architecture.md) — System architecture, routing pipeline, and internals.
 - [`docs/mvp-spec.md`](docs/mvp-spec.md) — Specifications for endpoints, schema, and security models.
+- [`docs/roadmap.md`](docs/roadmap.md) — Post-MVP roadmap and planned capabilities.
 
 ---
 
