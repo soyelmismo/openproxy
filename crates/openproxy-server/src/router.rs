@@ -601,6 +601,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/health", get(health))
         .merge(public_api_routes)
         .nest("/admin", admin_routes)
+        .layer(crate::middleware::compression::transport_compression_layer())
         .layer(middleware::from_fn(
             crate::middleware::request_id::request_id,
         ))
@@ -739,5 +740,51 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"]["code"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn test_transport_compression_json_gzip() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .header("Accept-Encoding", "gzip")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-encoding").and_then(|v| v.to_str().ok()),
+            Some("gzip")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transport_compression_json_zstd() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .header("Accept-Encoding", "zstd")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-encoding").and_then(|v| v.to_str().ok()),
+            Some("zstd")
+        );
     }
 }

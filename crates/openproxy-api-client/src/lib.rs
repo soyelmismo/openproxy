@@ -149,14 +149,52 @@ impl Client {
         .await
     }
 
+    async fn put_json(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
+        let b = bytes::Bytes::from(serde_json::to_vec(&body)?);
+        let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(self.url(path), b);
+        req.method = http::Method::PUT;
+        self.req(req).await
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        let resp = self.get(path).await?;
+        parse_json(resp).await
+    }
+
+    async fn post_json_resp<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<T, ClientError> {
+        let resp = self.post_json(path, body).await?;
+        parse_json(resp).await
+    }
+
+    async fn put_json_unit(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<(), ClientError> {
+        let resp = self.put_json(path, body).await?;
+        parse_unit(resp).await
+    }
+
+    async fn delete_unit(&self, path: &str) -> Result<(), ClientError> {
+        let resp = self.delete(path).await?;
+        parse_unit(resp).await
+    }
+
     // -----------------------------------------------------------------
     // Health
     // -----------------------------------------------------------------
 
     /// `GET /admin/health` — liveness con tag de versión.
     pub async fn health(&self) -> Result<serde_json::Value, ClientError> {
-        let resp = self.get("/admin/health").await?;
-        parse_json(resp).await
+        self.get_json("/admin/health").await
     }
 
     // -----------------------------------------------------------------
@@ -165,8 +203,7 @@ impl Client {
 
     /// `GET /admin/providers`.
     pub async fn list_providers(&self) -> Result<Vec<providers::Provider>, ClientError> {
-        let resp = self.get("/admin/providers").await?;
-        parse_json(resp).await
+        self.get_json("/admin/providers").await
     }
 
     /// `POST /admin/providers`. Devuelve el `ProviderId` recién creado.
@@ -174,8 +211,7 @@ impl Client {
         &self,
         input: CreateProviderInput,
     ) -> Result<ProviderId, ClientError> {
-        let resp = self.post_json("/admin/providers", &input).await?;
-        let body: serde_json::Value = parse_json(resp).await?;
+        let body: serde_json::Value = self.post_json_resp("/admin/providers", &input).await?;
         let id = body.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
             missing_field_err("missing \"id\" string in create_provider response")
         })?;
@@ -185,8 +221,7 @@ impl Client {
     /// `DELETE /admin/providers/:id`. Idempotente.
     pub async fn delete_provider(&self, id: &ProviderId) -> Result<(), ClientError> {
         let path = format!("/admin/providers/{}", urlencoded(id.as_str()));
-        let resp = self.delete(&path).await?;
-        parse_unit(resp).await
+        self.delete_unit(&path).await
     }
 
     // -----------------------------------------------------------------
@@ -214,8 +249,7 @@ impl Client {
         &self,
         input: CreateAccountInput,
     ) -> Result<AccountId, ClientError> {
-        let resp = self.post_json("/admin/accounts", &input).await?;
-        let body: serde_json::Value = parse_json(resp).await?;
+        let body: serde_json::Value = self.post_json_resp("/admin/accounts", &input).await?;
         let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
             missing_field_err("missing numeric \"id\" in create_account response")
         })?;
@@ -225,8 +259,7 @@ impl Client {
     /// `DELETE /admin/accounts/:id`. Idempotente.
     pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
         let path = format!("/admin/accounts/{}", id.0);
-        let resp = self.delete(&path).await?;
-        parse_unit(resp).await
+        self.delete_unit(&path).await
     }
 
     /// `PUT /admin/accounts/:id/api-key`. Encripta y guarda (o limpia)
@@ -237,15 +270,7 @@ impl Client {
         input: UpdateAccountApiKeyInput,
     ) -> Result<(), ClientError> {
         let path = format!("/admin/accounts/{}/api-key", id.0);
-        let resp = {
-            let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
-                self.url(&path),
-                bytes::Bytes::from(serde_json::to_vec(&input)?),
-            );
-            req.method = http::Method::PUT;
-            self.req(req).await?
-        };
-        parse_unit(resp).await
+        self.put_json_unit(&path, &input).await
     }
 
     // -----------------------------------------------------------------
@@ -254,14 +279,12 @@ impl Client {
 
     /// `GET /admin/combos`.
     pub async fn list_combos(&self) -> Result<Vec<combos::Combo>, ClientError> {
-        let resp = self.get("/admin/combos").await?;
-        parse_json(resp).await
+        self.get_json("/admin/combos").await
     }
 
     /// `POST /admin/combos`. Devuelve el `ComboId` recién creado.
     pub async fn create_combo(&self, input: CreateComboInput) -> Result<ComboId, ClientError> {
-        let resp = self.post_json("/admin/combos", &input).await?;
-        let body: serde_json::Value = parse_json(resp).await?;
+        let body: serde_json::Value = self.post_json_resp("/admin/combos", &input).await?;
         let id = body
             .get("id")
             .and_then(|v| v.as_i64())
@@ -272,8 +295,7 @@ impl Client {
     /// `DELETE /admin/combos/:id`. Idempotente.
     pub async fn delete_combo(&self, id: ComboId) -> Result<(), ClientError> {
         let path = format!("/admin/combos/{}", id.0);
-        let resp = self.delete(&path).await?;
-        parse_unit(resp).await
+        self.delete_unit(&path).await
     }
 
     /// `GET /admin/combos/:id/targets`.
@@ -282,8 +304,7 @@ impl Client {
         combo_id: ComboId,
     ) -> Result<Vec<combos::ComboTarget>, ClientError> {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
-        let resp = self.get(&path).await?;
-        parse_json(resp).await
+        self.get_json(&path).await
     }
 
     /// `POST /admin/combos/:id/targets`. Devuelve el `combo_target.id`
@@ -295,8 +316,7 @@ impl Client {
         input: AddTargetInput,
     ) -> Result<i64, ClientError> {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
-        let resp = self.post_json(&path, &input).await?;
-        let body: serde_json::Value = parse_json(resp).await?;
+        let body: serde_json::Value = self.post_json_resp(&path, &input).await?;
         let id = body
             .get("id")
             .and_then(|v| v.as_i64())
@@ -316,8 +336,7 @@ impl Client {
     /// del shape; los consumidores que necesiten los campos pueden
     /// deserializar desde aquí.
     pub async fn list_models(&self) -> Result<serde_json::Value, ClientError> {
-        let resp = self.get("/v1/models").await?;
-        parse_json(resp).await
+        self.get_json("/v1/models").await
     }
 
     /// `POST /admin/models/:id/refresh`.
@@ -332,15 +351,7 @@ impl Client {
     /// `models`, según reporta el server.
     pub async fn refresh_models(&self, model_row_id: ModelRowId) -> Result<usize, ClientError> {
         let path = format!("/admin/models/{}/refresh", model_row_id.0);
-        let resp = {
-            let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
-                self.url(&path),
-                bytes::Bytes::new(),
-            );
-            req.method = http::Method::POST;
-            self.req(req).await?
-        };
-        let body: serde_json::Value = parse_json(resp).await?;
+        let body: serde_json::Value = self.post_json_resp(&path, serde_json::json!({})).await?;
         let touched = body
             .get("touched")
             .and_then(|v| v.as_u64())
@@ -482,20 +493,13 @@ async fn parse_unit(
     resp: openproxy_adapters::upstream::UpstreamResponse,
 ) -> Result<(), ClientError> {
     let status = resp.status;
+    let bytes = resp
+        .collect()
+        .await
+        .map_err(|e| ClientError::Http(e.to_string()))?;
     if status.is_success() {
-        // Drenamos el body para liberar la conexión al pool, pero no lo
-        // inspeccionamos: los endpoints de delete devuelven `{"deleted":
-        // ...}` y esa información no es relevante para el llamador.
-        let _ = resp
-            .collect()
-            .await
-            .map_err(|e| ClientError::Http(e.to_string()))?;
         Ok(())
     } else {
-        let bytes = resp
-            .collect()
-            .await
-            .map_err(|e| ClientError::Http(e.to_string()))?;
         Err(map_error_body(status.as_u16(), &bytes))
     }
 }

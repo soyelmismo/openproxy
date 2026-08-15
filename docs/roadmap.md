@@ -8,7 +8,7 @@ This document defines the technical roadmap and structured task list (To-Do List
 
 | Tier | Area / Feature | Status | Complexity | Impact |
 | :--- | :--- | :--- | :--- | :--- |
-| **P1** | **HTTP Transport Compression (`gzip` / `br` / `zstd`)** | 📋 Pending | Low | High |
+| **P1** | **HTTP Transport Compression (`gzip` / `br` / `zstd`)** | ✅ Completed | Low | High |
 | **P2** | **MCP (Model Context Protocol) & Tool Gateway** | 📋 Pending | Medium | High |
 | **P3** | **Horizontal Scalability & Distributed State** | 📋 Pending | High | High |
 | **P4** | **Persistent Memory & Conversation Stores** | 📋 Pending | Medium | Medium |
@@ -24,17 +24,17 @@ This document defines the technical roadmap and structured task list (To-Do List
 
 *Objective:* Significantly reduce bandwidth and transfer times when loading embedded SPA dashboard assets and bulky JSON responses (model catalog, historical logs, analytics), without impacting TTFT latency on SSE streams.
 
-- [ ] **Compression Middleware in `openproxy-server`**
-  - [ ] Integrate `tower-http::compression::CompressionLayer` with support for `gzip`, `brotli` (`br`), and `zstd`.
-  - [ ] Configure minimum size threshold (e.g. only compress payloads $\ge 1\,\text{KB}$).
-- [ ] **Compression of Embedded Static Assets**
-  - [ ] Enable on-the-fly or build-time pre-compression (`.gz` / `.br`) for frontend bundles (`/admin/dist/*`, CSS, JS, favicons).
-  - [ ] Configure cache headers (`Cache-Control: public, max-age=31536000, immutable` for hashed assets).
-- [ ] **Compression of JSON Data Endpoints**
-  - [ ] Compress `GET /v1/models` responses (large catalogs with hundreds of models).
-  - [ ] Compress responses for `/admin/api/usage/*`, `/admin/api/logs`, and `/admin/api/models`.
-- [ ] **Bypass for SSE Streams (`text/event-stream`)**
-  - [ ] Ensure that the SSE stream (`/v1/chat/completions` with `stream: true`) is not subject to compression buffering, preserving the TTFT metric and low chunk-by-chunk latency.
+- [x] **Compression Middleware in `openproxy-server`**
+  - [x] Integrate `tower-http::compression::CompressionLayer` with support for `gzip`, `brotli` (`br`), and `zstd`.
+  - [x] Configure transport compression predicate enforcing strict MIME filtering and bypass rules.
+- [x] **Compression of Embedded Static Assets**
+  - [x] Enable dynamic on-the-fly compression for frontend bundles (`/admin/dist/*`, CSS, JS, favicons, fonts).
+  - [x] Configure cache headers (`Cache-Control: public, max-age=31536000, immutable` for hashed assets).
+- [x] **Compression of JSON Data Endpoints**
+  - [x] Compress `GET /v1/models` responses (large catalogs with hundreds of models).
+  - [x] Compress responses for `/admin/api/usage/*`, `/admin/api/logs`, and `/admin/api/models`.
+- [x] **Bypass for SSE Streams (`text/event-stream`)**
+  - [x] Ensure that the SSE stream (`/v1/chat/completions` with `stream: true`) is not subject to compression buffering, preserving the TTFT metric and low chunk-by-chunk latency.
 
 ---
 
