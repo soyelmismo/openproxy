@@ -194,8 +194,8 @@ export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uP
   // pushes the layout wider, which triggers ResizeObserver, which
   // calls setSize with the new (larger) width — the chart-grows-
   // without-bound bug.
-  const w: number = Math.max(100, container.clientWidth);
-  const h: number = Math.max(80, container.clientHeight || 200);
+  const w: number = container.clientWidth || 300;
+  const h: number = container.clientHeight || 200;
   const data: ChartData = opts.initialData ?? [[]];
   const u: uPlot = new uPlot(
     buildOptions(
@@ -296,8 +296,8 @@ export const smoothPath: uPlot.Series.PathBuilder = smoothSpline();
  *  hidden, so the scale doesn't matter. */
 export function createSparkline(container: HTMLElement, color: string): uPlot {
   injectUplotCss();
-  const w: number = Math.max(40, container.clientWidth);
-  const h: number = Math.max(16, container.clientHeight || 24);
+  const w: number = container.clientWidth || 100;
+  const h: number = container.clientHeight || 34;
   const opts: uPlot.Options = {
     width: w,
     height: h,
@@ -345,24 +345,16 @@ export function createSparkline(container: HTMLElement, color: string): uPlot {
 // Resize handling
 // ----------------------------------------------------------------------------
 
-/** Resize a uPlot instance to fill its container. Called on initial mount
- *  and on every ResizeObserver callback. Cheap — uPlot's `setSize` just
- *  resizes the canvas and redraws; it doesn't recreate the chart. */
 export function resizeChart(u: uPlot, container: HTMLElement): void {
-  // Read the container's CONTENT width (excluding padding) via
-  // clientWidth. If the container has padding, clientWidth is already
-  // the inner size. If clientWidth is 0 (container display:none or
-  // not laid out), skip — the ResizeObserver will fire again when
-  // the container becomes visible.
+  // Read the container's CONTENT width and height via clientWidth/clientHeight.
+  // If clientWidth or clientHeight is 0 (container display:none or not laid out), skip.
   const w: number = container.clientWidth;
   const h: number = container.clientHeight;
-  if (w === 0 || h === 0) return;
-  const cw: number = Math.max(100, w);
-  const ch: number = Math.max(80, h);
+  if (w <= 0 || h <= 0) return;
   // Guard against no-op resizes (uPlot triggers a full redraw on every
   // setSize call, even if the size hasn't changed).
-  if (u.width === cw && u.height === ch) return;
-  u.setSize({ width: cw, height: ch });
+  if (u.width === w && u.height === h) return;
+  u.setSize({ width: w, height: h });
 }
 
 /** Attach a ResizeObserver that keeps the chart sized to its container.
