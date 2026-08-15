@@ -594,10 +594,19 @@ function createCharts(): void {
   resizeDisposers.push(observeResize(latency, latencyEl));
 
   const sparkRequests: uPlot = createSparkline(sparkReqEl, CHART_COLORS.blue);
-  const sparkSuccess: uPlot = createSparkline(sparkSuccessEl, CHART_COLORS.green);
+  resizeDisposers.push(observeResize(sparkRequests, sparkReqEl));
+
   const sparkLatency: uPlot = createSparkline(sparkLatencyEl, CHART_COLORS.orange);
+  resizeDisposers.push(observeResize(sparkLatency, sparkLatencyEl));
+
+  const sparkSuccess: uPlot = createSparkline(sparkSuccessEl, CHART_COLORS.green);
+  resizeDisposers.push(observeResize(sparkSuccess, sparkSuccessEl));
+
   const sparkTokens: uPlot = createSparkline(sparkTokEl, CHART_COLORS.green);
+  resizeDisposers.push(observeResize(sparkTokens, sparkTokEl));
+
   const sparkCost: uPlot = createSparkline(sparkCostEl, CHART_COLORS.orange);
+  resizeDisposers.push(observeResize(sparkCost, sparkCostEl));
 
   charts = {
     throughput,

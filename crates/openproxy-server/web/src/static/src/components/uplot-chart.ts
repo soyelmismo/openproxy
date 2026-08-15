@@ -220,6 +220,70 @@ export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uP
   return u;
 }
 
+/** Smooth Catmull-Rom cubic spline path builder for uPlot. */
+export function smoothSpline(): uPlot.Series.PathBuilder {
+  return (u: uPlot, seriesIdx: number, idx0: number, idx1: number): uPlot.Series.Paths | null => {
+    const xdata = u.data[0];
+    const ydata = u.data[seriesIdx];
+    if (!xdata || !ydata || xdata.length === 0) return null;
+
+    const scaleKey = u.series[seriesIdx]?.scale || "y";
+    const stroke = new Path2D();
+    const fill = new Path2D();
+
+    const points: Array<[number, number]> = [];
+    for (let i = idx0; i <= idx1; i++) {
+      const val = ydata[i];
+      if (val != null && Number.isFinite(val)) {
+        const x = u.valToPos(xdata[i]!, "x", true);
+        const y = u.valToPos(val, scaleKey, true);
+        points.push([x, y]);
+      }
+    }
+
+    if (points.length === 0) return null;
+
+    stroke.moveTo(points[0]![0], points[0]![1]);
+    if (points.length === 1) {
+      stroke.lineTo(points[0]![0], points[0]![1]);
+    } else if (points.length === 2) {
+      stroke.lineTo(points[1]![0], points[1]![1]);
+    } else {
+      for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[i === 0 ? i : i - 1]!;
+        const p1 = points[i]!;
+        const p2 = points[i + 1]!;
+        const p3 = points[i + 2 < points.length ? i + 2 : i + 1]!;
+
+        const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+        const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+        const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+        const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+
+        stroke.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
+      }
+    }
+
+    const hasFill = Boolean(u.series[seriesIdx]?.fill);
+    if (hasFill) {
+      fill.addPath(stroke);
+      const bottomY = u.valToPos(0, scaleKey, true);
+      const lastPoint = points[points.length - 1]!;
+      const firstPoint = points[0]!;
+      fill.lineTo(lastPoint[0], bottomY);
+      fill.lineTo(firstPoint[0], bottomY);
+      fill.closePath();
+    }
+
+    return {
+      stroke,
+      fill: hasFill ? fill : null,
+    };
+  };
+}
+
+export const smoothPath: uPlot.Series.PathBuilder = smoothSpline();
+
 // ----------------------------------------------------------------------------
 // Sparkline (minimal — no axes, no legend, no cursor)
 // ----------------------------------------------------------------------------
@@ -240,25 +304,26 @@ export function createSparkline(container: HTMLElement, color: string): uPlot {
     legend: { show: false },
     cursor: { show: false },
     select: { show: false, left: 0, top: 0, width: 0, height: 0 },
-    padding: [0, 0, 0, 0],
+    padding: [4, 0, 4, 0],
     series: [
       {}, // X-axis (hidden)
       {
         stroke: color,
-        width: 1,
+        width: 1.5,
+        paths: smoothPath,
         points: { show: false },
       },
     ],
     scales: {
       x: { time: false },
-      // Pin the Y range to [min, max] but always at least 1 unit tall so
-      // a flat series (e.g. all zeros) still renders a visible line.
+      // Pad the Y range so zero and peak values never clip against container edges.
       y: {
         auto: true,
         range: (_u: uPlot, min: number, max: number): [number, number] => {
           if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
-          if (max === min) return [min, min + 1];
-          return [min, max];
+          if (max === min) return [Math.max(0, min - 0.5), min + 0.5];
+          const pad = (max - min) * 0.12;
+          return [Math.max(0, min - pad), max + pad];
         },
       },
     },
@@ -418,6 +483,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         label: "Requests",
         stroke: CHART_COLORS.blue,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         scale: "rps",
         value: formatRate,
@@ -426,6 +492,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         label: "Tokens",
         stroke: CHART_COLORS.green,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         scale: "tps",
         value: formatRate,
@@ -476,6 +543,7 @@ export function buildStatusCodesChart(container: HTMLElement): uPlot {
         stroke: CHART_COLORS.status2xx,
         fill: "rgba(22, 163, 74, 0.12)",
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         value: formatCount,
       },
@@ -483,6 +551,7 @@ export function buildStatusCodesChart(container: HTMLElement): uPlot {
         label: "Client error",
         stroke: CHART_COLORS.status4xx,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         value: formatCount,
       },
@@ -490,6 +559,7 @@ export function buildStatusCodesChart(container: HTMLElement): uPlot {
         label: "Server error",
         stroke: CHART_COLORS.status5xx,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         value: formatCount,
       },
@@ -528,6 +598,7 @@ export function buildLatencyChart(container: HTMLElement): uPlot {
         label: "p50",
         stroke: CHART_COLORS.blue,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         fill: "rgba(37, 99, 235, 0.10)",
         value: formatDuration,
@@ -536,6 +607,7 @@ export function buildLatencyChart(container: HTMLElement): uPlot {
         label: "p95",
         stroke: CHART_COLORS.orange,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         value: formatDuration,
       },
@@ -543,6 +615,7 @@ export function buildLatencyChart(container: HTMLElement): uPlot {
         label: "p99",
         stroke: CHART_COLORS.red,
         width: 2,
+        paths: smoothPath,
         points: { show: false },
         value: formatDuration,
       },
