@@ -287,6 +287,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000055_fix_null_pricing",
         sql: include_str!("../migrations/000055_fix_null_pricing.sql"),
     },
+    Migration {
+        version: 56,
+        name: "000056_add_provider_favicon",
+        sql: include_str!("../migrations/000056_add_provider_favicon.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

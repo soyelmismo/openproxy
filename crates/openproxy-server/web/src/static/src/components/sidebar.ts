@@ -203,7 +203,8 @@ export function renderSidebar(): void {
 
   render(html`
     <div class="brand">
-      <span class="nav-icon" aria-hidden="true">${navIconSvg("home")}</span><span class="nav-label" ?hidden=${collapsed}> OpenProxy</span>
+      <span class="nav-label" ?hidden=${collapsed}>OpenProxy</span>
+      ${collapsed ? html`<span>OP</span>` : html``}
     </div>
     <nav>${renderLink(HOME_LINK, collapsed)}${GROUPS.map((g: SidebarGroup) => html`
       <div class="sidebar-nav-group">
@@ -211,7 +212,9 @@ export function renderSidebar(): void {
         ${g.links.map((l: SidebarLink) => renderLink(l, collapsed))}
       </div>`)}</nav>
     <div class="health">
-      Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}"></span> ${healthText}</span>
+      ${collapsed
+        ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}"><span class="health-dot ${dotClass}"></span></span>`
+        : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}"></span> ${healthText}</span>`}
     </div>
     <div class="sidebar-footer">
       <button class="sidebar-toggle" type="button" data-action="toggleSidebar"

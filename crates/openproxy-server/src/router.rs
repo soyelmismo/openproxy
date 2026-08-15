@@ -471,6 +471,10 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::notifications::notifications_unread_count),
         )
         .route(
+            "/notifications/archive-all",
+            post(handlers::admin::notifications::archive_all_notifications),
+        )
+        .route(
             "/notifications/{id}/read",
             post(handlers::admin::notifications::mark_notification_read),
         )

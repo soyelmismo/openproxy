@@ -506,6 +506,25 @@ async function markAllRead(): Promise<void> {
   }
 }
 
+/** Archive (dismiss) all notifications. */
+async function archiveAll(): Promise<void> {
+  const snapshot: NotificationRow[] = rows;
+  const unreadBefore: number = getUnreadCount();
+  rows = [];
+  setUnreadCount(0);
+  requestUpdate();
+  try {
+    await api("/notifications/archive-all", { method: "POST" });
+    void refreshUnreadCount();
+  } catch (e: unknown) {
+    rows = snapshot;
+    setUnreadCount(unreadBefore);
+    requestUpdate();
+    void refreshUnreadCount();
+    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
+  }
+}
+
 /** Archive (dismiss) a notification. The card is removed from the
  *  list optimistically; the server call follows. On error, we
  *  refetch the list to restore the row.
@@ -1015,6 +1034,10 @@ async function onMarkAllRead(): Promise<void> {
   await markAllRead();
 }
 
+async function onClearAll(): Promise<void> {
+  await archiveAll();
+}
+
 function onFilterChange(e: Event): void {
   const sel: HTMLSelectElement = e.target as HTMLSelectElement;
   const v: string = sel.value;
@@ -1169,6 +1192,7 @@ function renderHeader(): TemplateResult {
     <div class="actions">
       ${renderFilterDropdown()}
       <button class="small" ?disabled=${unread === 0} @click=${() => { void onMarkAllRead(); }}>${t("notifications.mark_all_read")}</button>
+      <button class="small danger" ?disabled=${rows.length === 0} @click=${() => { void onClearAll(); }}>${t("notifications.clear_all")}</button>
     </div>
   </div>`;
 }

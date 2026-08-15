@@ -669,7 +669,7 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 }
 .logs-scroll-area {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   min-height: 0;
 }
 

@@ -89,7 +89,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
     let row = conn
         .query_row(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
              FROM providers WHERE id = ?1",
             params![id.as_str()],
             row_to_provider,
@@ -120,7 +120,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
 pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -148,7 +148,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
 pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -175,6 +175,134 @@ pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()
         "set active for provider {}",
         id
     )))?;
+    Ok(())
+}
+
+/// Update the `favicon_base64` column for a provider.
+pub fn set_favicon(conn: &Connection, id: &ProviderId, favicon: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE providers SET favicon_base64 = ?1 WHERE id = ?2",
+        params![favicon, id.as_str()],
+    )
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
+        "set favicon for provider {}",
+        id
+    )))?;
+    Ok(())
+}
+
+/// Extract clean domain/host from a base_url string.
+pub fn extract_domain(base_url: &str) -> Option<String> {
+    let trimmed = base_url.trim();
+    let stripped = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let host = stripped.split('/').next()?.split(':').next()?.trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+/// Extract apex/root domain from host (e.g. "api.fireworks.ai" -> "fireworks.ai").
+pub fn extract_apex_domain(host: &str) -> String {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() <= 2 {
+        return host.to_string();
+    }
+    let second_to_last = parts[parts.len() - 2];
+    let last = parts[parts.len() - 1];
+    let is_compound_tld = (second_to_last == "co"
+        || second_to_last == "com"
+        || second_to_last == "org"
+        || second_to_last == "net"
+        || second_to_last == "gov"
+        || second_to_last == "edu")
+        && last.len() == 2;
+    if is_compound_tld && parts.len() >= 3 {
+        parts[parts.len() - 3..].join(".")
+    } else {
+        parts[parts.len() - 2..].join(".")
+    }
+}
+
+/// Fetch the favicon for a provider from multiple fallback sources
+/// as a data URI (`data:image/png;base64,...`).
+pub async fn fetch_favicon_data_uri(
+    base_url: &str,
+    upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
+) -> Option<String> {
+    let host = extract_domain(base_url)?;
+    let apex = extract_apex_domain(&host);
+
+    let mut domains = vec![host.clone()];
+    if apex != host {
+        domains.push(apex);
+    }
+
+    async fn try_fetch_b64(
+        upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
+        url: &str,
+        mime: &str,
+    ) -> Option<String> {
+        let bytes = openproxy_adapters::adapters::upstream_get_bytes(upstream_client, url, &[]).await.ok()?;
+        if bytes.len() > 100 {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            Some(format!("data:{};base64,{}", mime, b64))
+        } else {
+            None
+        }
+    }
+
+    for domain in domains {
+        if let Some(data) = try_fetch_b64(
+            upstream_client,
+            &format!("https://www.google.com/s2/favicons?domain={}&sz=64", domain),
+            "image/png",
+        )
+        .await
+        {
+            return Some(data);
+        }
+
+        if let Some(data) = try_fetch_b64(
+            upstream_client,
+            &format!("https://icons.duckduckgo.com/ip3/{}.ico", domain),
+            "image/x-icon",
+        )
+        .await
+        {
+            return Some(data);
+        }
+
+        if let Some(data) = try_fetch_b64(
+            upstream_client,
+            &format!("https://{}/favicon.ico", domain),
+            "image/x-icon",
+        )
+        .await
+        {
+            return Some(data);
+        }
+    }
+
+    None
+}
+
+/// Fetch the favicon for a provider and store it in the database.
+pub async fn fetch_and_cache_favicon(
+    db_pool: &std::sync::Arc<openproxy_db::conn::DbPool>,
+    id: &ProviderId,
+    base_url: &str,
+    upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
+) -> Result<()> {
+    if let Some(data_uri) = fetch_favicon_data_uri(base_url, upstream_client).await {
+        let conn = db_pool.open_connection()?;
+        set_favicon(&conn, id, &data_uri)?;
+    }
     Ok(())
 }
 
@@ -369,6 +497,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let active = active != 0;
     let use_proxies = use_proxies != 0;
     let proxy_rotation_mode: String = row.get(13)?;
+    let favicon_base64: Option<String> = row.get(14)?;
 
     Ok(Provider {
         id: ProviderId::new(id),
@@ -385,6 +514,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         proxy_rotation_errors,
         rate_limit_scope,
         proxy_rotation_mode,
+        favicon_base64,
     })
 }
 

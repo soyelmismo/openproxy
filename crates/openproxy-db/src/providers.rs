@@ -66,7 +66,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
              FROM providers WHERE id = ?1",
         )
         .map_err(crate::error::map_db_error_ctx("prepare get provider"))?;
@@ -111,6 +111,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let proxy_rotation_errors: String = row.get(11)?;
     let rate_limit_scope_str: String = row.get(12)?;
     let proxy_rotation_mode: String = row.get(13)?;
+    let favicon_base64: Option<String> = row.get(14)?;
 
     let auth_type = AuthType::parse(&auth_type_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -149,6 +150,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         proxy_rotation_errors,
         rate_limit_scope,
         proxy_rotation_mode,
+        favicon_base64,
     })
 }
 

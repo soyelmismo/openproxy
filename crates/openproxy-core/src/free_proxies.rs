@@ -1907,6 +1907,7 @@ mod tests {
               rate_limit_scope TEXT DEFAULT 'account',
               proxy_rotation_mode TEXT DEFAULT 'global',
               active INTEGER NOT NULL DEFAULT 1,
+              favicon_base64 TEXT,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
               CHECK (format IN ('openai', 'anthropic', 'mixed', 'gemini', 'responses'))

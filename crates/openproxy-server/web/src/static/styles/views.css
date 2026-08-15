@@ -14,8 +14,7 @@
   display: block;
   padding: var(--space-3);
   background: var(--color-surface);
-  border: var(--border-w-2) var(--border-style) var(--color-border);
-  border-left-width: 4px;
+  border: var(--border-w) var(--border-style) var(--color-border);
   text-decoration: none;
   color: var(--color-text);
   transition: background var(--t-fast);
@@ -26,7 +25,7 @@
   border-color: var(--color-primary);
 }
 .provider-card.has-errors {
-  border-left-color: var(--color-error);
+  border-color: var(--color-error);
 }
 .provider-card.inactive {
   opacity: 0.55;
@@ -65,17 +64,24 @@
 .provider-icon {
   width: 36px; height: 36px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: var(--color-surface-2);
-  border: var(--border-w) var(--border-style) var(--color-border);
+  background: transparent;
+  border: none;
   font-family: var(--font-display);
-  font-size: 1rem;
+  font-size: 1.1rem;
+  font-weight: 600;
   flex-shrink: 0;
 }
-.provider-icon.icon-large { width: 56px; height: 56px; font-size: 1.4rem; }
-.provider-icon[data-format="openai"]   { background: #d8e2c8; color: #4d7c2a; border-color: #4d7c2a; }
-.provider-icon[data-format="anthropic"]{ background: #f3cdcd; color: #b21f1f; border-color: #b21f1f; }
-.provider-icon[data-format="gemini"]   { background: #cfdde5; color: #2b5a78; border-color: #2b5a78; }
-.provider-icon[data-format="openrouter"]{ background: #f5d9b8; color: #a86a00; border-color: #a86a00; }
+.provider-icon.icon-large { width: 48px; height: 48px; font-size: 1.5rem; }
+.provider-favicon {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: var(--radius-sm, 4px);
+}
+.provider-icon.icon-large .provider-favicon {
+  width: 48px;
+  height: 48px;
+}
 .provider-emoji { line-height: 1; }
 
 .empty-state {
@@ -467,7 +473,9 @@
   flex-wrap: nowrap;
   gap: var(--space-2);
   align-items: center;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
   text-align: left;
   background: var(--color-bg);
   color: var(--color-text);
@@ -478,6 +486,11 @@
   font-size: var(--fs-xs);
   cursor: pointer;
   transition: background var(--t-fast);
+}
+.logs-scroll-area [data-key] {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
 }
 .log-row:hover { background: var(--color-surface-2); }
 .log-row:active { transform: translateY(1px); }
@@ -494,26 +507,24 @@
  * a stable footprint that matches the original grid tracks. */
 .log-row > span {
   flex: 0 0 auto;
-  min-width: 60px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-sizing: border-box;
 }
-/* Per-column min-widths mirror the original `grid-template-columns`
- * values (time:150, phase:150, status:60, provider:120, model:1fr
- * → flexible, tokens:100, latency:80, cost:70). The model column is
- * the only one that flexes (`flex: 1 1 auto`) so the row can absorb
- * extra horizontal space. */
-.log-row .log-time     { flex: 0 0 auto; min-width: 150px; color: var(--color-text-muted); }
-.log-row .log-phase    { flex: 0 0 auto; min-width: 150px; }
-.log-row .log-client   { flex: 0 0 auto; min-width: 32px; display: inline-flex; align-items: center; justify-content: center; }
-.log-row .log-status   { flex: 0 0 auto; min-width: 60px;  font-weight: 600; }
-.log-row .log-provider { flex: 0 0 auto; min-width: 120px; }
-.log-row .log-model    { flex: 1 1 auto; min-width: 120px; }
-.log-row .log-tokens   { flex: 0 0 auto; min-width: 100px; }
-.log-row .log-latency  { flex: 0 0 auto; min-width: 80px;  color: var(--color-text-muted); }
-.log-row .log-cost     { flex: 0 0 auto; min-width: 70px;  color: var(--color-primary); }
-.log-row .log-compression { flex: 0 0 auto; min-width: 60px; color: var(--color-success, #22c55e); font-size: 0.85em; }
+/* Strict column footprints with flex: 0 0 <width> so rows never desynchronize */
+.log-row .log-time        { flex: 0 0 150px; width: 150px; color: var(--color-text-muted); }
+.log-row .log-phase       { flex: 0 0 145px; width: 145px; }
+.log-row .log-client      { flex: 0 0 36px;  width: 36px;  display: inline-flex; align-items: center; justify-content: center; }
+.log-row .log-status      { flex: 0 0 60px;  width: 60px;  font-weight: 600; }
+.log-row .log-provider    { flex: 0 0 130px; width: 130px; }
+.log-row .log-model       { flex: 1 0 180px; min-width: 180px; }
+.log-row .log-tokens      { flex: 0 0 110px; width: 110px; }
+.log-row .log-latency     { flex: 0 0 80px;  width: 80px;  color: var(--color-text-muted); }
+.log-row .log-cost        { flex: 0 0 70px;  width: 70px;  color: var(--color-primary); }
+.log-row .log-cache       { flex: 0 0 85px;  width: 85px; }
+.log-row .log-compression { flex: 0 0 80px;  width: 80px;  color: var(--color-success, #22c55e); font-size: 0.85em; }
 .log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
 
 /* Client response indicator: checkmark (winner) vs dashed circle (internal) */
@@ -608,8 +619,19 @@
   border: var(--border-w) var(--border-style) var(--color-border-soft);
   font-family: var(--font-sans);
   font-size: var(--fs-xs);
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
-.log-phase-sub { font-size: 0.7rem; color: var(--color-text-muted); font-family: var(--font-mono); }
+.log-phase-sub {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .log-phase-sub--ticking { color: var(--color-primary); }
 .log-phase--started      { background: var(--color-surface-2); }
 .log-phase--connecting   { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); animation: phasePulse 1.4s ease-in-out infinite; }
@@ -1427,8 +1449,6 @@ abbr {
   padding: var(--space-3);
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
-  border-left-width: 3px;
-  border-left-color: var(--card-accent, var(--color-border));
   /* Faint background tint from the accent color — gives each
    * notification type an intuitive color at a glance without
    * being overwhelming. Uses color-mix for a very subtle tint. */
@@ -1440,7 +1460,7 @@ abbr {
   transition: background var(--t-fast), border-color var(--t-fast);
 }
 .notification-card.unread {
-  border-left-color: var(--card-accent, var(--color-primary));
+  border-color: var(--card-accent, var(--color-primary));
   background: var(--color-primary-soft);
 }
 .notification-card.draggable {
@@ -1852,16 +1872,6 @@ abbr {
   min-width: 0;
   overflow: hidden;
 }
-.home-kpi-tile::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--color-info);
-}
-.home-kpi-tile.is-good::before { background: var(--color-success); }
-.home-kpi-tile.is-warn::before { background: var(--color-warn); }
-.home-kpi-tile.is-bad::before { background: var(--color-error); }
 .home-kpi-label {
   font-size: var(--fs-xs);
   text-transform: uppercase;
@@ -2305,14 +2315,10 @@ abbr {
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }
-.analytics-race-stat-won {
-  border-left: 3px solid var(--color-success);
-}
-.analytics-race-stat-lost {
-  border-left: 3px solid var(--color-error);
-}
-.analytics-race-stat-total {
-  border-left: 3px solid var(--color-info);
+.analytics-race-stat-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
 }
 
 /* ----- Responsive: tablet (≤900px) — analytics grid collapses to 1 col ----- */
@@ -2388,10 +2394,6 @@ abbr {
   background: var(--color-surface);
   box-shadow: var(--shadow-sm);
 }
-.analytics-metric::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--color-info); }
-.analytics-metric.is-good::before { background: var(--color-success); }
-.analytics-metric.is-warn::before { background: var(--color-warn); }
-.analytics-metric.is-bad::before { background: var(--color-error); }
 .analytics-metric-label { color: var(--color-text-muted); font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
 .analytics-metric-value { overflow: hidden; color: var(--color-text); font: 700 var(--fs-2xl) var(--font-mono); line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .analytics-metric-meta { overflow: hidden; color: var(--color-text-muted); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
@@ -2420,13 +2422,13 @@ abbr {
 .analytics-status-track { display: flex; height: 10px; margin: var(--space-2) var(--space-4) var(--space-4); overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
 .analytics-status-track span { display: block; height: 100%; }
 .analytics-status-track .ok,
-.analytics-status-dot.ok { background: var(--color-success); }
+.analytics-status-dot.ok { background: var(--color-status-ok-bright); }
 .analytics-status-track .warn,
-.analytics-status-dot.warn { background: var(--color-warn); }
+.analytics-status-dot.warn { background: var(--color-status-warn-bright); }
 .analytics-status-track .err,
-.analytics-status-dot.err { background: var(--color-error); }
+.analytics-status-dot.err { background: var(--color-status-err-bright); }
 .analytics-status-track .other,
-.analytics-status-dot.other { background: var(--color-text-muted); }
+.analytics-status-dot.other { background: var(--color-status-other-bright); }
 .analytics-status-legend { display: flex; flex-direction: column; padding: 0 var(--space-4) var(--space-4); }
 .analytics-status-legend > div { display: grid; grid-template-columns: 10px 1fr auto 44px; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-soft); font-size: var(--fs-xs); }
 .analytics-status-legend strong { font-family: var(--font-mono); }

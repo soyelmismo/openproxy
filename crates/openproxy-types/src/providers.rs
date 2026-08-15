@@ -160,6 +160,10 @@ pub struct Provider {
     pub rate_limit_scope: RateLimitScope,
     #[serde(default = "default_proxy_rotation_mode")]
     pub proxy_rotation_mode: String,
+    /// Cached favicon as a data URI (`data:image/png;base64,...`).
+    /// Populated lazily by the discovery scheduler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub favicon_base64: Option<String>,
 }
 
 fn default_proxy_rotation_mode() -> String {

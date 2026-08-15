@@ -66,16 +66,60 @@ function setProviderUi(providerId: string, ui: ProviderDetailUiState): void {
   state.providerDetail[providerId] = ui as unknown as Record<string, unknown>;
 }
 
-// Three built-in providers get distinct visual markers; custom
-// providers fall back to the first letter of their id (uppercased).
-function providerGlyph(providerId: string): string {
-  const knownLogos: Record<string, string> = {
-    "openrouter": "🟢",
-    "minimax": "🟡",
-    "opencode-zen": "🟣",
-    "opencode-go": "🟣",
+function extractDomain(urlStr: string): string | null {
+  try {
+    const u = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
+    return u.hostname;
+  } catch {
+    const stripped = urlStr.trim().replace(/^https?:\/\//i, "").split("/")[0]?.split(":")[0]?.trim();
+    return stripped || null;
+  }
+}
+
+function extractApexDomain(host: string): string {
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+  const secondToLast = parts[parts.length - 2] || "";
+  const last = parts[parts.length - 1] || "";
+  const isCompoundTld = ["co", "com", "org", "net", "gov", "edu"].includes(secondToLast) && last.length === 2;
+  if (isCompoundTld && parts.length >= 3) {
+    return parts.slice(-3).join(".");
+  }
+  return parts.slice(-2).join(".");
+}
+
+function renderProviderIcon(p: Provider): TemplateResult {
+  const fallback = (p.id[0] || "?").toUpperCase();
+  const host = extractDomain(p.base_url);
+  const apex = host ? extractApexDomain(host) : null;
+  const src = p.favicon_base64 || (host ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64` : null);
+
+  if (!src) {
+    return html`<span>${fallback}</span>`;
+  }
+
+  let attempt = 0;
+  const onImgError = (e: Event) => {
+    const img = e.currentTarget as HTMLImageElement;
+    attempt++;
+    if (attempt === 1 && apex && apex !== host) {
+      img.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(apex)}&sz=64`;
+      return;
+    }
+    if (attempt <= 2 && apex) {
+      img.src = `https://icons.duckduckgo.com/ip3/${encodeURIComponent(apex)}.ico`;
+      return;
+    }
+    img.style.display = "none";
+    if (img.nextElementSibling) {
+      (img.nextElementSibling as HTMLElement).style.display = "";
+    }
   };
-  return knownLogos[providerId] || ((providerId[0] || "?").toUpperCase());
+
+  return html`
+    <img src=${src} alt=${p.name} class="provider-favicon" @error=${onImgError} loading="lazy" />
+    <span style="display: none;">${fallback}</span>
+  `;
 }
 
 function formatContext(tokens: number | null | undefined): TemplateResult {
@@ -706,7 +750,7 @@ function renderProviderCard(p: Provider, accounts: Account[]): TemplateResult {
   ].filter(Boolean).join(" ");
   return html`<a href="#/providers/${encodeURIComponent(p.id)}" class=${cardClasses}>
     <div class="provider-card-header">
-      <div class="provider-icon" data-format=${p.format}>${providerGlyph(p.id)}</div>
+      <div class="provider-icon" data-format=${p.format}>${renderProviderIcon(p)}</div>
       <div class="provider-info">
         <h3>${p.name}${p.active ? html`` : html` <small class="inactive-suffix">(inactive)</small>`}</h3>
         <code>${p.id}</code>
@@ -772,7 +816,7 @@ function renderDetailHeader(provider: Provider): TemplateResult {
   const isDeletable = provider.metadata?.deletable ?? true;
   return html`
     <div class="provider-detail-header${provider.active ? "" : " inactive"}">
-      <div class="provider-icon icon-large" data-format=${provider.format}>${providerGlyph(provider.id)}</div>
+      <div class="provider-icon icon-large" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
       <div style="flex:1; min-width:0;">
         <h2>
           <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>

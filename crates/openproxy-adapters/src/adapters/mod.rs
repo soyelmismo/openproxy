@@ -801,11 +801,11 @@ pub use openrouter::OpenRouterAdapter;
 /// [`crate::upstream::UpstreamError`] into the provider-specific
 /// [`CoreError`] (most call sites return `CoreError::UpstreamConnection`
 /// on transport failure and `CoreError::Parse` on JSON failure).
-pub(crate) async fn upstream_get_json(
+pub async fn upstream_get_bytes(
     upstream_client: &Arc<UpstreamClient>,
     url: &str,
     headers: &[(&str, &str)],
-) -> std::result::Result<serde_json::Value, String> {
+) -> std::result::Result<bytes::Bytes, String> {
     let mut req = UpstreamRequest::get(url);
     for (k, v) in headers {
         if let Ok(hv) = HeaderValue::from_str(v) {
@@ -843,10 +843,18 @@ pub(crate) async fn upstream_get_json(
         ));
     }
 
-    let bytes = response
+    response
         .collect()
         .await
-        .map_err(|e| format!("{}: {}", url, e))?;
+        .map_err(|e| format!("{}: {}", url, e))
+}
+
+pub(crate) async fn upstream_get_json(
+    upstream_client: &Arc<UpstreamClient>,
+    url: &str,
+    headers: &[(&str, &str)],
+) -> std::result::Result<serde_json::Value, String> {
+    let bytes = upstream_get_bytes(upstream_client, url, headers).await?;
     serde_json::from_slice(&bytes).map_err(|e| format!("{}: parse: {}", url, e))
 }
 
@@ -1520,6 +1528,7 @@ mod tests {
             current_proxy_id: None,
             proxy_rotation_errors: "429,connect_error,timeout".to_string(),
             proxy_rotation_mode: "global".to_string(),
+            favicon_base64: None,
         }
     }
 

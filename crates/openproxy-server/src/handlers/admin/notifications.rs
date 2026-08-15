@@ -49,6 +49,14 @@ pub async fn mark_all_notifications_read(
     Ok(Json(serde_json::json!({ "updated": updated })))
 }
 
+pub async fn archive_all_notifications(
+    DbWriter(w): DbWriter,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let updated = openproxy_core::notifications::archive_all(&w)
+        .map_err(|e| CoreError::Internal(format!("core_notifications::archive_all: {}", e)))?;
+    Ok(Json(serde_json::json!({ "updated": updated })))
+}
+
 pub async fn archive_notification(
     DbWriter(w): DbWriter,
     Path(id): Path<i64>,

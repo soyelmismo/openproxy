@@ -492,6 +492,17 @@ pub fn mark_all_read(conn: &Connection) -> Result<usize> {
     Ok(changed)
 }
 
+/// Archive all non-archived notifications (sets `archived_at` to now).
+/// Returns the number of rows updated.
+pub fn archive_all(conn: &Connection) -> Result<usize> {
+    let changed = conn.execute(
+        "UPDATE notifications SET archived_at = datetime('now')
+         WHERE archived_at IS NULL",
+        [],
+    )?;
+    Ok(changed)
+}
+
 /// Archive a single notification (sets `archived_at` to now). The row is
 /// preserved for audit. Idempotent.
 pub fn archive(conn: &Connection, id: i64) -> Result<()> {
@@ -647,6 +658,32 @@ mod tests {
         assert_eq!(list(&conn, false, 10, None).unwrap().len(), 1);
         archive(&conn, id).unwrap();
         assert_eq!(list(&conn, false, 10, None).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn archive_all_hides_all_from_list() {
+        let conn = fresh_db();
+        insert(
+            &conn,
+            KIND_MODEL_NEW,
+            &serde_json::json!({}),
+            Some("p1:m1"),
+            Some("p1"),
+        )
+        .unwrap();
+        insert(
+            &conn,
+            KIND_SYSTEM,
+            &serde_json::json!({}),
+            Some("p1:m2"),
+            Some("p1"),
+        )
+        .unwrap();
+        assert_eq!(list(&conn, false, 10, None).unwrap().len(), 2);
+        let count = archive_all(&conn).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(list(&conn, false, 10, None).unwrap().len(), 0);
+        assert_eq!(unread_count(&conn).unwrap(), 0);
     }
 
     #[test]

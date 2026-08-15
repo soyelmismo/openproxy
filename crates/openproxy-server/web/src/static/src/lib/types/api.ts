@@ -140,6 +140,7 @@ export interface Provider {
   current_proxy_id: string | null;
   proxy_rotation_errors: string;
   proxy_rotation_mode: string;
+  favicon_base64?: string | null;
   oauth_flows?: string[];
   metadata?: ProviderMetadata;
   active_models?: number;

@@ -97,13 +97,19 @@
   --color-status-lost:      #5a5a5a;
   --color-status-lost-soft: #e6e6e6;
 
+  /* Bright status colors for charts, status tracks, and dots */
+  --color-status-ok-bright:    #22c55e;
+  --color-status-warn-bright:  #f59e0b;
+  --color-status-err-bright:   #ef4444;
+  --color-status-other-bright: #94a3b8;
+
   /* Phase pills (log rows) — kept for views.css */
   --color-phase-soft:       #ece9e2;
   --color-phase-text:       #1a1a1a;
 
   /* Log row header (sticky) — kept for views.css */
-  --color-log-header-bg:    #0f0d0b;
-  --color-log-header-fg:    #d8d4c8;
+  --color-log-header-bg:    var(--color-surface-2);
+  --color-log-header-fg:    var(--color-text-muted);
 
   /* ----- Spacing ----- */
   --space-1: 0.25rem;

@@ -472,6 +472,12 @@ async fn run_one_tick(
 
     let duration_ms = started.elapsed().as_millis();
     handle_discovery_outcome(db_pool, &provider, &provider_row, result, duration_ms).await;
+
+    if let Some(ref p) = provider_row
+        && p.favicon_base64.is_none()
+    {
+        let _ = providers::fetch_and_cache_favicon(db_pool, &provider, &p.base_url, upstream_client).await;
+    }
 }
 
 fn load_provider_snapshot(

@@ -305,6 +305,21 @@ pub(crate) async fn run_provider_refresh(
         Err(e) => return Err(ApiError(e)),
     };
 
+    let pid_clone = provider.clone();
+    let upstream_clone = std::sync::Arc::clone(s.upstream_client());
+    let pool_clone = std::sync::Arc::clone(s.db_pool());
+    tokio::spawn(async move {
+        let p_opt = {
+            let r = pool_clone.reader();
+            core_providers::get(&r, &pid_clone).ok().flatten()
+        };
+        if let Some(p) = p_opt
+            && p.favicon_base64.is_none()
+        {
+            let _ = core_providers::fetch_and_cache_favicon(&pool_clone, &pid_clone, &p.base_url, &upstream_clone).await;
+        }
+    });
+
     // 7. Auto-activation pass. The provider may have a substring
     //    `auto_activate_keyword` set; if so, every non-custom row
     //    gets `active` flipped to whether its `model_id` contains the

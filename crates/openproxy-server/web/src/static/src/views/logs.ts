@@ -74,7 +74,7 @@ function handleLogsMessage(event: MessageEvent): void {
 }
 
 function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
-  return html`<div class="log-row" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
+  return html`<div class="log-row" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-log-header-fg);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
     .filter((c) => visibleColKeys.has(c.key))
     .map((c) => html`<span class="log-${c.key}" data-col=${c.key}>${c.label}</span>`)}</div>`;
 }
