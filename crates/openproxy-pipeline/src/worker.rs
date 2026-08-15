@@ -115,6 +115,7 @@ pub fn process_job(
                             tracing::warn!("cooldown::record failed in background: {}", e);
                         }
                     }
+                    "record" => {}
                     _ => {}
                 }
             }
