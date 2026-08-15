@@ -439,18 +439,8 @@ pub(crate) async fn run_test_for_model(
         model: model.model_id.as_str().to_string(),
         messages: vec![
             OpenAIMessage {
-                role: "system".into(),
-                content: Some(serde_json::Value::String(
-                    "You are a helpful assistant.".to_string(),
-                )),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: serde_json::Map::new(),
-            },
-            OpenAIMessage {
                 role: "user".into(),
-                content: Some(serde_json::Value::String("ping".to_string())),
+                content: Some(serde_json::Value::String("hi".to_string())),
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
