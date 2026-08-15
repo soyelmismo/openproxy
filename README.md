@@ -25,9 +25,7 @@
              └───────────────────┘└───────────────────┘└───────────────────┘
 ```
 
-<!-- PLACEHOLDER: Main Dashboard Screenshot -->
-<!-- Replace with your dashboard screenshot path, e.g. docs/images/dashboard-hero.png -->
-> ![openproxy Dashboard](docs/images/dashboard-hero.png)
+![openproxy Dashboard](docs/dashboard-hero.png)
 
 ---
 

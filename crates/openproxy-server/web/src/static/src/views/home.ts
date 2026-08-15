@@ -360,8 +360,8 @@ function renderKpiGrid(snapshot: Snapshot | null): TemplateResult {
   return html`<div class="home-kpi-grid">
     ${renderKpiTile(t("home.kpi.active_requests"), snapshot ? String(snapshot.activeRequests) : "—", t("home.kpi.in_flight"), null)}
     ${renderKpiTile(t("home.kpi.requests_per_min"), snapshot ? formatCompact(snapshot.requestsPerSec * 60) : "—", `${formatCompact(windowRequests)} ${t("home.kpi.in_window")}`, "spark-requests")}
-    ${renderKpiTile(t("home.kpi.success_rate"), success, `${formatCompact(status.errors)} ${t("home.kpi.failed")}`, "spark-success", successTone)}
     ${renderKpiTile(t("home.kpi.p95_latency"), snapshot && responses > 0 ? formatLatency(snapshot.p95LatencyMs) : "—", `${t("home.kpi.p50")} ${snapshot && responses > 0 ? formatLatency(snapshot.p50LatencyMs) : "—"}`, "spark-latency")}
+    ${renderKpiTile(t("home.kpi.success_rate"), success, `${formatCompact(status.errors)} ${t("home.kpi.failed")}`, "spark-success", successTone)}
     ${renderKpiTile(t("home.kpi.tokens_per_min"), snapshot ? formatCompact(snapshot.tokensPerSec * 60) : "—", t("home.kpi.rolling_rate"), "spark-tokens")}
     ${renderKpiTile(t("home.kpi.cost_per_min"), snapshot ? formatCostPerMin(snapshot.costPerSec * 60) : "—", `${formatCostPerMin((snapshot?.costPerSec ?? 0) * 3600)} ${t("home.kpi.per_hour")}`, "spark-cost")}
   </div>`;
@@ -470,8 +470,8 @@ function renderHome(): TemplateResult {
       ${renderKpiGrid(snapshot)}
       <div class="home-charts-grid">
         ${renderChartCard(t("home.chart.throughput"), t("home.chart.throughput.subtitle"), "chart-throughput", snapshot ? `${formatCompact(snapshot.requestsPerSec * 60)} rpm` : "—")}
-        ${renderChartCard(t("home.chart.status_codes"), t("home.chart.status_codes.subtitle"), "chart-status-codes", snapshot && hasResponses ? `${(snapshot.successRate * 100).toFixed(1)}%` : "—")}
         ${renderChartCard(t("home.chart.latency"), t("home.chart.latency.subtitle"), "chart-latency", snapshot && hasResponses ? `p95 ${formatLatency(snapshot.p95LatencyMs)}` : "—")}
+        ${renderChartCard(t("home.chart.status_codes"), t("home.chart.status_codes.subtitle"), "chart-status-codes", snapshot && hasResponses ? `${(snapshot.successRate * 100).toFixed(1)}%` : "—")}
         ${renderRaceOutcomesCard(snapshot)}
       </div>
       ${renderActivityFeed(snapshot)}

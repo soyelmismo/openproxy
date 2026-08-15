@@ -100,15 +100,15 @@ export function injectUplotCss(): void {
  *  theme switching we'd need to read CSS custom properties via
  *  `getComputedStyle(document.documentElement)`. Out of scope for F6. */
 export const CHART_COLORS = {
-  blue: "#2563eb",
-  green: "#16a34a",
-  orange: "#ea580c",
-  red: "#dc2626",
-  purple: "#7c3aed",
-  gray: "#64748b",
-  status2xx: "#16a34a",
-  status4xx: "#f59e0b",
-  status5xx: "#dc2626",
+  blue: "#38bdf8",
+  green: "#4ade80",
+  orange: "#fb923c",
+  red: "#f87171",
+  purple: "#a855f7",
+  gray: "#94a3b8",
+  status2xx: "#4ade80",
+  status4xx: "#fbbf24",
+  status5xx: "#f87171",
 } as const;
 
 // ----------------------------------------------------------------------------
