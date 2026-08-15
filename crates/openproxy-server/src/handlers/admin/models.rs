@@ -437,16 +437,14 @@ pub(crate) async fn run_test_for_model(
     //    expect as a sanity check.
     let openai_req = OpenAIRequest {
         model: model.model_id.as_str().to_string(),
-        messages: vec![
-            OpenAIMessage {
-                role: "user".into(),
-                content: Some(serde_json::Value::String("hi".to_string())),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: serde_json::Map::new(),
-            },
-        ],
+        messages: vec![OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::Value::String("hi".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }],
         stream: false,
         temperature: None,
         max_tokens: Some(5),

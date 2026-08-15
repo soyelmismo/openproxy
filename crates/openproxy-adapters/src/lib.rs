@@ -10,11 +10,11 @@ pub use adapters::MockAdapter;
 pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,
-    builtin_adapters, cline::ClineAdapter,
-    cloudflare_workers_ai::CloudflareWorkersAIAdapter, codex::CodexAdapter,
-    custom_adapter::CustomAdapter, gemini::GeminiAdapter, kilocode::KilocodeAdapter,
-    kiro_ai::KiroAdapter, minimax::MiniMaxAdapter, nous_research::NousResearchAdapter,
-    nvidia_nim::NvidiaNimAdapter, ollama_cloud::OllamaCloudAdapter, opencode_go::OpenCodeGoAdapter,
+    builtin_adapters, cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter,
+    codex::CodexAdapter, custom_adapter::CustomAdapter, gemini::GeminiAdapter,
+    kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, minimax::MiniMaxAdapter,
+    nous_research::NousResearchAdapter, nvidia_nim::NvidiaNimAdapter,
+    ollama_cloud::OllamaCloudAdapter, opencode_go::OpenCodeGoAdapter,
     opencode_zen::OpenCodeZenAdapter, openrouter::OpenRouterAdapter,
 };
 
