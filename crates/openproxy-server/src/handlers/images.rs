@@ -5,10 +5,12 @@
 //! Delegates routing resolution, credential decryption, upstream dispatch,
 //! and usage recording to [`openproxy_core::images`].
 
+use std::sync::Arc;
+
 use axum::{
     Json,
-    extract::{Multipart, State},
-    http::HeaderMap,
+    extract::{FromRequest, Multipart, Request, State},
+    http::{HeaderMap, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use openproxy_core::images::{
@@ -68,9 +70,9 @@ pub async fn generate_images(
 pub async fn edit_images(
     State(state): State<AppState>,
     headers: HeaderMap,
-    multipart: Multipart,
+    req: Request,
 ) -> Result<Response, ApiError> {
-    let parsed_body = parse_image_multipart(multipart).await?;
+    let parsed_body = parse_image_request(req, state.upstream_client()).await?;
 
     if !parsed_body
         .files
@@ -78,7 +80,7 @@ pub async fn edit_images(
         .any(|f| f.name == "image" && !f.bytes.is_empty())
     {
         return Err(ApiError(CoreError::Validation(
-            "missing or empty 'image' in multipart body".into(),
+            "missing or empty 'image' in request body".into(),
         )));
     }
 
@@ -126,9 +128,9 @@ pub async fn edit_images(
 pub async fn create_image_variation(
     State(state): State<AppState>,
     headers: HeaderMap,
-    multipart: Multipart,
+    req: Request,
 ) -> Result<Response, ApiError> {
-    let parsed_body = parse_image_multipart(multipart).await?;
+    let parsed_body = parse_image_request(req, state.upstream_client()).await?;
 
     if !parsed_body
         .files
@@ -136,7 +138,7 @@ pub async fn create_image_variation(
         .any(|f| f.name == "image" && !f.bytes.is_empty())
     {
         return Err(ApiError(CoreError::Validation(
-            "missing or empty 'image' in multipart body".into(),
+            "missing or empty 'image' in request body".into(),
         )));
     }
 
@@ -168,6 +170,127 @@ pub async fn create_image_variation(
     .map_err(ApiError)?;
 
     Ok(Json(response).into_response())
+}
+
+async fn parse_image_request(
+    req: Request,
+    upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
+) -> Result<ParsedImageMultipartBody, ApiError> {
+    let content_type = req
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    if content_type.contains("multipart/form-data") {
+        let multipart = Multipart::from_request(req, &())
+            .await
+            .map_err(|e| ApiError(CoreError::Validation(format!("multipart extract: {e}"))))?;
+        return parse_image_multipart(multipart).await;
+    }
+
+    // Otherwise, parse as JSON payload
+    let body_bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
+        .await
+        .map_err(|e| ApiError(CoreError::Validation(format!("read body: {e}"))))?;
+
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| ApiError(CoreError::Validation(format!("invalid json body: {e}"))))?;
+
+    let mut model_name = json
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("dall-e-2")
+        .to_string();
+    if model_name.is_empty() {
+        model_name = "dall-e-2".to_string();
+    }
+
+    let mut files = Vec::new();
+    let mut form_fields = Vec::new();
+
+    if let Some(map) = json.as_object() {
+        for (k, v) in map {
+            if k == "image" {
+                if let Some(s) = v.as_str() {
+                    let file = resolve_image_input(s, "image", upstream_client).await?;
+                    files.push(file);
+                }
+            } else if k == "mask" {
+                if let Some(s) = v.as_str() {
+                    let file = resolve_image_input(s, "mask", upstream_client).await?;
+                    files.push(file);
+                }
+            } else if let Some(s) = v.as_str() {
+                form_fields.push((k.clone(), s.to_string()));
+            } else if let Some(n) = v.as_i64() {
+                form_fields.push((k.clone(), n.to_string()));
+            } else if let Some(f) = v.as_f64() {
+                form_fields.push((k.clone(), f.to_string()));
+            } else if let Some(b) = v.as_bool() {
+                form_fields.push((k.clone(), b.to_string()));
+            }
+        }
+    }
+
+    Ok(ParsedImageMultipartBody {
+        model_name,
+        files,
+        form_fields,
+    })
+}
+
+async fn resolve_image_input(
+    raw: &str,
+    field_name: &str,
+    upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
+) -> Result<MultipartFile, ApiError> {
+    use base64::Engine as _;
+    let trimmed = raw.trim();
+
+    if trimmed.starts_with("data:image/")
+        && let Some((_, b64_part)) = trimmed.split_once(";base64,")
+    {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64_part.trim())
+            .map_err(|e| ApiError(CoreError::Validation(format!("invalid base64 image: {e}"))))?;
+        return Ok(MultipartFile {
+            name: field_name.to_string(),
+            file_name: format!("{field_name}.png"),
+            content_type: "image/png".to_string(),
+            bytes: bytes.into(),
+        });
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let req = openproxy_adapters::UpstreamRequest::get(trimmed);
+        let cancel = openproxy_adapters::CancellationToken::new();
+        let resp = upstream_client
+            .call(req, openproxy_adapters::TimeoutProfile::Chat, cancel)
+            .await
+            .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("failed to fetch image URL: {e}"))))?;
+        let bytes = resp
+            .collect()
+            .await
+            .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("failed to read image URL body: {e}"))))?;
+        return Ok(MultipartFile {
+            name: field_name.to_string(),
+            file_name: format!("{field_name}.png"),
+            content_type: "image/png".to_string(),
+            bytes,
+        });
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .map_err(|e| ApiError(CoreError::Validation(format!("invalid base64 image data: {e}"))))?;
+    Ok(MultipartFile {
+        name: field_name.to_string(),
+        file_name: format!("{field_name}.png"),
+        content_type: "image/png".to_string(),
+        bytes: bytes.into(),
+    })
 }
 
 async fn parse_image_multipart(

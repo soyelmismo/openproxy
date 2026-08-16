@@ -25,6 +25,7 @@ openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
 openproxy-compression = { path = "../openproxy-compression" }
 tokio = { workspace = true }
+base64 = { workspace = true }
 # The `multipart` feature is required for the
 # `POST /v1/audio/transcriptions` (Whisper) handler, which uses
 # `axum::extract::Multipart` to parse the incoming `multipart/form-data`
