@@ -27,9 +27,8 @@ pub fn get_or_assign_provider_proxy(
 ) -> Result<Option<String>> {
     use crate::cooldowns::is_provider_proxy_in_cooldown;
 
-    let provider = match crate::providers::get(conn, provider_id)? {
-        Some(p) => p,
-        None => return Ok(None),
+    let Some(provider) = crate::providers::get(conn, provider_id)? else {
+        return Ok(None);
     };
 
     if !provider.use_proxies {

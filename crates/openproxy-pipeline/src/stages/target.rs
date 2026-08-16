@@ -266,34 +266,31 @@ impl PipelineStage for DispatchStage {
             .as_ref()
             .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
 
-        let adapter = match ctx
+        let Some(adapter) = ctx
             .pipeline
             .config
             .adapters
             .iter()
             .find(|a| a.id() == &target.provider_id)
-        {
-            Some(a) => a,
-            None => {
-                let err = CoreError::ProviderNotFound(target.provider_id.to_string());
-                return Ok(ctx.pipeline.record_and_fail(
-                    ctx.req.clone(),
-                    combo,
-                    target,
-                    FailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ));
-            }
+        else {
+            let err = CoreError::ProviderNotFound(target.provider_id.to_string());
+            return Ok(ctx.pipeline.record_and_fail(
+                ctx.req.clone(),
+                combo,
+                target,
+                FailureContext {
+                    proxy_url: None,
+                    proxy_status: None,
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+                },
+            ));
         };
 
         if let Some(cancel) = &ctx.race_cancel
@@ -491,38 +488,35 @@ impl PipelineStage for CustomAdapterStage {
             .as_mut()
             .expect("current_target must be set");
         let target = &current.target;
-        let _adapter = match ctx
+        let Some(_adapter) = ctx
             .pipeline
             .config
             .adapters
             .iter()
             .find(|a| a.id() == &target.provider_id)
-        {
-            Some(a) => a,
-            None => {
-                let err = CoreError::ProviderNotFound(target.provider_id.to_string());
-                let combo = ctx.combo.as_ref().ok_or_else(|| {
-                    CoreError::Internal("missing combo in pipeline context".into())
-                })?;
-                return Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                    ctx.req.clone(),
-                    combo,
-                    target,
-                    FailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
-                        attempt: ctx.current_target_attempt,
-                        race_size: ctx.race_size,
-                        err: &err,
-                        started: ctx.started.unwrap_or_else(std::time::Instant::now),
-                        model: Some(&current.model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                    ctx.trace_id.clone(),
-                ));
-            }
+        else {
+            let err = CoreError::ProviderNotFound(target.provider_id.to_string());
+            let combo = ctx.combo.as_ref().ok_or_else(|| {
+                CoreError::Internal("missing combo in pipeline context".into())
+            })?;
+            return Ok(ctx.pipeline.record_and_fail_with_trace_id(
+                ctx.req.clone(),
+                combo,
+                target,
+                FailureContext {
+                    proxy_url: None,
+                    proxy_status: None,
+                    attempt: ctx.current_target_attempt,
+                    race_size: ctx.race_size,
+                    err: &err,
+                    started: ctx.started.unwrap_or_else(std::time::Instant::now),
+                    model: Some(&current.model),
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+                },
+                ctx.trace_id.clone(),
+            ));
         };
 
         next.execute(ctx).await

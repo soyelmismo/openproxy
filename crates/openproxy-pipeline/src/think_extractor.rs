@@ -238,9 +238,8 @@ fn strip_orphaned_close_tags(content: &str) -> String {
         let close_lower = close_tag.to_ascii_lowercase();
         loop {
             let lower = result.to_ascii_lowercase();
-            let pos = match lower.find(&close_lower) {
-                Some(p) => p,
-                None => break,
+            let Some(pos) = lower.find(&close_lower) else {
+                break;
             };
             // Check that there's no matching open tag before this
             // close tag in the content.

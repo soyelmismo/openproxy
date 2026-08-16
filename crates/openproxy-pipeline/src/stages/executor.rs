@@ -13,9 +13,8 @@ impl PipelineStage for UpstreamExecutorStage {
         ctx: &mut PipelineContext,
         _next: crate::stage::PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let combo = match &ctx.combo {
-            Some(c) => c,
-            None => return Err(CoreError::Validation("No combo resolved".to_string())),
+        let Some(combo) = &ctx.combo else {
+            return Err(CoreError::Validation("No combo resolved".to_string()));
         };
         let to_run = std::mem::take(&mut ctx.targets);
 

@@ -35,7 +35,7 @@ fn insert_manage_key(pool: &core_db::DbPool, plaintext: &str) {
     let w = pool.writer();
     let key_hash = core_api_keys::hash_key(plaintext);
     w.execute(
-        "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, \
+        "INSERT OR REPLACE INTO api_keys (key_hash, key_prefix, label, scopes_json, \
                 allowed_models_json, allowed_combos_json, expires_at, created_by) \
              VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'test')",
         rusqlite::params![

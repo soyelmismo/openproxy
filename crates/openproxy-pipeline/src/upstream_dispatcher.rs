@@ -151,22 +151,18 @@ impl UpstreamDispatcher {
             let should_rotate = match trigger {
                 crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
                 crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
-                    let errors_list: Vec<&str> = provider
+                    let sc_str = sc.to_string();
+                    provider
                         .proxy_rotation_errors
                         .split(',')
                         .map(str::trim)
-                        .collect();
-                    errors_list.contains(&sc.to_string().as_str())
+                        .any(|e| e == sc_str)
                 }
-                crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
-                    let errors_list: Vec<&str> = provider
-                        .proxy_rotation_errors
-                        .split(',')
-                        .map(str::trim)
-                        .collect();
-                    errors_list.contains(&"connect_error")
-                        || errors_list.contains(&"timeout")
-                }
+                crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => provider
+                    .proxy_rotation_errors
+                    .split(',')
+                    .map(str::trim)
+                    .any(|e| e == "connect_error" || e == "timeout"),
             };
 
             if should_rotate && let Some(ref bad_proxy) = bad_proxy_id {
@@ -614,14 +610,8 @@ UpstreamError::Invalid(msg)) => {
             });
         };
 
-        // Unwrap the `Ok` arm. The match above has already handled
-        // every `Err` variant with an early `return` (or fell
-        // through to `Ok`). This is just the `let response = match
-        // { Ok(r) => r, Err(_) => unreachable!() }` of the original
-        // code, expressed with `into_result` semantics.
-        let response = match response_result {
-            Ok(r) => r,
-            Err(_) => unreachable!("error variants are handled above with early return"),
+        let Ok(response) = response_result else {
+            unreachable!("error variants are handled above with early return");
         };
 
         let status_code = response.status.as_u16();

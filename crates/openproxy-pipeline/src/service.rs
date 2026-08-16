@@ -550,9 +550,8 @@ impl tower::Service<PipelineState> for RoutingService {
                         );
                         return Ok(pipeline.client_disconnected_result(overall_attempt, reason));
                     }
-                    let delay = match policy.delay_after_attempt(target_local_retry_count) {
-                        Some(d) => d,
-                        None => break,
+                    let Some(delay) = policy.delay_after_attempt(target_local_retry_count) else {
+                        break;
                     };
                     let delay = if let CoreError::RateLimited {
                         retry_after_ms,
