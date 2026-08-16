@@ -83,7 +83,7 @@ pub fn openai_to_anthropic(
                         blocks.push(json!({"type": "text", "text": text}));
                         pending_assistant_text.clear();
                     }
-                    let text = m.extract_text();
+                    let text = m.extract_text_cow();
                     if !text.is_empty() {
                         blocks.push(json!({"type": "text", "text": text}));
                     }
@@ -125,7 +125,7 @@ pub fn openai_to_anthropic(
                     // pending_assistant_text instead of emitting
                     // immediately — consecutive assistant text messages
                     // will be merged into a single assistant message.
-                    let text = m.extract_text();
+                    let text = m.extract_text_cow();
                     // Skip empty / system-injected markers.
                     if text.is_empty()
                         || text.starts_with("Operation interrupted")
@@ -133,7 +133,7 @@ pub fn openai_to_anthropic(
                     {
                         continue;
                     }
-                    pending_assistant_text.push(text);
+                    pending_assistant_text.push(text.into_owned());
                 }
             }
             "user" => {
@@ -141,11 +141,11 @@ pub fn openai_to_anthropic(
                 // the SAME user message as the text (content =
                 // [tool_result..., text]). Otherwise emit the text as
                 // a plain string user message.
-                let text = m.extract_text();
+                let text = m.extract_text_cow();
                 if pending_tool_results.is_empty() {
                     conversation.push(AnthropicMessage {
                         role: "user".to_string(),
-                        content: serde_json::Value::String(text),
+                        content: serde_json::Value::String(text.into_owned()),
                     });
                 } else {
                     pending_tool_results.push(json!({"type": "text", "text": text}));
@@ -159,7 +159,7 @@ pub fn openai_to_anthropic(
             }
             "tool" => {
                 let tool_use_id = m.tool_call_id.as_deref().unwrap_or("");
-                let content_text = m.extract_text();
+                let content_text = m.extract_text_cow();
                 pending_tool_results.push(json!({
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,

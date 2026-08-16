@@ -23,6 +23,14 @@ static CODEX_USER_AGENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(
         })
 });
 
+pub fn codex_client_version_str() -> &'static str {
+    &CODEX_CLIENT_VERSION
+}
+
+pub fn codex_user_agent_str() -> &'static str {
+    &CODEX_USER_AGENT
+}
+
 pub fn codex_client_version() -> String {
     CODEX_CLIENT_VERSION.clone()
 }
@@ -205,11 +213,11 @@ impl CodexAdapter {
             http::header::HeaderName::from_static("originator"),
             http::HeaderValue::from_static("codex_cli_rs"),
         );
-        if let Ok(v) = http::HeaderValue::from_str(&codex_client_version()) {
+        if let Ok(v) = http::HeaderValue::from_str(codex_client_version_str()) {
             req.headers
                 .insert(http::HeaderName::from_static("version"), v);
         }
-        if let Ok(v) = http::HeaderValue::from_str(&codex_user_agent()) {
+        if let Ok(v) = http::HeaderValue::from_str(codex_user_agent_str()) {
             req.headers.insert(http::header::USER_AGENT, v);
         }
         let workspace_header = workspace_id.and_then(codex_workspace_header);

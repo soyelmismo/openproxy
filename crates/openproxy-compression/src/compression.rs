@@ -116,7 +116,7 @@ pub fn apply_compression(
 
 /// Cuenta chars totales del contenido textual de los mensajes.
 fn count_content_chars(msgs: &[OpenAIMessage]) -> usize {
-    msgs.iter().map(|m| m.extract_text().len()).sum()
+    msgs.iter().map(|m| m.extract_text_cow().len()).sum()
 }
 
 #[cfg(test)]

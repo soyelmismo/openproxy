@@ -54,20 +54,25 @@ pub struct OpenAIMessage {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Extracts text from an optional JSON content value, handling string, multipart array, null, etc.
-pub fn extract_content_text(content: &Option<serde_json::Value>) -> String {
+/// Extracts text from an optional JSON content value without allocating when content is a plain string.
+pub fn extract_content_text_cow(content: &Option<serde_json::Value>) -> std::borrow::Cow<'_, str> {
     match content {
-        Some(Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => std::borrow::Cow::Borrowed(s.as_str()),
         Some(Value::Array(parts)) => {
             let mut out = String::new();
             for part in parts {
                 out.push_str(&extract_content_part_text(part));
             }
-            out
+            std::borrow::Cow::Owned(out)
         }
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string(),
+        Some(Value::Null) | None => std::borrow::Cow::Borrowed(""),
+        Some(value) => std::borrow::Cow::Owned(value.to_string()),
     }
+}
+
+/// Extracts text from an optional JSON content value, handling string, multipart array, null, etc.
+pub fn extract_content_text(content: &Option<serde_json::Value>) -> String {
+    extract_content_text_cow(content).into_owned()
 }
 
 /// Extracts text from a single content part JSON value.
@@ -92,11 +97,17 @@ impl OpenAIMessage {
         self.content.as_ref().and_then(|c| c.as_str())
     }
 
+    /// Extracts all text content from the message as a `Cow<str>`, avoiding
+    /// heap allocation if the message is a plain string.
+    pub fn extract_text_cow(&self) -> std::borrow::Cow<'_, str> {
+        extract_content_text_cow(&self.content)
+    }
+
     /// Extracts all text content from the message, handling both plain strings
     /// and multipart arrays (e.g. `[{"type": "text", "text": "..."}]` or `[{"content": "..."}]`).
     /// Returns an empty string if content is `None` or `Null`.
     pub fn extract_text(&self) -> String {
-        extract_content_text(&self.content)
+        self.extract_text_cow().into_owned()
     }
 }
 
