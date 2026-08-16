@@ -444,14 +444,14 @@ async function executeImageRequest(key: string): Promise<void> {
   rawResponseText = text;
   currentMetrics.payloadSizeBytes = new Blob([text]).size;
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${text}`);
-  }
-
   try {
     parsedResponseJson = JSON.parse(text);
   } catch {
     parsedResponseJson = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${text}`);
   }
 }
 
@@ -499,10 +499,6 @@ async function executeEmbeddingRequest(key: string): Promise<void> {
   rawResponseText = text;
   currentMetrics.payloadSizeBytes = new Blob([text]).size;
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${text}`);
-  }
-
   try {
     const json = JSON.parse(text);
     parsedResponseJson = json;
@@ -512,6 +508,10 @@ async function executeEmbeddingRequest(key: string): Promise<void> {
     }
   } catch {
     parsedResponseJson = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${text}`);
   }
 }
 
@@ -552,14 +552,14 @@ async function executeAudioRequest(key: string): Promise<void> {
   rawResponseText = text;
   currentMetrics.payloadSizeBytes = new Blob([text]).size;
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${text}`);
-  }
-
   try {
     parsedResponseJson = JSON.parse(text);
   } catch {
     parsedResponseJson = text;
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${text}`);
   }
 }
 
@@ -1191,10 +1191,45 @@ function renderMetricsBar(): TemplateResult {
 
 function renderFormattedResponse(): TemplateResult {
   if (responseError) {
+    const errorDetails = (typeof parsedResponseJson === 'object' && parsedResponseJson !== null)
+      ? parsedResponseJson
+      : null;
+    const curl = generateCurlCommand();
+
     return html`
-      <div class="banner banner-error">
-        <h4>Request Failed</h4>
-        <p>${responseError}</p>
+      <div class="banner banner-error" style="display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md);">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);">
+          <h4 style="margin: 0; color: var(--color-error); display: flex; align-items: center; gap: var(--space-2);">
+            <span>⚠️ Request Failed</span>
+            ${currentMetrics.statusCode
+              ? html`<span class="badge" style="background: var(--color-error); color: #fff;">HTTP ${currentMetrics.statusCode}</span>`
+              : html``}
+          </h4>
+          <button class="small" @click=${() => { activeResponseTab = 'raw'; requestUpdate(); }}>
+            View Raw Error Body →
+          </button>
+        </div>
+
+        <p style="margin: 0; font-family: var(--font-mono); font-size: var(--fs-sm); word-break: break-word;">${responseError}</p>
+
+        ${errorDetails
+          ? html`
+              <div style="padding: var(--space-2); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
+                <div style="font-weight: 600; font-size: var(--fs-xs); margin-bottom: var(--space-1); color: var(--color-text-muted);">
+                  Upstream / Server Error Object:
+                </div>
+                <pre class="playground-code-view" style="margin: 0; max-height: 180px; font-size: var(--fs-xs);"><code>${JSON.stringify(errorDetails, null, 2)}</code></pre>
+              </div>
+            `
+          : html``}
+
+        <div style="padding: var(--space-2); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-1);">
+            <span style="font-weight: 600; font-size: var(--fs-xs); color: var(--color-text-muted);">Sent Request (Payload & Command):</span>
+            <button class="small" @click=${copyCurlToClipboard}>Copy cURL</button>
+          </div>
+          <pre class="playground-code-view" style="margin: 0; max-height: 180px; font-size: var(--fs-xs);"><code>${curl}</code></pre>
+        </div>
       </div>
     `;
   }
