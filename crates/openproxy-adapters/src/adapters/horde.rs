@@ -126,36 +126,32 @@ impl ProviderAdapter for HordeAdapter {
 
         let mut discovered = Vec::new();
 
-        // 1. Fetch text models from official OpenAI-compatible endpoint
-        let oai_models_url = "https://oai.aihorde.net/v1/models";
+        // 1. Fetch text models from AI Horde live cluster metrics
+        let text_url = format!("{}/status/models?type=text", self.config.base_url);
         if let Ok(json_val) =
-            crate::adapters::upstream_get_json(upstream_client, oai_models_url, &header_refs).await
-            && let Some(arr) = json_val.get("data").and_then(|v| v.as_array())
+            crate::adapters::upstream_get_json(upstream_client, &text_url, &header_refs).await
+            && let Some(arr) = json_val.as_array()
         {
-            let mut text_models: Vec<(u64, DiscoveredModel)> = arr
+            let mut text_models: Vec<(u64, u64, DiscoveredModel)> = arr
                 .iter()
                 .filter_map(|item| {
-                    let id = item.get("id")?.as_str()?.to_string();
-                    let clean_name = item
-                        .get("clean_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&id)
-                        .to_string();
-                    let workers = item
-                        .get("worker_threads")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    if workers < 1 {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+
+                    if count < 1 || eta >= 60 {
                         return None;
                     }
-                    let family = openproxy_types::capabilities::infer_family(&id)
+
+                    let family = openproxy_types::capabilities::infer_family(&name)
                         .or_else(|| Some("instruct".into()));
 
                     Some((
-                        workers,
+                        count,
+                        eta,
                         DiscoveredModel {
-                            model_id: ModelId::new(id),
-                            display_name: Some(format!("{clean_name} ({workers}w)")),
+                            model_id: ModelId::new(name.clone()),
+                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
                             target_format: TargetFormat::Openai,
                             context_length: None,
                             max_output_tokens: None,
@@ -169,8 +165,8 @@ impl ProviderAdapter for HordeAdapter {
                 })
                 .collect();
 
-            text_models.sort_by_key(|b| std::cmp::Reverse(b.0));
-            discovered.extend(text_models.into_iter().map(|(_, m)| m));
+            text_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            discovered.extend(text_models.into_iter().map(|(_, _, m)| m));
         }
 
         // 2. Fetch image generation models from AI Horde API
