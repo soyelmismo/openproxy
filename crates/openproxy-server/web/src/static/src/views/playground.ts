@@ -60,7 +60,12 @@ let chatMessages: ChatMessage[] = [
   { id: 'msg-2', role: 'user', content: 'Hello! Please summarize what you can do.' },
 ];
 let chatTemperature = 0.7;
+let chatTopP: number | null = null;
 let chatMaxTokens: number | null = null;
+let chatFrequencyPenalty = 0;
+let chatPresencePenalty = 0;
+let chatSeed: number | null = null;
+let chatStop = '';
 let chatStream = true;
 
 // Image parameters
@@ -303,8 +308,24 @@ async function executeChatRequest(key: string, startTime: number): Promise<void>
     temperature: chatTemperature,
     stream: chatStream,
   };
+  if (chatTopP !== null) {
+    payload['top_p'] = chatTopP;
+  }
   if (chatMaxTokens !== null && chatMaxTokens > 0) {
     payload['max_tokens'] = chatMaxTokens;
+  }
+  if (chatFrequencyPenalty !== 0) {
+    payload['frequency_penalty'] = chatFrequencyPenalty;
+  }
+  if (chatPresencePenalty !== 0) {
+    payload['presence_penalty'] = chatPresencePenalty;
+  }
+  if (chatSeed !== null) {
+    payload['seed'] = chatSeed;
+  }
+  if (chatStop.trim()) {
+    const stops = chatStop.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    if (stops.length > 0) payload['stop'] = stops.length === 1 ? stops[0] : stops;
   }
   if (chatResponseFormat === 'json_object') {
     payload['response_format'] = { type: 'json_object' };
@@ -657,8 +678,14 @@ function generateCurlCommand(): string {
       temperature: chatTemperature,
       stream: chatStream,
     };
-    if (chatMaxTokens !== null && chatMaxTokens > 0) {
-      payload['max_tokens'] = chatMaxTokens;
+    if (chatTopP !== null) payload['top_p'] = chatTopP;
+    if (chatMaxTokens !== null && chatMaxTokens > 0) payload['max_tokens'] = chatMaxTokens;
+    if (chatFrequencyPenalty !== 0) payload['frequency_penalty'] = chatFrequencyPenalty;
+    if (chatPresencePenalty !== 0) payload['presence_penalty'] = chatPresencePenalty;
+    if (chatSeed !== null) payload['seed'] = chatSeed;
+    if (chatStop.trim()) {
+      const stops = chatStop.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+      if (stops.length > 0) payload['stop'] = stops.length === 1 ? stops[0] : stops;
     }
     if (chatResponseFormat === 'json_object') {
       payload['response_format'] = { type: 'json_object' };
@@ -888,6 +915,22 @@ function renderChatConfig(): TemplateResult {
         </div>
 
         <div class="field">
+          <label class="field-label">Top P ${chatTopP !== null ? `(${chatTopP})` : '(default)'}</label>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            .value=${String(chatTopP ?? 1)}
+            @input=${(e: Event) => {
+              const v = parseFloat((e.target as HTMLInputElement).value);
+              chatTopP = v === 1 ? null : v;
+              requestUpdate();
+            }}
+          />
+        </div>
+
+        <div class="field">
           <label class="field-label">Max Tokens (Optional)</label>
           <input
             type="number"
@@ -896,6 +939,66 @@ function renderChatConfig(): TemplateResult {
             @input=${(e: Event) => {
               const val = (e.target as HTMLInputElement).value;
               chatMaxTokens = val ? parseInt(val, 10) : null;
+            }}
+          />
+        </div>
+
+        <div class="field">
+          <label class="field-label">Stream Response (SSE)</label>
+          <label class="playground-switch-label">
+            <input
+              type="checkbox"
+              ?checked=${chatStream}
+              @change=${(e: Event) => {
+                chatStream = (e.target as HTMLInputElement).checked;
+                requestUpdate();
+              }}
+            />
+            <span>${chatStream ? 'SSE Streaming ON' : 'Non-Streaming JSON'}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="playground-grid-4" style="margin-top: var(--space-2);">
+        <div class="field">
+          <label class="field-label">Freq. Penalty (${chatFrequencyPenalty})</label>
+          <input
+            type="range"
+            min="-2"
+            max="2"
+            step="0.1"
+            .value=${String(chatFrequencyPenalty)}
+            @input=${(e: Event) => {
+              chatFrequencyPenalty = parseFloat((e.target as HTMLInputElement).value);
+              requestUpdate();
+            }}
+          />
+        </div>
+
+        <div class="field">
+          <label class="field-label">Pres. Penalty (${chatPresencePenalty})</label>
+          <input
+            type="range"
+            min="-2"
+            max="2"
+            step="0.1"
+            .value=${String(chatPresencePenalty)}
+            @input=${(e: Event) => {
+              chatPresencePenalty = parseFloat((e.target as HTMLInputElement).value);
+              requestUpdate();
+            }}
+          />
+        </div>
+
+        <div class="field">
+          <label class="field-label">Seed (Optional)</label>
+          <input
+            type="number"
+            placeholder="Deterministic seed"
+            .value=${chatSeed !== null ? String(chatSeed) : ''}
+            @input=${(e: Event) => {
+              const val = (e.target as HTMLInputElement).value;
+              chatSeed = val ? parseInt(val, 10) : null;
             }}
           />
         </div>
@@ -913,21 +1016,18 @@ function renderChatConfig(): TemplateResult {
             <option value="json_object">JSON Object</option>
           </select>
         </div>
+      </div>
 
-        <div class="field">
-          <label class="field-label">Stream Response (SSE)</label>
-          <label class="playground-switch-label">
-            <input
-              type="checkbox"
-              ?checked=${chatStream}
-              @change=${(e: Event) => {
-                chatStream = (e.target as HTMLInputElement).checked;
-                requestUpdate();
-              }}
-            />
-            <span>${chatStream ? 'SSE Streaming ON' : 'Non-Streaming JSON'}</span>
-          </label>
-        </div>
+      <div class="field" style="margin-top: var(--space-2);">
+        <label class="field-label">Stop Sequences (comma-separated, optional)</label>
+        <input
+          type="text"
+          placeholder='e.g. \n, END, ###'
+          .value=${chatStop}
+          @input=${(e: Event) => {
+            chatStop = (e.target as HTMLInputElement).value;
+          }}
+        />
       </div>
     </div>
   `;
