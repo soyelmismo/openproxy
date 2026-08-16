@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Benchmark for the SSE chunk-forwarding hot path.
 //!
 //! Simulates the inner loop of `Pipeline::dispatch_upstream_streaming`

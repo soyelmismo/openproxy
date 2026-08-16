@@ -7,6 +7,8 @@
 //! - `*    /admin/*`  (CRUD for providers, accounts, combos, models, usage)
 //!
 //! Startup sequence:
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! 0. Install a process-wide rustls crypto provider (mandatory since
 //!    rustls 0.23 — without this, the first TLS handshake to an
 //!    upstream HTTPS endpoint panics with `Could not automatically

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_core::free_proxies::{ScrapedProxy, upsert_scraped_proxies};
 

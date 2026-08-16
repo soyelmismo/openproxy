@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use openproxy_db::conn::DbPool;
 fn main() {
     let pool = DbPool::open(std::path::Path::new("/root/.openproxy/data.db")).unwrap();

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Regression test for the Gemini probe struct's handling of the
 //! `role` sibling field inside `content`.
 //!

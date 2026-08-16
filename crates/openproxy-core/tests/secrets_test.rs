@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Integration tests for `openproxy_core::secrets`.
 //!
 //! These tests live in `tests/` so they exercise the crate's public API

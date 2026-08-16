@@ -5,6 +5,8 @@
 //! sirve desde el propio binario openproxy-server vía rust-embed, así que
 //! ya no hay un crate `openproxy-web` que lo consuma internamente).
 //!
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! ## Forma de uso
 //!
 //! ```no_run

@@ -4,6 +4,8 @@
 //! `openproxy-core` library. The binary entry point lives in `main.rs`;
 //! everything else is reachable through the [`openproxy_server`] crate.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 /// Dashboard SPA embedded in the server binary via `rust-embed`.
 /// Serves `index.html`, `callback.html`, and the `dist/` /
 /// `styles/` / `fonts/` asset tree at `/admin/*`. The admin REST

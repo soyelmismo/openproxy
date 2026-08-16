@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 mod compression;
 pub mod content_router;
 pub mod diff_compressor;

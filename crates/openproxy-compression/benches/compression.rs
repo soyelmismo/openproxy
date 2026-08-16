@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Benchmark for the compression module.
 //!
 //! Measures `apply_compression` throughput on realistic multi-message

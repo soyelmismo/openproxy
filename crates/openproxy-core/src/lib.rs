@@ -2,6 +2,8 @@
 //!
 //! See docs/architecture.md and docs/mvp-spec.md for the full spec.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod capabilities;
 pub mod config;
 pub(crate) use openproxy_types::error;

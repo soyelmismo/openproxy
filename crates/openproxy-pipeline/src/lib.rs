@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod pipeline;
 pub use pipeline::{
     ErrorPhase, FailureContext, PartialFailureParams, Pipeline, PipelineConfig, PipelineRequest,

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Gate C — end-to-end test for the discovery + delete-on-disappear
 //! chain.
 //!

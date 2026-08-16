@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod adapters;
 pub mod antigravity_headers;
 pub mod spoofer;

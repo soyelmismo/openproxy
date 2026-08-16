@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use openproxy_core::free_proxies::{fetch_custom_proxy_source, upsert_scraped_proxies};
 use openproxy_db::DbPool;
 

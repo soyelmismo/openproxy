@@ -57,6 +57,7 @@ unimplemented = "warn"
 redundant_clone = "warn"
 uninlined_format_args = "warn"
 explicit_iter_loop = "warn"
+unwrap_used = "warn"
 
 # Noise suppression for practical maintainability
 missing_errors_doc = "allow"

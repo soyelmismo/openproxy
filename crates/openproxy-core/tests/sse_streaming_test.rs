@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Integration tests for SSE streaming pipeline.
 //!
 //! These tests exercise the SSE parsing functions in a realistic
