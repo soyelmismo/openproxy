@@ -50,14 +50,14 @@ urlencoding = "2.1"
 tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "compression-br"] }
 
 [workspace.lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-clone_on_ref_ptr = "warn"
-todo = "warn"
-unimplemented = "warn"
-redundant_clone = "warn"
-uninlined_format_args = "warn"
-explicit_iter_loop = "warn"
-unwrap_used = "warn"
+pedantic = { level = "deny", priority = -1 }
+clone_on_ref_ptr = "deny"
+todo = "deny"
+unimplemented = "deny"
+redundant_clone = "deny"
+uninlined_format_args = "deny"
+explicit_iter_loop = "deny"
+unwrap_used = "deny"
 
 # Noise suppression for practical maintainability
 missing_errors_doc = "allow"
