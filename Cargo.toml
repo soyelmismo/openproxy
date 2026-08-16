@@ -47,6 +47,7 @@ regex = "1"
 sha2 = "0.11"
 zeroize = "1"
 urlencoding = "2.1"
+miniz_oxide = "0.8"
 tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "compression-br"] }
 
 [workspace.lints.clippy]

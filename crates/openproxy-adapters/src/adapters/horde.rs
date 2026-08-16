@@ -47,6 +47,12 @@ struct HordeGenerationParams {
     cfg_scale: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     seed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    denoising_strength: Option<f32>,
+    karras: bool,
+    hires_fix: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    post_processing: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +63,12 @@ struct HordeGenerationPayload {
     nsfw: bool,
     censor_nsfw: bool,
     r2: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_mask: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_processing: Option<String>,
 }
 
 impl ProviderAdapter for HordeAdapter {
@@ -100,71 +112,137 @@ impl ProviderAdapter for HordeAdapter {
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        let Some(url) = self.models_url() else {
-            return Ok(vec![]);
-        };
-
         let headers = self.build_headers(api_key, TargetFormat::Openai, &ModelId::new(""));
         let header_refs: Vec<(&str, &str)> =
             headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-        let json_val = crate::adapters::upstream_get_json(upstream_client, &url, &header_refs)
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("horde /status/models: {e}")))?;
+        let mut discovered = Vec::new();
 
-        let arr = json_val
-            .as_array()
-            .ok_or_else(|| CoreError::Parse("horde /status/models: expected array".into()))?;
+        // 1. Fetch text generation models (standard OpenAI-compatible LLMs)
+        let text_url = format!("{}/status/models?type=text", self.config.base_url);
+        if let Ok(json_val) =
+            crate::adapters::upstream_get_json(upstream_client, &text_url, &header_refs).await
+            && let Some(arr) = json_val.as_array()
+        {
+            let mut text_models: Vec<(u64, u64, DiscoveredModel)> = arr
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-        let mut models: Vec<(u64, u64, DiscoveredModel)> = arr
-            .iter()
-            .filter_map(|item| {
-                let name = item.get("name")?.as_str()?.to_string();
-                let model_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("image");
-                if model_type != "image" {
-                    return None;
-                }
+                    if count < 1 {
+                        return None;
+                    }
 
-                let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+                    let family = openproxy_types::capabilities::infer_family(&name)
+                        .or_else(|| Some("instruct".into()));
 
-                if count < 1 || eta >= 60 {
-                    return None;
-                }
+                    Some((
+                        count,
+                        eta,
+                        DiscoveredModel {
+                            model_id: ModelId::new(name.clone()),
+                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
+                            target_format: TargetFormat::Openai,
+                            context_length: None,
+                            max_output_tokens: None,
+                            input_modalities: Some(vec!["text".into()]),
+                            output_modalities: Some(vec!["text".into()]),
+                            model_type: Some("chat".into()),
+                            family,
+                            capabilities: None,
+                        },
+                    ))
+                })
+                .collect();
 
-                let family = infer_horde_family(&name);
-                Some((
-                    count,
-                    eta,
-                    DiscoveredModel {
-                        model_id: ModelId::new(name.clone()),
-                        display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
-                        target_format: TargetFormat::Openai,
-                        context_length: None,
-                        max_output_tokens: None,
-                        input_modalities: Some(vec!["text".into()]),
-                        output_modalities: Some(vec!["image".into()]),
-                        model_type: Some("image".into()),
-                        family: Some(family),
-                        capabilities: None,
-                    },
-                ))
-            })
-            .collect();
+            text_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            discovered.extend(text_models.into_iter().map(|(_, _, m)| m));
+        }
 
-        models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        // 2. Fetch image generation models
+        let image_url = format!("{}/status/models?type=image", self.config.base_url);
+        if let Ok(json_val) =
+            crate::adapters::upstream_get_json(upstream_client, &image_url, &header_refs).await
+            && let Some(arr) = json_val.as_array()
+        {
+            let mut image_models: Vec<(u64, u64, DiscoveredModel)> = arr
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-        Ok(models.into_iter().map(|(_, _, m)| m).collect())
+                    if count < 1 || eta >= 60 {
+                        return None;
+                    }
+
+                    let family = infer_horde_family(&name);
+                    Some((
+                        count,
+                        eta,
+                        DiscoveredModel {
+                            model_id: ModelId::new(name.clone()),
+                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
+                            target_format: TargetFormat::Openai,
+                            context_length: None,
+                            max_output_tokens: None,
+                            input_modalities: Some(vec!["text".into()]),
+                            output_modalities: Some(vec!["image".into()]),
+                            model_type: Some("image".into()),
+                            family: Some(family),
+                            capabilities: None,
+                        },
+                    ))
+                })
+                .collect();
+
+            image_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            discovered.extend(image_models.into_iter().map(|(_, _, m)| m));
+        }
+
+        Ok(discovered)
     }
 
     fn build_image_url(&self) -> String {
         format!("{}/generate/async", self.config.base_url)
     }
 
+    /// Horde img2img uses the same `/generate/async` endpoint with `source_image`.
+    fn build_image_edits_url(&self) -> String {
+        self.build_image_url()
+    }
+
+    /// Horde variations also use `/generate/async` with `source_image` + `source_processing=img2img`.
+    fn build_image_variations_url(&self) -> String {
+        self.build_image_url()
+    }
+
     fn format_image_request(
         &self,
         req: &ImageGenerationRequest,
         upstream_model_id: &str,
+    ) -> Result<Bytes> {
+        self.build_horde_payload(req, upstream_model_id, None, None, None, None)
+    }
+}
+
+impl HordeAdapter {
+    /// Build a Horde `/generate/async` JSON payload.
+    ///
+    /// When `source_image_b64` is provided, the request becomes img2img (or inpainting if `source_mask_b64` is provided).
+    /// `source_processing` defaults to `"inpainting"` if mask is present, otherwise `"img2img"`.
+    /// `denoising_strength` is clamped to `0.0..=1.0`, defaulting to 0.6 if img2img and omitted.
+    /// If `quality` is `"hd"`, RealESRGAN_x4plus and GFPGAN post-processors are automatically injected.
+    pub fn build_horde_payload(
+        &self,
+        req: &ImageGenerationRequest,
+        upstream_model_id: &str,
+        source_image_b64: Option<String>,
+        source_mask_b64: Option<String>,
+        source_processing: Option<&str>,
+        denoising_strength: Option<f32>,
     ) -> Result<Bytes> {
         let (width, height) = parse_dimensions(req.size.as_deref(), req.aspect_ratio.as_deref());
 
@@ -176,21 +254,54 @@ impl ProviderAdapter for HordeAdapter {
             prompt.push_str(neg.trim());
         }
 
+        let is_img2img = source_image_b64.is_some();
+        let default_processing = if source_mask_b64.is_some() {
+            "inpainting"
+        } else if is_img2img {
+            "img2img"
+        } else {
+            "txt2img"
+        };
+
+        let post_processing = if req.quality.as_deref() == Some("hd") {
+            Some(vec![
+                "RealESRGAN_x4plus".to_string(),
+                "GFPGAN".to_string(),
+            ])
+        } else {
+            None
+        };
+
         let payload = HordeGenerationPayload {
             prompt,
             params: HordeGenerationParams {
-                n: req.n.unwrap_or(1),
+                n: req.n.unwrap_or(1).clamp(1, 10),
                 width,
                 height,
                 steps: 25,
                 sampler_name: "k_euler_a".to_string(),
                 cfg_scale: 6.5,
                 seed: req.seed,
+                denoising_strength: if is_img2img {
+                    Some(denoising_strength.unwrap_or(0.6).clamp(0.0, 1.0))
+                } else {
+                    None
+                },
+                karras: true,
+                hires_fix: !is_img2img,
+                post_processing,
             },
             models: vec![upstream_model_id.to_string()],
             nsfw: true,
             censor_nsfw: false,
             r2: true,
+            source_image: source_image_b64,
+            source_mask: source_mask_b64,
+            source_processing: if is_img2img {
+                Some(source_processing.unwrap_or(default_processing).to_string())
+            } else {
+                None
+            },
         };
 
         let vec = serde_json::to_vec(&payload)
@@ -216,26 +327,48 @@ fn infer_horde_family(model_name: &str) -> String {
     }
 }
 
-fn parse_dimensions(size: Option<&str>, aspect_ratio: Option<&str>) -> (u32, u32) {
+pub const MIN_HORDE_DIMENSION: u32 = 64;
+pub const MAX_HORDE_DIMENSION: u32 = 3072;
+pub const DEFAULT_HORDE_DIMENSION: u32 = 1024;
+
+/// Normalize a dimension to the nearest multiple of 64 within AI Horde bounds.
+pub fn normalize_dimension_64(val: u32) -> u32 {
+    let clamped = val.clamp(MIN_HORDE_DIMENSION, MAX_HORDE_DIMENSION);
+    let rem = clamped % 64;
+    let rounded = if rem >= 32 {
+        clamped.saturating_add(64 - rem)
+    } else {
+        clamped.saturating_sub(rem)
+    };
+    rounded.clamp(MIN_HORDE_DIMENSION, MAX_HORDE_DIMENSION)
+}
+
+/// Parse dimensions from size string (e.g. "1024x1024") or aspect ratio (e.g. "16:9"),
+/// guaranteeing both width and height are strict multiples of 64.
+pub fn parse_dimensions(size: Option<&str>, aspect_ratio: Option<&str>) -> (u32, u32) {
     if let Some(size) = size
         && let Some((w_str, h_str)) = size.split_once('x')
         && let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>())
     {
-        return (w, h);
+        return (normalize_dimension_64(w), normalize_dimension_64(h));
     }
 
     if let Some(ar) = aspect_ratio {
-        match ar {
+        let (w, h) = match ar {
             "16:9" => (1024, 576),
             "9:16" => (576, 1024),
-            "3:2" => (1024, 680),
-            "2:3" => (680, 1024),
+            "3:2" => (960, 640),
+            "2:3" => (640, 960),
             "4:3" => (1024, 768),
             "3:4" => (768, 1024),
-            _ => (1024, 1024),
-        }
+            "21:9" => (1344, 576),
+            "9:21" => (576, 1344),
+            "1:1" => (1024, 1024),
+            _ => (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
+        };
+        (normalize_dimension_64(w), normalize_dimension_64(h))
     } else {
-        (1024, 1024)
+        (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION)
     }
 }
 
@@ -250,6 +383,14 @@ mod tests {
         assert_eq!(a.config().name, "AI Horde");
         assert_eq!(a.config().base_url, "https://aihorde.net/api/v2");
         assert!(a.config().anonymous_fallback);
+        assert_eq!(
+            a.build_chat_url(TargetFormat::Openai, &ModelId::new("any")),
+            "https://aihorde.net/api/v2/chat/completions"
+        );
+        assert_eq!(
+            a.models_url().unwrap(),
+            "https://aihorde.net/api/v2/status/models?type=image"
+        );
     }
 
     #[test]
@@ -265,7 +406,48 @@ mod tests {
     }
 
     #[test]
-    fn test_format_image_request() {
+    fn test_normalize_dimension_64() {
+        assert_eq!(normalize_dimension_64(0), 64);
+        assert_eq!(normalize_dimension_64(30), 64);
+        assert_eq!(normalize_dimension_64(64), 64);
+        assert_eq!(normalize_dimension_64(65), 64);
+        assert_eq!(normalize_dimension_64(95), 64);
+        assert_eq!(normalize_dimension_64(96), 128);
+        assert_eq!(normalize_dimension_64(500), 512);
+        assert_eq!(normalize_dimension_64(700), 704);
+        assert_eq!(normalize_dimension_64(1024), 1024);
+        assert_eq!(normalize_dimension_64(5000), 3072);
+    }
+
+    #[test]
+    fn test_parse_dimensions_aspect_ratios() {
+        let pairs = [
+            ("16:9", (1024, 576)),
+            ("9:16", (576, 1024)),
+            ("3:2", (960, 640)),
+            ("2:3", (640, 960)),
+            ("4:3", (1024, 768)),
+            ("3:4", (768, 1024)),
+            ("21:9", (1344, 576)),
+            ("9:21", (576, 1344)),
+            ("1:1", (1024, 1024)),
+        ];
+
+        for (ar, expected) in pairs {
+            let (w, h) = parse_dimensions(None, Some(ar));
+            assert_eq!((w, h), expected, "aspect ratio {ar}");
+            assert_eq!(w % 64, 0, "width not multiple of 64: {w}");
+            assert_eq!(h % 64, 0, "height not multiple of 64: {h}");
+        }
+
+        let (w, h) = parse_dimensions(Some("700x700"), None);
+        assert_eq!((w, h), (704, 704));
+        assert_eq!(w % 64, 0);
+        assert_eq!(h % 64, 0);
+    }
+
+    #[test]
+    fn test_format_image_request_standard() {
         let a = HordeAdapter::new();
         let req = ImageGenerationRequest {
             prompt: "A beautiful sunset".into(),
@@ -287,5 +469,101 @@ mod tests {
         assert_eq!(v["params"]["height"], 512);
         assert_eq!(v["params"]["seed"], 42);
         assert_eq!(v["models"][0], "SDXL 1.0");
+        assert!(v["params"]["karras"].as_bool().unwrap());
+        assert!(v["params"]["hires_fix"].as_bool().unwrap());
+        assert!(v["params"].get("post_processing").is_none());
+        assert!(v.get("source_image").is_none());
+        assert!(v.get("source_processing").is_none());
+    }
+
+    #[test]
+    fn test_format_image_request_hd_quality() {
+        let a = HordeAdapter::new();
+        let req = ImageGenerationRequest {
+            prompt: "Cyberpunk street".into(),
+            model: "SDXL 1.0".into(),
+            n: Some(1),
+            quality: Some("hd".into()),
+            response_format: None,
+            size: Some("1024x1024".into()),
+            style: None,
+            user: None,
+            aspect_ratio: None,
+            seed: None,
+            negative_prompt: None,
+        };
+        let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let post = v["params"]["post_processing"].as_array().unwrap();
+        assert_eq!(post.len(), 2);
+        assert_eq!(post[0], "RealESRGAN_x4plus");
+        assert_eq!(post[1], "GFPGAN");
+    }
+
+    #[test]
+    fn test_format_img2img_request() {
+        let a = HordeAdapter::new();
+        let req = ImageGenerationRequest {
+            prompt: "Add sunglasses".into(),
+            model: "SDXL 1.0".into(),
+            n: Some(1),
+            quality: None,
+            response_format: None,
+            size: Some("512x512".into()),
+            style: None,
+            user: None,
+            aspect_ratio: None,
+            seed: None,
+            negative_prompt: None,
+        };
+        let body = a
+            .build_horde_payload(
+                &req,
+                "SDXL 1.0",
+                Some("aGVsbG8=".into()),
+                None,
+                None,
+                Some(0.75),
+            )
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["source_image"], "aGVsbG8=");
+        assert_eq!(v["source_processing"], "img2img");
+        assert_eq!(v["params"]["denoising_strength"], 0.75);
+        assert!(!v["params"]["hires_fix"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_format_inpainting_request() {
+        let a = HordeAdapter::new();
+        let req = ImageGenerationRequest {
+            prompt: "Replace car with motorcycle".into(),
+            model: "SDXL 1.0".into(),
+            n: Some(1),
+            quality: None,
+            response_format: None,
+            size: Some("512x512".into()),
+            style: None,
+            user: None,
+            aspect_ratio: None,
+            seed: None,
+            negative_prompt: None,
+        };
+        let body = a
+            .build_horde_payload(
+                &req,
+                "SDXL 1.0",
+                Some("aW1hZ2U=".into()),
+                Some("bWFzaw==".into()),
+                None,
+                Some(1.5), // should be clamped to 1.0
+            )
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["source_image"], "aW1hZ2U=");
+        assert_eq!(v["source_mask"], "bWFzaw==");
+        assert_eq!(v["source_processing"], "inpainting");
+        assert_eq!(v["params"]["denoising_strength"], 1.0);
     }
 }
+

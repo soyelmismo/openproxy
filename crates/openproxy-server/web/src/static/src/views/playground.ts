@@ -76,6 +76,10 @@ let imageSize = '1024x1024';
 let imageQuality = 'standard';
 let imageN = 1;
 let imageSeed: number | null = null;
+let imageAspectRatio = '';
+let imageDenoisingStrength = 0.6;
+let imageSourceProcessing = '';
+let imagePostProcessing = '';
 let imageResponseFormat: 'url' | 'b64_json' = 'b64_json';
 let imageSourceFile: File | null = null;
 let imageMaskFile: File | null = null;
@@ -180,13 +184,14 @@ function getFilteredModels(): Array<{ id: string; name: string; type: string; pr
     }
   }
 
-  // Filter models by modality
+  // Filter models by modality strictly
   for (const m of matchingModels) {
     const mType = (m.model_type || 'chat').toLowerCase();
     let matchesModality = false;
 
     if (modality === 'chat') {
-      matchesModality = mType === 'chat' || mType === 'mixed' || mType === '' || !mType;
+      matchesModality = (mType === 'chat' || mType === 'llm' || mType === 'text' || mType === 'mixed' || !m.model_type) &&
+        mType !== 'image' && mType !== 'embedding' && mType !== 'audio';
     } else if (modality === 'image') {
       matchesModality = mType === 'image' || m.model_id.toLowerCase().includes('dall-e') || m.model_id.toLowerCase().includes('flux') || m.model_id.toLowerCase().includes('sd');
     } else if (modality === 'embedding') {
@@ -195,19 +200,7 @@ function getFilteredModels(): Array<{ id: string; name: string; type: string; pr
       matchesModality = mType === 'audio' || m.model_id.toLowerCase().includes('whisper') || m.model_id.toLowerCase().includes('audio');
     }
 
-    if (matchesModality || !mType) {
-      result.push({
-        id: m.model_id,
-        name: m.display_name ? `${m.display_name} (${m.model_id})` : m.model_id,
-        type: m.model_type || 'chat',
-        provider: m.provider_id,
-      });
-    }
-  }
-
-  // If no models matched strictly for this modality, offer all models so the user isn't blocked
-  if (result.length === 0) {
-    for (const m of matchingModels) {
+    if (matchesModality) {
       result.push({
         id: m.model_id,
         name: m.display_name ? `${m.display_name} (${m.model_id})` : m.model_id,
@@ -474,6 +467,12 @@ async function executeImageRequest(key: string): Promise<void> {
     if (imageSeed !== null && !isNaN(imageSeed)) {
       payload['seed'] = imageSeed;
     }
+    if (imageAspectRatio) {
+      payload['aspect_ratio'] = imageAspectRatio;
+    }
+    if (imagePostProcessing) {
+      payload['post_processing'] = imagePostProcessing;
+    }
     headers['Content-Type'] = 'application/json';
     reqInit = {
       method: 'POST',
@@ -497,7 +496,21 @@ async function executeImageRequest(key: string): Promise<void> {
     formData.append('model', selectedModelId || 'dall-e-2');
     formData.append('n', String(imageN));
     formData.append('size', imageSize);
+    formData.append('quality', imageQuality);
     formData.append('response_format', imageResponseFormat);
+    formData.append('denoising_strength', String(imageDenoisingStrength));
+    if (imageSourceProcessing) {
+      formData.append('source_processing', imageSourceProcessing);
+    }
+    if (imagePostProcessing) {
+      formData.append('post_processing', imagePostProcessing);
+    }
+    if (imageNegativePrompt.trim()) {
+      formData.append('negative_prompt', imageNegativePrompt.trim());
+    }
+    if (imageSeed !== null && !isNaN(imageSeed)) {
+      formData.append('seed', String(imageSeed));
+    }
     reqInit = {
       method: 'POST',
       headers,
@@ -511,10 +524,30 @@ async function executeImageRequest(key: string): Promise<void> {
     endpoint = '/v1/images/variations';
     const formData = new FormData();
     formData.append('image', imageSourceFile, imageSourceFile.name);
+    if (imageMaskFile) {
+      formData.append('mask', imageMaskFile, imageMaskFile.name);
+    }
+    if (imagePrompt.trim()) {
+      formData.append('prompt', imagePrompt.trim());
+    }
     formData.append('model', selectedModelId || 'dall-e-2');
     formData.append('n', String(imageN));
     formData.append('size', imageSize);
+    formData.append('quality', imageQuality);
     formData.append('response_format', imageResponseFormat);
+    formData.append('denoising_strength', String(imageDenoisingStrength));
+    if (imageSourceProcessing) {
+      formData.append('source_processing', imageSourceProcessing);
+    }
+    if (imagePostProcessing) {
+      formData.append('post_processing', imagePostProcessing);
+    }
+    if (imageNegativePrompt.trim()) {
+      formData.append('negative_prompt', imageNegativePrompt.trim());
+    }
+    if (imageSeed !== null && !isNaN(imageSeed)) {
+      formData.append('seed', String(imageSeed));
+    }
     reqInit = {
       method: 'POST',
       headers,
@@ -704,14 +737,27 @@ function generateCurlCommand(): string {
       };
       if (imageNegativePrompt.trim()) payload['negative_prompt'] = imageNegativePrompt.trim();
       if (imageSeed !== null && !isNaN(imageSeed)) payload['seed'] = imageSeed;
+      if (imageAspectRatio) payload['aspect_ratio'] = imageAspectRatio;
+      if (imagePostProcessing) payload['post_processing'] = imagePostProcessing;
       const body = JSON.stringify(payload, null, 2);
       return `curl -X POST "${host}/v1/images/generations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
     } else if (imageMode === 'edit') {
-      let cmd = `curl -X POST "${host}/v1/images/edits" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "image=@${imageSourceFile ? imageSourceFile.name : 'image.png'}" \\\n  -F "prompt=${imagePrompt}" \\\n  -F "model=${selectedModelId || 'dall-e-2'}" \\\n  -F "size=${imageSize}" \\\n  -F "n=${imageN}"`;
+      let cmd = `curl -X POST "${host}/v1/images/edits" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "image=@${imageSourceFile ? imageSourceFile.name : 'image.png'}" \\\n  -F "prompt=${imagePrompt}" \\\n  -F "model=${selectedModelId || 'dall-e-2'}" \\\n  -F "size=${imageSize}" \\\n  -F "quality=${imageQuality}" \\\n  -F "n=${imageN}" \\\n  -F "denoising_strength=${imageDenoisingStrength}"`;
       if (imageMaskFile) cmd += ` \\\n  -F "mask=@${imageMaskFile.name}"`;
+      if (imageSourceProcessing) cmd += ` \\\n  -F "source_processing=${imageSourceProcessing}"`;
+      if (imagePostProcessing) cmd += ` \\\n  -F "post_processing=${imagePostProcessing}"`;
+      if (imageNegativePrompt.trim()) cmd += ` \\\n  -F "negative_prompt=${imageNegativePrompt.trim()}"`;
+      if (imageSeed !== null && !isNaN(imageSeed)) cmd += ` \\\n  -F "seed=${imageSeed}"`;
       return cmd;
     } else {
-      return `curl -X POST "${host}/v1/images/variations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "image=@${imageSourceFile ? imageSourceFile.name : 'image.png'}" \\\n  -F "model=${selectedModelId || 'dall-e-2'}" \\\n  -F "size=${imageSize}" \\\n  -F "n=${imageN}"`;
+      let cmd = `curl -X POST "${host}/v1/images/variations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "image=@${imageSourceFile ? imageSourceFile.name : 'image.png'}" \\\n  -F "model=${selectedModelId || 'dall-e-2'}" \\\n  -F "size=${imageSize}" \\\n  -F "quality=${imageQuality}" \\\n  -F "n=${imageN}" \\\n  -F "denoising_strength=${imageDenoisingStrength}"`;
+      if (imageMaskFile) cmd += ` \\\n  -F "mask=@${imageMaskFile.name}"`;
+      if (imagePrompt.trim()) cmd += ` \\\n  -F "prompt=${imagePrompt.trim()}"`;
+      if (imageSourceProcessing) cmd += ` \\\n  -F "source_processing=${imageSourceProcessing}"`;
+      if (imagePostProcessing) cmd += ` \\\n  -F "post_processing=${imagePostProcessing}"`;
+      if (imageNegativePrompt.trim()) cmd += ` \\\n  -F "negative_prompt=${imageNegativePrompt.trim()}"`;
+      if (imageSeed !== null && !isNaN(imageSeed)) cmd += ` \\\n  -F "seed=${imageSeed}"`;
+      return cmd;
     }
   } else if (modality === 'embedding') {
     const payload: Record<string, unknown> = {
@@ -1066,92 +1112,123 @@ function renderImageConfig(): TemplateResult {
         ? html`
             <div class="playground-grid-2" style="margin-bottom: var(--space-3);">
               <div class="field">
-                <label class="field-label">Source Image (Required PNG/JPEG)</label>
-                <input
-                  type="file"
-                  accept="image/png, image/jpeg, image/webp"
-                  @change=${(e: Event) => {
-                    const input = e.target as HTMLInputElement;
-                    if (input.files && input.files[0]) {
-                      imageSourceFile = input.files[0];
-                      requestUpdate();
-                    }
-                  }}
-                />
-                ${imageSourceFile
-                  ? html`<small class="text-muted">${imageSourceFile.name} (${Math.round(imageSourceFile.size / 1024)} KB)</small>`
-                  : html``}
+                <label class="field-label">Source Image (Required PNG / JPEG / WebP)</label>
+                <div class="playground-file-dropzone" style="padding: var(--space-3); min-height: 80px; display: flex; align-items: center; justify-content: center;">
+                  <input
+                    type="file"
+                    accept="image/png, image/jpeg, image/webp"
+                    @change=${(e: Event) => {
+                      const input = e.target as HTMLInputElement;
+                      if (input.files && input.files[0]) {
+                        imageSourceFile = input.files[0];
+                        requestUpdate();
+                      }
+                    }}
+                  />
+                  ${imageSourceFile
+                    ? html`
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                          <small><strong>Selected:</strong> ${imageSourceFile.name} (${Math.round(imageSourceFile.size / 1024)} KB)</small>
+                          <button
+                            class="small danger"
+                            style="position: relative; z-index: 2;"
+                            @click=${(e: Event) => {
+                              e.stopPropagation();
+                              imageSourceFile = null;
+                              requestUpdate();
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      `
+                    : html`<p class="text-muted" style="margin: 0;">Click or drop base image</p>`}
+                </div>
               </div>
 
-              ${imageMode === 'edit'
-                ? html`
-                    <div class="field">
-                      <label class="field-label">Mask Image (Optional PNG with transparency)</label>
-                      <input
-                        type="file"
-                        accept="image/png"
-                        @change=${(e: Event) => {
-                          const input = e.target as HTMLInputElement;
-                          if (input.files && input.files[0]) {
-                            imageMaskFile = input.files[0];
-                            requestUpdate();
-                          }
-                        }}
-                      />
-                      ${imageMaskFile
-                        ? html`<small class="text-muted">${imageMaskFile.name} (${Math.round(imageMaskFile.size / 1024)} KB)</small>`
-                        : html``}
-                    </div>
-                  `
-                : html``}
+              <div class="field">
+                <label class="field-label">Mask Image (Optional for Inpainting / Edits)</label>
+                <div class="playground-file-dropzone" style="padding: var(--space-3); min-height: 80px; display: flex; align-items: center; justify-content: center;">
+                  <input
+                    type="file"
+                    accept="image/png, image/webp"
+                    @change=${(e: Event) => {
+                      const input = e.target as HTMLInputElement;
+                      if (input.files && input.files[0]) {
+                        imageMaskFile = input.files[0];
+                        requestUpdate();
+                      }
+                    }}
+                  />
+                  ${imageMaskFile
+                    ? html`
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                          <small><strong>Mask:</strong> ${imageMaskFile.name} (${Math.round(imageMaskFile.size / 1024)} KB)</small>
+                          <button
+                            class="small danger"
+                            style="position: relative; z-index: 2;"
+                            @click=${(e: Event) => {
+                              e.stopPropagation();
+                              imageMaskFile = null;
+                              requestUpdate();
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      `
+                    : html`<p class="text-muted" style="margin: 0;">Click or drop alpha mask (PNG)</p>`}
+                </div>
+              </div>
             </div>
           `
         : html``}
 
-      ${imageMode !== 'variation'
-        ? html`
-            <div class="field">
-              <label class="field-label">Prompt (Required)</label>
-              <textarea
-                rows="3"
-                placeholder="Describe the image you want to generate or how to edit it..."
-                .value=${imagePrompt}
-                @input=${(e: Event) => {
-                  imagePrompt = (e.target as HTMLInputElement).value;
-                }}
-              ></textarea>
-            </div>
-          `
-        : html``}
+      <div class="field">
+        <label class="field-label">
+          Prompt ${imageMode === 'variation' ? '(Optional Guidance)' : '(Required)'}
+        </label>
+        <textarea
+          rows="3"
+          placeholder="${imageMode === 'variation' ? 'Optional guide for variations...' : 'Describe the image to generate or edits to apply...'}"
+          .value=${imagePrompt}
+          @input=${(e: Event) => {
+            imagePrompt = (e.target as HTMLTextAreaElement).value;
+          }}
+        ></textarea>
+      </div>
 
-      ${imageMode === 'generation'
-        ? html`
-            <div class="field">
-              <label class="field-label">Negative Prompt (Optional)</label>
-              <input
-                type="text"
-                placeholder="low resolution, blurry, bad anatomy..."
-                .value=${imageNegativePrompt}
-                @input=${(e: Event) => {
-                  imageNegativePrompt = (e.target as HTMLInputElement).value;
-                }}
-              />
-            </div>
-          `
-        : html``}
+      <div class="field">
+        <label class="field-label">Negative Prompt (Optional)</label>
+        <input
+          type="text"
+          placeholder="blurry, low quality, distorted, artifacts..."
+          .value=${imageNegativePrompt}
+          @input=${(e: Event) => {
+            imageNegativePrompt = (e.target as HTMLInputElement).value;
+          }}
+        />
+      </div>
 
-      <div class="playground-grid-4">
+      <!-- Basic Dimension & Quality Controls -->
+      <div class="playground-grid-4" style="margin-top: var(--space-2);">
         <div class="field">
-          <label class="field-label">Size / Ratio</label>
+          <label class="field-label">Size / Resolution</label>
           <select
             .value=${imageSize}
             @change=${(e: Event) => {
               imageSize = (e.target as HTMLSelectElement).value;
+              requestUpdate();
             }}
           >
             <option value="1024x1024">1024x1024 (1:1)</option>
             <option value="1792x1024">1792x1024 (16:9)</option>
             <option value="1024x1792">1024x1792 (9:16)</option>
+            <option value="1024x680">1024x680 (3:2)</option>
+            <option value="680x1024">680x1024 (2:3)</option>
+            <option value="1024x768">1024x768 (4:3)</option>
+            <option value="768x1024">768x1024 (3:4)</option>
+            <option value="768x768">768x768 (Medium)</option>
             <option value="512x512">512x512 (Fast)</option>
           </select>
         </div>
@@ -1162,6 +1239,7 @@ function renderImageConfig(): TemplateResult {
             .value=${imageQuality}
             @change=${(e: Event) => {
               imageQuality = (e.target as HTMLSelectElement).value;
+              requestUpdate();
             }}
           >
             <option value="standard">Standard</option>
@@ -1175,6 +1253,7 @@ function renderImageConfig(): TemplateResult {
             .value=${String(imageN)}
             @change=${(e: Event) => {
               imageN = parseInt((e.target as HTMLSelectElement).value, 10);
+              requestUpdate();
             }}
           >
             <option value="1">1 image</option>
@@ -1189,11 +1268,101 @@ function renderImageConfig(): TemplateResult {
             .value=${imageResponseFormat}
             @change=${(e: Event) => {
               imageResponseFormat = (e.target as HTMLSelectElement).value as typeof imageResponseFormat;
+              requestUpdate();
             }}
           >
             <option value="b64_json">Base64 JSON</option>
             <option value="url">URL</option>
           </select>
+        </div>
+      </div>
+
+      <!-- Advanced Img2Img & Processing Controls -->
+      <div class="playground-grid-${imageMode === 'generation' ? '3' : '4'}" style="margin-top: var(--space-3);">
+        ${imageMode === 'edit' || imageMode === 'variation'
+          ? html`
+              <div class="field">
+                <label class="field-label">Denoising Strength (${imageDenoisingStrength.toFixed(2)})</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  .value=${String(imageDenoisingStrength)}
+                  @input=${(e: Event) => {
+                    imageDenoisingStrength = parseFloat((e.target as HTMLInputElement).value);
+                    requestUpdate();
+                  }}
+                />
+              </div>
+
+              <div class="field">
+                <label class="field-label">Source Processing</label>
+                <select
+                  .value=${imageSourceProcessing}
+                  @change=${(e: Event) => {
+                    imageSourceProcessing = (e.target as HTMLSelectElement).value;
+                    requestUpdate();
+                  }}
+                >
+                  <option value="">(Auto: Inpaint if mask, img2img otherwise)</option>
+                  <option value="img2img">img2img (Guided variation)</option>
+                  <option value="inpainting">inpainting (Masked replacement)</option>
+                  <option value="outpainting">outpainting (Canvas extension)</option>
+                </select>
+              </div>
+            `
+          : html`
+              <div class="field">
+                <label class="field-label">Aspect Ratio</label>
+                <select
+                  .value=${imageAspectRatio}
+                  @change=${(e: Event) => {
+                    imageAspectRatio = (e.target as HTMLSelectElement).value;
+                    requestUpdate();
+                  }}
+                >
+                  <option value="">(Auto / From Size)</option>
+                  <option value="1:1">1:1 (Square)</option>
+                  <option value="16:9">16:9 (Landscape)</option>
+                  <option value="9:16">9:16 (Portrait)</option>
+                  <option value="3:2">3:2 (35mm Film)</option>
+                  <option value="2:3">2:3 (Photo)</option>
+                  <option value="4:3">4:3 (Standard)</option>
+                  <option value="3:4">3:4 (Document)</option>
+                </select>
+              </div>
+            `}
+
+        <div class="field">
+          <label class="field-label">Post-Processing / Upscale</label>
+          <select
+            .value=${imagePostProcessing}
+            @change=${(e: Event) => {
+              imagePostProcessing = (e.target as HTMLSelectElement).value;
+              requestUpdate();
+            }}
+          >
+            <option value="">None (Raw)</option>
+            <option value="RealESRGAN_x4plus">RealESRGAN_x4plus (4x Upscaler)</option>
+            <option value="GFPGAN">GFPGAN (Face Restoration)</option>
+            <option value="CodeFormers">CodeFormers (High Quality Face Fix)</option>
+            <option value="NMKD_Siax">NMKD_Siax (Detail Enhancement)</option>
+            <option value="4x_AnimeSharp">4x_AnimeSharp (Anime / 2D)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Seed (Optional)</label>
+          <input
+            type="number"
+            placeholder="Deterministic seed"
+            .value=${imageSeed !== null ? String(imageSeed) : ''}
+            @input=${(e: Event) => {
+              const val = (e.target as HTMLInputElement).value;
+              imageSeed = val ? parseInt(val, 10) : null;
+            }}
+          />
         </div>
       </div>
     </div>

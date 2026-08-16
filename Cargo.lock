@@ -1794,6 +1794,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "memchr",
+ "miniz_oxide",
  "openproxy-adapters",
  "openproxy-compression",
  "openproxy-db",
