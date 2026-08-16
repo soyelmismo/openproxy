@@ -32,7 +32,7 @@ import { disconnectLogsWebSocket } from "../state/ws.js";
 
 function mutableState() { return state; }
 
-type NavIconName = "home" | "providers" | "combos" | "keys" | "analytics" | "logs" | "debug-logs" | "config" | "notifications" | "proxies" | "proxy-sources";
+type NavIconName = "home" | "providers" | "combos" | "keys" | "playground" | "analytics" | "logs" | "debug-logs" | "config" | "notifications" | "proxies" | "proxy-sources";
 
 interface SidebarLink {
   href: string;
@@ -52,6 +52,7 @@ const GROUPS: readonly SidebarGroup[] = [
     { href: "#/providers", icon: "providers", label: "Providers" },
     { href: "#/combos", icon: "combos", label: "Combos" },
     { href: "#/keys", icon: "keys", label: "API Keys" },
+    { href: "#/playground", icon: "playground", label: "Playground" },
     { href: "#/proxies", icon: "proxies", label: "Free Proxies" },
     { href: "#/proxy-sources", icon: "proxy-sources", label: "Proxy Sources" },
   ]},
@@ -72,6 +73,7 @@ function navIconSvg(name: NavIconName): TemplateResult {
     providers: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="3" width="12" height="3" rx="0.5"/><rect x="2" y="7" width="12" height="3" rx="0.5"/><rect x="2" y="11" width="12" height="3" rx="0.5"/><circle cx="4" cy="4.5" r="0.4" fill="currentColor" stroke="none"/><circle cx="4" cy="8.5" r="0.4" fill="currentColor" stroke="none"/><circle cx="4" cy="12.5" r="0.4" fill="currentColor" stroke="none"/></svg>`,
     combos: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="9" height="9" rx="1"/><rect x="5" y="5" width="9" height="9" rx="1"/></svg>`,
     keys: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="5" cy="5" r="2.5"/><path d="M6.8 6.8 L13 13"/><path d="M11 11 L13 9"/><path d="M9 13 L11 11"/></svg>`,
+    playground: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3 L3 13 L13 8 Z"/><path d="M9 3 L13 3 M11 1.5 L11 4.5"/></svg>`,
     proxies: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><circle cx="8" cy="4" r="2.5"/><circle cx="3" cy="12" r="2.5"/><circle cx="13" cy="12" r="2.5"/><path d="M5.5 10.5 L6.5 9 M10.5 10.5 L9.5 9"/></svg>`,
     "proxy-sources": `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1 V3.5 M8 12.5 V15 M1 8 H3.5 M12.5 8 H15"/></svg>`,
     analytics: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 14 H14"/><rect x="3" y="9" width="2.5" height="5"/><rect x="6.75" y="5" width="2.5" height="9"/><rect x="10.5" y="7" width="2.5" height="7"/></svg>`,

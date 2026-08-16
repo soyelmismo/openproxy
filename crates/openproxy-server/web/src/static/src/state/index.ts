@@ -41,7 +41,8 @@ export type RouteName =
   | "notifications"
   | "login"
   | "proxies"
-  | "proxy-sources";
+  | "proxy-sources"
+  | "playground";
 
 /** Live-logs WebSocket connection status. Mirrors the `setLogsStatus`
  *  labels in `state/ws.ts`. */
