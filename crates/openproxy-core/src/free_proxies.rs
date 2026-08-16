@@ -1808,8 +1808,11 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
             list
         };
 
+        if proxies.is_empty() {
+            return;
+        }
+
         use futures::StreamExt;
-        let pool_clone = Arc::clone(&db_pool);
 
         let test_url = {
             let r = db_pool.reader();
@@ -1817,13 +1820,65 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string())
         };
 
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
+        let pool_writer = Arc::clone(&db_pool);
+
+        let writer_handle = tokio::spawn(async move {
+            while let Some(first) = rx.recv().await {
+                let mut batch = vec![first];
+                while batch.len() < 50 {
+                    match rx.try_recv() {
+                        Ok(item) => batch.push(item),
+                        Err(_) => break,
+                    }
+                }
+
+                let pool = Arc::clone(&pool_writer);
+                let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
+                    let mut w = pool.open_connection()?;
+                    let tx_db = w.transaction().map_err(|e| crate::error::CoreError::Database {
+                        message: e.to_string(),
+                        source: Some(Box::new(e)),
+                    })?;
+                    let now = chrono::Utc::now().to_rfc3339();
+                    {
+                        let mut stmt = tx_db
+                            .prepare_cached(
+                                "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
+                            )
+                            .map_err(|e| crate::error::CoreError::Database {
+                                message: e.to_string(),
+                                source: Some(Box::new(e)),
+                            })?;
+
+                        for (id, test_res) in batch {
+                            match test_res {
+                                Ok(latency) => {
+                                    let _ = stmt.execute(rusqlite::params!["alive", latency, now, now, id]);
+                                }
+                                Err(_) => {
+                                    let _ = stmt.execute(rusqlite::params!["dead", None::<i64>, now, now, id]);
+                                }
+                            }
+                        }
+                    }
+                    tx_db.commit().map_err(|e| crate::error::CoreError::Database {
+                        message: e.to_string(),
+                        source: Some(Box::new(e)),
+                    })?;
+                    Ok(())
+                })
+                .await;
+            }
+        });
+
+        let test_url_ref = &test_url;
         futures::stream::iter(proxies)
-            .for_each_concurrent(20, move |(id, r#type, host, port, username, password)| {
-                let pool = Arc::clone(&pool_clone);
-                let test_url = test_url.to_owned();
+            .for_each_concurrent(20, |(id, r#type, host, port, username, password)| {
+                let tx = tx.clone();
                 async move {
                     let test_res = test_proxy_connection(
-                        &test_url,
+                        test_url_ref,
                         &r#type,
                         &host,
                         port,
@@ -1831,34 +1886,13 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                         password.as_deref(),
                     )
                     .await;
-                    let _ = tokio::task::spawn_blocking(
-                        move || -> Result<(), crate::error::CoreError> {
-                            let w = pool.open_connection()?;
-                            match test_res {
-                                Ok(latency) => {
-                                    let _ = update_proxy_status(&w, &id, "alive", Some(latency));
-                                }
-                                Err(_) => {
-                                    // Only mark dead if status was not already alive
-                                    let current_status: Option<String> = w
-                                        .query_row(
-                                            "SELECT status FROM free_proxies WHERE id = ?1",
-                                            rusqlite::params![&id],
-                                            |r| r.get(0),
-                                        )
-                                        .ok();
-                                    if current_status.as_deref() != Some("alive") {
-                                        let _ = update_proxy_status(&w, &id, "dead", None);
-                                    }
-                                }
-                            }
-                            Ok(())
-                        },
-                    )
-                    .await;
+                    let _ = tx.send((id, test_res)).await;
                 }
             })
             .await;
+
+        drop(tx);
+        let _ = writer_handle.await;
     });
 }
 

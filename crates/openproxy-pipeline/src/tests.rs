@@ -5824,3 +5824,120 @@ fn test_opencode_zen_no_account_proxy_rotation() {
         .unwrap();
     assert_eq!(proxy3, None);
 }
+
+#[tokio::test]
+async fn test_account_scoped_proxy_rotation() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE providers (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              base_url TEXT NOT NULL,
+              auth_type TEXT NOT NULL,
+              format TEXT NOT NULL,
+              extra_headers_json TEXT,
+              auto_activate_keyword TEXT,
+              use_proxies INTEGER DEFAULT 1,
+              current_proxy_id TEXT,
+              proxy_rotation_errors TEXT DEFAULT '429,connect_error,timeout',
+              rate_limit_scope TEXT DEFAULT 'account',
+              proxy_rotation_mode TEXT DEFAULT 'account',
+              active INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE accounts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              provider_id TEXT NOT NULL,
+              current_proxy_id TEXT,
+              active INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE free_proxies (
+              id TEXT PRIMARY KEY,
+              source TEXT NOT NULL,
+              host TEXT NOT NULL,
+              port INTEGER NOT NULL,
+              type TEXT NOT NULL DEFAULT 'http',
+              country_code TEXT,
+              status TEXT NOT NULL DEFAULT 'unknown',
+              latency_ms INTEGER,
+              last_validated TEXT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE(host, port)
+            );
+            CREATE TABLE provider_proxy_cooldowns (
+              provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+              proxy_id TEXT NOT NULL REFERENCES free_proxies(id) ON DELETE CASCADE,
+              cooldown_until TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              PRIMARY KEY (provider_id, proxy_id)
+            );",
+    )
+    .unwrap();
+
+    let conn_arc = Arc::new(parking_lot::Mutex::new(conn));
+    let repo = Arc::new(SqlitePipelineRepository::new(Arc::clone(&conn_arc)));
+    let tracker = crate::usage_tracker::UsageTracker::new(Arc::clone(&repo));
+    let dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
+        Arc::clone(&conn_arc),
+        crate::PipelineConfig::default(),
+        tracker,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+
+    {
+        let conn = conn_arc.lock();
+        conn.execute(
+            "INSERT INTO providers (id, name, base_url, auth_type, format, use_proxies, proxy_rotation_mode) VALUES ('prov-acc', 'Provider Acc', 'http://localhost', 'bearer', 'mixed', 1, 'account')",
+            []
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, provider_id, current_proxy_id) VALUES (42, 'prov-acc', 'p-acc-1')",
+            []
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-acc-1', 'src', '2.2.2.2', 8080, 'http', 'alive', 20)",
+            []
+        ).unwrap();
+    }
+
+    let provider_id = openproxy_types::ids::ProviderId::new("prov-acc");
+    let account_id = Some(openproxy_types::ids::AccountId(42));
+
+    // Trigger rotation on 429
+    let rotated = dispatcher
+        .check_and_trigger_proxy_rotation(
+            &provider_id,
+            account_id,
+            crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+            None,
+        )
+        .await;
+
+    assert!(rotated);
+
+    // Verify account's current_proxy_id was cleared
+    {
+        let conn = conn_arc.lock();
+        let acc_proxy: Option<String> = conn
+            .query_row(
+                "SELECT current_proxy_id FROM accounts WHERE id = 42",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(acc_proxy, None);
+
+        // Verify cooldown was registered
+        let in_cooldown: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM provider_proxy_cooldowns WHERE provider_id = 'prov-acc' AND proxy_id = 'p-acc-1'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap();
+        assert!(in_cooldown);
+    }
+}

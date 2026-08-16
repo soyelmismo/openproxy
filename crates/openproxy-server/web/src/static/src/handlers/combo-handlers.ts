@@ -296,14 +296,7 @@ async function patchComboField(
     // middle of editing another field. A re-render would lose
     // their focus and unsaved changes.
     console.error("[openproxy] combo PATCH failed:", msg);
-    // Use a toast instead of alert() so the user can dismiss it
-    // without losing focus.
-    const toast = document.createElement("div");
-    toast.className = "toast toast-error";
-    toast.textContent = "Error: " + msg;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.classList.add("show"), 10);
-    setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.remove(), 300); }, 4000);
+    showToast("Error: " + msg, "error");
   }
 }
 

@@ -54,6 +54,10 @@
 
   --color-log-header-bg:  var(--color-surface-2);
   --color-log-header-fg:  var(--color-text-muted);
+
+  --color-scrollbar-thumb:       #cfd7e3;
+  --color-scrollbar-thumb-hover: #a5b0bf;
+  --color-scrollbar-track:       transparent;
 }
 
 /* ---------- Dark ---------- */
@@ -104,6 +108,10 @@
 
   --color-log-header-bg:  var(--color-surface-2);
   --color-log-header-fg:  var(--color-text-muted);
+
+  --color-scrollbar-thumb:       #3c3935;
+  --color-scrollbar-thumb-hover: #54504a;
+  --color-scrollbar-track:       transparent;
 }
 
 /* ---------- prefers-color-scheme fallback ----------
@@ -159,5 +167,9 @@
 
     --color-log-header-bg:  var(--color-surface-2);
     --color-log-header-fg:  var(--color-text-muted);
+
+    --color-scrollbar-thumb:       #3c3935;
+    --color-scrollbar-thumb-hover: #54504a;
+    --color-scrollbar-track:       transparent;
   }
 }

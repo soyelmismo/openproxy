@@ -118,6 +118,7 @@ impl UpstreamDispatcher {
     pub(crate) async fn check_and_trigger_proxy_rotation(
         &self,
         provider_id: &openproxy_types::ids::ProviderId,
+        account_id: Option<openproxy_types::ids::AccountId>,
         trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
         cooldown_ms: Option<u64>,
     ) -> bool {
@@ -125,67 +126,94 @@ impl UpstreamDispatcher {
         let provider_id = provider_id.to_owned();
         let repo = Arc::clone(&self.tracker.repo);
         tokio::task::spawn_blocking(move || {
-            let provider = {
+            let (provider, bad_proxy_id, is_per_account) = {
                 let conn = conn_clone.lock();
-                openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None)
+                let provider = openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None);
+                if let Some(provider) = provider
+                    && provider.use_proxies
+                {
+                    let is_per_account = provider.proxy_rotation_mode == "account";
+                    let bad_proxy_id = if is_per_account {
+                        if let Some(ref acc_id) = account_id {
+                            conn.query_row(
+                                "SELECT current_proxy_id FROM accounts WHERE id = ?1",
+                                rusqlite::params![acc_id.0],
+                                |row| row.get::<_, Option<String>>(0),
+                            )
+                            .unwrap_or(None)
+                        } else {
+                            None
+                        }
+                    } else {
+                        provider.current_proxy_id.clone()
+                    };
+                    (provider, bad_proxy_id, is_per_account)
+                } else {
+                    return false;
+                }
             };
 
-            if let Some(provider) = provider
-                && provider.use_proxies
-            {
-                    let should_rotate = match trigger {
-                        crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
-                            let errors_list: Vec<&str> = provider
-                                .proxy_rotation_errors
-                                .split(',')
-                                .map(|s| s.trim())
-                                .collect();
-                            errors_list.contains(&sc.to_string().as_str())
-                        }
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
-                            let errors_list: Vec<&str> = provider
-                                .proxy_rotation_errors
-                                .split(',')
-                                .map(|s| s.trim())
-                                .collect();
-                            errors_list.contains(&"connect_error")
-                                || errors_list.contains(&"timeout")
-                        }
-                    };
+            let should_rotate = match trigger {
+                crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
+                crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
+                    let errors_list: Vec<&str> = provider
+                        .proxy_rotation_errors
+                        .split(',')
+                        .map(|s| s.trim())
+                        .collect();
+                    errors_list.contains(&sc.to_string().as_str())
+                }
+                crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
+                    let errors_list: Vec<&str> = provider
+                        .proxy_rotation_errors
+                        .split(',')
+                        .map(|s| s.trim())
+                        .collect();
+                    errors_list.contains(&"connect_error")
+                        || errors_list.contains(&"timeout")
+                }
+            };
 
-                    if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
-                        tracing::warn!(
-                            provider = %provider_id,
-                            proxy_id = %bad_proxy_id,
-                            trigger = ?trigger,
-                            "proxy rotation triggered: clearing binding and adding 15m cooldown for provider"
-                        );
-                        let cooldown_duration = cooldown_ms
-                            .map(std::time::Duration::from_millis)
-                            .unwrap_or_else(|| std::time::Duration::from_secs(15 * 60));
+            if should_rotate && let Some(ref bad_proxy) = bad_proxy_id {
+                tracing::warn!(
+                    provider = %provider_id,
+                    account_id = ?account_id,
+                    proxy_id = %bad_proxy,
+                    trigger = ?trigger,
+                    "proxy rotation triggered: clearing binding and adding cooldown for provider"
+                );
+                let cooldown_duration = cooldown_ms
+                    .map(std::time::Duration::from_millis)
+                    .unwrap_or_else(|| std::time::Duration::from_secs(15 * 60));
 
-                        // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
-                        // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
-                        if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
-                            let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
-                        }
+                // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
+                // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
+                if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
+                    let _ = repo.update_proxy_status(bad_proxy, "dead", None);
+                }
 
-                        let conn = conn_clone.lock();
-                        // NEW-2 fix: proxy rotations triggered by rate-limit get dynamic cooldown
-                        let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
-                            &conn,
-                            provider_id.as_str(),
-                            bad_proxy_id,
-                            cooldown_duration,
+                let conn = conn_clone.lock();
+                let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
+                    &conn,
+                    provider_id.as_str(),
+                    bad_proxy,
+                    cooldown_duration,
+                );
+                if is_per_account {
+                    if let Some(ref acc_id) = account_id {
+                        let _ = conn.execute(
+                            "UPDATE accounts SET current_proxy_id = NULL WHERE id = ?1",
+                            rusqlite::params![acc_id.0],
                         );
-                        let _ = openproxy_db::providers::update_current_proxy(
-                            &conn,
-                            &provider_id,
-                            None,
-                        );
-                        return true;
                     }
+                } else {
+                    let _ = openproxy_db::providers::update_current_proxy(
+                        &conn,
+                        &provider_id,
+                        None,
+                    );
+                }
+                return true;
             }
             false
         })
@@ -478,6 +506,7 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
+                        target.account_id,
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -527,6 +556,7 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
+                        target.account_id,
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -549,6 +579,7 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
+                        target.account_id,
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -720,6 +751,7 @@ impl UpstreamDispatcher {
             Ok(Err(e)) => {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
+                    target.account_id,
                     crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                     None,
                 )
@@ -740,6 +772,7 @@ impl UpstreamDispatcher {
             Err(_elapsed) => {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
+                    target.account_id,
                     crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                     None,
                 )
@@ -783,6 +816,7 @@ impl UpstreamDispatcher {
             let mut is_proxy_rotated = self
                 .check_and_trigger_proxy_rotation(
                     &target.provider_id,
+                    target.account_id,
                     crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
                     None,
                 )
@@ -803,6 +837,7 @@ impl UpstreamDispatcher {
                     is_proxy_rotated = self
                         .check_and_trigger_proxy_rotation(
                             &target.provider_id,
+                            target.account_id,
                             crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
                             Some(retry_ms),
                         )
@@ -1550,6 +1585,7 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
+                        target.account_id,
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -1596,6 +1632,7 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
+                        target.account_id,
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -1618,6 +1655,7 @@ impl UpstreamDispatcher {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
+                        target.account_id,
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -1656,6 +1694,7 @@ impl UpstreamDispatcher {
             let mut is_proxy_rotated = self
                 .check_and_trigger_proxy_rotation(
                     &target.provider_id,
+                    target.account_id,
                     crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
                     None,
                 )
@@ -1733,6 +1772,7 @@ impl UpstreamDispatcher {
                     is_proxy_rotated = self
                         .check_and_trigger_proxy_rotation(
                             &target.provider_id,
+                            target.account_id,
                             crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
                             Some(retry_ms),
                         )
