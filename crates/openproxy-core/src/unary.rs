@@ -45,6 +45,12 @@ pub fn resolve_unary_targets(
             let targets = routing::expand_account_rotation(&r, targets)
                 .map_err(|e| CoreError::Validation(format!("expand_account_rotation failed: {e}")))?;
 
+            let maybe_key = if let Some(key_id) = api_key_id {
+                crate::api_keys::get_by_id(&r, key_id).ok().flatten()
+            } else {
+                None
+            };
+
             let mut unary_targets = Vec::with_capacity(targets.len());
             for target in targets {
                 if let Some(model_row_id) = target.model_row_id {
@@ -54,6 +60,14 @@ pub fn resolve_unary_targets(
                         };
                         (model.provider_id, model.model_id.as_str().to_string())
                     };
+                    if let Some(key) = &maybe_key {
+                        if !key.is_provider_allowed(provider.as_str()) {
+                            continue;
+                        }
+                        if !key.is_model_allowed(&upstream_model, Some(provider.as_str())) {
+                            continue;
+                        }
+                    }
                     unary_targets.push(UnaryTarget {
                         provider,
                         account_id: target.account_id,
@@ -63,19 +77,29 @@ pub fn resolve_unary_targets(
                         combo_id: Some(combo_id),
                     });
                 } else {
+                    let provider = target.provider_id.clone();
+                    let upstream_model = req_model.to_string();
+                    if let Some(key) = &maybe_key {
+                        if !key.is_provider_allowed(provider.as_str()) {
+                            continue;
+                        }
+                        if !key.is_model_allowed(&upstream_model, Some(provider.as_str())) {
+                            continue;
+                        }
+                    }
                     unary_targets.push(UnaryTarget {
-                        provider: target.provider_id.clone(),
+                        provider,
                         account_id: target.account_id,
                         model_row_id: None,
                         combo_target_id: Some(target.id),
-                        upstream_model: req_model.to_string(),
+                        upstream_model,
                         combo_id: Some(combo_id),
                     });
                 }
             }
             if unary_targets.is_empty() {
                 return Err(CoreError::Validation(format!(
-                    "combo has no model target suitable for {endpoint_kind}"
+                    "combo has no permitted target suitable for {endpoint_kind}"
                 )));
             }
             Ok(unary_targets)

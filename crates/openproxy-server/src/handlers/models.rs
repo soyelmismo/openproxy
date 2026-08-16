@@ -28,7 +28,7 @@
 
 use axum::{Json, extract::State, http::HeaderMap};
 use openproxy_core::{capabilities, models};
-use openproxy_types::{ApiKeyId, CoreError};
+use openproxy_types::CoreError;
 
 use crate::{error::ApiError, state::AppState};
 
@@ -51,8 +51,8 @@ pub async fn list_models(
     //
     // The anonymous fallback (when zero active keys exist) is preserved
     // so first-boot before the bootstrap key is created still works.
-    let _api_key_id = match authenticate_chat_or_anonymous(&state, &headers) {
-        Ok(id) => id,
+    let maybe_api_key = match authenticate_chat_or_anonymous(&state, &headers) {
+        Ok(key) => key,
         Err(e) => return Err(e),
     };
 
@@ -63,6 +63,29 @@ pub async fn list_models(
         .models
         .list_active_all(std::time::Duration::from_secs(5))?;
     let combo_rows = state.services().combos.list_combos()?;
+
+    let rows: Vec<_> = if let Some(key) = &maybe_api_key {
+        rows.into_iter()
+            .filter(|m| key.is_model_allowed(m.model_id.as_str(), Some(m.provider_id.as_str())))
+            .collect()
+    } else {
+        rows
+    };
+
+    let combo_rows: Vec<_> = if let Some(key) = &maybe_api_key {
+        combo_rows
+            .into_iter()
+            .filter(|c| {
+                if !key.is_combo_allowed(c.id.0) {
+                    return false;
+                }
+                let combo_virtual_id = format!("combo:{}", c.name);
+                key.is_model_allowed(&combo_virtual_id, None) || key.is_model_allowed(&c.name, None)
+            })
+            .collect()
+    } else {
+        combo_rows
+    };
 
     let mut data: Vec<serde_json::Value> =
         rows.into_iter().map(|m| build_model_entry(&m)).collect();
@@ -122,12 +145,12 @@ pub async fn list_models(
 }
 
 /// Authenticate with a chat-scope key, OR allow anonymous when zero
-/// active keys exist (first-boot window). Returns the key id if
+/// active keys exist (first-boot window). Returns the key if
 /// authenticated, or None if anonymous.
 fn authenticate_chat_or_anonymous(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<Option<ApiKeyId>, ApiError> {
+) -> Result<Option<openproxy_core::api_keys::ApiKey>, ApiError> {
     use openproxy_core::api_keys;
 
     let token = headers
@@ -192,7 +215,7 @@ fn authenticate_chat_or_anonymous(
         let w = pool.writer();
         let _ = api_keys::touch_last_used(&w, key_id);
     });
-    Ok(Some(key.id))
+    Ok(Some(key))
 }
 
 /// Project a combo into a synthetic catalog entry. The shape mirrors
@@ -206,6 +229,18 @@ fn build_combo_entry(
     effective_context_window: Option<i64>,
 ) -> serde_json::Value {
     let id = format!("combo:{}", c.name);
+    let combo_type = capabilities::infer_model_type(&c.name);
+    let empty_caps = capabilities::ModelCapabilities::empty();
+    let input_modalities: Vec<String> =
+        capabilities::infer_input_modalities_for_model(&c.name, &empty_caps)
+            .into_iter()
+            .map(std::string::ToString::to_string)
+            .collect();
+    let output_modalities: Vec<String> = capabilities::infer_output_modalities(&c.name)
+        .into_iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+
     serde_json::json!({
         "id": id,
         "object": "model",
@@ -221,10 +256,10 @@ fn build_combo_entry(
         "context_length": effective_context_window,
         "max_input_tokens": effective_context_window,
         "max_output_tokens": null,
-        "input_modalities": ["text"],
-        "output_modalities": ["text"],
+        "input_modalities": input_modalities,
+        "output_modalities": output_modalities,
         "capabilities": {},
-        "type": "chat",
+        "type": combo_type,
         "family": "combo",
     })
 }
@@ -285,8 +320,8 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
         .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
     {
         Some(v) => v,
-        None => capabilities::infer_input_modalities(&caps)
-            .iter()
+        None => capabilities::infer_input_modalities_for_model(model_id, &caps)
+            .into_iter()
             .map(std::string::ToString::to_string)
             .collect(),
     };
@@ -296,11 +331,25 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
         .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
     {
         Some(v) => v,
-        None => capabilities::infer_output_modalities()
-            .iter()
+        None => capabilities::infer_output_modalities(model_id)
+            .into_iter()
             .map(std::string::ToString::to_string)
             .collect(),
     };
+
+    let inferred_type = capabilities::infer_model_type(model_id);
+    let effective_type = if m.model_type.is_empty()
+        || (m.model_type == "chat" && inferred_type != "chat")
+    {
+        inferred_type
+    } else {
+        m.model_type.as_str()
+    };
+
+    let family = m
+        .family
+        .clone()
+        .or_else(|| capabilities::infer_family(model_id));
 
     serde_json::json!({
         // OpenAI-spec fields.
@@ -326,8 +375,8 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
         // the wire shape clean even for models where only one or two
         // capabilities are known.
         "capabilities": build_capabilities_object(&caps),
-        "type": m.model_type,
-        "family": m.family,
+        "type": effective_type,
+        "family": family,
     })
 }
 
@@ -497,5 +546,45 @@ mod tests {
             .and_then(|x| x.as_str())
             .expect("id is a string");
         assert_eq!(id, "openrouter/nex-agi/nex-n2-pro:free");
+    }
+
+    #[test]
+    fn api_key_model_filtering_logic() {
+        let key = openproxy_core::api_keys::ApiKey {
+            id: openproxy_types::ApiKeyId(1),
+            key_hash: "hash".into(),
+            key_prefix: Some("op_live_test".into()),
+            label: Some("test".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: None,
+            allowed_combos: None,
+            blacklisted_providers: Some(vec!["openrouter".into()]),
+            blacklisted_models: Some(vec!["gpt-3.5*".into()]),
+            is_active: true,
+            revoked_at: None,
+            expires_at: None,
+            last_used_at: None,
+            created_at: "2024-01-01".into(),
+            created_by: None,
+        };
+
+        let m1 = empty_model(); // provider: openrouter, model: openai/gpt-4o
+        let mut m2 = empty_model();
+        m2.provider_id = ProviderId::new("openai");
+        m2.model_id = ModelId::new("gpt-4o");
+
+        let mut m3 = empty_model();
+        m3.provider_id = ProviderId::new("openai");
+        m3.model_id = ModelId::new("gpt-3.5-turbo");
+
+        let list = vec![m1, m2, m3];
+        let filtered: Vec<_> = list
+            .into_iter()
+            .filter(|m| key.is_model_allowed(m.model_id.as_str(), Some(m.provider_id.as_str())))
+            .collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_id.as_str(), "openai");
+        assert_eq!(filtered[0].model_id.as_str(), "gpt-4o");
     }
 }

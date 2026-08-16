@@ -74,17 +74,23 @@ pub async fn fetch_opencode_models(
         .map(|m| {
             let id = m.id;
             let target_format = classify_opencode_target_format(&id);
+            let m_type = openproxy_types::capabilities::infer_model_type(&id);
+            let caps = openproxy_types::capabilities::infer_capabilities(&id);
+            let in_mods =
+                openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
+            let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
+            let family = openproxy_types::capabilities::infer_family(&id);
             DiscoveredModel {
                 display_name: Some(id.clone()),
                 model_id: ModelId::new(id),
                 target_format,
                 context_length: None,
                 max_output_tokens: None,
-                input_modalities: None,
-                output_modalities: None,
-                model_type: None,
-                family: None,
-                capabilities: None,
+                input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+                output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+                model_type: Some(m_type.to_string()),
+                family,
+                capabilities: Some(caps),
             }
         })
         .collect();

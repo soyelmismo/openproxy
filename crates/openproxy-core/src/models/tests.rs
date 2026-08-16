@@ -937,6 +937,7 @@ fn create_custom_inserts_active_row() {
         Some("My Hand-Crafted Model"),
         TargetFormat::Openai,
         3600,
+        None,
     )
     .expect("create_custom");
     assert!(row_id.0 > 0);
@@ -961,6 +962,7 @@ fn create_custom_with_ttl_zero_means_no_expiry() {
         None,
         TargetFormat::Anthropic,
         0,
+        None,
     )
     .expect("create_custom ttl=0");
     let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
@@ -989,6 +991,7 @@ fn create_custom_on_existing_row_upserts() {
         Some("new"),
         TargetFormat::Openai,
         60,
+        None,
     )
     .expect("create_custom on existing");
 
@@ -1012,6 +1015,7 @@ fn create_custom_with_unknown_provider_fails_validation() {
         None,
         TargetFormat::Openai,
         60,
+        None,
     )
     .expect_err("FK violation");
     assert!(
@@ -1511,6 +1515,7 @@ fn upsert_many_preserves_custom_rows_when_not_in_diff() {
         Some("Curated by operator"),
         TargetFormat::Openai,
         3600,
+        None,
     )
     .expect("create_custom");
     assert!(custom_id.0 > 0);
@@ -1586,6 +1591,7 @@ fn upsert_many_with_empty_discovered_deletes_all_non_custom() {
         Some("Hand-curated"),
         TargetFormat::Openai,
         3600,
+        None,
     )
     .expect("create_custom keep");
 
@@ -2347,4 +2353,55 @@ fn upsert_many_does_not_duplicate_notifications_on_rediscovery() {
         )
         .unwrap();
     assert_eq!(count_after, 1);
+}
+
+#[test]
+fn sync_and_upsert_preserves_manually_configured_model_type() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    openproxy_db::migrations::run(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('p1', 'Provider 1', 'https://example.com', 'none', 'openai')",
+        [],
+    )
+    .unwrap();
+    let provider = ProviderId::new("p1");
+
+    // 1. Initial discovery creates the model with default or inferred type (chat)
+    let d = [discovered("flux-dev", TargetFormat::Openai)];
+    upsert_many(&conn, &provider, &d, Duration::from_hours(1)).unwrap();
+
+    let row_id: i64 = conn
+        .query_row(
+            "SELECT id FROM models WHERE provider_id = 'p1' AND model_id = 'flux-dev'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    let initial_row = get_by_row_id(&conn, ModelRowId(row_id)).unwrap().unwrap();
+
+    // 2. User manually updates model_type to 'image'
+    update_model_type(&conn, initial_row.row_id, "image").unwrap();
+
+    let updated_row = get_by_row_id(&conn, initial_row.row_id).unwrap().unwrap();
+    assert_eq!(updated_row.model_type, "image");
+
+    // 3. Provider refresh / rediscovery runs (with model_type = None or default)
+    let diff = sync::compute_diff(&conn, &provider, &d).unwrap();
+    sync::execute_sync_transaction(&conn, &provider, &d, &diff, Duration::from_hours(1)).unwrap();
+
+    let after_sync = get_by_row_id(&conn, initial_row.row_id).unwrap().unwrap();
+    assert_eq!(
+        after_sync.model_type, "image",
+        "manual model_type override must be preserved across syncs"
+    );
+
+    // 4. Test upsert_many path as well
+    upsert_many(&conn, &provider, &d, Duration::from_hours(1)).unwrap();
+    let after_upsert = get_by_row_id(&conn, initial_row.row_id).unwrap().unwrap();
+    assert_eq!(
+        after_upsert.model_type, "image",
+        "manual model_type override must be preserved across upsert_many"
+    );
 }

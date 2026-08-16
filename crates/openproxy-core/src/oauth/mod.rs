@@ -14,7 +14,7 @@ use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::num::NonZeroU32;
+use std::num::NonZero;
 use std::sync::Arc;
 
 // Re-export account-level OAuth helpers for convenience.
@@ -878,8 +878,8 @@ async fn tick_refresh_cycle(
     };
 
     let quota = match Quota::with_period(std::time::Duration::from_secs(STAGGER_DELAY_SECS)) {
-        Some(q) => q.allow_burst(NonZeroU32::MIN),
-        None => Quota::per_second(NonZeroU32::MIN),
+        Some(q) => q.allow_burst(NonZero::<u32>::MIN),
+        None => Quota::per_second(NonZero::<u32>::MIN),
     };
     let limiter = std::sync::Arc::new(RateLimiter::direct(quota));
     let mut join_set = tokio::task::JoinSet::new();

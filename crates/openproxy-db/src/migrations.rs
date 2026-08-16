@@ -308,6 +308,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000059_provider_proxy_cooldowns",
         sql: include_str!("../migrations/000059_provider_proxy_cooldowns.sql"),
     },
+    Migration {
+        version: 60,
+        name: "000060_api_key_blacklist",
+        sql: include_str!("../migrations/000060_api_key_blacklist.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

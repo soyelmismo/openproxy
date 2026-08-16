@@ -48,9 +48,7 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
         CreateApiKeyInput {
             label: Some(label.to_string()),
             scopes: vec!["manage".to_string(), "chat".to_string()],
-            allowed_models: None,
-            allowed_combos: None,
-            expires_at: None,
+            ..Default::default()
         },
         "system",
     )?;
@@ -132,9 +130,7 @@ mod tests {
             CreateApiKeyInput {
                 label: Some("pre".into()),
                 scopes: vec!["chat".into()],
-                allowed_models: None,
-                allowed_combos: None,
-                expires_at: None,
+                ..Default::default()
             },
             "admin",
         )

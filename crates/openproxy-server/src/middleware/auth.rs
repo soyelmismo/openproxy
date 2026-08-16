@@ -15,8 +15,11 @@ pub struct ParsedChatRequest {
 /// per-key restrictions that need to be enforced after routing.
 #[derive(Clone, Debug)]
 pub struct ValidatedApiToken {
-    pub(crate) key_id: ApiKeyId,
-    pub(crate) allowed_combos: Option<Vec<i64>>,
+    pub key_id: ApiKeyId,
+    pub allowed_models: Option<Vec<String>>,
+    pub allowed_combos: Option<Vec<i64>>,
+    pub blacklisted_providers: Option<Vec<String>>,
+    pub blacklisted_models: Option<Vec<String>>,
 }
 
 impl ValidatedApiToken {
@@ -25,6 +28,88 @@ impl ValidatedApiToken {
             Some(allowed) if !allowed.is_empty() => allowed.contains(&combo_id),
             _ => true,
         }
+    }
+
+    pub fn is_provider_allowed(&self, provider_id: &str) -> bool {
+        if let Some(blacklisted) = &self.blacklisted_providers
+            && blacklisted.iter().any(|p| p == provider_id || p == "*")
+        {
+            return false;
+        }
+        true
+    }
+
+    pub fn is_model_allowed(&self, model: &str, provider_id: Option<&str>) -> bool {
+        let (prov_from_model, bare_model) = match model.split_once('/') {
+            Some((p, rest)) => (Some(p), rest),
+            None => (None, model),
+        };
+
+        let full_id = provider_id.and_then(|p| {
+            if model.starts_with(&format!("{p}/")) {
+                None
+            } else {
+                Some(format!("{p}/{model}"))
+            }
+        });
+
+        let matches_spec = |spec: &str, candidate: &str| -> bool {
+            if spec == "*" || spec == candidate {
+                return true;
+            }
+            if let Some(prefix) = spec.strip_suffix('*')
+                && candidate.starts_with(prefix)
+            {
+                return true;
+            }
+            if let Some(suffix) = spec.strip_prefix('*')
+                && candidate.ends_with(suffix)
+            {
+                return true;
+            }
+            false
+        };
+
+        let check_match = |pattern: &str| -> bool {
+            matches_spec(pattern, model)
+                || matches_spec(pattern, bare_model)
+                || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
+                || model.strip_prefix(&format!("{pattern}/")).is_some()
+                || model.strip_suffix(&format!("/{pattern}")).is_some()
+        };
+
+        // 1. Allowlist check
+        if let Some(allowed) = &self.allowed_models
+            && !allowed.is_empty()
+        {
+            let matches_allowed = allowed.iter().any(|m| check_match(m));
+            if !matches_allowed {
+                return false;
+            }
+        }
+
+        // 2. Blacklisted providers check
+        if let Some(blacklisted_provs) = &self.blacklisted_providers {
+            if let Some(p) = provider_id
+                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
+            {
+                return false;
+            }
+            if let Some(p) = prov_from_model
+                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
+            {
+                return false;
+            }
+        }
+
+        // 3. Blacklisted models check
+        if let Some(blacklisted) = &self.blacklisted_models
+            && blacklisted.iter().any(|b| check_match(b))
+        {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -37,12 +122,13 @@ impl ValidatedApiToken {
 /// | absent, no active keys configured     | `Ok(None)` — anonymous OK (local-dev). |
 /// | absent, ≥1 active key configured      | 401 `missing api key`. |
 /// | `Authorization: <other-scheme> ...`   | treated as missing → falls into the two rows above. |
-/// | `Authorization: Bearer *** | look up by SHA-256, enforce active+unexpired+scope+allowlist. |
+/// | `Authorization: Bearer *** | look up by SHA-256, enforce active+unexpired+scope+allowlist+blacklist. |
 /// | `Bearer <key>` not in the table        | 401 `invalid api key`. |
 /// | key is revoked / inactive              | 401 `api key revoked or inactive`. |
 /// | key has expired                       | 401 `api key expired`. |
 /// | key lacks the `chat` scope            | 403 `api key lacks 'chat' scope`. |
 /// | key's model allowlist excludes request | 403 `model '...' not allowed for this key`. |
+/// | key's blacklist excludes request      | 403 `model '...' is blacklisted for this key`. |
 pub(crate) fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
@@ -126,12 +212,9 @@ pub(crate) fn authenticate(
         )));
     }
 
-    if let Some(allowed) = &key.allowed_models
-        && !allowed.is_empty()
-        && !allowed.iter().any(|m| m == requested_model)
-    {
+    if !key.is_model_allowed(requested_model, None) {
         return Err(ApiError(CoreError::Auth(format!(
-            "model '{requested_model}' not allowed for this key"
+            "model '{requested_model}' not allowed or blacklisted for this key"
         ))));
     }
 
@@ -149,7 +232,10 @@ pub(crate) fn authenticate(
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
+        allowed_models: key.allowed_models,
         allowed_combos: key.allowed_combos,
+        blacklisted_providers: key.blacklisted_providers,
+        blacklisted_models: key.blacklisted_models,
     }))
 }
 

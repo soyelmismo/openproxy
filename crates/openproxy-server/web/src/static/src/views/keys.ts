@@ -34,6 +34,8 @@ interface ApiKeyRow {
   key_prefix: string | null;
   scopes: string[] | null;
   allowed_models: string[] | null | unknown;
+  blacklisted_providers?: string[] | null;
+  blacklisted_models?: string[] | null;
   is_active: boolean;
   revoked_at: string | null;
   last_used_at: string | null;
@@ -104,6 +106,16 @@ function renderKeyRow(k: ApiKeyRow): TemplateResult {
   if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
   else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
   else if (Array.isArray(k.allowed_models)) allowedModels = k.allowed_models.length + " models";
+  const blBadges: string[] = [];
+  if (Array.isArray(k.blacklisted_providers) && k.blacklisted_providers.length > 0) {
+    blBadges.push(`!prov: ${k.blacklisted_providers.join(",")}`);
+  }
+  if (Array.isArray(k.blacklisted_models) && k.blacklisted_models.length > 0) {
+    blBadges.push(`!models: ${k.blacklisted_models.length}`);
+  }
+  const restrictions: string = blBadges.length > 0
+    ? `${allowedModels} (${blBadges.join("; ")})`
+    : allowedModels;
   const isActive: boolean = k.is_active && !k.revoked_at;
   const statusClass: string = isActive ? "on" : "off";
   const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
@@ -114,7 +126,7 @@ function renderKeyRow(k: ApiKeyRow): TemplateResult {
       <td>${label}${createdBy}</td>
       <td><code>${k.key_prefix || "—"}</code></td>
       <td>${scopes}</td>
-      <td>${allowedModels}</td>
+      <td>${restrictions}</td>
       <td><span class="status-pill ${statusClass}">${statusText}</span></td>
       <td>${k.last_used_at || "never"}</td>
       <td>${k.created_at || "—"}</td>

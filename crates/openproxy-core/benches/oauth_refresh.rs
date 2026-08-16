@@ -24,12 +24,12 @@ fn bench_oauth_refresh(c: &mut Criterion) {
     group.bench_function("concurrent_refresh_10", |b| {
         b.to_async(&rt).iter(|| async {
             use governor::{Quota, RateLimiter};
-            use std::num::NonZeroU32;
+            use std::num::NonZero;
             use std::sync::Arc;
 
             let quota = Quota::with_period(Duration::from_millis(3))
                 .unwrap()
-                .allow_burst(NonZeroU32::new(1).unwrap());
+                .allow_burst(NonZero::<u32>::new(1).unwrap());
             let limiter = Arc::new(RateLimiter::direct(quota));
 
             let mut join_set = tokio::task::JoinSet::new();

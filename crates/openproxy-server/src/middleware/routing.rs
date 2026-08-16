@@ -47,9 +47,10 @@ pub async fn routing_middleware(
     let api_key_id = auth_token.as_ref().map(|t| t.key_id);
 
     let openai_req = parsed_chat_req.parsed;
-    let plan = resolve_routing_plan(&state, req.headers(), &openai_req, auth_token.as_ref())?;
+    let (plan, has_key_restrictions) =
+        resolve_routing_plan(&state, req.headers(), &openai_req, auth_token.as_ref())?;
     let (combo_id, combo_override, targets_override) =
-        translate_plan_to_targets(&state, plan, api_key_id)?;
+        translate_plan_to_targets(&state, plan, has_key_restrictions, api_key_id)?;
 
     let resolved = ResolvedRoute {
         openai_req,
@@ -68,12 +69,12 @@ fn resolve_routing_plan(
     headers: &HeaderMap,
     openai_req: &OpenAIRequest,
     auth_result: Option<&ValidatedApiToken>,
-) -> Result<RoutingPlan, ApiError> {
+) -> Result<(RoutingPlan, bool), ApiError> {
     let legacy_combo_name = headers
         .get("x-openproxy-combo")
         .and_then(|v| v.to_str().ok());
 
-    let plan = {
+    let mut plan = {
         let w = state.db_pool().writer();
         if let Some(name) = legacy_combo_name {
             match openproxy_db::combos::get_combo_by_name(&w, name)? {
@@ -94,16 +95,58 @@ fn resolve_routing_plan(
         }
     };
 
-    if let RoutingPlan::Combo { combo_id, .. } = &plan
+    let mut has_restrictions = false;
+    if let RoutingPlan::Combo {
+        combo_id,
+        targets,
+        ..
+    } = &mut plan
         && let Some(auth) = auth_result
-        && !auth.is_combo_allowed(combo_id.0)
     {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".to_string(),
-        )));
+        if !auth.is_combo_allowed(combo_id.0) {
+            return Err(ApiError(CoreError::Auth(
+                "combo not allowed for this key".to_string(),
+            )));
+        }
+
+        let has_blacklist =
+            auth.blacklisted_providers.is_some() || auth.blacklisted_models.is_some();
+        let has_allowlist = auth.allowed_models.as_ref().is_some_and(|a| !a.is_empty());
+
+        if has_blacklist || has_allowlist {
+            has_restrictions = true;
+            let r = state.db_pool().reader();
+            let mut filtered_targets = Vec::with_capacity(targets.len());
+            for target in targets.drain(..) {
+                if !auth.is_provider_allowed(target.provider_id.as_str()) {
+                    continue;
+                }
+                if let Some(row_id) = target.model_row_id {
+                    let model_id: Option<String> = r
+                        .query_row(
+                            "SELECT model_id FROM models WHERE id = ?1",
+                            rusqlite::params![row_id.0],
+                            |row| row.get(0),
+                        )
+                        .ok();
+                    if let Some(m_id) = model_id
+                        && !auth.is_model_allowed(&m_id, Some(target.provider_id.as_str()))
+                    {
+                        continue;
+                    }
+                }
+                filtered_targets.push(target);
+            }
+            if filtered_targets.is_empty() {
+                return Err(ApiError(CoreError::Auth(
+                    "all upstream targets in combo are restricted for this key".to_string(),
+                )));
+            }
+            *targets = filtered_targets;
+        }
     }
 
-    Ok(plan)
+    Ok((plan, has_restrictions))
 }
 
 pub type RoutingPlanTargets = (
@@ -115,6 +158,7 @@ pub type RoutingPlanTargets = (
 fn translate_plan_to_targets(
     state: &AppState,
     plan: RoutingPlan,
+    has_key_restrictions: bool,
     api_key_id: Option<ApiKeyId>,
 ) -> Result<RoutingPlanTargets, ApiError> {
     match plan {
@@ -142,6 +186,8 @@ fn translate_plan_to_targets(
                     selection_window_secs: None,
                 };
                 Ok((combo_id, Some(synthetic_combo), Some(targets)))
+            } else if has_key_restrictions {
+                Ok((combo_id, None, Some(targets)))
             } else {
                 Ok((combo_id, None, None))
             }

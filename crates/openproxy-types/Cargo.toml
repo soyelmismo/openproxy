@@ -18,5 +18,4 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 bytes = "1"
 parking_lot = { workspace = true }
-regex = { workspace = true }
 

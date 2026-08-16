@@ -1,6 +1,6 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, OpenAIModelEntry,
-    ProviderAdapter, ProviderAdapterConfig, Result, TargetFormat, UpstreamClient,
+    ProviderAdapter, ProviderAdapterConfig, ProviderMetadata, Result, TargetFormat, UpstreamClient,
     upstream_get_json,
 };
 
@@ -28,14 +28,15 @@ impl CustomAdapter {
 
     /// Build a `CustomAdapter` from a DB provider row.
     ///
-    /// Maps [`providers::AuthType`] → [`AdapterAuthType`] and
-    /// [`providers::ProviderFormat`] → [`AdapterFormat`]. Extra headers
-    /// are deserialised from the JSON string stored in the row (falling
-    /// back to an empty vec on parse failure).
+    /// Parses the row's `auth_type` and `format` strings into the
+    /// strongly-typed adapter enums, deserializes `extra_headers_json`
+    /// (defaulting to empty on parse error or `NULL`), and fills the
+    /// rest of the config fields.
     pub fn from_provider_row(provider: &openproxy_types::Provider) -> Self {
         let auth_type = match provider.auth_type {
-            // OAuth tokens are still passed as Bearer on the wire.
-            openproxy_types::AuthType::OAuth | openproxy_types::AuthType::Bearer => AdapterAuthType::Bearer,
+            openproxy_types::AuthType::OAuth | openproxy_types::AuthType::Bearer => {
+                AdapterAuthType::Bearer
+            }
             openproxy_types::AuthType::XApiKey => AdapterAuthType::XApiKey,
             openproxy_types::AuthType::GoogApiKey => AdapterAuthType::GoogApiKey,
             openproxy_types::AuthType::None => AdapterAuthType::None,
@@ -46,14 +47,8 @@ impl CustomAdapter {
         let extra_headers: Vec<(String, String)> = provider
             .extra_headers_json
             .as_deref()
-            .and_then(|json_str| {
-                // The JSON is stored as an object like
-                // `{"X-Title":"openproxy"}` — deserialize into a HashMap
-                // and convert to Vec<(String, String)>.
-                let map: Option<std::collections::HashMap<String, String>> =
-                    serde_json::from_str(json_str).ok();
-                map.map(|m| m.into_iter().collect())
-            })
+            .and_then(|raw| serde_json::from_str::<std::collections::HashMap<String, String>>(raw).ok())
+            .map(|map| map.into_iter().collect())
             .unwrap_or_default();
 
         Self {
@@ -69,11 +64,19 @@ impl CustomAdapter {
             },
         }
     }
+
+    pub fn from_provider(provider: &openproxy_types::Provider) -> Self {
+        Self::from_provider_row(provider)
+    }
 }
 
 impl ProviderAdapter for CustomAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
+    }
+
+    fn metadata(&self) -> ProviderMetadata {
+        ProviderMetadata::custom_default()
     }
 
     async fn fetch_models(
@@ -99,7 +102,9 @@ impl ProviderAdapter for CustomAdapter {
                 }
                 AdapterAuthType::XApiKey => headers.push(("x-api-key", api_key)),
                 AdapterAuthType::GoogApiKey => headers.push(("x-goog-api-key", api_key)),
-                AdapterAuthType::None => {}
+                AdapterAuthType::None => {
+                    headers.push(("Authorization", bearer_auth.as_str()));
+                }
             }
         }
         for (k, v) in &self.config.extra_headers {
@@ -130,17 +135,23 @@ impl ProviderAdapter for CustomAdapter {
                 .filter_map(|raw| {
                     let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
                     let id = entry.id;
+                    let m_type = openproxy_types::capabilities::infer_model_type(&id);
+                    let caps = openproxy_types::capabilities::infer_capabilities(&id);
+                    let in_mods =
+                        openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
+                    let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
+                    let family = openproxy_types::capabilities::infer_family(&id);
                     Some(DiscoveredModel {
                         display_name: Some(id.clone()),
                         model_id: ModelId::new(id),
                         target_format,
                         context_length: None,
                         max_output_tokens: None,
-                        input_modalities: None,
-                        output_modalities: None,
-                        model_type: None,
-                        family: None,
-                        capabilities: None,
+                        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+                        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+                        model_type: Some(m_type.to_string()),
+                        family,
+                        capabilities: Some(caps),
                     })
                 })
                 .collect();
@@ -157,17 +168,23 @@ impl ProviderAdapter for CustomAdapter {
                     let display_name = m
                         .get("displayName")
                         .and_then(|v| v.as_str()).map_or_else(|| id.to_string(), std::string::ToString::to_string);
+                    let m_type = openproxy_types::capabilities::infer_model_type(id);
+                    let caps = openproxy_types::capabilities::infer_capabilities(id);
+                    let in_mods =
+                        openproxy_types::capabilities::infer_input_modalities_for_model(id, &caps);
+                    let out_mods = openproxy_types::capabilities::infer_output_modalities(id);
+                    let family = openproxy_types::capabilities::infer_family(id);
                     Some(DiscoveredModel {
                         model_id: ModelId::new(id.to_string()),
                         display_name: Some(display_name),
                         target_format: TargetFormat::Gemini,
                         context_length: None,
                         max_output_tokens: None,
-                        input_modalities: None,
-                        output_modalities: None,
-                        model_type: None,
-                        family: None,
-                        capabilities: None,
+                        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+                        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+                        model_type: Some(m_type.to_string()),
+                        family,
+                        capabilities: Some(caps),
                     })
                 })
                 .collect();
@@ -221,5 +238,23 @@ mod tests {
             adapter.build_chat_url(TargetFormat::Responses, &model),
             "https://api.test.com/v1/responses"
         );
+    }
+
+    #[test]
+    fn test_custom_adapter_metadata_deletable() {
+        let adapter = CustomAdapter::from_config(ProviderAdapterConfig {
+            id: ProviderId::new("custom-provider"),
+            name: "Custom Provider".to_string(),
+            base_url: "https://api.custom.com/v1".to_string(),
+            auth_type: AdapterAuthType::Bearer,
+            format: AdapterFormat::Openai,
+            extra_headers: vec![],
+            anonymous_fallback: false,
+            rate_limit_scope: "account".into(),
+        });
+
+        let meta = adapter.metadata();
+        assert!(!meta.built_in, "custom adapter must not be built-in");
+        assert!(meta.deletable, "custom adapter must be deletable");
     }
 }

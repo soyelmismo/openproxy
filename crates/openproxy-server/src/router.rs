@@ -63,6 +63,29 @@ use crate::{
 /// real TCP-level events (request-body read errors + response-body
 /// write errors) instead of a time-based watchdog. See
 /// `crates/openproxy-server/src/disconnect.rs` for the rationale.
+fn chat_endpoint<H, T>(state: &AppState, handler: H) -> axum::routing::MethodRouter<AppState>
+where
+    H: axum::handler::Handler<T, AppState>,
+    T: 'static,
+{
+    post(handler)
+        .route_layer(middleware::from_fn(
+            crate::disconnect::client_disconnect_middleware,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::rate_limit::rate_limit_middleware,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::routing::routing_middleware,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ))
+}
+
 pub fn build_router(state: AppState) -> Router {
     // Public + chat routes. `/v1/health` is a tiny liveness probe;
     // `/v1/models` lists known models in OpenAI shape;
@@ -90,41 +113,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/models", get(handlers::models::list_models))
         .route(
             "/v1/chat/completions",
-            post(handlers::chat::chat_completions)
-                .route_layer(middleware::from_fn(
-                    crate::disconnect::client_disconnect_middleware,
-                ))
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::rate_limit::rate_limit_middleware,
-                ))
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::routing::routing_middleware,
-                ))
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::auth::auth_middleware,
-                )),
+            chat_endpoint(&state, handlers::chat::chat_completions),
         )
         .route(
             "/v1/messages",
-            post(handlers::messages::anthropic_messages)
-                .route_layer(middleware::from_fn(
-                    crate::disconnect::client_disconnect_middleware,
-                ))
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::rate_limit::rate_limit_middleware,
-                ))
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::routing::routing_middleware,
-                ))
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::auth::auth_middleware,
-                )),
+            chat_endpoint(&state, handlers::messages::anthropic_messages),
         )
         .route(
             "/v1/audio/transcriptions",
@@ -357,7 +350,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/models/{id}",
-            axum::routing::delete(handlers::admin::models::delete_model),
+            axum::routing::delete(handlers::admin::models::delete_model)
+                .patch(handlers::admin::models::update_model),
         )
         .route("/models", get(handlers::admin::models::list_models_admin))
         .route(

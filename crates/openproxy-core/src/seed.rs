@@ -161,27 +161,24 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
     let mut updated = 0u64;
 
     for m in models {
-        // Skip rows that already have a context_length AND capabilities
-        // — the cheapest proxy for "fully backfilled" we have, since
-        // every heuristic always sets `context_length` to a known
-        // value or leaves it `None`. The same call is cheap to make
-        // for every row, so we keep the predicate simple and don't
-        // try to be clever.
-        if m.context_length.is_some() && m.capabilities_json.is_some() {
+        let model_id = m.model_id.as_str();
+        let inferred_model_type = capabilities::infer_model_type(model_id);
+        let model_type_needs_fix =
+            m.model_type.is_empty() || (m.model_type == "chat" && inferred_model_type != "chat");
+
+        if m.context_length.is_some() && m.capabilities_json.is_some() && !model_type_needs_fix {
             continue;
         }
 
-        let model_id = m.model_id.as_str();
         let context_length = capabilities::infer_context_length(model_id);
         let max_output_tokens = capabilities::infer_max_output_tokens(model_id);
         let caps = capabilities::infer_capabilities(model_id);
         let caps_json = caps.to_json();
         let input_mods = capabilities::infer_input_modalities_json(model_id);
         let output_mods = capabilities::infer_output_modalities_json(model_id);
-        // model_type: COALESCE(NULL, heuristic) — never clobber an
-        // operator-set value.
-        let model_type = if m.model_type.is_empty() {
-            capabilities::infer_model_type(model_id)
+
+        let model_type = if model_type_needs_fix {
+            inferred_model_type
         } else {
             m.model_type.as_str()
         };
@@ -193,9 +190,9 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
                     context_length         = COALESCE(?1, context_length),
                     max_output_tokens      = COALESCE(?2, max_output_tokens),
                     capabilities_json      = COALESCE(?3, capabilities_json),
-                    model_type             = COALESCE(?4, model_type),
+                    model_type             = ?4,
                     input_modalities_json  = COALESCE(?5, input_modalities_json),
-                    output_modalities_json = COALESCE(?6, output_modalities_json),
+                    output_modalities_json = ?6,
                     family                 = COALESCE(?7, family)
                  WHERE id = ?8",
                 params![

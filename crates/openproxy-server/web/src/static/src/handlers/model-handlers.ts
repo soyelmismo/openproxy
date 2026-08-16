@@ -597,6 +597,7 @@ export async function createCustomModel(providerId: string, e: Event): Promise<v
     provider_id: providerId,
     model_id: f.get("model_id"),
     display_name: f.get("display_name") || null,
+    model_type: f.get("model_type") || "chat",
     target_format: f.get("target_format"),
     ttl_seconds: parseInt(String(f.get("ttl_seconds"))) || 0,
   };

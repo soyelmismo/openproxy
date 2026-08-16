@@ -17,8 +17,12 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
 import { showPlaintextKey } from "../components/key-display.js";
-import { renderAllowedModelsChips } from "../components/model-picker.js";
-import type { Model, ApiKeyId } from "../lib/types/api.js";
+import {
+  renderAllowedModelsChips,
+  renderBlacklistedModelsChips,
+  getAvailableProviders,
+} from "../components/model-picker.js";
+import type { Model, Provider, ApiKeyId } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot } from "../lib/ui-utils.js";
@@ -28,6 +32,8 @@ interface KeyRow {
   label?: string | null;
   scopes?: string[];
   allowed_models?: string[];
+  blacklisted_providers?: string[] | null;
+  blacklisted_models?: string[] | null;
   expires_at?: string | null;
 }
 
@@ -35,6 +41,8 @@ interface KeyBody {
   label: string | null;
   scopes: string[];
   allowed_models: string[] | null;
+  blacklisted_providers: string[] | null;
+  blacklisted_models: string[] | null;
   expires_at: string | null;
 }
 
@@ -53,6 +61,37 @@ function formatExpiryAmount(iso: string): string {
   return String(Math.max(1, days));
 }
 
+function onAddBlacklistProvider(e: Event): void {
+  const select = e.target as HTMLSelectElement | null;
+  if (!select || !select.value) return;
+  const prov = select.value;
+  const input = document.querySelector<HTMLInputElement>('input[name="blacklisted_providers"]');
+  if (input) {
+    const current = input.value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!current.includes(prov)) {
+      current.push(prov);
+      input.value = current.join(", ");
+    }
+  }
+  select.value = "";
+}
+
+function addCustomBlacklistedModel(): void {
+  const customInput = document.getElementById("key-bl-models-custom") as HTMLInputElement | null;
+  if (!customInput || !customInput.value.trim()) return;
+  const pattern = customInput.value.trim();
+  const hidden = document.querySelector<HTMLInputElement>('input[name="blacklisted_models"]');
+  if (hidden) {
+    const current = hidden.value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!current.includes(pattern)) {
+      current.push(pattern);
+      hidden.value = current.join(",");
+    }
+  }
+  customInput.value = "";
+  renderBlacklistedModelsChips();
+}
+
 function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?: KeyRow; wrapper: HTMLElement }): TemplateResult {
   const isEdit = mode === "edit" && key;
   const labelVal = isEdit ? (key!.label || "") : "";
@@ -61,6 +100,14 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
   if (isEdit && Array.isArray(key!.allowed_models)) {
     allowedModelsValue = key!.allowed_models.length === 0 ? " " : key!.allowed_models.join(",");
   }
+  const blProvidersVal = isEdit && Array.isArray(key!.blacklisted_providers)
+    ? key!.blacklisted_providers.join(", ")
+    : "";
+  let blModelsVal = "";
+  if (isEdit && Array.isArray(key!.blacklisted_models)) {
+    blModelsVal = key!.blacklisted_models.join(",");
+  }
+  const availableProviders = getAvailableProviders();
   const safeKey: KeyRow = key || { id: 0 };
   const title = isEdit ? `Edit API key #${safeKey.id}` : "Create API key";
   const submitLabel = isEdit ? "Save" : "Create key";
@@ -113,6 +160,27 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
               <input type="hidden" name="allowed_models" .value=${allowedModelsValue}>
             </div>
             <div class="field">
+              <span class="field-label">Blacklisted providers</span>
+              <div style="display:flex;gap:8px;margin-bottom:6px;">
+                <select id="quick-bl-provider-select" style="flex:1;" @change=${onAddBlacklistProvider}>
+                  <option value="">-- Add provider to blacklist --</option>
+                  ${availableProviders.map((p) => html`<option value="${p}">${p}</option>`)}
+                </select>
+              </div>
+              <input id="key-bl-providers" name="blacklisted_providers" type="text" placeholder="e.g. openai, groq (comma-separated)" .value=${blProvidersVal}>
+            </div>
+            <div class="field">
+              <span class="field-label">Blacklisted models</span>
+              <div class="model-picker-display" id="blacklisted-models-display" style="margin-bottom:6px;">
+                <span class="muted">Loading...</span>
+              </div>
+              <input type="hidden" name="blacklisted_models" .value=${blModelsVal}>
+              <div style="display:flex;gap:8px;">
+                <input id="key-bl-models-custom" placeholder="Type pattern/wildcard (e.g. gpt-4*, *-preview)..." style="flex:1;">
+                <button type="button" class="small" @click=${addCustomBlacklistedModel}>+ Add</button>
+              </div>
+            </div>
+            <div class="field">
               <label for="key-expires-amount">Expires in</label>
               <div class="expiry-row">
                 <input id="key-expires-amount" type="number" name="expires_amount" min="1" max="999" placeholder="30"
@@ -142,16 +210,23 @@ export async function showCreateKey(): Promise<void> {
     state.models = await api("/models") as Model[];
     state.modelsComplete = true;
   }
+  if (!state.providers || state.providers.length === 0) {
+    state.providers = await api("/providers") as Provider[];
+  }
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
   render(keyFormTemplate({ mode: "create", wrapper }), wrapper);
   renderAllowedModelsChips();
+  renderBlacklistedModelsChips();
 }
 
 export async function showEditKey(id: number): Promise<void> {
   if (!state.modelsComplete) {
     state.models = await api("/models") as Model[];
     state.modelsComplete = true;
+  }
+  if (!state.providers || state.providers.length === 0) {
+    state.providers = await api("/providers") as Provider[];
   }
   let key: KeyRow;
   try { key = await api("/keys/" + id) as KeyRow; }
@@ -164,6 +239,7 @@ export async function showEditKey(id: number): Promise<void> {
   ensureModalRoot().appendChild(wrapper);
   render(keyFormTemplate({ mode: "edit", key, wrapper }), wrapper);
   renderAllowedModelsChips();
+  renderBlacklistedModelsChips();
 }
 
 // Closes the key form modal. The optional first arg is the legacy
@@ -221,6 +297,18 @@ function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   if (allowedModelsStr === "") allowedModels = null;
   else if (allowedModelsStr === " ") allowedModels = [];
   else allowedModels = allowedModelsStr.split(",").map((s) => s.trim()).filter(Boolean);
+  const blProvidersEl = form.querySelector<HTMLInputElement>('input[name="blacklisted_providers"]');
+  const blProvidersStr = blProvidersEl ? blProvidersEl.value.trim() : "";
+  let blacklistedProviders: string[] | null = null;
+  if (blProvidersStr) {
+    blacklistedProviders = blProvidersStr.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  const blModelsEl = form.querySelector<HTMLInputElement>('input[name="blacklisted_models"]');
+  const blModelsStr = blModelsEl ? blModelsEl.value.trim() : "";
+  let blacklistedModels: string[] | null = null;
+  if (blModelsStr) {
+    blacklistedModels = blModelsStr.split(",").map((s) => s.trim()).filter(Boolean);
+  }
   const amountEl = form.querySelector<HTMLInputElement>('input[name="expires_amount"]');
   const unitEl = form.querySelector<HTMLSelectElement>('select[name="expires_unit"]');
   const amount = amountEl ? amountEl.value : "";
@@ -229,7 +317,14 @@ function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   const labelEl = form.querySelector<HTMLInputElement>('input[name="label"]');
   const labelRaw = labelEl ? labelEl.value : "";
   const label: string | null = (labelRaw || "").trim() || null;
-  return { label, scopes, allowed_models: allowedModels, expires_at: expiresAt };
+  return {
+    label,
+    scopes,
+    allowed_models: allowedModels,
+    blacklisted_providers: blacklistedProviders,
+    blacklisted_models: blacklistedModels,
+    expires_at: expiresAt,
+  };
 }
 
 export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> {

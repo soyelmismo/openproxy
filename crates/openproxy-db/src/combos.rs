@@ -716,20 +716,27 @@ pub fn update_target_cooldown_mode(
     Ok(())
 }
 
+fn update_target_column<T: rusqlite::ToSql>(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    column: &'static str,
+    value: T,
+) -> Result<()> {
+    let sql = format!("UPDATE combo_targets SET {column} = ?1 WHERE id = ?2");
+    conn.execute(&sql, params![value, target_id.0])
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update {column} for combo_target {}",
+            target_id.0
+        )))?;
+    Ok(())
+}
+
 pub fn update_target_cooldown_base(
     conn: &Connection,
     target_id: ComboTargetId,
     base: Option<u64>,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE combo_targets SET cooldown_base_secs = ?1 WHERE id = ?2",
-        params![base.map(|v| v as i64), target_id.0],
-    )
-    .map_err(crate::error::map_db_error_ctx(format!(
-        "update cooldown_base_secs for combo_target {}",
-        target_id.0
-    )))?;
-    Ok(())
+    update_target_column(conn, target_id, "cooldown_base_secs", base.map(|v| v as i64))
 }
 
 pub fn update_target_cooldown_max(
@@ -737,15 +744,7 @@ pub fn update_target_cooldown_max(
     target_id: ComboTargetId,
     max: Option<u64>,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE combo_targets SET cooldown_max_secs = ?1 WHERE id = ?2",
-        params![max.map(|v| v as i64), target_id.0],
-    )
-    .map_err(crate::error::map_db_error_ctx(format!(
-        "update cooldown_max_secs for combo_target {}",
-        target_id.0
-    )))?;
-    Ok(())
+    update_target_column(conn, target_id, "cooldown_max_secs", max.map(|v| v as i64))
 }
 
 pub fn update_target_cooldown_factor(
@@ -753,15 +752,7 @@ pub fn update_target_cooldown_factor(
     target_id: ComboTargetId,
     factor: Option<u32>,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
-        params![factor.map(i64::from), target_id.0],
-    )
-    .map_err(crate::error::map_db_error_ctx(format!(
-        "update cooldown_factor for combo_target {}",
-        target_id.0
-    )))?;
-    Ok(())
+    update_target_column(conn, target_id, "cooldown_factor", factor.map(i64::from))
 }
 
 /// Atomically reassign `priority_order` for every target of `combo_id`
@@ -1029,55 +1020,38 @@ pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) 
     Ok(())
 }
 
-/// Update ONLY the cooldown_base_secs column.
-pub fn update_cooldown_base(conn: &Connection, id: ComboId, base: Option<u64>) -> Result<()> {
+fn update_combo_column<T: rusqlite::ToSql>(
+    conn: &Connection,
+    id: ComboId,
+    column: &'static str,
+    value: T,
+) -> Result<()> {
+    let sql = format!("UPDATE combos SET {column} = ?1 WHERE id = ?2");
     let affected = conn
-        .execute(
-            "UPDATE combos SET cooldown_base_secs = ?1 WHERE id = ?2",
-            params![base.map(|v| v as i64), id.0],
-        )
+        .execute(&sql, params![value, id.0])
         .map_err(crate::error::map_db_error_ctx(format!(
-            "update cooldown_base_secs for combo {}",
+            "update {column} for combo {}",
             id.0
         )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
     Ok(())
+}
+
+/// Update ONLY the cooldown_base_secs column.
+pub fn update_cooldown_base(conn: &Connection, id: ComboId, base: Option<u64>) -> Result<()> {
+    update_combo_column(conn, id, "cooldown_base_secs", base.map(|v| v as i64))
 }
 
 /// Update ONLY the cooldown_max_secs column.
 pub fn update_cooldown_max(conn: &Connection, id: ComboId, max: Option<u64>) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE combos SET cooldown_max_secs = ?1 WHERE id = ?2",
-            params![max.map(|v| v as i64), id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update cooldown_max_secs for combo {}",
-            id.0
-        )))?;
-    if affected == 0 {
-        return Err(CoreError::ComboNotFound(id.0));
-    }
-    Ok(())
+    update_combo_column(conn, id, "cooldown_max_secs", max.map(|v| v as i64))
 }
 
 /// Update ONLY the cooldown_factor column.
 pub fn update_cooldown_factor(conn: &Connection, id: ComboId, factor: Option<u32>) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
-            params![factor.map(i64::from), id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update cooldown_factor for combo {}",
-            id.0
-        )))?;
-    if affected == 0 {
-        return Err(CoreError::ComboNotFound(id.0));
-    }
-    Ok(())
+    update_combo_column(conn, id, "cooldown_factor", factor.map(i64::from))
 }
 
 /// Update the LKGP exploration rate. `None` clears the column back

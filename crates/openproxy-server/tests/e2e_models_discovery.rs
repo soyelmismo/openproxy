@@ -559,6 +559,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             Some("z (custom)"),
             TargetFormat::Openai,
             0,
+            None,
         )
         .expect("create_custom z");
         assert!(z_id.0 > 0, "custom row must have a positive id");

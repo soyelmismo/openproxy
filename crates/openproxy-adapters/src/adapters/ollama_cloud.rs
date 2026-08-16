@@ -46,17 +46,22 @@ declare_openai_adapter!(
                     let id = m.name.unwrap_or_default();
                     let family = derive_ollama_family(&id);
                     let display_name = m.display_name.or_else(|| Some(id.clone()));
+                    let m_type = openproxy_types::capabilities::infer_model_type(&id);
+                    let caps = openproxy_types::capabilities::infer_capabilities(&id);
+                    let in_mods =
+                        openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
+                    let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
                     DiscoveredModel {
                         model_id: ModelId::new(id),
                         display_name,
                         target_format: TargetFormat::Openai,
                         context_length: None,
                         max_output_tokens: None,
-                        input_modalities: None,
-                        output_modalities: None,
-                        model_type: Some("chat".into()),
+                        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+                        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+                        model_type: Some(m_type.to_string()),
                         family,
-                        capabilities: None,
+                        capabilities: Some(caps),
                     }
                 })
                 .collect();

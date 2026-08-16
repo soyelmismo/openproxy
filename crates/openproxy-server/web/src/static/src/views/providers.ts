@@ -711,6 +711,47 @@ async function onBulkDeleteSelected(providerId: string): Promise<void> {
   }
 }
 
+async function onBulkSetModalitySelected(newType: string): Promise<void> {
+  const ids = Array.from(state.selectedModels).map((n) => Number(n));
+  if (ids.length === 0) return;
+  try {
+    await Promise.all(
+      ids.map((rowId) =>
+        api(`/models/${rowId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ model_type: newType }),
+        })
+      )
+    );
+    for (const rowId of ids) {
+      const m = (state.models || []).find((x) => x.row_id === rowId);
+      if (m) m.model_type = newType;
+    }
+    showToast(`Tagged ${ids.length} models as ${newType}`, "success");
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, "Error");
+  }
+}
+
+async function onChangeModelType(rowId: number, e: Event): Promise<void> {
+  const target = e.target instanceof HTMLSelectElement ? e.target : null;
+  if (!target) return;
+  const newType = target.value;
+  try {
+    await api(`/models/${rowId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ model_type: newType }),
+    });
+    const m = (state.models || []).find((x) => x.row_id === rowId);
+    if (m) m.model_type = newType;
+    showToast(`Model modality updated to ${newType}`, "success");
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, "Error");
+  }
+}
+
 async function onToggleModel(rowId: number, newActive: boolean): Promise<void> {
   try {
     await api("/models/" + rowId + "/toggle", {
@@ -1000,6 +1041,10 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
         <span><strong>${state.selectedModels.size}</strong> selected</span>
         <button @click=${() => onBulkEnableSelected(provider.id)}>Enable selected</button>
         <button @click=${() => onBulkDisableSelected(provider.id)}>Disable selected</button>
+        <button @click=${() => onBulkSetModalitySelected("chat")}>💬 Tag Chat</button>
+        <button @click=${() => onBulkSetModalitySelected("image")}>🎨 Tag Image</button>
+        <button @click=${() => onBulkSetModalitySelected("embedding")}>📐 Tag Embedding</button>
+        <button @click=${() => onBulkSetModalitySelected("audio")}>🎙️ Tag Audio</button>
         <button @click=${() => onBulkTestSelected(provider.id)}>Test selected</button>
         <button class="danger" @click=${() => onBulkDeleteSelected(provider.id)}>Delete selected</button>
         <button class="link" @click=${onClearModelSelection}>Clear selection</button>
@@ -1161,7 +1206,28 @@ function renderModelRow(m: Model): TemplateResult {
     <td>${m.target_format || "—"}</td>
     <td>${formatContext(m.context_length)}</td>
     <td>${formatContext(m.max_output_tokens)}</td>
-    <td>${renderCapabilityBadges(m.capabilities_json, m.model_type)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
+    <td>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <select
+            style="padding: 1px 4px; font-size: 11px; font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer;"
+            title="Model modality / type (Chat, Image, Embedding, Audio, Rerank)"
+            .value=${m.model_type || "chat"}
+            @change=${(e: Event) => onChangeModelType(m.row_id, e)}
+          >
+            <option value="chat" ?selected=${!m.model_type || m.model_type === "chat"}>💬 Chat</option>
+            <option value="image" ?selected=${m.model_type === "image"}>🎨 Image</option>
+            <option value="embedding" ?selected=${m.model_type === "embedding"}>📐 Embedding</option>
+            <option value="audio" ?selected=${m.model_type === "audio"}>🎙️ Audio</option>
+            <option value="rerank" ?selected=${m.model_type === "rerank"}>🔄 Rerank</option>
+          </select>
+        </div>
+        <div>
+          ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
+          ${m.family ? html` <small class="muted">${m.family}</small>` : html``}
+        </div>
+      </div>
+    </td>
     <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
     <td class="last-test-cell">${lastTest}</td>
     <td>

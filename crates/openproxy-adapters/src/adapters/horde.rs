@@ -199,7 +199,7 @@ impl ProviderAdapter for HordeAdapter {
                     let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
                     let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-                    if count < 1 || eta >= 60 {
+                    if count < 1 || eta > 120 {
                         return None;
                     }
 
@@ -242,7 +242,7 @@ impl ProviderAdapter for HordeAdapter {
                     let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
                     let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-                    if count < 1 || eta >= 60 {
+                    if count < 1 || eta > 120 {
                         return None;
                     }
 
@@ -485,6 +485,13 @@ impl HordeAdapter {
         if req.quality.as_deref() == Some("hd") {
             post_processing_list.push("RealESRGAN_x4plus".to_string());
             post_processing_list.push("GFPGAN".to_string());
+        }
+        if let Some(req_pp) = &req.post_processing {
+            for pp in req_pp {
+                if !post_processing_list.contains(pp) {
+                    post_processing_list.push(pp.clone());
+                }
+            }
         }
         for pp in parsed.post_processing {
             if !post_processing_list.contains(&pp) {
@@ -1105,7 +1112,23 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
 
         match lower.as_str() {
             "--hires" | "--hires_fix" => {
-                hires_fix = Some(true);
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    if words[i].eq_ignore_ascii_case("false") || words[i] == "0" || words[i].eq_ignore_ascii_case("off") {
+                        hires_fix = Some(false);
+                        i += 1;
+                    } else if words[i].eq_ignore_ascii_case("true") || words[i] == "1" || words[i].eq_ignore_ascii_case("on") {
+                        hires_fix = Some(true);
+                        i += 1;
+                    } else {
+                        hires_fix = Some(true);
+                    }
+                } else {
+                    hires_fix = Some(true);
+                }
+            }
+            "--no-hires" | "--no_hires" | "--nohires" => {
+                hires_fix = Some(false);
                 i += 1;
             }
             "--allow_slow" => {
@@ -1175,12 +1198,15 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
                     i += 1;
                 }
             }
-            "--post" | "--upscale" => {
+            "--post" | "--upscale" | "--post_processing" => {
                 i += 1;
                 if i < words.len() && !words[i].starts_with("--") {
-                    let p = words[i].trim_matches(|c| c == '"' || c == '\'').to_string();
-                    if !post_processing.contains(&p) {
-                        post_processing.push(p);
+                    let raw = words[i].trim_matches(|c| c == '"' || c == '\'');
+                    for part in raw.split(',') {
+                        let p = part.trim().to_string();
+                        if !p.is_empty() && !post_processing.contains(&p) {
+                            post_processing.push(p);
+                        }
                     }
                     i += 1;
                 }
@@ -1481,6 +1507,7 @@ mod tests {
             aspect_ratio: None,
             seed: Some(42),
             negative_prompt: Some("blurry, low quality".into()),
+            post_processing: None,
         };
         let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1511,6 +1538,7 @@ mod tests {
             aspect_ratio: None,
             seed: None,
             negative_prompt: None,
+            post_processing: None,
         };
         let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1518,6 +1546,33 @@ mod tests {
         assert_eq!(post.len(), 2);
         assert_eq!(post[0], "RealESRGAN_x4plus");
         assert_eq!(post[1], "GFPGAN");
+    }
+
+    #[test]
+    fn test_format_image_request_cumulative_post_processing() {
+        let a = HordeAdapter::new();
+        let req = ImageGenerationRequest {
+            prompt: "A portrait --post NMKD_Siax,GFPGAN".into(),
+            model: "SDXL 1.0".into(),
+            n: Some(1),
+            quality: None,
+            response_format: None,
+            size: Some("1024x1024".into()),
+            style: None,
+            user: None,
+            aspect_ratio: None,
+            seed: None,
+            negative_prompt: None,
+            post_processing: Some(vec!["RealESRGAN_x4plus".into(), "CodeFormers".into()]),
+        };
+        let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let post = v["params"]["post_processing"].as_array().unwrap();
+        assert_eq!(post.len(), 4);
+        assert_eq!(post[0], "RealESRGAN_x4plus");
+        assert_eq!(post[1], "CodeFormers");
+        assert_eq!(post[2], "NMKD_Siax");
+        assert_eq!(post[3], "GFPGAN");
     }
 
     #[test]
@@ -1535,6 +1590,7 @@ mod tests {
             aspect_ratio: None,
             seed: None,
             negative_prompt: None,
+            post_processing: None,
         };
         let body = a
             .build_horde_payload(
@@ -1568,6 +1624,7 @@ mod tests {
             aspect_ratio: None,
             seed: None,
             negative_prompt: None,
+            post_processing: None,
         };
         let body = a
             .build_horde_payload(
@@ -1857,6 +1914,7 @@ mod tests {
             aspect_ratio: None,
             seed: None,
             negative_prompt: Some("blurry".into()),
+            post_processing: None,
         };
 
         let body = a.format_image_request(&req, "SDXL 1.0").unwrap();

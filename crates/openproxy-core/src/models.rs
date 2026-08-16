@@ -66,7 +66,7 @@ pub use openproxy_db::models::{
     ModelRepository, SqliteModelRepository, apply_auto_activation, create_custom, delete,
     find_active_by_name, find_active_by_provider_and_name, get_by_row_id, get_by_row_ids,
     list_active, list_active_all, list_all, mark_expired, set_active, set_active_bulk,
-    set_test_status,
+    set_test_status, update_model_details, update_model_type,
 };
 
 pub use discovery::DiscoveryService;

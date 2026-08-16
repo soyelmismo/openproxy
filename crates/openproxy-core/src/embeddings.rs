@@ -88,12 +88,17 @@ pub async fn dispatch_embedding_request(
     let payload = adapter.format_embedding_request(req, upstream_model_id)?;
     let mut upstream_req = UpstreamRequest::post_json(upstream_url, payload);
 
-    if let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key)
-        && !auth_name.is_empty()
-        && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
-        && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value)
-    {
-        upstream_req.headers.insert(k, v);
+    for (k, v) in adapter.build_headers(
+        api_key,
+        openproxy_types::TargetFormat::Openai,
+        &openproxy_types::ModelId::new(upstream_model_id),
+    ) {
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            axum::http::HeaderValue::from_str(&v),
+        ) {
+            upstream_req.headers.insert(name, val);
+        }
     }
 
     for (k, v) in &adapter.config().extra_headers {
@@ -226,9 +231,26 @@ pub async fn execute_embeddings(
                 status_code,
                 err_text
             );
-            last_error = Some(CoreError::UpstreamConnection(format!(
-                "upstream status {status_code}: {err_text}"
-            )));
+            let err = if status_code == 429 {
+                CoreError::RateLimited {
+                    provider: target.provider.as_str().to_string(),
+                    retry_after_ms: 1000,
+                    is_proxy_rotated: false,
+                }
+            } else if status_code == 401 || status_code == 403 {
+                CoreError::Auth(err_text.to_string())
+            } else if status_code == 400 {
+                CoreError::Validation(err_text.to_string())
+            } else {
+                CoreError::UpstreamError {
+                    status: status_code,
+                    provider: target.provider.as_str().to_string(),
+                    model: target.upstream_model.clone(),
+                    body: err_text.to_string(),
+                    is_proxy_rotated: false,
+                }
+            };
+            last_error = Some(err);
             continue;
         }
 

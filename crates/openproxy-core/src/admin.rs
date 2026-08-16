@@ -869,6 +869,15 @@ pub struct CreateCustomModelInput {
     /// [`CoreError::Validation`].
     pub target_format: String,
     pub ttl_seconds: i64,
+    #[serde(default)]
+    pub model_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateModelInput {
+    pub display_name: Option<String>,
+    pub model_type: Option<String>,
+    pub target_format: Option<String>,
 }
 
 /// Create a hand-picked model row. See [`models::create_custom`] for the
@@ -884,6 +893,23 @@ pub fn create_custom_model(conn: &Connection, input: CreateCustomModelInput) -> 
         input.display_name.as_deref(),
         target_format,
         input.ttl_seconds,
+        input.model_type.as_deref(),
+    )
+}
+
+/// Update details (display_name, model_type, target_format) for an existing model row.
+pub fn update_model(conn: &Connection, id: ModelRowId, input: UpdateModelInput) -> Result<()> {
+    let target_format = if let Some(tf) = input.target_format.as_deref() {
+        Some(models::TargetFormat::parse(tf)?)
+    } else {
+        None
+    };
+    models::update_model_details(
+        conn,
+        id,
+        input.display_name.as_deref(),
+        input.model_type.as_deref(),
+        target_format,
     )
 }
 
@@ -1514,6 +1540,7 @@ mod tests {
                 display_name: None,
                 target_format: "xml".into(),
                 ttl_seconds: 60,
+                model_type: None,
             },
         )
         .expect_err("bad format");
@@ -1528,6 +1555,7 @@ mod tests {
                 display_name: Some("Display".into()),
                 target_format: "openai".into(),
                 ttl_seconds: 60,
+                model_type: Some("image".into()),
             },
         )
         .expect("create custom");
@@ -1536,6 +1564,24 @@ mod tests {
             .expect("present");
         assert!(m.custom);
         assert!(m.active);
+        assert_eq!(m.model_type, "image");
+
+        // Update model test.
+        update_model(
+            &conn,
+            row_id,
+            UpdateModelInput {
+                display_name: Some("Updated Display".into()),
+                model_type: Some("embedding".into()),
+                target_format: None,
+            },
+        )
+        .expect("update model");
+        let updated_m = models::get_by_row_id(&conn, row_id)
+            .unwrap()
+            .expect("present");
+        assert_eq!(updated_m.display_name.as_deref(), Some("Updated Display"));
+        assert_eq!(updated_m.model_type, "embedding");
     }
 
     #[test]

@@ -5,13 +5,6 @@
 //! `gemini-2.5-pro`) so that `anthropic/claude-3-5-sonnet-20241022`
 //! matches models.dev's `claude-3-5-sonnet`.
 
-use regex::Regex;
-use std::sync::LazyLock;
-
-static DATE_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").expect("valid regex"));
-static YYYYMM_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-\d{4}$").expect("valid regex"));
 pub const MODEL_SUFFIXES: &[&str] = &[
     "-free-trial",
     "-free",
@@ -31,28 +24,73 @@ pub const MODEL_SUFFIXES: &[&str] = &[
     ":nitro",
 ];
 
-static VERSION_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-v\d+$").expect("valid regex"));
-
 pub fn normalize_model_id(id: &str) -> String {
     let mut s: &str = id.rsplit_once('/').map_or(id, |(_, rest)| rest);
     for suffix in MODEL_SUFFIXES {
         s = s.trim_end_matches(suffix);
     }
 
-    let s = s.replace(':', "-");
+    let replaced = s.replace(':', "-");
+    let mut cur = replaced.as_str();
 
-    let s: String = DATE_SUFFIX_RE.replace_all(&s, "").into_owned();
-    let s: String = strip_compact_yyyymmdd(&s).unwrap_or(s);
+    if let Some(stripped) = strip_date_suffix(cur) {
+        cur = stripped;
+    }
+    if let Some(stripped) = strip_compact_yyyymmdd(cur) {
+        cur = stripped;
+    }
+    if let Some(stripped) = strip_4digit_suffix(cur) {
+        cur = stripped;
+    }
+    if let Some(stripped) = strip_version_suffix(cur) {
+        cur = stripped;
+    }
 
-    let s: String = YYYYMM_SUFFIX_RE.replace_all(&s, "").into_owned();
-
-    let s: String = VERSION_SUFFIX_RE.replace_all(&s, "").into_owned();
-
-    normalize_family(&s)
+    normalize_family(cur)
 }
 
-fn strip_compact_yyyymmdd(s: &str) -> Option<String> {
+fn strip_date_suffix(s: &str) -> Option<&str> {
+    if s.len() <= 11 {
+        return None;
+    }
+    let suffix = &s[s.len() - 11..];
+    let bytes = suffix.as_bytes();
+    if bytes[0] == b'-'
+        && bytes[1..5].iter().all(u8::is_ascii_digit)
+        && bytes[5] == b'-'
+        && bytes[6..8].iter().all(u8::is_ascii_digit)
+        && bytes[8] == b'-'
+        && bytes[9..11].iter().all(u8::is_ascii_digit)
+    {
+        Some(&s[..s.len() - 11])
+    } else {
+        None
+    }
+}
+
+fn strip_4digit_suffix(s: &str) -> Option<&str> {
+    if s.len() <= 5 {
+        return None;
+    }
+    let suffix = &s[s.len() - 5..];
+    let bytes = suffix.as_bytes();
+    if bytes[0] == b'-' && bytes[1..5].iter().all(u8::is_ascii_digit) {
+        Some(&s[..s.len() - 5])
+    } else {
+        None
+    }
+}
+
+fn strip_version_suffix(s: &str) -> Option<&str> {
+    let (prefix, rest) = s.rsplit_once("-v")?;
+    if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
     if bytes.len() <= 9 {
         return None;
@@ -69,7 +107,7 @@ fn strip_compact_yyyymmdd(s: &str) -> Option<String> {
     if !(year.starts_with("19") || year.starts_with("20")) {
         return None;
     }
-    Some(s[..s.len() - 9].to_string())
+    Some(&s[..s.len() - 9])
 }
 
 fn normalize_family(s: &str) -> String {
@@ -202,11 +240,11 @@ mod tests {
         // Valid compact form with 19xx or 20xx
         assert_eq!(
             strip_compact_yyyymmdd("claude-3-5-sonnet-20241022"),
-            Some("claude-3-5-sonnet".to_string())
+            Some("claude-3-5-sonnet")
         );
         assert_eq!(
             strip_compact_yyyymmdd("model-19991231"),
-            Some("model".to_string())
+            Some("model")
         );
 
         // Too short (len <= 9)

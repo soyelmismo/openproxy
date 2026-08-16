@@ -42,6 +42,16 @@ function customModelFormTemplate(providerId: string): TemplateResult {
               <input id="custom-model-display" name="display_name" type="text" placeholder="My custom model">
             </div>
             <div class="field">
+              <label for="custom-model-type">Modality / Model Type</label>
+              <select id="custom-model-type" name="model_type">
+                <option value="chat">💬 Chat / LLM</option>
+                <option value="image">🎨 Image Generation</option>
+                <option value="embedding">📐 Text Embeddings</option>
+                <option value="audio">🎙️ Audio Transcription</option>
+                <option value="rerank">🔄 Reranker</option>
+              </select>
+            </div>
+            <div class="field">
               <label for="custom-model-format">Target format</label>
               <select id="custom-model-format" name="target_format">
                 <option value="openai" ?selected=${defaultFormat === "openai"}>openai</option>

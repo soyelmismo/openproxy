@@ -286,6 +286,7 @@ pub fn create_custom(
     display_name: Option<&str>,
     target_format: TargetFormat,
     ttl_seconds: i64,
+    model_type: Option<&str>,
 ) -> Result<ModelRowId> {
     let expires_expr = if ttl_seconds <= 0 {
         "NULL".to_string()
@@ -294,11 +295,12 @@ pub fn create_custom(
     };
 
     let normalized = normalize_model_id(model_id.as_str());
+    let effective_type = model_type.unwrap_or("chat");
     let sql = format!(
         "INSERT INTO models \
             (provider_id, model_id, display_name, target_format, \
-             discovered_at, expires_at, active, custom, model_id_normalized) \
-         VALUES (?1, ?2, ?3, ?4, datetime('now'), {expires_expr}, 1, 1, ?5) \
+             discovered_at, expires_at, active, custom, model_id_normalized, model_type) \
+         VALUES (?1, ?2, ?3, ?4, datetime('now'), {expires_expr}, 1, 1, ?5, ?6) \
          ON CONFLICT(provider_id, model_id) DO UPDATE SET \
             display_name = excluded.display_name, \
             target_format = excluded.target_format, \
@@ -306,6 +308,7 @@ pub fn create_custom(
             expires_at = {expires_expr}, \
             active = 1, \
             custom = 1, \
+            model_type = excluded.model_type, \
             model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized) \
          RETURNING id",
     );
@@ -319,6 +322,7 @@ pub fn create_custom(
                 display_name,
                 target_format.as_str(),
                 &normalized,
+                effective_type,
             ],
             |r| r.get(0),
         )
@@ -337,6 +341,46 @@ pub fn create_custom(
         })?;
 
     Ok(ModelRowId(row_id))
+}
+
+pub fn update_model_type(conn: &Connection, id: ModelRowId, model_type: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE models SET model_type = ?1 WHERE id = ?2",
+        params![model_type, id.0],
+    )
+    .map_err(crate::error::map_db_error)?;
+    Ok(())
+}
+
+pub fn update_model_details(
+    conn: &Connection,
+    id: ModelRowId,
+    display_name: Option<&str>,
+    model_type: Option<&str>,
+    target_format: Option<TargetFormat>,
+) -> Result<()> {
+    if let Some(dn) = display_name {
+        conn.execute(
+            "UPDATE models SET display_name = ?1 WHERE id = ?2",
+            params![dn, id.0],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    if let Some(mt) = model_type {
+        conn.execute(
+            "UPDATE models SET model_type = ?1 WHERE id = ?2",
+            params![mt, id.0],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    if let Some(tf) = target_format {
+        conn.execute(
+            "UPDATE models SET target_format = ?1 WHERE id = ?2",
+            params![tf.as_str(), id.0],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    Ok(())
 }
 
 pub fn apply_auto_activation(
@@ -520,7 +564,7 @@ pub fn upsert_many(
                     max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
                     input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
                     output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                    model_type = COALESCE(excluded.model_type, model_type), \
+                    model_type = COALESCE(models.model_type, excluded.model_type), \
                     family = COALESCE(excluded.family, family), \
                     capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
                     model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
@@ -652,6 +696,7 @@ pub trait ModelRepository: Send + Sync {
         display_name: Option<&str>,
         target_format: TargetFormat,
         ttl_seconds: i64,
+        model_type: Option<&str>,
     ) -> Result<ModelRowId>;
     fn mark_expired(&self) -> Result<usize>;
     fn upsert_many(
@@ -736,6 +781,7 @@ impl ModelRepository for SqliteModelRepository {
         display_name: Option<&str>,
         target_format: TargetFormat,
         ttl_seconds: i64,
+        model_type: Option<&str>,
     ) -> Result<ModelRowId> {
         let conn = self.pool.open_connection()?;
         create_custom(
@@ -745,6 +791,7 @@ impl ModelRepository for SqliteModelRepository {
             display_name,
             target_format,
             ttl_seconds,
+            model_type,
         )
     }
 

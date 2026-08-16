@@ -98,7 +98,7 @@ pub fn execute_sync_transaction(
                     model_type, family, capabilities_json, model_id_normalized\
                  ) VALUES (\
                     ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
-                    ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?, ?\
+                    ?, ?, ?, ?, ?, ?, ?, ?\
                  ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
                     display_name = excluded.display_name, \
                     target_format = excluded.target_format, \
@@ -106,7 +106,7 @@ pub fn execute_sync_transaction(
                     max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
                     input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
                     output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                    model_type = COALESCE(excluded.model_type, model_type), \
+                    model_type = COALESCE(models.model_type, excluded.model_type), \
                     family = COALESCE(excluded.family, family), \
                     capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
                     model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
@@ -114,28 +114,43 @@ pub fn execute_sync_transaction(
             .map_err(openproxy_db::error::map_db_error)?;
 
         for d in discovered {
-            let caps_json = d.capabilities.as_ref().and_then(openproxy_types::ModelCapabilities::to_json);
+            let model_id_str = d.model_id.as_str();
+            let caps = d
+                .capabilities
+                .clone()
+                .unwrap_or_else(|| openproxy_types::capabilities::infer_capabilities(model_id_str));
+            let caps_json = caps.to_json();
             let input_mods_json = d
                 .input_modalities
                 .as_ref()
-                .and_then(|v| serde_json::to_string(v).ok());
+                .and_then(|v| serde_json::to_string(v).ok())
+                .or_else(|| Some(openproxy_types::capabilities::infer_input_modalities_json(model_id_str)));
             let output_mods_json = d
                 .output_modalities
                 .as_ref()
-                .and_then(|v| serde_json::to_string(v).ok());
+                .and_then(|v| serde_json::to_string(v).ok())
+                .or_else(|| Some(openproxy_types::capabilities::infer_output_modalities_json(model_id_str)));
+            let inferred_type = d
+                .model_type
+                .clone()
+                .unwrap_or_else(|| openproxy_types::capabilities::infer_model_type(model_id_str).to_string());
+            let inferred_family = d
+                .family
+                .clone()
+                .or_else(|| openproxy_types::capabilities::infer_family(model_id_str));
 
-            let is_new = new_models_set.contains(d.model_id.as_str());
+            let is_new = new_models_set.contains(model_id_str);
             if is_new {
                 new_model_ids.push(d.model_id.clone());
-                inserted_model_ids.push(d.model_id.as_str());
+                inserted_model_ids.push(model_id_str);
             }
 
-            let normalized = crate::model_normalize::normalize_model_id(d.model_id.as_str());
+            let normalized = crate::model_normalize::normalize_model_id(model_id_str);
 
             let changed = stmt
                 .execute(params![
                     provider.as_str(),        // 1. provider_id
-                    d.model_id.as_str(),      // 2. model_id
+                    model_id_str,             // 2. model_id
                     d.display_name,           // 3. display_name
                     d.target_format.as_str(), // 4. target_format
                     ttl_secs,                 // 5. (used in the datetime '+? seconds' expr)
@@ -143,8 +158,8 @@ pub fn execute_sync_transaction(
                     d.max_output_tokens,      // 7. max_output_tokens
                     input_mods_json,          // 8. input_modalities_json
                     output_mods_json,         // 9. output_modalities_json
-                    d.model_type,             // 10. model_type
-                    d.family,                 // 11. family
+                    inferred_type,            // 10. model_type
+                    inferred_family,          // 11. family
                     caps_json,                // 12. capabilities_json
                     &normalized,              // 13. model_id_normalized
                 ])

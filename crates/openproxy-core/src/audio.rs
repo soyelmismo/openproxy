@@ -62,9 +62,9 @@ pub async fn dispatch_audio_request(
     upstream_model_id: &str,
     body: ParsedAudioBody,
 ) -> Result<UpstreamResponse> {
-    let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key) else {
+    if adapter.build_auth_header(api_key).is_none() {
         return Err(CoreError::Validation("Invalid API Key".into()));
-    };
+    }
 
     let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
     let mut payload = Vec::new();
@@ -109,11 +109,20 @@ pub async fn dispatch_audio_request(
         Bytes::from(payload),
     );
 
-    if !auth_name.is_empty()
-        && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
-        && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value)
-    {
-        req.headers.insert(k, v);
+    for (k, v) in adapter.build_headers(
+        api_key,
+        openproxy_types::TargetFormat::Openai,
+        &openproxy_types::ModelId::new(upstream_model_id),
+    ) {
+        if k.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            axum::http::HeaderValue::from_str(&v),
+        ) {
+            req.headers.insert(name, val);
+        }
     }
     for (k, v) in &adapter.config().extra_headers {
         if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
@@ -273,7 +282,8 @@ pub async fn execute_transcribe(
             }
         };
 
-        if status_code.as_u16() >= 400 {
+        let code_u16 = status_code.as_u16();
+        if code_u16 >= 400 {
             if let Some(account_id) = target.account_id {
                 circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
             }
@@ -282,9 +292,26 @@ pub async fn execute_transcribe(
                 target.provider,
                 status_code
             );
-            last_error = Some(CoreError::UpstreamConnection(format!(
-                "upstream status {status_code}"
-            )));
+            let err = if code_u16 == 429 {
+                CoreError::RateLimited {
+                    provider: target.provider.as_str().to_string(),
+                    retry_after_ms: 1000,
+                    is_proxy_rotated: false,
+                }
+            } else if code_u16 == 401 || code_u16 == 403 {
+                CoreError::Auth(format!("upstream status {code_u16}"))
+            } else if code_u16 == 400 {
+                CoreError::Validation(format!("upstream status {code_u16}"))
+            } else {
+                CoreError::UpstreamError {
+                    status: code_u16,
+                    provider: target.provider.as_str().to_string(),
+                    model: target.upstream_model.clone(),
+                    body: format!("upstream status {code_u16}"),
+                    is_proxy_rotated: false,
+                }
+            };
+            last_error = Some(err);
             continue;
         }
 

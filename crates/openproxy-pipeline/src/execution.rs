@@ -259,7 +259,13 @@ impl Pipeline {
         let selection_registry = Arc::clone(&self.selection_registry);
         tokio::task::spawn_blocking(move || {
             if let Some(overrides) = overrides {
-                return repo.expand_account_rotation(overrides);
+                let balanced = crate::load_balancing::execute_load_balancing(
+                    overrides,
+                    &combo_clone,
+                    &rr_counters,
+                    &selection_registry,
+                );
+                return repo.expand_account_rotation(balanced);
             }
 
             let _ = repo.list_targets(combo_clone.id)?;

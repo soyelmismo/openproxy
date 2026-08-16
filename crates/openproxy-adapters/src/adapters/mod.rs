@@ -42,6 +42,24 @@ pub struct ProviderAdapterConfig {
 pub type AdapterAuthType = openproxy_types::AuthType;
 pub type AdapterFormat = openproxy_types::ProviderFormat;
 
+/// Helper to serialize a request object, overwrite its `model` field, and return `Bytes`.
+pub fn inject_model_and_serialize<T: Serialize>(
+    req: &T,
+    upstream_model: &str,
+) -> std::result::Result<Bytes, CoreError> {
+    let mut val = serde_json::to_value(req)
+        .map_err(|e| CoreError::Validation(e.to_string()))?;
+    if let serde_json::Value::Object(ref mut map) = val {
+        map.insert(
+            "model".to_string(),
+            serde_json::Value::String(upstream_model.to_string()),
+        );
+    }
+    serde_json::to_vec(&val)
+        .map(Bytes::from)
+        .map_err(|e| CoreError::Validation(e.to_string()))
+}
+
 /// Per-provider adapter. One concrete impl per upstream.
 ///
 /// All methods are `&self` and the trait is `Send + Sync` so adapters can live
@@ -154,17 +172,7 @@ pub trait ProviderAdapter: Send + Sync {
         req: &openproxy_types::embeddings::EmbeddingRequest,
         upstream_model: &str,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        let mut val = serde_json::to_value(req)
-            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
-        if let serde_json::Value::Object(ref mut map) = val {
-            map.insert(
-                "model".to_string(),
-                serde_json::Value::String(upstream_model.to_string()),
-            );
-        }
-        serde_json::to_vec(&val)
-            .map(bytes::Bytes::from)
-            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))
+        inject_model_and_serialize(req, upstream_model)
     }
 
     /// Build the URL for image generation. Default:
@@ -197,17 +205,7 @@ pub trait ProviderAdapter: Send + Sync {
         req: &openproxy_types::images::ImageGenerationRequest,
         upstream_model: &str,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        let mut val = serde_json::to_value(req)
-            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
-        if let serde_json::Value::Object(ref mut map) = val {
-            map.insert(
-                "model".to_string(),
-                serde_json::Value::String(upstream_model.to_string()),
-            );
-        }
-        serde_json::to_vec(&val)
-            .map(bytes::Bytes::from)
-            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))
+        inject_model_and_serialize(req, upstream_model)
     }
 
     /// Build the URL for video generation. Default:
@@ -1050,17 +1048,23 @@ pub(crate) async fn fetch_openai_models(
         .into_iter()
         .map(|m| {
             let id = m.id;
+            let m_type = openproxy_types::capabilities::infer_model_type(&id);
+            let caps = openproxy_types::capabilities::infer_capabilities(&id);
+            let in_mods =
+                openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
+            let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
+            let family = openproxy_types::capabilities::infer_family(&id);
             DiscoveredModel {
                 display_name: Some(id.clone()),
                 model_id: ModelId::new(id),
                 target_format,
                 context_length: None,
                 max_output_tokens: None,
-                input_modalities: None,
-                output_modalities: None,
-                model_type: None,
-                family: None,
-                capabilities: None,
+                input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+                output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+                model_type: Some(m_type.to_string()),
+                family,
+                capabilities: Some(caps),
             }
         })
         .collect();
@@ -1851,6 +1855,7 @@ mod tests {
             aspect_ratio: Some("16:9".into()),
             seed: Some(12345),
             negative_prompt: Some("blurry".into()),
+            post_processing: None,
         };
         let formatted = a.format_image_request(&req, "flux-pro-v1").unwrap();
         let val: serde_json::Value = serde_json::from_slice(&formatted).unwrap();

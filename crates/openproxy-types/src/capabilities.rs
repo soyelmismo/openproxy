@@ -60,20 +60,26 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
         "pixtral",
         "qwen-vl",
         "qwen2-vl",
+        "qwen3-vl",
         "llava",
         "vision",
         "multimodal",
         "kimi",
+        "minicpm-v",
+        "internvl",
+        "glm-4v",
     ];
     const REASONING_KW: &[&str] = &[
         "o1",
         "o3",
         "o4",
         "reasoning",
+        "reasoner",
         "r1",
         "qwq",
         "think",
         "opus-4",
+        "deepseek-r1",
     ];
 
     let lower = model_id.to_lowercase();
@@ -107,7 +113,107 @@ pub fn infer_input_modalities(caps: &ModelCapabilities) -> Vec<&'static str> {
     out
 }
 
-pub fn infer_output_modalities() -> Vec<&'static str> {
+pub fn infer_input_modalities_for_model(
+    model_id: &str,
+    caps: &ModelCapabilities,
+) -> Vec<&'static str> {
+    let m_type = infer_model_type(model_id);
+    let lower = model_id.to_lowercase();
+
+    match m_type {
+        "embedding" => {
+            if lower.contains("vl")
+                || lower.contains("multimodal")
+                || lower.contains("embed-vl")
+                || lower.contains("gemini-embedding-2")
+            {
+                vec!["text", "image"]
+            } else {
+                vec!["text"]
+            }
+        }
+        "rerank" => vec!["text"],
+        "image" => {
+            if lower.contains("inpaint")
+                || lower.contains("edit")
+                || lower.contains("img2img")
+                || lower.contains("controlnet")
+                || lower.contains("variation")
+            {
+                vec!["text", "image"]
+            } else {
+                vec!["text"]
+            }
+        }
+        "audio" => {
+            if lower.contains("whisper")
+                || lower.contains("asr")
+                || lower.contains("conformer")
+                || lower.contains("sensevoice")
+                || lower.contains("speechmatics")
+                || lower.contains("transcription")
+            {
+                vec!["audio"]
+            } else {
+                vec!["text"]
+            }
+        }
+        _ => {
+            if lower.contains("gpt-4o-audio")
+                || lower.contains("gpt-4-audio")
+                || lower.contains("native-audio")
+                || lower.contains("stepaudio")
+            {
+                if caps.vision.unwrap_or(false) {
+                    vec!["text", "image", "audio"]
+                } else {
+                    vec!["text", "audio"]
+                }
+            } else if caps.vision.unwrap_or(false) {
+                vec!["text", "image"]
+            } else {
+                vec!["text"]
+            }
+        }
+    }
+}
+
+pub fn infer_output_modalities(model_id: &str) -> Vec<&'static str> {
+    let m_type = infer_model_type(model_id);
+    let lower = model_id.to_lowercase();
+
+    match m_type {
+        "embedding" => vec!["embedding"],
+        "image" => vec!["image"],
+        "audio" => {
+            if lower.contains("whisper")
+                || lower.contains("asr")
+                || lower.contains("conformer")
+                || lower.contains("sensevoice")
+                || lower.contains("speechmatics")
+                || lower.contains("transcription")
+            {
+                vec!["text"]
+            } else {
+                vec!["audio"]
+            }
+        }
+        "rerank" => vec!["text"],
+        _ => {
+            if lower.contains("gpt-4o-audio")
+                || lower.contains("gpt-4-audio")
+                || lower.contains("native-audio")
+                || lower.contains("stepaudio")
+            {
+                vec!["text", "audio"]
+            } else {
+                vec!["text"]
+            }
+        }
+    }
+}
+
+pub fn infer_default_output_modalities() -> Vec<&'static str> {
     vec!["text"]
 }
 
@@ -172,48 +278,175 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
 
 pub fn infer_model_type(model_id: &str) -> &'static str {
     let lower = model_id.to_lowercase();
-    if lower.contains("embed") || lower.contains("bge-") || lower.contains("text-embedding") {
-        "embedding"
-    } else if lower.contains("dall-e")
+
+    // 1. Audio special handling & multimodal conversational exceptions
+    if lower.contains("deepgram") {
+        return "audio";
+    }
+    if lower.contains("gpt-4o-audio")
+        || lower.contains("gpt-4-audio")
+        || lower.contains("qwen-audio-chat")
+        || lower.contains("qwen2-audio-instruct")
+        || lower.contains("stepaudio-2.5-chat")
+        || lower.contains("stepaudio-2.5-realtime")
+    {
+        return "chat";
+    }
+
+    // 2. Audio models (TTS, STT, Music, Speech)
+    if lower.contains("whisper")
+        || lower.contains("speechify")
+        || lower.contains("melotts")
+        || lower.contains("melo-tts")
+        || lower.contains("kokoro")
+        || lower.contains("fish-audio")
+        || lower.contains("fish-speech")
+        || lower.contains("chattts")
+        || lower.contains("cosyvoice")
+        || lower.contains("openvoice")
+        || lower.contains("parler-tts")
+        || lower.contains("speechmatics")
+        || lower.contains("tts-1")
+        || lower.contains("inworld-tts")
+        || lower.contains("elevenlabs")
+        || lower.contains("eleven-labs")
+        || lower.contains("eleven_multilingual")
+        || lower.contains("stable-audio")
+        || lower.contains("musicgen")
+        || lower.contains("audioldm")
+        || lower.contains("seamless-m4t")
+        || lower.contains("sensevoice")
+        || lower.contains("voxtral-mini-tts")
+        || lower.contains("xai-tts")
+        || (lower.contains("telnyx-") && lower.contains("tts"))
+        || lower.ends_with("-tts")
+        || lower.ends_with("_tts")
+        || lower.ends_with("/tts")
+        || lower.contains("-tts-")
+        || lower.contains("_tts_")
+        || lower.contains("/tts-")
+        || lower.contains("preview-tts")
+        || lower.contains("-tts-preview")
+        || lower.ends_with("-asr")
+        || lower.contains("-asr-")
+        || lower.contains("-asr")
+    {
+        return "audio";
+    }
+
+    // 3. Rerank models
+    if lower.contains("rerank") {
+        return "rerank";
+    }
+
+    // 4. Embedding models
+    if lower.contains("text-embedding")
+        || lower.contains("embedding")
+        || lower.contains("embeddings")
+        || lower.contains("embedder")
+        || lower.contains("model2vec")
+        || lower.contains("bge-")
+        || lower.contains("/bge-")
+        || lower.contains("bge_")
+        || lower.contains("bge.")
+        || lower.contains("embed-qa")
+        || lower.contains("embedcode")
+        || lower.contains("pplx-embed")
+        || lower.contains("mistral-embed")
+        || lower.contains("codestral-embed")
+        || lower.contains("arctic-embed")
+        || lower.contains("nomic-embed")
+        || lower.contains("voyage-embed")
+        || lower.contains("nv-embed")
+        || lower.contains("gte-")
+        || lower.contains("e5-")
+        || lower.contains("embed-v")
+        || (lower.contains("embed")
+            && !lower.contains("embedded-")
+            && !lower.contains("embed_chat")
+            && !lower.contains("embeddable"))
+    {
+        return "embedding";
+    }
+
+    // 5. Image models (with anti-false-positive guards for text models)
+    if lower.contains("diffusiongemma") || lower.contains("sdft") {
+        return "chat";
+    }
+
+    if lower.contains("dall-e")
+        || lower.contains("dalle")
+        || lower.contains("midjourney")
+        || lower.contains("ideogram")
+        || lower.contains("recraft")
         || lower.contains("flux")
         || lower.contains("sdxl")
         || lower.contains("stable-diffusion")
         || lower.contains("stable_diffusion")
-        || lower.contains("imagen")
-        || lower.contains("ideogram")
-        || lower.contains("midjourney")
+        || lower.contains("stablediffusion")
+        || lower.contains("stable-image")
+        || lower.contains("sd-turbo")
+        || lower.contains("sdxl-turbo")
+        || lower.contains("sd-1.5")
+        || lower.contains("sd-2.1")
+        || lower.contains("sd-3")
+        || lower.contains("sd-3.5")
+        || lower.contains("sd3")
+        || lower.contains("sd3.5")
+        || lower.contains("imagen-")
+        || lower.contains("imagen/")
+        || lower.starts_with("imagen-")
+        || lower == "imagen"
         || lower.contains("dreamshaper")
         || lower.contains("pony")
-        || lower.contains("recraft")
+        || lower.contains("animagine")
+        || lower.contains("zavychroma")
+        || lower.contains("novafast")
+        || lower.contains("albedobase")
+        || lower.contains("edge of realism")
+        || lower.contains("zeipher female")
+        || lower.contains("mhxl")
+        || lower.contains("rag illustrious")
+        || lower.contains("mistoon anime")
+        || lower.contains("bb95 furry")
+        || lower.contains("camelliamix")
+        || lower.contains("anything v3")
+        || lower.contains("anything v5")
+        || lower.contains("perfect world")
+        || lower.contains("abyss orangemix")
+        || lower.contains("stable cascade")
+        || lower.contains("playbookxl")
+        || lower.contains("rundiffusion")
+        || lower.contains("playground-v2")
+        || lower.contains("kandinsky")
+        || lower.contains("kolors")
+        || lower.contains("auraflow")
+        || lower.contains("lumina-image")
+        || lower.contains("hunyuan-dit")
+        || lower.contains("pixart")
+        || lower.contains("cogview")
+        || lower.contains("gameart")
+        || lower.contains("art of mtg")
+        || lower.contains("duchaiten")
+        || lower.contains("duc haiten")
+        || lower.contains("nai-diffusion")
+        || lower.contains("diffusion")
     {
-        "image"
-    } else if lower.contains("whisper")
-        || lower.contains("tts")
-        || lower.contains("eleven")
-        || lower.contains("speech")
-        || lower.contains("audio")
-    {
-        "audio"
-    } else if lower.contains("rerank") {
-        "rerank"
-    } else {
-        "chat"
+        return "image";
     }
+
+    "chat"
 }
 
 pub fn infer_input_modalities_json(model_id: &str) -> String {
     let caps = infer_capabilities(model_id);
-    let mods = infer_input_modalities(&caps);
+    let mods = infer_input_modalities_for_model(model_id, &caps);
     serde_json::to_string(&mods).unwrap_or_else(|_| r#"["text"]"#.to_string())
 }
 
 pub fn infer_output_modalities_json(model_id: &str) -> String {
-    let model_type = infer_model_type(model_id);
-    match model_type {
-        "image" => r#"["image"]"#.to_string(),
-        "audio" => r#"["audio"]"#.to_string(),
-        _ => r#"["text"]"#.to_string(),
-    }
+    let mods = infer_output_modalities(model_id);
+    serde_json::to_string(&mods).unwrap_or_else(|_| r#"["text"]"#.to_string())
 }
 
 pub fn infer_family(model_id: &str) -> Option<String> {
@@ -313,11 +546,61 @@ mod tests {
             infer_model_type("openai/text-embedding-3-large"),
             "embedding"
         );
+        assert_eq!(infer_model_type("baai/bge-large-en-v1.5"), "embedding");
+        assert_eq!(infer_model_type("qwen3-embedding-8b"), "embedding");
         assert_eq!(infer_model_type("dall-e-3"), "image");
         assert_eq!(infer_model_type("black-forest-labs/flux-1.1"), "image");
+        assert_eq!(infer_model_type("sdxl-lightning"), "image");
         assert_eq!(infer_model_type("gpt-4o"), "chat");
         assert_eq!(infer_model_type("whisper-1"), "audio");
+        assert_eq!(infer_model_type("inworld-tts2"), "audio");
+        assert_eq!(infer_model_type("melotts"), "audio");
         assert_eq!(infer_model_type("cohere/rerank-v3"), "rerank");
+        assert_eq!(
+            infer_model_type("accounts/fireworks/models/qwen3-reranker-8b"),
+            "rerank"
+        );
+    }
+
+    #[test]
+    fn false_positive_guards() {
+        // Text models containing "diffusion" or "sd" or "audio" or "embed"
+        assert_eq!(
+            infer_model_type("YoannDev90/diffusiongemma-26b-a4b-it:free"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("gemma-4-31b-sdft-heretic-rp"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("gpt-4o-audio-preview"),
+            "chat"
+        );
+        // Audio models named flux (Deepgram Flux)
+        assert_eq!(
+            infer_model_type("deepgram-flux"),
+            "audio"
+        );
+        assert_eq!(
+            infer_model_type("@cf/deepgram/flux"),
+            "audio"
+        );
+    }
+
+    #[test]
+    fn modality_inference_consistency() {
+        assert_eq!(infer_output_modalities("text-embedding-3-small"), vec!["embedding"]);
+        assert_eq!(infer_output_modalities("black-forest-labs/flux-1.1"), vec!["image"]);
+        assert_eq!(infer_output_modalities("whisper-1"), vec!["text"]);
+        assert_eq!(infer_input_modalities_for_model("whisper-1", &ModelCapabilities::empty()), vec!["audio"]);
+        assert_eq!(infer_output_modalities("tts-1"), vec!["audio"]);
+        assert_eq!(infer_input_modalities_for_model("tts-1", &ModelCapabilities::empty()), vec!["text"]);
+        assert_eq!(infer_output_modalities("gpt-4o"), vec!["text"]);
+        assert_eq!(
+            infer_output_modalities("gpt-4o-audio-preview"),
+            vec!["text", "audio"]
+        );
     }
 
     #[test]

@@ -76,6 +76,34 @@ pub async fn update_api_key(
     let allowed_combos_slice: Option<Option<&[i64]>> =
         allowed_combos_owned.as_ref().map(|o| o.as_deref());
 
+    let blacklisted_providers_owned: Option<Option<Vec<String>>> = body.get("blacklisted_providers").map(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        }
+    });
+    let blacklisted_providers_slice: Option<Option<&[String]>> =
+        blacklisted_providers_owned.as_ref().map(|o| o.as_deref());
+
+    let blacklisted_models_owned: Option<Option<Vec<String>>> = body.get("blacklisted_models").map(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        }
+    });
+    let blacklisted_models_slice: Option<Option<&[String]>> =
+        blacklisted_models_owned.as_ref().map(|o| o.as_deref());
+
     let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
     let expires_owned: Option<Option<String>> =
@@ -89,6 +117,8 @@ pub async fn update_api_key(
             scopes: scopes_slice,
             allowed_models: allowed_models_slice,
             allowed_combos: allowed_combos_slice,
+            blacklisted_providers: blacklisted_providers_slice,
+            blacklisted_models: blacklisted_models_slice,
             is_active,
             expires_at: expires_slice,
         },

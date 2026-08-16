@@ -46,12 +46,115 @@ pub struct ApiKey {
     /// Decoded `allowed_combos_json` column. Same semantics as
     /// `allowed_models`.
     pub allowed_combos: Option<Vec<i64>>,
+    /// Decoded `blacklisted_providers_json` column. `None` = no restriction.
+    pub blacklisted_providers: Option<Vec<String>>,
+    /// Decoded `blacklisted_models_json` column. `None` = no restriction.
+    pub blacklisted_models: Option<Vec<String>>,
     pub is_active: bool,
     pub revoked_at: Option<String>,
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
     pub created_at: String,
     pub created_by: Option<String>,
+}
+
+impl ApiKey {
+    /// Returns whether the specified model is permitted by this key's
+    /// `allowed_models`, `blacklisted_models`, and `blacklisted_providers`.
+    pub fn is_model_allowed(&self, model: &str, provider_id: Option<&str>) -> bool {
+        let (prov_from_model, bare_model) = if let Some((p, m)) = model.split_once('/') {
+            (Some(p), m)
+        } else {
+            (None, model)
+        };
+        let effective_prov = provider_id.or(prov_from_model);
+        let full_id = effective_prov.map(|p| {
+            if model.starts_with(&format!("{p}/")) {
+                model.to_string()
+            } else {
+                format!("{p}/{model}")
+            }
+        });
+
+        let matches_spec = |spec: &str, candidate: &str| -> bool {
+            if spec == "*" || spec == candidate {
+                return true;
+            }
+            if let Some(prefix) = spec.strip_suffix('*')
+                && candidate.starts_with(prefix)
+            {
+                return true;
+            }
+            if let Some(suffix) = spec.strip_prefix('*')
+                && candidate.ends_with(suffix)
+            {
+                return true;
+            }
+            false
+        };
+
+        let check_match = |pattern: &str| -> bool {
+            matches_spec(pattern, model)
+                || matches_spec(pattern, bare_model)
+                || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
+                || model.strip_prefix(&format!("{pattern}/")).is_some()
+                || model.strip_suffix(&format!("/{pattern}")).is_some()
+        };
+
+        // 1. Allowlist check (if set and non-empty)
+        if let Some(allowed) = &self.allowed_models
+            && !allowed.is_empty()
+        {
+            let matches_allowed = allowed.iter().any(|m| check_match(m));
+            if !matches_allowed {
+                return false;
+            }
+        }
+
+        // 2. Blacklisted providers check
+        if let Some(blacklisted_provs) = &self.blacklisted_providers {
+            if let Some(p) = provider_id
+                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
+            {
+                return false;
+            }
+            if let Some(p) = prov_from_model
+                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
+            {
+                return false;
+            }
+        }
+
+        // 3. Blacklisted models check
+        if let Some(blacklisted) = &self.blacklisted_models
+            && blacklisted.iter().any(|b| check_match(b))
+        {
+            return false;
+        }
+
+        true
+    }
+
+    /// Returns whether the specified provider is permitted by this key.
+    pub fn is_provider_allowed(&self, provider_id: &str) -> bool {
+        if let Some(blacklisted) = &self.blacklisted_providers
+            && blacklisted.iter().any(|p| p == provider_id || p == "*")
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Returns whether the specified combo ID is permitted by this key.
+    pub fn is_combo_allowed(&self, combo_id: i64) -> bool {
+        if let Some(allowed) = &self.allowed_combos
+            && !allowed.is_empty()
+            && !allowed.contains(&combo_id)
+        {
+            return false;
+        }
+        true
+    }
 }
 
 /// Input to [`create`]. All fields except `scopes` are optional; an
@@ -66,12 +169,14 @@ impl Validatable for CreateApiKeyInput {
         Ok(())
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateApiKeyInput {
     pub label: Option<String>,
     pub scopes: Vec<String>,
     pub allowed_models: Option<Vec<String>>,
     pub allowed_combos: Option<Vec<i64>>,
+    pub blacklisted_providers: Option<Vec<String>>,
+    pub blacklisted_models: Option<Vec<String>>,
     pub expires_at: Option<String>,
 }
 
@@ -180,12 +285,27 @@ pub fn create(
         ),
         None => None,
     };
+    let blacklisted_providers_json = match &input.blacklisted_providers {
+        Some(v) => Some(
+            serde_json::to_string(v)
+                .map_err(|e| CoreError::Parse(format!("serialize blacklisted_providers: {e}")))?,
+        ),
+        None => None,
+    };
+    let blacklisted_models_json = match &input.blacklisted_models {
+        Some(v) => Some(
+            serde_json::to_string(v)
+                .map_err(|e| CoreError::Parse(format!("serialize blacklisted_models: {e}")))?,
+        ),
+        None => None,
+    };
 
     conn.execute(
         "INSERT INTO api_keys \
             (key_hash, key_prefix, label, scopes_json, allowed_models_json, \
-             allowed_combos_json, expires_at, created_by) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             allowed_combos_json, expires_at, created_by, \
+             blacklisted_providers_json, blacklisted_models_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             key_hash,
             key_prefix,
@@ -195,6 +315,8 @@ pub fn create(
             allowed_combos_json,
             input.expires_at,
             created_by,
+            blacklisted_providers_json,
+            blacklisted_models_json,
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -211,7 +333,8 @@ pub fn get_by_id(conn: &Connection, id: ApiKeyId) -> Result<Option<ApiKey>> {
         .query_row(
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
                     allowed_models_json, allowed_combos_json, is_active, \
-                    revoked_at, expires_at, last_used_at, created_at, created_by \
+                    revoked_at, expires_at, last_used_at, created_at, created_by, \
+                    blacklisted_providers_json, blacklisted_models_json \
              FROM api_keys WHERE id = ?1",
             params![id.0],
             row_to_api_key,
@@ -232,7 +355,8 @@ pub fn get_by_hash(conn: &Connection, key_hash: &str) -> Result<Option<ApiKey>> 
         .query_row(
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
                     allowed_models_json, allowed_combos_json, is_active, \
-                    revoked_at, expires_at, last_used_at, created_at, created_by \
+                    revoked_at, expires_at, last_used_at, created_at, created_by, \
+                    blacklisted_providers_json, blacklisted_models_json \
              FROM api_keys WHERE key_hash = ?1",
             params![key_hash],
             row_to_api_key,
@@ -265,7 +389,8 @@ pub fn list(conn: &Connection) -> Result<Vec<ApiKey>> {
         .prepare(
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
                     allowed_models_json, allowed_combos_json, is_active, \
-                    revoked_at, expires_at, last_used_at, created_at, created_by \
+                    revoked_at, expires_at, last_used_at, created_at, created_by, \
+                    blacklisted_providers_json, blacklisted_models_json \
              FROM api_keys ORDER BY id DESC",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -378,6 +503,8 @@ pub struct UpdateParams<'a> {
     pub scopes: Option<&'a [String]>,
     pub allowed_models: Option<Option<&'a [String]>>,
     pub allowed_combos: Option<Option<&'a [i64]>>,
+    pub blacklisted_providers: Option<Option<&'a [String]>>,
+    pub blacklisted_models: Option<Option<&'a [String]>>,
     pub is_active: Option<bool>,
     pub expires_at: Option<Option<&'a str>>,
 }
@@ -418,6 +545,28 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
                 .transpose()
         })
         .transpose()?;
+    let blacklisted_providers_json: Option<Option<String>> = params
+        .blacklisted_providers
+        .map(|inner| {
+            inner
+                .map(|v| {
+                    serde_json::to_string(v)
+                        .map_err(|e| CoreError::Parse(format!("serialize blacklisted_providers: {e}")))
+                })
+                .transpose()
+        })
+        .transpose()?;
+    let blacklisted_models_json: Option<Option<String>> = params
+        .blacklisted_models
+        .map(|inner| {
+            inner
+                .map(|v| {
+                    serde_json::to_string(v)
+                        .map_err(|e| CoreError::Parse(format!("serialize blacklisted_models: {e}")))
+                })
+                .transpose()
+        })
+        .transpose()?;
     let expires_at_str: Option<Option<&str>> = params.expires_at;
 
     // Build the dynamic SET clause. We only touch columns that the
@@ -440,6 +589,14 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
     if let Some(oc) = &allowed_combos_json {
         sets.push("allowed_combos_json = ?");
         bound.push(Box::new(oc.to_owned()));
+    }
+    if let Some(bp) = &blacklisted_providers_json {
+        sets.push("blacklisted_providers_json = ?");
+        bound.push(Box::new(bp.to_owned()));
+    }
+    if let Some(bm) = &blacklisted_models_json {
+        sets.push("blacklisted_models_json = ?");
+        bound.push(Box::new(bm.to_owned()));
     }
     if let Some(active) = params.is_active {
         sets.push("is_active = ?");
@@ -581,6 +738,8 @@ fn row_to_api_key(row: &Row<'_>) -> rusqlite::Result<ApiKey> {
     let last_used_at: Option<String> = row.get(10)?;
     let created_at: String = row.get(11)?;
     let created_by: Option<String> = row.get(12)?;
+    let blacklisted_providers_json: Option<String> = row.get(13)?;
+    let blacklisted_models_json: Option<String> = row.get(14)?;
 
     let scopes: Vec<String> = serde_json::from_str(&scopes_json).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -609,6 +768,14 @@ fn row_to_api_key(row: &Row<'_>) -> rusqlite::Result<ApiKey> {
         })?),
         _ => None,
     };
+    let blacklisted_providers = match blacklisted_providers_json {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).ok(),
+        _ => None,
+    };
+    let blacklisted_models = match blacklisted_models_json {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).ok(),
+        _ => None,
+    };
 
     Ok(ApiKey {
         id: ApiKeyId(id),
@@ -618,6 +785,8 @@ fn row_to_api_key(row: &Row<'_>) -> rusqlite::Result<ApiKey> {
         scopes,
         allowed_models,
         allowed_combos,
+        blacklisted_providers,
+        blacklisted_models,
         is_active: is_active != 0,
         revoked_at,
         expires_at,
@@ -666,9 +835,7 @@ mod tests {
         CreateApiKeyInput {
             label: Some(label.to_string()),
             scopes: vec!["chat".to_string()],
-            allowed_models: None,
-            allowed_combos: None,
-            expires_at: None,
+            ..Default::default()
         }
     }
 
@@ -771,9 +938,7 @@ mod tests {
         let input = CreateApiKeyInput {
             label: None,
             scopes: vec![],
-            allowed_models: None,
-            allowed_combos: None,
-            expires_at: None,
+            ..Default::default()
         };
         let err = create(&conn, input, "admin").expect_err("empty scopes");
         assert!(matches!(err, CoreError::Validation(_)));
@@ -918,12 +1083,8 @@ mod tests {
             &conn,
             key.id,
             UpdateParams {
-                label: None,
-                scopes: None,
                 allowed_models: Some(None),
-                allowed_combos: None,
-                is_active: None,
-                expires_at: None,
+                ..Default::default()
             },
         )
         .expect("clear allowed_models");
@@ -935,12 +1096,8 @@ mod tests {
             &conn,
             key.id,
             UpdateParams {
-                label: None,
                 scopes: Some(&[]),
-                allowed_models: None,
-                allowed_combos: None,
-                is_active: None,
-                expires_at: None,
+                ..Default::default()
             },
         )
         .expect_err("empty scopes");
@@ -968,12 +1125,8 @@ mod tests {
             &conn,
             key.id,
             UpdateParams {
-                label: None,
-                scopes: None,
-                allowed_models: None,
-                allowed_combos: None,
                 is_active: Some(false),
-                expires_at: None,
+                ..Default::default()
             },
         )
         .expect("disable");
@@ -986,12 +1139,8 @@ mod tests {
             &conn,
             key.id,
             UpdateParams {
-                label: None,
-                scopes: None,
-                allowed_models: None,
-                allowed_combos: None,
                 is_active: Some(true),
-                expires_at: None,
+                ..Default::default()
             },
         )
         .expect("enable");
@@ -1079,5 +1228,45 @@ mod tests {
         // Revoke k1. count_active must drop back to 1.
         revoke(&conn, k1.id).expect("revoke");
         assert_eq!(count_active(&conn).expect("count"), 1);
+    }
+
+    #[test]
+    fn is_model_allowed_checks_blacklist_providers_and_models() {
+        let (conn, _p) = fresh_pool();
+        let (key, _) = create(
+            &conn,
+            CreateApiKeyInput {
+                label: Some("blacklist-test".into()),
+                scopes: vec!["chat".into()],
+                blacklisted_providers: Some(vec!["openai".into(), "groq".into()]),
+                blacklisted_models: Some(vec![
+                    "claude-3-opus*".into(),
+                    "anthropic/claude-2".into(),
+                    "bad-model".into(),
+                ]),
+                ..Default::default()
+            },
+            "admin",
+        )
+        .expect("create");
+
+        // Provider blacklisted
+        assert!(!key.is_model_allowed("gpt-4o", Some("openai")));
+        assert!(!key.is_model_allowed("openai/gpt-4o", None));
+        assert!(!key.is_model_allowed("llama-3", Some("groq")));
+        assert!(!key.is_provider_allowed("openai"));
+        assert!(!key.is_provider_allowed("groq"));
+
+        // Models blacklisted by pattern/exact
+        assert!(!key.is_model_allowed("claude-3-opus-20240229", Some("anthropic")));
+        assert!(!key.is_model_allowed("anthropic/claude-3-opus-20240229", None));
+        assert!(!key.is_model_allowed("claude-2", Some("anthropic")));
+        assert!(!key.is_model_allowed("anthropic/claude-2", None));
+        assert!(!key.is_model_allowed("bad-model", Some("custom")));
+
+        // Allowed models / providers
+        assert!(key.is_model_allowed("claude-3-5-sonnet", Some("anthropic")));
+        assert!(key.is_model_allowed("anthropic/claude-3-5-sonnet", None));
+        assert!(key.is_provider_allowed("anthropic"));
     }
 }

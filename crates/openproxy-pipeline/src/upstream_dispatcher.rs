@@ -977,38 +977,35 @@ UpstreamError::Invalid(msg)) => {
         // instead of using the fixed exponential backoff. The default
         // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
-            let mut is_proxy_rotated = self
-                .check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    target.account_id,
-                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-                    None,
-                )
-                .await;
-            let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-            // Parse `Retry-After` from response_headers (extracted at L1751
-            // before the body was consumed). Accepts either an integer
-            // number of seconds or an HTTP-date (RFC 7231).
             let retry_after_ms: Option<u64> = response_headers
                 .as_ref()
                 .and_then(|h| h.get("retry-after").or_else(|| h.get("Retry-After")))
                 .and_then(|v| parse_retry_after_ms(v));
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
+            let retry_ms = retry_after_ms.unwrap_or(300_000);
+
+            let is_proxy_rotated = if is_rate_limited_status {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                    crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                    Some(retry_ms),
+                )
+                .await
+            } else {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                    crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
+                    None,
+                )
+                .await
+            };
+            let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             if is_rate_limited_status {
-                let retry_ms = retry_after_ms.unwrap_or(300_000);
-                if !is_proxy_rotated {
-                    is_proxy_rotated = self
-                        .check_and_trigger_proxy_rotation(
-                            &target.provider_id,
-                            target.account_id,
-                            req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                            crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                            Some(retry_ms),
-                        )
-                        .await;
-                }
                 let err = CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
                     retry_after_ms: retry_ms,
@@ -1151,12 +1148,6 @@ UpstreamError::Invalid(msg)) => {
             }
         };
 
-        // Snapshot the body JSON before it gets moved into the
-        // format-specific parser below; we need it both as the
-        // recorded response body and as a source for the request
-        // body we are about to send.
-        let response_body_value = response_body_raw.clone();
-
         let openai_response = match target_format {
             openproxy_types::TargetFormat::Responses => {
                 unreachable!("Responses format is handled natively before dispatcher")
@@ -1205,7 +1196,7 @@ UpstreamError::Invalid(msg)) => {
             }
             openproxy_types::TargetFormat::Gemini => {
                 let adapter = openproxy_adapters::GeminiAdapter::new();
-                match adapter.translate_non_streaming_response(target_format, response_body_raw) {
+                match adapter.translate_non_streaming_response(target_format, response_body_raw.clone()) {
                     Ok(r) => r,
                     Err(err) => {
                         return self.record_and_fail(
@@ -1335,7 +1326,7 @@ UpstreamError::Invalid(msg)) => {
                 .prompt_tokens_opt(prompt_tokens)
                 .completion_tokens_opt(completion_tokens)
                 .cached_tokens(cached_tokens)
-                .response_body_json(Some(response_body_value))
+                .response_body_json(Some(response_body_raw))
                 .request_headers(Some(request_headers_btm))
                 .response_headers(response_headers)
                 .is_streaming(false)
@@ -1855,15 +1846,35 @@ UpstreamError::Invalid(msg)) => {
 
         let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
-            let mut is_proxy_rotated = self
-                .check_and_trigger_proxy_rotation(
+            let retry_after_ms: Option<u64> = response
+                .headers
+                .get("retry-after")
+                .or_else(|| response.headers.get("Retry-After"))
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_retry_after_ms);
+            let is_rate_limited_status =
+                status_code == 429 || status_code == 408 || status_code == 503;
+            let retry_ms = retry_after_ms.unwrap_or(300_000);
+
+            let is_proxy_rotated = if is_rate_limited_status {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                    crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                    Some(retry_ms),
+                )
+                .await
+            } else {
+                self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     target.account_id,
                     req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
                     None,
                 )
-                .await;
+                .await
+            };
             // Error responses should not stall the pipeline. We give the upstream
             // 5 seconds to send the error body; if it stalls, we drop the body
             // and proceed with the error status code. This prevents "ghost" requests
@@ -1917,33 +1928,7 @@ UpstreamError::Invalid(msg)) => {
                 .await
                 .ok();
             }
-            // NEW-2 fix: when the upstream returns 429 (or 408/503)
-            // with a `Retry-After` header, surface the error as
-            // `CoreError::RateLimited` so the per-target retry loop
-            // honors the upstream-requested delay instead of using
-            // the fixed exponential backoff. Mirrors the non-streaming
-            // path's handling at line 3172.
-            let retry_after_ms: Option<u64> = response
-                .headers
-                .get("retry-after")
-                .or_else(|| response.headers.get("Retry-After"))
-                .and_then(|v| v.to_str().ok())
-                .and_then(parse_retry_after_ms);
-            let is_rate_limited_status =
-                status_code == 429 || status_code == 408 || status_code == 503;
             let err = if is_rate_limited_status {
-                let retry_ms = retry_after_ms.unwrap_or(300_000);
-                if !is_proxy_rotated {
-                    is_proxy_rotated = self
-                        .check_and_trigger_proxy_rotation(
-                            &target.provider_id,
-                            target.account_id,
-                            req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                            crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                            Some(retry_ms),
-                        )
-                        .await;
-                }
                 CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
                     retry_after_ms: retry_ms,

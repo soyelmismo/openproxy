@@ -104,12 +104,17 @@ pub async fn dispatch_image_request(
     let payload = adapter.format_image_request(req, upstream_model_id)?;
     let mut upstream_req = UpstreamRequest::post_json(upstream_url, payload);
 
-    if let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key)
-        && !auth_name.is_empty()
-        && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
-        && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value)
-    {
-        upstream_req.headers.insert(k, v);
+    for (k, v) in adapter.build_headers(
+        api_key,
+        openproxy_types::TargetFormat::Openai,
+        &openproxy_types::ModelId::new(upstream_model_id),
+    ) {
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            axum::http::HeaderValue::from_str(&v),
+        ) {
+            upstream_req.headers.insert(name, val);
+        }
     }
 
     for (k, v) in &adapter.config().extra_headers {
@@ -242,9 +247,26 @@ pub async fn execute_image_generation(
                 status_code,
                 err_text
             );
-            last_error = Some(CoreError::UpstreamConnection(format!(
-                "upstream status {status_code}: {err_text}"
-            )));
+            let err = if status_code == 429 {
+                CoreError::RateLimited {
+                    provider: target.provider.as_str().to_string(),
+                    retry_after_ms: 1000,
+                    is_proxy_rotated: false,
+                }
+            } else if status_code == 401 || status_code == 403 {
+                CoreError::Auth(err_text.to_string())
+            } else if status_code == 400 {
+                CoreError::Validation(err_text.to_string())
+            } else {
+                CoreError::UpstreamError {
+                    status: status_code,
+                    provider: target.provider.as_str().to_string(),
+                    model: target.upstream_model.clone(),
+                    body: err_text.to_string(),
+                    is_proxy_rotated: false,
+                }
+            };
+            last_error = Some(err);
             continue;
         }
 
@@ -366,12 +388,20 @@ pub async fn dispatch_image_multipart_request(
         bytes::Bytes::from(payload),
     );
 
-    if let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key)
-        && !auth_name.is_empty()
-        && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
-        && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value)
-    {
-        upstream_req.headers.insert(k, v);
+    for (k, v) in adapter.build_headers(
+        api_key,
+        openproxy_types::TargetFormat::Openai,
+        &openproxy_types::ModelId::new(upstream_model_id),
+    ) {
+        if k.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            axum::http::HeaderValue::from_str(&v),
+        ) {
+            upstream_req.headers.insert(name, val);
+        }
     }
 
     for (k, v) in &adapter.config().extra_headers {
@@ -656,6 +686,23 @@ async fn dispatch_horde_img2img(
         .find(|(k, _)| k == "source_processing")
         .map(|(_, v)| v.as_str());
 
+    let mut post_processing_list = Vec::new();
+    for (k, v) in &body.form_fields {
+        if k == "post_processing" || k == "post_processing[]" || k == "post" {
+            for part in v.split(',') {
+                let trimmed = part.trim();
+                if !trimmed.is_empty() && !post_processing_list.contains(&trimmed.to_string()) {
+                    post_processing_list.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    let post_processing = if post_processing_list.is_empty() {
+        None
+    } else {
+        Some(post_processing_list)
+    };
+
     let dummy_req = ImageGenerationRequest {
         prompt,
         model: upstream_model_id.to_string(),
@@ -668,6 +715,7 @@ async fn dispatch_horde_img2img(
         aspect_ratio: None,
         seed,
         negative_prompt,
+        post_processing,
     };
 
     let payload = horde_adapter.build_horde_payload(
@@ -680,12 +728,17 @@ async fn dispatch_horde_img2img(
     )?;
 
     let mut upstream_req = UpstreamRequest::post_json(&upstream_url, payload);
-    if let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key)
-        && !auth_name.is_empty()
-        && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
-        && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value)
-    {
-        upstream_req.headers.insert(k, v);
+    for (k, v) in adapter.build_headers(
+        api_key,
+        openproxy_types::TargetFormat::Openai,
+        &openproxy_types::ModelId::new(upstream_model_id),
+    ) {
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            axum::http::HeaderValue::from_str(&v),
+        ) {
+            upstream_req.headers.insert(name, val);
+        }
     }
 
     for (k, v) in &adapter.config().extra_headers {
@@ -859,9 +912,26 @@ async fn execute_image_multipart(
                 "Image multipart target returned error status: provider={}, status={}, body={}",
                 target.provider, status_code, err_text
             );
-            last_error = Some(CoreError::UpstreamConnection(format!(
-                "upstream status {status_code}: {err_text}"
-            )));
+            let err = if status_code == 429 {
+                CoreError::RateLimited {
+                    provider: target.provider.as_str().to_string(),
+                    retry_after_ms: 1000,
+                    is_proxy_rotated: false,
+                }
+            } else if status_code == 401 || status_code == 403 {
+                CoreError::Auth(err_text.to_string())
+            } else if status_code == 400 {
+                CoreError::Validation(err_text.to_string())
+            } else {
+                CoreError::UpstreamError {
+                    status: status_code,
+                    provider: target.provider.as_str().to_string(),
+                    model: target.upstream_model.clone(),
+                    body: err_text.to_string(),
+                    is_proxy_rotated: false,
+                }
+            };
+            last_error = Some(err);
             continue;
         }
 
@@ -1045,10 +1115,11 @@ async fn poll_horde_image_generation(
         .map_err(|e| CoreError::Parse(format!("failed to parse horde submit response: {e}")))?;
 
     let Some(job_id) = submit_resp.id else {
-        return Err(CoreError::UpstreamConnection(format!(
-            "horde did not return a job ID: {:?}",
-            submit_resp.message.or(submit_resp.error)
-        )));
+        let msg = submit_resp
+            .message
+            .or(submit_resp.error)
+            .unwrap_or_else(|| "unknown horde submission error".to_string());
+        return Err(CoreError::Validation(format!("horde submission failed: {msg}")));
     };
 
     let base_url = adapter.config().base_url.as_str();
@@ -1190,6 +1261,12 @@ async fn poll_horde_image_generation(
                     revised_prompt: None,
                 });
             }
+        } else if response_format == Some("url") {
+            data.push(ImageData {
+                url: Some(format!("data:image/webp;base64,{img}")),
+                b64_json: None,
+                revised_prompt: None,
+            });
         } else {
             data.push(ImageData {
                 url: None,

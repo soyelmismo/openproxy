@@ -24,6 +24,84 @@ pub struct ImageGenerationRequest {
     pub seed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub negative_prompt: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_string_or_vec_opt"
+    )]
+    pub post_processing: Option<Vec<String>>,
+}
+
+fn deserialize_string_or_vec_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrVecVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrVecVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string, a list of strings, or null")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let list: Vec<String> = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if list.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(list))
+            }
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut list = Vec::new();
+            while let Some(elem) = seq.next_element::<String>()? {
+                let trimmed = elem.trim().to_string();
+                if !trimmed.is_empty() {
+                    list.push(trimmed);
+                }
+            }
+            if list.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(list))
+            }
+        }
+    }
+
+    deserializer.deserialize_option(StringOrVecVisitor)
 }
 
 fn default_image_model() -> String {
@@ -45,6 +123,12 @@ pub struct ImageEditRequest {
     pub response_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_string_or_vec_opt"
+    )]
+    pub post_processing: Option<Vec<String>>,
 }
 
 /// An individual generated image in the response.
@@ -156,5 +240,33 @@ mod tests {
             Some("a detailed cute cat")
         );
         assert_eq!(res.data[0].b64_json, None);
+    }
+
+    #[test]
+    fn test_image_post_processing_serde() {
+        // Array format
+        let json_arr = r#"{"prompt":"dragon","post_processing":["RealESRGAN_x4plus","GFPGAN"]}"#;
+        let req_arr: ImageGenerationRequest = serde_json::from_str(json_arr).expect("deserialize array");
+        assert_eq!(
+            req_arr.post_processing,
+            Some(vec!["RealESRGAN_x4plus".to_string(), "GFPGAN".to_string()])
+        );
+
+        // Comma-separated string format
+        let json_str = r#"{"prompt":"dragon","post_processing":"RealESRGAN_x4plus, GFPGAN, CodeFormers"}"#;
+        let req_str: ImageGenerationRequest = serde_json::from_str(json_str).expect("deserialize string");
+        assert_eq!(
+            req_str.post_processing,
+            Some(vec![
+                "RealESRGAN_x4plus".to_string(),
+                "GFPGAN".to_string(),
+                "CodeFormers".to_string()
+            ])
+        );
+
+        // Null / omitted
+        let json_none = r#"{"prompt":"dragon"}"#;
+        let req_none: ImageGenerationRequest = serde_json::from_str(json_none).expect("deserialize none");
+        assert_eq!(req_none.post_processing, None);
     }
 }

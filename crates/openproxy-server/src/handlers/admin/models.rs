@@ -40,6 +40,16 @@ pub async fn delete_model(
     Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
 }
 
+pub async fn update_model(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<core_admin::UpdateModelInput>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let w = s.db_pool().writer();
+    core_admin::update_model(&w, ModelRowId(id), input)?;
+    Ok(Json(serde_json::json!({ "id": id, "updated": true })))
+}
+
 pub async fn create_custom_model(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateCustomModelInput>,

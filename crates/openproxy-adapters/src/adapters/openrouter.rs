@@ -420,24 +420,9 @@ fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCa
 /// (`"chat" | "embedding" | "image" | "audio" | "rerank"`) using both
 /// the id's name and the `architecture.output_modalities` field.
 fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchitecture>) -> String {
-    let lower = id.to_lowercase();
-
-    if lower.contains("embed") {
-        return "embedding".to_string();
-    }
-    if lower.contains("dall-e")
-        || lower.contains("flux")
-        || lower.contains("imagen")
-        || lower.contains("sdxl")
-        || lower.contains("ideogram")
-    {
-        return "image".to_string();
-    }
-    if lower.contains("whisper") || lower.contains("tts") || lower.contains("eleven") {
-        return "audio".to_string();
-    }
-    if lower.contains("rerank") {
-        return "rerank".to_string();
+    let inferred = openproxy_types::capabilities::infer_model_type(id);
+    if inferred != "chat" {
+        return inferred.to_string();
     }
 
     // Output modalities: if a model emits image/audio, classify by that
