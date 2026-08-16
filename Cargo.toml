@@ -32,7 +32,7 @@ config = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
-parking_lot = { version = "0.12", features = ["send_guard"] }
+parking_lot = { version = "0.12", features = ["send_guard", "arc_lock"] }
 rand = "0.10"
 hex = "0.4"
 aes-gcm = "0.10"

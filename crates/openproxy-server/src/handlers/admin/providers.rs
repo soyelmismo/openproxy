@@ -393,27 +393,14 @@ fn enrich_provider_with_oauth(
             meta
         }, openproxy_adapters::ProviderAdapterEnum::metadata);
 
-    let active_models: i64 = r
-        .query_row(
-            "SELECT count(*) FROM models WHERE provider_id = ? AND active = 1",
-            [p.id.as_str()],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let total_models: i64 = r
-        .query_row(
-            "SELECT count(*) FROM models WHERE provider_id = ?",
-            [p.id.as_str()],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    let model_counts = openproxy_db::models::count_by_provider(r, &p.id).unwrap_or_default();
 
     ProviderWithOAuth {
         provider: p,
         oauth_flows: flows,
         metadata,
-        active_models,
-        total_models,
+        active_models: model_counts.active_models,
+        total_models: model_counts.total_models,
     }
 }
 

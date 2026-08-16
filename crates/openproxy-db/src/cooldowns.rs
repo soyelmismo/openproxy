@@ -76,6 +76,17 @@ pub fn clear_cooldown(
     Ok(())
 }
 
+pub fn prune_expired(conn: &rusqlite::Connection) -> openproxy_types::error::Result<usize> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let n = conn
+        .execute(
+            "DELETE FROM target_cooldowns WHERE datetime(cooldown_until) <= datetime(?1)",
+            rusqlite::params![now],
+        )
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+    Ok(n)
+}
+
 use rusqlite::OptionalExtension;
 
 pub fn add_provider_proxy_cooldown(

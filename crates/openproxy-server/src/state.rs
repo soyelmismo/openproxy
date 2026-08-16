@@ -962,9 +962,7 @@ fn prune_usage_and_dead_proxies(prune_pool: &openproxy_db::DbPool, retention_day
         let _ =
             openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
     }
-    let _ = prune_pool
-        .writer()
-        .execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
+    let _ = openproxy_core::free_proxies::prune_dead_proxies(&prune_pool.writer());
 }
 
 fn execute_vacuum_cycle(

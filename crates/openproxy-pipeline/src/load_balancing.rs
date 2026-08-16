@@ -16,7 +16,7 @@ pub const DEFAULT_SELECTION_WINDOW_SECS: u64 = 3600;
 pub const DEFAULT_LKGP_EXPLORATION_RATE: f64 = 0.1;
 
 pub fn execute_load_balancing(
-    targets: Vec<ComboTarget>,
+    mut targets: Vec<ComboTarget>,
     combo: &Combo,
     rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
     selection_registry: &SelectionRegistry,
@@ -35,10 +35,8 @@ pub fn execute_load_balancing(
                 *counter = counter.wrapping_add(1);
                 s
             };
-            let mut rotated = Vec::with_capacity(n);
-            rotated.extend_from_slice(&targets[shift..]);
-            rotated.extend_from_slice(&targets[..shift]);
-            rotated
+            targets.rotate_left(shift);
+            targets
         }
         Strategy::Shuffle => {
             let mut shuffled = targets;

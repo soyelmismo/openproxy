@@ -21,6 +21,12 @@ pub type WriterGuard<'a> = parking_lot::MutexGuard<'a, Connection>;
 /// Alias for the reader guard returned by [`DbPool::reader`].
 pub type ReaderGuard<'a> = parking_lot::MutexGuard<'a, Connection>;
 
+/// Alias for the owned writer guard returned by [`DbPool::writer_guard`].
+pub type ArcWriterGuard = parking_lot::ArcMutexGuard<parking_lot::RawMutex, Connection>;
+
+/// Alias for the owned reader guard returned by [`DbPool::reader_guard`].
+pub type ArcReaderGuard = parking_lot::ArcMutexGuard<parking_lot::RawMutex, Connection>;
+
 /// Connection pool holding one serialized writer and one serialized reader.
 /// SQLite file-level locking + rusqlite's lack of `Sync` on `Connection` mean we
 /// guard both with a Mutex. A future r2d2-based pool can swap in true reader
@@ -136,6 +142,16 @@ impl DbPool {
     /// `lock()` call serializes as before.
     pub fn writer_arc(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.writer)
+    }
+
+    /// Acquire the serialized writer with an owned guard backed by Arc.
+    pub fn writer_guard(&self) -> ArcWriterGuard {
+        parking_lot::Mutex::lock_arc(&self.writer)
+    }
+
+    /// Acquire the serialized reader with an owned guard backed by Arc.
+    pub fn reader_guard(&self) -> ArcReaderGuard {
+        parking_lot::Mutex::lock_arc(&self.reader)
     }
 
     /// Acquire the serialized reader. Blocks until the previous reader is released.

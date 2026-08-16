@@ -142,6 +142,29 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
     rows.map(|r| r.map_err(map_db_error)).collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProviderModelCounts {
+    pub active_models: i64,
+    pub total_models: i64,
+}
+
+pub fn count_by_provider(conn: &Connection, provider: &ProviderId) -> Result<ProviderModelCounts> {
+    let (active_models, total_models) = conn
+        .query_row(
+            "SELECT \
+                COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0), \
+                COUNT(*) \
+             FROM models WHERE provider_id = ?1",
+            [provider.as_str()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(map_db_error)?;
+    Ok(ProviderModelCounts {
+        active_models,
+        total_models,
+    })
+}
+
 pub fn mark_expired(conn: &Connection) -> Result<usize> {
     let n = conn
         .execute(

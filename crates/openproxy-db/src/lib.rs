@@ -18,9 +18,11 @@ pub use batch::{
     query_in_chunks_by, query_in_chunks_by_with_params, query_in_chunks_with_params,
     repeat_row_template, values_placeholders,
 };
-pub use conn::{DbPool, ReaderGuard, WriterGuard};
+pub use conn::{ArcReaderGuard, ArcWriterGuard, DbPool, ReaderGuard, WriterGuard};
 pub use crud::FromRow;
 pub use secrets::MasterKey;
 pub mod combos;
 pub mod error;
+pub mod free_proxies;
+pub mod maintenance;
 pub mod models;

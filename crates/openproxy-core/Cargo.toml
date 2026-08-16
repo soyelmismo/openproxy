@@ -50,8 +50,6 @@ tokio-util = { workspace = true, features = ["rt"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
-aes-gcm = { workspace = true }
-argon2 = { workspace = true }
 base64 = { workspace = true }
 tdigest = { workspace = true }
 dashmap = { workspace = true }

@@ -1403,6 +1403,69 @@ pub fn compute_effective_context_window(
     compute_effective_context_window_recursive(conn, combo_id, &mut visited, 0)
 }
 
+pub fn resolve_combo_to_targets(
+    conn: &rusqlite::Connection,
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Vec<ComboTarget>> {
+    if depth > MAX_SUB_COMBO_DEPTH {
+        return Err(CoreError::Validation(format!(
+            "max sub-combo depth ({MAX_SUB_COMBO_DEPTH}) exceeded"
+        )));
+    }
+    if visited.contains(&combo_id) {
+        return Err(CoreError::Validation(format!(
+            "cyclic combo detected at id {}",
+            combo_id.0
+        )));
+    }
+    visited.push(combo_id);
+
+    let targets = list_targets(conn, combo_id)?;
+    let mut flat = Vec::new();
+    for t in targets {
+        if let Some(sub_id) = t.sub_combo_id {
+            let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
+            flat.extend(sub);
+        } else {
+            flat.push(t);
+        }
+    }
+    visited.pop();
+    Ok(flat)
+}
+
+pub fn expand_account_rotation(
+    conn: &rusqlite::Connection,
+    targets: Vec<ComboTarget>,
+) -> Result<Vec<ComboTarget>> {
+    let mut out = Vec::new();
+    for t in targets {
+        if t.account_id.is_some() || t.sub_combo_id.is_some() {
+            out.push(t);
+            continue;
+        }
+        let mut stmt = conn
+            .prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC")
+            .map_err(crate::error::map_db_error)?;
+        let mut rows = stmt
+            .query(params![t.provider_id.as_str()])
+            .map_err(crate::error::map_db_error)?;
+        let mut count = 0;
+        while let Some(r) = rows.next().map_err(crate::error::map_db_error)? {
+            let mut ct = t.clone();
+            ct.account_id = Some(AccountId(r.get::<_, i64>(0).map_err(crate::error::map_db_error)?));
+            out.push(ct);
+            count += 1;
+        }
+        if count == 0 {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
 impl crate::crud::FromRow for Combo {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         row_to_combo(row)

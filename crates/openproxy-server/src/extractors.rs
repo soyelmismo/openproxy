@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Axum extractor that acquires a read connection from [`AppState`].
-pub struct DbReader(pub db::ReaderGuard<'static>);
+pub struct DbReader(pub db::ArcReaderGuard);
 
 impl Deref for DbReader {
     type Target = rusqlite::Connection;
@@ -32,15 +32,13 @@ where
 
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        let r = app_state.db_pool().reader();
-        let r_static =
-            unsafe { std::mem::transmute::<db::ReaderGuard<'_>, db::ReaderGuard<'static>>(r) };
-        Ok(DbReader(r_static))
+        let r = app_state.db_pool().reader_guard();
+        Ok(DbReader(r))
     }
 }
 
 /// Axum extractor that acquires a write connection from [`AppState`].
-pub struct DbWriter(pub db::WriterGuard<'static>);
+pub struct DbWriter(pub db::ArcWriterGuard);
 
 impl Deref for DbWriter {
     type Target = rusqlite::Connection;
@@ -65,10 +63,8 @@ where
 
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        let w = app_state.db_pool().writer();
-        let w_static =
-            unsafe { std::mem::transmute::<db::WriterGuard<'_>, db::WriterGuard<'static>>(w) };
-        Ok(DbWriter(w_static))
+        let w = app_state.db_pool().writer_guard();
+        Ok(DbWriter(w))
     }
 }
 

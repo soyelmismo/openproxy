@@ -103,18 +103,15 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
             })?;
 
         // Step 1: Checkpoint the WAL.
-        let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+        let _ = openproxy_db::maintenance::checkpoint_wal(&w);
         tracing::info!("VACUUM step 1: WAL checkpoint done");
 
         // Step 2: Integrity check.
-        let integrity: String = w
-            .query_row("PRAGMA integrity_check;", [], |r| r.get::<_, String>(0))
-            .unwrap_or_else(|e| format!("integrity_check error: {e}"));
+        let integrity = openproxy_db::maintenance::integrity_check(&w);
         tracing::info!("VACUUM step 2: integrity_check = {}", integrity);
 
         if integrity != "ok" {
-            let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-            let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
+            let inc_result = openproxy_db::maintenance::incremental_vacuum(&w, 1000);
             match inc_result {
                 Ok(()) => {
                     tracing::info!("VACUUM: incremental_vacuum succeeded despite integrity issues");
@@ -152,12 +149,7 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
         }
 
         // Step 3: DB is healthy — run full VACUUM.
-        // VACUUM creates a full copy of the DB. We temporarily switch temp_store
-        // to FILE to prevent memory exhaustion, as our global temp_store=MEMORY
-        // would force the entire VACUUM operation into RAM.
-        let _ = w.pragma_update(None, "temp_store", "FILE");
-        let vacuum_res = w.execute_batch("VACUUM;");
-        let _ = w.pragma_update(None, "temp_store", "MEMORY");
+        let vacuum_res = openproxy_db::maintenance::vacuum(&w);
 
         match vacuum_res {
             Ok(()) => {
@@ -177,8 +169,7 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
             }
             Err(e) => {
                 tracing::warn!(error = %e, "VACUUM step 3: full VACUUM failed, trying incremental");
-                let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-                match w.execute_batch("PRAGMA incremental_vacuum(1000);") {
+                match openproxy_db::maintenance::incremental_vacuum(&w, 1000) {
                     Ok(()) => {
                         tracing::info!("VACUUM: incremental fallback succeeded");
                         drop(w);
@@ -245,9 +236,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         // run `PRAGMA integrity_check` to see what's wrong, then
         // attempt to rebuild each table individually.
 
-        let integrity: String = w
-            .query_row("PRAGMA integrity_check;", [], |r| r.get::<_, String>(0))
-            .unwrap_or_else(|e| format!("error: {e}"));
+        let integrity = openproxy_db::maintenance::integrity_check(&w);
 
         tracing::info!(
             integrity = %integrity,
@@ -256,21 +245,11 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         );
 
         // List all tables so we can rebuild them.
-        let mut stmt = w
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        let table_names = openproxy_db::maintenance::list_user_tables(&w)
             .map_err(|e| ApiError(CoreError::Database {
                 message: format!("repair: list tables: {e}"),
                 source: Some(Box::new(e)),
             }))?;
-        let table_names: Vec<String> = stmt
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(|e| ApiError(CoreError::Database {
-                message: format!("repair: query tables: {e}"),
-                source: Some(Box::new(e)),
-            }))?
-            .filter_map(std::result::Result::ok)
-            .collect();
-        drop(stmt);
 
         tracing::info!(
             tables = ?table_names,
@@ -283,15 +262,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         let mut table_stats: Vec<serde_json::Value> = Vec::new();
         let mut total_rows_recovered: u64 = 0;
         for table in &table_names {
-            if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                tracing::warn!(table = %table, "Skipping table with invalid name characters");
-                continue;
-            }
-            let count_result: rusqlite::Result<i64> = w.query_row(
-                &format!("SELECT COUNT(*) FROM \"{table}\""),
-                [],
-                |r| r.get(0),
-            );
+            let count_result = openproxy_db::maintenance::count_table_rows(&w, table);
             match count_result {
                 Ok(count) => {
                     total_rows_recovered += count as u64;

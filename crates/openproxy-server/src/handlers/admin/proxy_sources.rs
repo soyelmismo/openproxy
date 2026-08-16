@@ -114,30 +114,9 @@ pub struct ReorderProxySourcesInput {
 }
 
 pub async fn reorder_proxy_sources(
-    DbWriter(mut w): DbWriter,
+    DbWriter(w): DbWriter,
     Json(body): Json<ReorderProxySourcesInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let tx = w.transaction().map_err(|e| CoreError::Database {
-        message: e.to_string(),
-        source: Some(Box::new(e)),
-    })?;
-
-    let n = body.ids.len();
-    for (i, id) in body.ids.iter().enumerate() {
-        let p = ((n - i) * 10) as i32;
-        tx.execute(
-            "UPDATE proxy_sources SET priority = ?1 WHERE id = ?2",
-            rusqlite::params![p, id],
-        )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })?;
-    }
-    tx.commit().map_err(|e| CoreError::Database {
-        message: e.to_string(),
-        source: Some(Box::new(e)),
-    })?;
-
+    openproxy_core::free_proxies::reorder_proxy_sources(&w, &body.ids)?;
     Ok(Json(serde_json::json!({ "reordered": true })))
 }

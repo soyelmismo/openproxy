@@ -147,145 +147,31 @@ impl SqlitePipelineRepository {
 
 impl PipelineRepository for SqlitePipelineRepository {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>> {
-        use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let combo = conn
-            .query_row(
-                "SELECT id, name, strategy, race_size, created_at, context_window, \
-                    priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
-                    cooldown_factor, lkgp_exploration_rate, selection_window_secs \
-             FROM combos WHERE id = ?1",
-                rusqlite::params![combo_id.0],
-                |row| {
-                    let strategy_str: String = row.get(2)?;
-                    let strategy = openproxy_types::combos::Strategy::parse(&strategy_str)
-                        .map_err(|e| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                2,
-                                rusqlite::types::Type::Text,
-                                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-                            )
-                        })?;
-                    let priority_mode_str: Option<String> = row.get(6)?;
-                    let priority_mode = priority_mode_str
-                        .map_or(openproxy_types::combos::PriorityMode::Strict, |s| {
-                            openproxy_types::combos::PriorityMode::parse(&s)
-                                .unwrap_or(openproxy_types::combos::PriorityMode::Strict)
-                        });
-                    let cooldown_mode_str: Option<String> = row.get(7)?;
-                    let cooldown_mode = cooldown_mode_str
-                        .map_or(openproxy_types::config::CooldownMode::Flat, |s| {
-                            openproxy_types::config::CooldownMode::parse(&s)
-                                .unwrap_or(openproxy_types::config::CooldownMode::Flat)
-                        });
-                    Ok(Combo {
-                        id: ComboId(row.get(0)?),
-                        name: row.get(1)?,
-                        strategy,
-                        race_size: row.get::<_, i64>(3)? as u8,
-                        created_at: row.get(4)?,
-                        context_window: row.get(5)?,
-                        priority_mode,
-                        cooldown_mode,
-                        cooldown_base_secs: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
-                        cooldown_max_secs: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-                        cooldown_factor: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        lkgp_exploration_rate: row.get(11)?,
-                        selection_window_secs: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        Ok(combo)
+        openproxy_db::combos::get_combo(&conn, combo_id)
     }
 
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-        list_targets(&self.conn.lock(), combo_id)
+        let conn = self.conn.lock();
+        openproxy_db::combos::list_targets(&conn, combo_id)
     }
+
     fn auto_populate_empty_combo(&self, combo_id: ComboId) -> Result<usize> {
         auto_populate_empty_combo(&self.conn.lock(), combo_id)
     }
+
     fn get_account(
         &self,
         account_id: AccountId,
-        _master_key: &MasterKey,
+        master_key: &MasterKey,
     ) -> Result<Option<Account>> {
-        use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let row = conn
-            .query_row(
-                "SELECT a.id, a.provider_id, a.label, a.priority, a.extra_config_json, a.health_status, \
-                    a.rate_limited_until, a.expires_at, a.created_at, \
-                    a.quota_session_used, a.quota_session_limit, a.quota_session_reset_at, \
-                    a.quota_weekly_used, a.quota_weekly_limit, a.quota_weekly_reset_at, \
-                    a.quota_plan_name, a.quota_last_fetched_at, a.quota_fetch_error, a.quota_model_details, \
-                    p.auth_type \
-             FROM accounts a \
-             JOIN providers p ON a.provider_id = p.id \
-             WHERE a.id = ?1",
-                rusqlite::params![account_id.0],
-                |row| {
-                    let health_str: String = row.get(5)?;
-                    let health_status = openproxy_types::HealthStatus::parse(&health_str)
-                        .unwrap_or(openproxy_types::HealthStatus::Healthy);
-
-                    let quota_model_details_str: Option<String> = row.get(18)?;
-                    let quota_model_details = quota_model_details_str.and_then(|s| {
-                        serde_json::from_str(&s).ok()
-                    });
-
-                    Ok(Account {
-                        id: AccountId(row.get(0)?),
-                        provider_id: openproxy_types::ids::ProviderId::new(
-                            row.get::<_, String>(1)?,
-                        ),
-                        label: row.get(2)?,
-                        priority: row.get(3)?,
-                        extra_config_json: row.get(4)?,
-                        health_status,
-                        rate_limited_until: row.get(6)?,
-                        quota_session_used: row.get(9)?,
-                        quota_session_limit: row.get(10)?,
-                        quota_session_reset_at: row.get(11)?,
-                        quota_weekly_used: row.get(12)?,
-                        quota_weekly_limit: row.get(13)?,
-                        quota_weekly_reset_at: row.get(14)?,
-                        quota_plan_name: row.get(15)?,
-                        quota_last_fetched_at: row.get(16)?,
-                        quota_fetch_error: row.get(17)?,
-                        quota_model_details,
-                        auth_type: row.get(19)?,
-                        email: None,
-                        oauth_scope: None,
-                        oauth_provider_specific: None,
-                        expires_at: row.get(7)?,
-                        created_at: row.get(8)?,
-                        current_proxy_id: None,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        Ok(row)
+        openproxy_db::accounts::get(&conn, account_id, master_key)
     }
 
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
-        use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let val: Option<Vec<u8>> = conn
-            .query_row(
-                "SELECT api_key_encrypted FROM accounts WHERE id = ?1",
-                rusqlite::params![account_id.0],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
-            .flatten();
-        match val {
-            Some(b) => master_key.decrypt(&b),
-            None => Ok(String::new()),
-        }
+        openproxy_db::accounts::decrypt_api_key(&conn, account_id, master_key)
     }
 
     fn decrypt_access_token(
@@ -293,21 +179,8 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<String> {
-        use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let val: Option<Vec<u8>> = conn
-            .query_row(
-                "SELECT access_token_encrypted FROM accounts WHERE id = ?1",
-                rusqlite::params![account_id.0],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
-            .flatten();
-        match val {
-            Some(b) => master_key.decrypt(&b),
-            None => Ok(String::new()),
-        }
+        openproxy_db::accounts::decrypt_access_token(&conn, account_id, master_key)
     }
 
     fn store_oauth_tokens(
@@ -317,15 +190,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         params: openproxy_types::accounts::StoreOAuthTokensParams<'_>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let access_token_encrypted = master_key.encrypt(params.access_token)?;
-        let refresh_token_encrypted = params
-            .refresh_token
-            .map(|rt| master_key.encrypt(rt))
-            .transpose()?;
-        conn.execute(
-            "UPDATE accounts SET access_token_encrypted = ?1, refresh_token_encrypted = ?2, expires_at = ?3 WHERE id = ?4",
-            rusqlite::params![access_token_encrypted, refresh_token_encrypted, params.expires_at, account_id.0]
-        ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+        openproxy_db::accounts::store_oauth_tokens(&conn, account_id, master_key, params)
     }
 
     fn insert_and_broadcast_notification(
@@ -369,109 +234,18 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn load_model(&self, row_id: ModelRowId) -> Result<Model> {
         let conn = self.conn.lock();
-        conn.query_row(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models WHERE id = ?1",
-            rusqlite::params![row_id.0],
-            |row| {
-                let target_format_str: String = row.get(4)?;
-                let target_format = match target_format_str.as_str() {
-                    "openai" => openproxy_types::message::TargetFormat::Openai,
-                    "anthropic" => openproxy_types::message::TargetFormat::Anthropic,
-                    "gemini" => openproxy_types::message::TargetFormat::Gemini,
-                    "responses" => openproxy_types::message::TargetFormat::Responses,
-                    "atomesus" => openproxy_types::message::TargetFormat::Atomesus,
-                    other => {
-                        return Err(rusqlite::Error::FromSqlConversionFailure(
-                            4,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("invalid target_format in db: {other}"),
-                            )),
-                        ));
-                    }
-                };
-
-                let active_bit: i64 = row.get(8)?;
-                let active = match active_bit {
-                    0 => false,
-                    1 => true,
-                    other => {
-                        return Err(rusqlite::Error::FromSqlConversionFailure(
-                            8,
-                            rusqlite::types::Type::Integer,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("invalid active bit in db: {other}"),
-                            )),
-                        ));
-                    }
-                };
-
-                let custom_bit: i64 = row.get(11)?;
-                let custom = match custom_bit {
-                    0 => false,
-                    1 => true,
-                    other => {
-                        return Err(rusqlite::Error::FromSqlConversionFailure(
-                            11,
-                            rusqlite::types::Type::Integer,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("invalid custom bit in db: {other}"),
-                            )),
-                        ));
-                    }
-                };
-
-                Ok(Model {
-                    row_id: openproxy_types::ids::ModelRowId(row.get(0)?),
-                    provider_id: openproxy_types::ids::ProviderId::new(row.get::<_, String>(1)?),
-                    model_id: openproxy_types::ids::ModelId::new(row.get::<_, String>(2)?),
-                    display_name: row.get(3)?,
-                    target_format,
-                    discovered_at: row.get(5)?,
-                    expires_at: row.get(6)?,
-                    timeout_overrides_json: row.get(7)?,
-                    active,
-                    last_test_status: row.get(9)?,
-                    last_test_at: row.get(10)?,
-                    custom,
-                    context_length: row.get(12)?,
-                    max_output_tokens: row.get(13)?,
-                    capabilities_json: row.get(14)?,
-                    family: row.get(15)?,
-                    model_type: row.get(16)?,
-                    input_modalities_json: row.get(17)?,
-                    output_modalities_json: row.get(18)?,
-                })
-            },
-        )
-        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+        openproxy_db::models::get_by_row_id(&conn, row_id)?
+            .ok_or_else(|| openproxy_types::error::CoreError::Internal(format!("model {} not found", row_id.0)))
     }
 
     fn get_account_label(
         &self,
         account_id: AccountId,
-        _master_key: &MasterKey,
+        master_key: &MasterKey,
     ) -> Result<Option<String>> {
-        use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let label = conn
-            .query_row(
-                "SELECT label FROM accounts WHERE id = ?1",
-                rusqlite::params![account_id.0],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        Ok(label)
+        openproxy_db::accounts::get(&conn, account_id, master_key)
+            .map(|opt| opt.and_then(|a| a.label))
     }
 
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>> {
@@ -581,10 +355,11 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>> {
+        let conn = self.conn.lock();
+        let models = openproxy_db::models::get_by_row_ids(&conn, model_row_ids)?;
         let mut map = HashMap::new();
-        for id in model_row_ids {
-            let m = self.load_model(*id)?;
-            map.insert(id.0, m);
+        for m in models {
+            map.insert(m.row_id.0, m);
         }
         Ok(map)
     }
@@ -806,16 +581,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         _error_msg: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
-            rusqlite::params![status, None::<i64>, now, now, proxy_id],
-        )
-        .map(|_| ())
-        .map_err(|e| openproxy_types::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })
+        openproxy_db::free_proxies::update_proxy_status(&conn, proxy_id, status, None)
     }
 
     fn get_or_assign_provider_proxy(
@@ -823,266 +589,27 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: &ProviderId,
         account_id: Option<AccountId>,
     ) -> Result<Option<String>> {
-        use openproxy_db::cooldowns::is_provider_proxy_in_cooldown;
-        use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-
-        let provider = match openproxy_db::providers::get(&conn, provider_id)? {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
-        if !provider.use_proxies {
-            return Ok(None);
-        }
-
-        let is_per_account = provider.proxy_rotation_mode == "account";
-        let (current_proxy_id, _account) = if is_per_account {
-            if let Some(ref acc_id) = account_id {
-                let acc_proxy_id: Option<String> = conn
-                    .query_row(
-                        "SELECT current_proxy_id FROM accounts WHERE id = ?1",
-                        rusqlite::params![acc_id.0],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| openproxy_types::error::CoreError::Database {
-                        message: e.to_string(),
-                        source: Some(Box::new(e)),
-                    })?
-                    .flatten();
-                (acc_proxy_id, Some(*acc_id))
-            } else {
-                (None, None)
-            }
-        } else {
-            (provider.current_proxy_id, None)
-        };
-
-        if let Some(ref proxy_id) = current_proxy_id
-            && !is_provider_proxy_in_cooldown(&conn, provider_id.as_str(), proxy_id)
-        {
-            let exists_and_alive = conn
-                .query_row(
-                    "SELECT host, port, type, username, password FROM free_proxies WHERE id = ?1 AND status = 'alive'",
-                    rusqlite::params![proxy_id],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, i64>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                            row.get::<_, Option<String>>(4)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(|e| openproxy_types::error::CoreError::Database {
-                    message: format!("query current proxy: {e}"),
-                    source: Some(Box::new(e)),
-                })?;
-
-            if let Some((host, port, proto, username, password)) = exists_and_alive {
-                if let (Some(u), Some(p)) = (username, password) {
-                    return Ok(Some(format!(
-                        "{}://{}:{}@{}:{}",
-                        proto.to_lowercase(),
-                        u,
-                        p,
-                        host,
-                        port
-                    )));
-                }
-                return Ok(Some(format!(
-                    "{}://{}:{}",
-                    proto.to_lowercase(),
-                    host,
-                    port
-                )));
-            }
-        }
-
-        let mut in_use_by_others = std::collections::HashSet::new();
-        if is_per_account {
-            let mut stmt = conn
-                .prepare("SELECT current_proxy_id FROM accounts WHERE provider_id = ?1 AND current_proxy_id IS NOT NULL AND id != ?2")
-                .map_err(|e| openproxy_types::error::CoreError::Database { message: e.to_string(), source: Some(Box::new(e)) })?;
-            let rows = stmt
-                .query_map(
-                    rusqlite::params![
-                        provider_id.as_str(),
-                        account_id.as_ref().map_or(0, |id| id.0)
-                    ],
-                    |row| row.get::<_, String>(0),
-                )
-                .map_err(|e| openproxy_types::error::CoreError::Database {
-                    message: e.to_string(),
-                    source: Some(Box::new(e)),
-                })?;
-            for r in rows.flatten() {
-                in_use_by_others.insert(r);
-            }
-        }
-
-        let mut stmt = conn
-            .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
-            .map_err(|e| openproxy_types::error::CoreError::Database {
-                message: format!("prepare query new proxy: {e}"),
-                source: Some(Box::new(e)),
-            })?;
-
-        let candidate_rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })
-            .map_err(|e| openproxy_types::error::CoreError::Database {
-                message: format!("query new proxy candidates: {e}"),
-                source: Some(Box::new(e)),
-            })?;
-
-        let mut selected_proxy = None;
-        let mut fallback_proxy = None;
-
-        for item in candidate_rows.flatten() {
-            if fallback_proxy.is_none() {
-                fallback_proxy = Some(item.clone());
-            }
-            if !is_provider_proxy_in_cooldown(&conn, provider_id.as_str(), &item.0)
-                && !in_use_by_others.contains(&item.0)
-            {
-                selected_proxy = Some(item);
-                break;
-            }
-        }
-
-        let new_proxy = selected_proxy.or(fallback_proxy);
-
-        if let Some((new_id, host, port, proto, username, password)) = new_proxy {
-            if is_per_account {
-                if let Some(ref acc_id) = account_id {
-                    conn.execute(
-                        "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
-                        rusqlite::params![new_id, acc_id.0],
-                    )
-                    .map_err(|e| {
-                        openproxy_types::error::CoreError::Database {
-                            message: e.to_string(),
-                            source: Some(Box::new(e)),
-                        }
-                    })?;
-                }
-            } else {
-                openproxy_db::providers::update_current_proxy(&conn, provider_id, Some(&new_id))?;
-            }
-
-            if let (Some(u), Some(p)) = (username, password) {
-                return Ok(Some(format!(
-                    "{}://{}:{}@{}:{}",
-                    proto.to_lowercase(),
-                    u,
-                    p,
-                    host,
-                    port
-                )));
-            }
-            return Ok(Some(format!(
-                "{}://{}:{}",
-                proto.to_lowercase(),
-                host,
-                port
-            )));
-        }
-
-        Ok(None)
+        openproxy_db::free_proxies::get_or_assign_provider_proxy(
+            &conn,
+            provider_id,
+            account_id.as_ref(),
+        )
     }
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {
         let conn = self.conn.lock();
-        let (_, host_port) = url.split_once("://")?;
-        let (host, port_str) = host_port.split_once(':')?;
-        let port: i64 = port_str.parse().ok()?;
-        conn.query_row(
-            "SELECT status FROM free_proxies WHERE host = ?1 AND port = ?2",
-            rusqlite::params![host, port],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
+        openproxy_db::free_proxies::get_proxy_status_by_url(&conn, url)
     }
 
     fn prune_expired_cooldowns(&self) -> Result<usize> {
         let conn = self.conn.lock();
-        prune_expired_cooldowns(&conn)
+        openproxy_db::cooldowns::prune_expired(&conn)
     }
 }
 
 pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
-                    ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
-             FROM combo_targets ct \
-             INNER JOIN providers p ON p.id = ct.provider_id \
-             WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
-                 AND (SELECT count(*) FROM target_cooldowns tc \
-                      WHERE tc.combo_target_id = ct.id \
-                        AND datetime(tc.cooldown_until) > datetime('now')) = 0 \
-             ORDER BY ct.priority_order ASC, ct.id ASC",
-        )
-        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-    let rows = stmt
-        .query_map(rusqlite::params![combo_id.0], |row| {
-            let id: i64 = row.get(0)?;
-            let combo_id: i64 = row.get(1)?;
-            let provider_id: String = row.get(2)?;
-            let account_id: Option<i64> = row.get(3)?;
-            let model_row_id: Option<i64> = row.get(4)?;
-            let sub_combo_id: Option<i64> = row.get(5)?;
-            let priority_order: i32 = row.get(6)?;
-            let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
-            let rate_limit_scope: String = row.get(8)?;
-            let active: i64 = row.get::<_, Option<i64>>(9)?.unwrap_or(1);
-            let cooldown_mode_str: Option<String> = row.get(10).ok().flatten();
-            let cooldown_mode = cooldown_mode_str
-                .as_deref()
-                .and_then(|s| openproxy_types::config::CooldownMode::parse(s).ok());
-            let cooldown_base_secs: Option<u64> = row.get::<_, Option<i64>>(11)?.map(|v| v as u64);
-            let cooldown_max_secs: Option<u64> = row.get::<_, Option<i64>>(12)?.map(|v| v as u64);
-            let cooldown_factor: Option<u32> = row.get::<_, Option<i64>>(13)?.map(|v| v as u32);
-
-            Ok(ComboTarget {
-                id: openproxy_types::ids::ComboTargetId(id),
-                combo_id: ComboId(combo_id),
-                provider_id: openproxy_types::ids::ProviderId::new(provider_id),
-                account_id: account_id.map(AccountId),
-                model_row_id: model_row_id.map(ModelRowId),
-                sub_combo_id: sub_combo_id.map(ComboId),
-                priority_order,
-                weight,
-                active: active != 0,
-                rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(
-                    &rate_limit_scope,
-                )
-                .unwrap_or_default(),
-                cooldown_mode,
-                cooldown_base_secs,
-                cooldown_max_secs,
-                cooldown_factor,
-            })
-        })
-        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-    let mut res = Vec::new();
-    for r in rows {
-        res.push(r.map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?);
-    }
-    Ok(res)
+    openproxy_db::combos::list_targets(conn, combo_id)
 }
 
 pub fn auto_populate_empty_combo(
@@ -1096,34 +623,7 @@ pub fn expand_account_rotation(
     conn: &rusqlite::Connection,
     targets: Vec<ComboTarget>,
 ) -> Result<Vec<ComboTarget>> {
-    let mut out = Vec::new();
-    for t in targets {
-        if t.account_id.is_some() || t.sub_combo_id.is_some() {
-            out.push(t);
-            continue;
-        }
-        let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let mut rows = stmt
-            .query(rusqlite::params![t.provider_id.as_str()])
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let mut count = 0;
-        while let Some(r) = rows
-            .next()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
-        {
-            let mut ct = t.clone();
-            ct.account_id =
-                Some(AccountId(r.get::<_, i64>(0).map_err(|e| {
-                    openproxy_types::error::CoreError::Internal(e.to_string())
-                })?));
-            out.push(ct);
-            count += 1;
-        }
-        if count == 0 {
-            out.push(t);
-        }
-    }
-    Ok(out)
+    openproxy_db::combos::expand_account_rotation(conn, targets)
 }
 
 pub fn resolve_combo_to_targets(
@@ -1132,39 +632,9 @@ pub fn resolve_combo_to_targets(
     visited: &mut Vec<ComboId>,
     depth: u32,
 ) -> Result<Vec<ComboTarget>> {
-    if depth > 5 {
-        return Err(openproxy_types::error::CoreError::Validation(format!(
-            "max sub-combo depth ({}) exceeded",
-            5
-        )));
-    }
-    if visited.contains(&combo_id) {
-        return Err(openproxy_types::error::CoreError::Validation(format!(
-            "cyclic combo detected at id {}",
-            combo_id.0
-        )));
-    }
-    visited.push(combo_id);
-
-    let targets = list_targets(conn, combo_id)?;
-    let mut flat = Vec::new();
-    for t in targets {
-        if let Some(sub_id) = t.sub_combo_id {
-            let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
-            flat.extend(sub);
-        } else {
-            flat.push(t);
-        }
-    }
-    visited.pop();
-    Ok(flat)
+    openproxy_db::combos::resolve_combo_to_targets(conn, combo_id, visited, depth)
 }
 
 pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "DELETE FROM target_cooldowns WHERE datetime(cooldown_until) <= datetime(?1)",
-        rusqlite::params![now],
-    )
-    .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+    openproxy_db::cooldowns::prune_expired(conn)
 }

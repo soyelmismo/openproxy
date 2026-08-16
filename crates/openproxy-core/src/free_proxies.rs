@@ -1428,18 +1428,7 @@ pub fn update_proxy_source(
     })
 }
 
-pub fn delete_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<bool> {
-    let count = conn
-        .execute(
-            "DELETE FROM proxy_sources WHERE id = ?1",
-            rusqlite::params![id],
-        )
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })?;
-    Ok(count > 0)
-}
+pub use openproxy_db::free_proxies::*;
 
 pub async fn fetch_custom_proxy_source(
     source_name: &str,

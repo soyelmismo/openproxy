@@ -1073,3 +1073,34 @@ fn parse_image_url_to_inline_data_extracts_base64() {
     });
     assert!(parse_image_url_to_inline_data(&invalid_url).is_none());
 }
+
+#[tokio::test]
+async fn openai_to_anthropic_sse_stream_translates_chunks() {
+    use futures_util::StreamExt;
+
+    let chunks = vec![
+        bytes::Bytes::from("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"),
+        bytes::Bytes::from("data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"),
+        bytes::Bytes::from("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"),
+        bytes::Bytes::from("data: [DONE]\n\n"),
+    ];
+    let stream = futures_util::stream::iter(chunks);
+    let sse_stream = OpenAIToAnthropicSseStream::new(stream, "msg_test".to_string(), "claude-3".to_string());
+    let results: Vec<bytes::Bytes> = sse_stream.map(|r| r.unwrap()).collect().await;
+
+    assert_eq!(results.len(), 3);
+    let first = std::str::from_utf8(&results[0]).unwrap();
+    assert!(first.contains("event: message_start"));
+    assert!(first.contains("event: content_block_start"));
+    assert!(first.contains("event: content_block_delta"));
+    assert!(first.contains("Hello"));
+
+    let second = std::str::from_utf8(&results[1]).unwrap();
+    assert!(second.contains("event: content_block_delta"));
+    assert!(second.contains("world"));
+
+    let third = std::str::from_utf8(&results[2]).unwrap();
+    assert!(third.contains("event: content_block_stop"));
+    assert!(third.contains("event: message_delta"));
+    assert!(third.contains("event: message_stop"));
+}
