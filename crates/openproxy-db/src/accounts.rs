@@ -729,3 +729,23 @@ pub fn update_antigravity_project_id(
 
     Ok(())
 }
+
+pub fn get_current_proxy_id(conn: &Connection, account_id: AccountId) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT current_proxy_id FROM accounts WHERE id = ?1",
+        params![account_id.0],
+        |row| row.get(0),
+    )
+    .optional()
+    .map(|opt| opt.flatten())
+    .map_err(crate::error::map_db_error_ctx("get current_proxy_id"))
+}
+
+pub fn clear_current_proxy_id(conn: &Connection, account_id: AccountId) -> Result<()> {
+    conn.execute(
+        "UPDATE accounts SET current_proxy_id = NULL WHERE id = ?1",
+        params![account_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx("clear current_proxy_id"))?;
+    Ok(())
+}

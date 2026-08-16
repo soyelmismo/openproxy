@@ -135,12 +135,7 @@ impl UpstreamDispatcher {
                     let is_per_account = provider.proxy_rotation_mode == "account";
                     let bad_proxy_id = if is_per_account {
                         if let Some(ref acc_id) = account_id {
-                            conn.query_row(
-                                "SELECT current_proxy_id FROM accounts WHERE id = ?1",
-                                rusqlite::params![acc_id.0],
-                                |row| row.get::<_, Option<String>>(0),
-                            )
-                            .unwrap_or(None)
+                            openproxy_db::accounts::get_current_proxy_id(&conn, *acc_id).unwrap_or(None)
                         } else {
                             None
                         }
@@ -199,10 +194,7 @@ impl UpstreamDispatcher {
                 );
                 if is_per_account {
                     if let Some(ref acc_id) = account_id {
-                        let _ = conn.execute(
-                            "UPDATE accounts SET current_proxy_id = NULL WHERE id = ?1",
-                            rusqlite::params![acc_id.0],
-                        );
+                        let _ = openproxy_db::accounts::clear_current_proxy_id(&conn, *acc_id);
                     }
                 } else {
                     let _ = openproxy_db::providers::update_current_proxy(
