@@ -1051,6 +1051,7 @@ mod tests {
             "codex",
             "kiro",
             "openrouter",
+            "horde",
         ];
         let providers_with_fetcher = [
             "minimax",
@@ -1060,6 +1061,7 @@ mod tests {
             "codex",
             "kiro",
             "openrouter",
+            "horde",
         ];
         for adapter in adapters {
             let id = adapter.id().as_str();

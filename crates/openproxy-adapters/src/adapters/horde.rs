@@ -6,8 +6,9 @@
 //! `/generate/status/{id}` until finished.
 
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
+    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, DiscoveredModel, ModelId,
+    ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
+    UpstreamClient, UpstreamRequest,
 };
 use bytes::Bytes;
 use openproxy_types::ImageGenerationRequest;
@@ -36,6 +37,40 @@ impl HordeAdapter {
 }
 
 crate::adapters::derive_default_from_new!(HordeAdapter);
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HordeLora {
+    pub name: String,
+    pub model: f32,
+    pub clip: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inject_trigger: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HordeTi {
+    pub name: String,
+    pub strength: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParsedPromptDirectives {
+    pub clean_prompt: String,
+    pub negative_prompts: Vec<String>,
+    pub loras: Vec<HordeLora>,
+    pub tis: Vec<HordeTi>,
+    pub sampler_name: Option<String>,
+    pub steps: Option<u32>,
+    pub cfg_scale: Option<f32>,
+    pub clip_skip: Option<u32>,
+    pub hires_fix: Option<bool>,
+    pub hires_fix_denoising_strength: Option<f32>,
+    pub seed: Option<u64>,
+    pub control_type: Option<String>,
+    pub post_processing: Vec<String>,
+    pub slow_workers: Option<bool>,
+    pub trusted_workers: Option<bool>,
+    pub workers: Vec<String>,
+}
 
 #[derive(Debug, Serialize)]
 struct HordeGenerationParams {
@@ -52,7 +87,19 @@ struct HordeGenerationParams {
     karras: bool,
     hires_fix: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    hires_fix_denoising_strength: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clip_skip: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     post_processing: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loras: Option<Vec<HordeLora>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tis: Option<Vec<HordeTi>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +110,10 @@ struct HordeGenerationPayload {
     nsfw: bool,
     censor_nsfw: bool,
     r2: bool,
+    slow_workers: bool,
+    trusted_workers: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workers: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,6 +125,15 @@ struct HordeGenerationPayload {
 impl ProviderAdapter for HordeAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
+    }
+
+    fn metadata(&self) -> openproxy_types::ProviderMetadata {
+        let mut meta = openproxy_types::ProviderMetadata::custom_default();
+        meta.built_in = true;
+        meta.deletable = false;
+        meta.supports_quota = true;
+        meta.quota_refresh_supported = true;
+        meta
     }
 
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
@@ -210,6 +270,20 @@ impl ProviderAdapter for HordeAdapter {
             discovered.extend(image_models.into_iter().map(|(_, _, m)| m));
         }
 
+        // 3. Synthetic Vision / Interrogation model
+        discovered.push(DiscoveredModel {
+            model_id: ModelId::new("horde/vision"),
+            display_name: Some("Horde Vision (CLIP/BLIP Interrogator)".into()),
+            target_format: TargetFormat::Openai,
+            context_length: None,
+            max_output_tokens: None,
+            input_modalities: Some(vec!["text".into(), "image".into()]),
+            output_modalities: Some(vec!["text".into()]),
+            model_type: Some("chat".into()),
+            family: Some("vision".into()),
+            capabilities: None,
+        });
+
         Ok(discovered)
     }
 
@@ -234,9 +308,131 @@ impl ProviderAdapter for HordeAdapter {
     ) -> Result<Bytes> {
         self.build_horde_payload(req, upstream_model_id, None, None, None, None)
     }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Option<Result<openproxy_types::AccountQuota>> {
+        Some(self.fetch_horde_quota_local(upstream_client, api_key).await)
+    }
 }
 
 impl HordeAdapter {
+    async fn fetch_horde_quota_local(
+        &self,
+        upstream: &Arc<UpstreamClient>,
+        api_key: &str,
+    ) -> Result<openproxy_types::AccountQuota> {
+        let key = if api_key.trim().is_empty() {
+            "0000000000"
+        } else {
+            api_key.trim()
+        };
+
+        let url = format!("{}/find_user", self.config.base_url);
+        let mut req = UpstreamRequest::get(url);
+        if let Ok(v) = http::HeaderValue::from_str(key) {
+            req.headers.insert(
+                http::header::HeaderName::from_static("apikey"),
+                v,
+            );
+        }
+        if let Ok(v) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
+            req.headers.insert(
+                http::header::HeaderName::from_static("client-agent"),
+                v,
+            );
+        }
+        req.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+
+        let cancel = CancellationToken::new();
+        let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(openproxy_types::AccountQuota {
+                    session_used: None,
+                    session_limit: None,
+                    session_reset_at: None,
+                    weekly_used: None,
+                    weekly_limit: None,
+                    weekly_reset_at: None,
+                    plan_name: None,
+                    last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
+                    fetch_error: Some(format!("network: {e}")),
+                    model_details: None,
+                });
+            }
+        };
+
+        if !response.status.is_success() {
+            let status = response.status.as_u16();
+            let body = response.collect().await.unwrap_or_default();
+            let snippet = String::from_utf8_lossy(&body)
+                .chars()
+                .take(200)
+                .collect::<String>();
+            return Ok(openproxy_types::AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: None,
+                last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
+                fetch_error: Some(format!("HTTP {status}: {snippet}")),
+                model_details: None,
+            });
+        }
+
+        let body = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(openproxy_types::AccountQuota {
+                    session_used: None,
+                    session_limit: None,
+                    session_reset_at: None,
+                    weekly_used: None,
+                    weekly_limit: None,
+                    weekly_reset_at: None,
+                    plan_name: None,
+                    last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
+                    fetch_error: Some(format!("collect: {e}")),
+                    model_details: None,
+                });
+            }
+        };
+
+        let json: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(openproxy_types::AccountQuota {
+                    session_used: None,
+                    session_limit: None,
+                    session_reset_at: None,
+                    weekly_used: None,
+                    weekly_limit: None,
+                    weekly_reset_at: None,
+                    plan_name: None,
+                    last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
+                    fetch_error: Some(format!("parse: {e}")),
+                    model_details: None,
+                });
+            }
+        };
+
+        Ok(parse_horde_quota(
+            &json,
+            &openproxy_types::quota::now_unix_secs_str(),
+        ))
+    }
+
     /// Build a Horde `/generate/async` JSON payload.
     ///
     /// When `source_image_b64` is provided, the request becomes img2img (or inpainting if `source_mask_b64` is provided).
@@ -254,12 +450,26 @@ impl HordeAdapter {
     ) -> Result<Bytes> {
         let (width, height) = parse_dimensions(req.size.as_deref(), req.aspect_ratio.as_deref());
 
-        let mut prompt = req.prompt.clone();
-        if let Some(ref neg) = req.negative_prompt
-            && !neg.trim().is_empty()
-        {
+        let parsed = parse_prompt_directives(&req.prompt);
+
+        let mut all_negatives = Vec::new();
+        if let Some(ref neg) = req.negative_prompt {
+            let clean_neg = clean_residual_prompt(neg);
+            if !clean_neg.is_empty() {
+                all_negatives.push(clean_neg);
+            }
+        }
+        for n in &parsed.negative_prompts {
+            let clean_n = clean_residual_prompt(n);
+            if !clean_n.is_empty() && !all_negatives.contains(&clean_n) {
+                all_negatives.push(clean_n);
+            }
+        }
+
+        let mut prompt = parsed.clean_prompt.clone();
+        if !all_negatives.is_empty() {
             prompt.push_str(" ### ");
-            prompt.push_str(neg.trim());
+            prompt.push_str(&all_negatives.join(", "));
         }
 
         let is_img2img = source_image_b64.is_some();
@@ -271,13 +481,26 @@ impl HordeAdapter {
             "txt2img"
         };
 
-        let post_processing = if req.quality.as_deref() == Some("hd") {
-            Some(vec![
-                "RealESRGAN_x4plus".to_string(),
-                "GFPGAN".to_string(),
-            ])
-        } else {
+        let mut post_processing_list = Vec::new();
+        if req.quality.as_deref() == Some("hd") {
+            post_processing_list.push("RealESRGAN_x4plus".to_string());
+            post_processing_list.push("GFPGAN".to_string());
+        }
+        for pp in parsed.post_processing {
+            if !post_processing_list.contains(&pp) {
+                post_processing_list.push(pp);
+            }
+        }
+        let post_processing = if post_processing_list.is_empty() {
             None
+        } else {
+            Some(post_processing_list)
+        };
+
+        let workers = if parsed.workers.is_empty() {
+            None
+        } else {
+            Some(parsed.workers)
         };
 
         let payload = HordeGenerationPayload {
@@ -286,23 +509,42 @@ impl HordeAdapter {
                 n: req.n.unwrap_or(1).clamp(1, 10),
                 width,
                 height,
-                steps: 25,
-                sampler_name: "k_euler_a".to_string(),
-                cfg_scale: 6.5,
-                seed: req.seed,
+                steps: parsed.steps.unwrap_or(25),
+                sampler_name: parsed
+                    .sampler_name
+                    .unwrap_or_else(|| "k_euler_a".to_string()),
+                cfg_scale: parsed.cfg_scale.unwrap_or(6.5),
+                seed: parsed.seed.or(req.seed),
                 denoising_strength: if is_img2img {
                     Some(denoising_strength.unwrap_or(0.6).clamp(0.0, 1.0))
                 } else {
                     None
                 },
                 karras: true,
-                hires_fix: !is_img2img,
+                hires_fix: parsed.hires_fix.unwrap_or(!is_img2img),
+                hires_fix_denoising_strength: parsed.hires_fix_denoising_strength,
+                clip_skip: parsed.clip_skip,
+                control_type: parsed.control_type,
                 post_processing,
+                loras: if parsed.loras.is_empty() {
+                    None
+                } else {
+                    Some(parsed.loras)
+                },
+                tis: if parsed.tis.is_empty() {
+                    None
+                } else {
+                    Some(parsed.tis)
+                },
+                workers: workers.clone(),
             },
             models: vec![upstream_model_id.to_string()],
             nsfw: true,
             censor_nsfw: false,
             r2: true,
+            slow_workers: parsed.slow_workers.unwrap_or(false),
+            trusted_workers: parsed.trusted_workers.unwrap_or(true),
+            workers,
             source_image: source_image_b64,
             source_mask: source_mask_b64,
             source_processing: if is_img2img {
@@ -315,6 +557,376 @@ impl HordeAdapter {
         let vec = serde_json::to_vec(&payload)
             .map_err(|e| CoreError::Parse(format!("failed to serialize horde request: {e}")))?;
         Ok(Bytes::from(vec))
+    }
+
+    /// Check if a model name refers to the Horde vision/interrogation synthetic model.
+    pub fn is_vision_model(model_name: &str) -> bool {
+        let lower = model_name.to_lowercase();
+        lower == "horde/vision" || lower == "vision" || lower.ends_with("/vision")
+    }
+
+    /// Build a Horde `/interrogate/async` JSON payload.
+    pub fn build_interrogate_payload(source_image: &str, forms: &[&str]) -> Result<Bytes> {
+        let forms_vec: Vec<HordeInterrogateForm> = if forms.is_empty() {
+            vec![HordeInterrogateForm {
+                name: "caption".to_string(),
+            }]
+        } else {
+            forms
+                .iter()
+                .map(|f| HordeInterrogateForm {
+                    name: f.to_string(),
+                })
+                .collect()
+        };
+
+        let payload = HordeInterrogatePayload {
+            forms: forms_vec,
+            source_image: clean_image_str(source_image),
+        };
+
+        let vec = serde_json::to_vec(&payload)
+            .map_err(|e| CoreError::Parse(format!("failed to serialize horde interrogate request: {e}")))?;
+        Ok(Bytes::from(vec))
+    }
+
+    /// Extract image base64 or URL from chat messages.
+    pub fn extract_image_from_messages(
+        messages: &[openproxy_types::OpenAIMessage],
+    ) -> Option<String> {
+        for msg in messages.iter().rev() {
+            if let Some(ref content) = msg.content {
+                match content {
+                    serde_json::Value::Array(parts) => {
+                        for part in parts {
+                            if let Some(img) = extract_image_from_part(part) {
+                                return Some(img);
+                            }
+                        }
+                    }
+                    serde_json::Value::Object(map) => {
+                        if let Some(img) = extract_image_from_json_map(map) {
+                            return Some(img);
+                        }
+                    }
+                    serde_json::Value::String(s)
+                        if s.starts_with("data:image/")
+                            || s.starts_with("http://")
+                            || s.starts_with("https://") =>
+                    {
+                        return Some(clean_image_str(s));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    /// Parse caption string from a Horde interrogate status response.
+    pub fn parse_interrogate_status_caption(status_json: &serde_json::Value) -> Option<String> {
+        // 1. Check forms array:
+        if let Some(forms) = status_json.get("forms").and_then(|v| v.as_array()) {
+            for form in forms {
+                if let Some(result) = form.get("result") {
+                    if let Some(s) = result.as_str()
+                        && !s.trim().is_empty()
+                    {
+                        return Some(s.trim().to_string());
+                    }
+                    if let Some(obj) = result.as_object() {
+                        for key in ["caption", "text", "interrogation", "description", "summary", "result"] {
+                            if let Some(s) = obj.get(key).and_then(|v| v.as_str())
+                                && !s.trim().is_empty()
+                            {
+                                return Some(s.trim().to_string());
+                            }
+                        }
+                        if let Ok(serialized) = serde_json::to_string(obj) {
+                            return Some(serialized);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check top-level result or caption fields
+        if let Some(caption) = status_json.get("caption").and_then(|v| v.as_str()) {
+            return Some(caption.trim().to_string());
+        }
+        if let Some(result) = status_json.get("result") {
+            if let Some(s) = result.as_str() {
+                return Some(s.trim().to_string());
+            }
+            if let Some(caption) = result.get("caption").and_then(|v| v.as_str()) {
+                return Some(caption.trim().to_string());
+            }
+        }
+        if let Some(gens) = status_json.get("generations").and_then(|v| v.as_array()) {
+            for item in gens {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    return Some(text.trim().to_string());
+                }
+                if let Some(img) = item.get("img").and_then(|v| v.as_str()) {
+                    return Some(img.trim().to_string());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Check if interrogation status is done or faulted.
+    pub fn is_interrogate_done(status_json: &serde_json::Value) -> (bool, bool) {
+        let state = status_json.get("state").and_then(|v| v.as_str()).unwrap_or("");
+        let is_done = state.eq_ignore_ascii_case("done")
+            || status_json.get("done").and_then(|v| v.as_bool()).unwrap_or(false)
+            || status_json.get("forms").and_then(|v| v.as_array()).is_some_and(|arr| {
+                arr.iter().any(|f| {
+                    f.get("state")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| s.eq_ignore_ascii_case("done"))
+                        || f.get("result").is_some()
+                })
+            });
+        let is_faulted = state.eq_ignore_ascii_case("faulted")
+            || status_json.get("faulted").and_then(|v| v.as_bool()).unwrap_or(false);
+        (is_done, is_faulted)
+    }
+
+    /// Execute an asynchronous interrogation on AI Horde and poll until done.
+    pub async fn execute_interrogate(
+        upstream_client: &Arc<UpstreamClient>,
+        base_url: &str,
+        api_key: &str,
+        source_image: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<String> {
+        let payload = Self::build_interrogate_payload(source_image, &["caption"])?;
+        let async_url = format!("{base_url}/interrogate/async");
+        let mut post_req = UpstreamRequest::post_json(async_url, payload);
+
+        let key = if api_key.trim().is_empty() {
+            "0000000000"
+        } else {
+            api_key.trim()
+        };
+        if let Ok(val) = http::HeaderValue::from_str(key) {
+            post_req
+                .headers
+                .insert(http::header::HeaderName::from_static("apikey"), val);
+        }
+        if let Ok(val) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
+            post_req
+                .headers
+                .insert(http::header::HeaderName::from_static("client-agent"), val);
+        }
+        if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {key}")) {
+            post_req.headers.insert(http::header::AUTHORIZATION, val);
+        }
+
+        let resp = upstream_client
+            .call(post_req, TimeoutProfile::Chat, cancel_token.clone())
+            .await
+            .map_err(|e| {
+                CoreError::UpstreamConnection(format!("horde interrogate submit error: {e:?}"))
+            })?;
+
+        if !resp.status.is_success() {
+            let status = resp.status.as_u16();
+            let body = resp.collect().await.unwrap_or_default();
+            let snippet = String::from_utf8_lossy(&body);
+            return Err(CoreError::UpstreamConnection(format!(
+                "horde interrogate submit failed (HTTP {status}): {snippet}"
+            )));
+        }
+
+        let body = resp
+            .collect()
+            .await
+            .map_err(|e| CoreError::UpstreamConnection(format!("read submit response: {e:?}")))?;
+
+        let submit_json: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Parse(format!("parse horde submit response: {e}")))?;
+
+        let Some(job_id) = submit_json.get("id").and_then(|v| v.as_str()) else {
+            return Err(CoreError::UpstreamConnection(format!(
+                "horde interrogate did not return a job ID: {submit_json}"
+            )));
+        };
+        let job_id = job_id.to_string();
+
+        let status_url = format!("{base_url}/interrogate/status/{job_id}");
+        let timeout = std::time::Duration::from_secs(120);
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < timeout {
+            if cancel_token.is_cancelled() {
+                cancel_interrogate_job(upstream_client, base_url, &job_id, api_key).await;
+                return Err(CoreError::Cancelled(
+                    openproxy_types::CancelReason::ClientDisconnected,
+                ));
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+            let mut req = UpstreamRequest::get(&status_url);
+            if let Ok(val) = http::HeaderValue::from_str(key) {
+                req.headers
+                    .insert(http::header::HeaderName::from_static("apikey"), val);
+            }
+            if let Ok(val) =
+                http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
+            {
+                req.headers
+                    .insert(http::header::HeaderName::from_static("client-agent"), val);
+            }
+
+            let resp = match upstream_client
+                .call(req, TimeoutProfile::Chat, cancel_token.clone())
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Horde interrogate status polling network error: {e:?}");
+                    continue;
+                }
+            };
+
+            if resp.status.as_u16() != 200 {
+                continue;
+            }
+
+            let Ok(body) = resp.collect().await else { continue };
+
+            let Ok(status_json) = serde_json::from_slice::<serde_json::Value>(&body) else {
+                continue;
+            };
+
+            let (is_done, is_faulted) = Self::is_interrogate_done(&status_json);
+
+            if is_faulted {
+                cancel_interrogate_job(upstream_client, base_url, &job_id, api_key).await;
+                return Err(CoreError::UpstreamConnection(
+                    "horde interrogation job faulted or worker unavailable".into(),
+                ));
+            }
+
+            if (is_done || status_json.get("forms").is_some())
+                && let Some(caption) = Self::parse_interrogate_status_caption(&status_json)
+            {
+                return Ok(caption);
+            }
+        }
+
+        cancel_interrogate_job(upstream_client, base_url, &job_id, api_key).await;
+        Err(CoreError::UpstreamTimeout {
+            phase: "horde_interrogate_poll".into(),
+            ms: 120_000,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HordeInterrogateForm {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HordeInterrogatePayload {
+    pub forms: Vec<HordeInterrogateForm>,
+    pub source_image: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HordeInterrogateStatusResponse {
+    pub id: Option<String>,
+    pub state: Option<String>,
+    pub forms: Option<Vec<HordeInterrogateFormStatus>>,
+    pub message: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HordeInterrogateFormStatus {
+    pub name: Option<String>,
+    pub form: Option<String>,
+    pub state: Option<String>,
+    pub result: Option<serde_json::Value>,
+}
+
+async fn cancel_interrogate_job(
+    upstream_client: &Arc<UpstreamClient>,
+    base_url: &str,
+    job_id: &str,
+    api_key: &str,
+) {
+    let cancel_url = format!("{base_url}/interrogate/status/{job_id}");
+    let mut del_req = UpstreamRequest::delete(&cancel_url);
+    let key = if api_key.trim().is_empty() {
+        "0000000000"
+    } else {
+        api_key.trim()
+    };
+    if let Ok(val) = http::HeaderValue::from_str(key) {
+        del_req
+            .headers
+            .insert(http::header::HeaderName::from_static("apikey"), val);
+    }
+    if let Ok(val) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
+        del_req
+            .headers
+            .insert(http::header::HeaderName::from_static("client-agent"), val);
+    }
+    let _ = upstream_client
+        .call(del_req, TimeoutProfile::Chat, CancellationToken::new())
+        .await;
+}
+
+fn extract_image_from_part(part: &serde_json::Value) -> Option<String> {
+    let obj = part.as_object()?;
+    extract_image_from_json_map(obj)
+}
+
+fn extract_image_from_json_map(map: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    // 1. type == "image_url" -> image_url.url or image_url string
+    if let Some(img_url_val) = map.get("image_url") {
+        if let Some(url_str) = img_url_val.as_str() {
+            return Some(clean_image_str(url_str));
+        }
+        if let Some(url_obj) = img_url_val.as_object()
+            && let Some(url_str) = url_obj.get("url").and_then(|v| v.as_str())
+        {
+            return Some(clean_image_str(url_str));
+        }
+    }
+
+    // 2. source -> data (Anthropic style)
+    if let Some(source) = map.get("source").and_then(|v| v.as_object())
+        && let Some(data) = source.get("data").and_then(|v| v.as_str())
+    {
+        return Some(clean_image_str(data));
+    }
+
+    // 3. input_image / image -> image string / data
+    if let Some(img) = map.get("image").and_then(|v| v.as_str()) {
+        return Some(clean_image_str(img));
+    }
+    if let Some(img) = map.get("source_image").and_then(|v| v.as_str()) {
+        return Some(clean_image_str(img));
+    }
+
+    None
+}
+
+fn clean_image_str(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.starts_with("data:image/")
+        && let Some((_header, data)) = trimmed.split_once(',')
+    {
+        data.trim().to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -380,9 +992,409 @@ pub fn parse_dimensions(size: Option<&str>, aspect_ratio: Option<&str>) -> (u32,
     }
 }
 
+/// Extract AI Horde prompt directives (<lora:...>, <ti:...>, --sampler, --steps, etc.) from a prompt.
+pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
+    let mut loras = Vec::new();
+    let mut tis = Vec::new();
+    let mut without_tags = String::with_capacity(raw_prompt.len());
+
+    let mut cursor = 0;
+    while let Some(start_idx) = raw_prompt[cursor..].find('<') {
+        let absolute_start = cursor + start_idx;
+        without_tags.push_str(&raw_prompt[cursor..absolute_start]);
+        if let Some(end_idx) = raw_prompt[absolute_start..].find('>') {
+            let absolute_end = absolute_start + end_idx;
+            let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
+            let tag_trimmed = tag_content.trim();
+
+            if tag_trimmed.len() >= 5 && tag_trimmed[..5].eq_ignore_ascii_case("lora:") {
+                let lora_body = &tag_trimmed[5..];
+                let parts: Vec<&str> = lora_body.split(':').collect();
+                if !parts.is_empty() {
+                    let name = parts[0].trim().to_string();
+                    if !name.is_empty() {
+                        let (model, clip) = match parts.len() {
+                            1 => (1.0, 1.0),
+                            2 => {
+                                let w = parts[1].trim().parse::<f32>().unwrap_or(1.0);
+                                (w, w)
+                            }
+                            _ => {
+                                let m = parts[1].trim().parse::<f32>().unwrap_or(1.0);
+                                let c = parts[2].trim().parse::<f32>().unwrap_or(m);
+                                (m, c)
+                            }
+                        };
+                        loras.push(HordeLora {
+                            name,
+                            model,
+                            clip,
+                            inject_trigger: None,
+                        });
+                    }
+                }
+            } else if (tag_trimmed.len() >= 3 && tag_trimmed[..3].eq_ignore_ascii_case("ti:"))
+                || (tag_trimmed.len() >= 4 && tag_trimmed[..4].eq_ignore_ascii_case("emb:"))
+            {
+                let ti_body = if tag_trimmed[..3].eq_ignore_ascii_case("ti:") {
+                    &tag_trimmed[3..]
+                } else {
+                    &tag_trimmed[4..]
+                };
+                let parts: Vec<&str> = ti_body.split(':').collect();
+                if !parts.is_empty() {
+                    let name = parts[0].trim().to_string();
+                    if !name.is_empty() {
+                        let strength = if parts.len() >= 2 {
+                            parts[1].trim().parse::<f32>().unwrap_or(1.0)
+                        } else {
+                            1.0
+                        };
+                        tis.push(HordeTi { name, strength });
+                    }
+                }
+            } else {
+                without_tags.push_str(&raw_prompt[absolute_start..=absolute_end]);
+            }
+            cursor = absolute_end + 1;
+        } else {
+            without_tags.push_str(&raw_prompt[absolute_start..]);
+            cursor = raw_prompt.len();
+            break;
+        }
+    }
+    if cursor < raw_prompt.len() {
+        without_tags.push_str(&raw_prompt[cursor..]);
+    }
+
+    let (pos_part, neg_part) = match without_tags.split_once(" ### ") {
+        Some((p, n)) => (p, Some(n)),
+        None => match without_tags.split_once("###") {
+            Some((p, n)) => (p, Some(n)),
+            None => (without_tags.as_str(), None),
+        },
+    };
+
+    let mut negative_prompts = Vec::new();
+    if let Some(n) = neg_part {
+        let cleaned = clean_residual_prompt(n);
+        if !cleaned.is_empty() {
+            negative_prompts.push(cleaned);
+        }
+    }
+
+    let words: Vec<&str> = pos_part.split_whitespace().collect();
+    let mut clean_words = Vec::new();
+    let mut sampler_name = None;
+    let mut steps = None;
+    let mut cfg_scale = None;
+    let mut clip_skip = None;
+    let mut hires_fix = None;
+    let mut hires_fix_denoising_strength = None;
+    let mut seed = None;
+    let mut control_type = None;
+    let mut post_processing = Vec::new();
+    let mut slow_workers = None;
+    let mut trusted_workers = None;
+    let mut workers = Vec::new();
+
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i];
+        let lower = word.to_ascii_lowercase();
+
+        match lower.as_str() {
+            "--hires" | "--hires_fix" => {
+                hires_fix = Some(true);
+                i += 1;
+            }
+            "--allow_slow" => {
+                slow_workers = Some(true);
+                i += 1;
+            }
+            "--any_worker" => {
+                trusted_workers = Some(false);
+                i += 1;
+            }
+            "--sampler" | "--sampler_name" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    sampler_name = Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
+                    i += 1;
+                }
+            }
+            "--steps" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    if let Ok(val) = words[i].parse::<u32>() {
+                        steps = Some(val.clamp(10, 100));
+                    }
+                    i += 1;
+                }
+            }
+            "--cfg" | "--cfg_scale" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    if let Ok(val) = words[i].parse::<f32>() {
+                        cfg_scale = Some(val.clamp(1.0, 30.0));
+                    }
+                    i += 1;
+                }
+            }
+            "--clip_skip" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    if let Ok(val) = words[i].parse::<u32>() {
+                        clip_skip = Some(val.clamp(1, 12));
+                    }
+                    i += 1;
+                }
+            }
+            "--hires_denoising" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    if let Ok(val) = words[i].parse::<f32>() {
+                        hires_fix_denoising_strength = Some(val.clamp(0.0, 1.0));
+                    }
+                    i += 1;
+                }
+            }
+            "--seed" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    if let Ok(val) = words[i].parse::<u64>() {
+                        seed = Some(val);
+                    }
+                    i += 1;
+                }
+            }
+            "--control" | "--control_type" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    control_type = Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
+                    i += 1;
+                }
+            }
+            "--post" | "--upscale" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    let p = words[i].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    if !post_processing.contains(&p) {
+                        post_processing.push(p);
+                    }
+                    i += 1;
+                }
+            }
+            "--worker" => {
+                i += 1;
+                if i < words.len() && !words[i].starts_with("--") {
+                    let w = words[i].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    if !workers.contains(&w) {
+                        workers.push(w);
+                    }
+                    i += 1;
+                }
+            }
+            "--no" | "--neg" | "--negative_prompt" => {
+                i += 1;
+                let mut neg_tokens = Vec::new();
+                while i < words.len() && !words[i].starts_with("--") {
+                    neg_tokens.push(words[i]);
+                    i += 1;
+                }
+                if !neg_tokens.is_empty() {
+                    let neg_str = neg_tokens.join(" ");
+                    let cleaned_neg = clean_residual_prompt(neg_str.trim_matches(|c| c == '"' || c == '\''));
+                    if !cleaned_neg.is_empty() {
+                        negative_prompts.push(cleaned_neg);
+                    }
+                }
+            }
+            _ => {
+                clean_words.push(word);
+                i += 1;
+            }
+        }
+    }
+
+    let raw_clean = clean_words.join(" ");
+    let clean_prompt = clean_residual_prompt(&raw_clean);
+
+    ParsedPromptDirectives {
+        clean_prompt,
+        negative_prompts,
+        loras,
+        tis,
+        sampler_name,
+        steps,
+        cfg_scale,
+        clip_skip,
+        hires_fix,
+        hires_fix_denoising_strength,
+        seed,
+        control_type,
+        post_processing,
+        slow_workers,
+        trusted_workers,
+        workers,
+    }
+}
+
+/// Clean up stray punctuation, multiple spaces, and dangling commas left after extracting directives.
+pub fn clean_residual_prompt(s: &str) -> String {
+    let mut result = s.trim().to_string();
+    while result.contains("  ") {
+        result = result.replace("  ", " ");
+    }
+    while result.contains(" ,") {
+        result = result.replace(" ,", ",");
+    }
+    while result.contains(",,") {
+        result = result.replace(",,", ",");
+    }
+    while result.contains(", ,") {
+        result = result.replace(", ,", ",");
+    }
+    result
+        .trim_matches(|c: char| c == ',' || c.is_whitespace())
+        .trim()
+        .to_string()
+}
+
+pub fn parse_horde_quota(
+    body: &serde_json::Value,
+    last_fetched_at: &str,
+) -> openproxy_types::AccountQuota {
+    if let Some(msg) = body.get("message").and_then(|v| v.as_str())
+        && body.get("kudos").is_none()
+        && body.get("username").is_none()
+    {
+        return openproxy_types::AccountQuota {
+            session_used: None,
+            session_limit: None,
+            session_reset_at: None,
+            weekly_used: None,
+            weekly_limit: None,
+            weekly_reset_at: None,
+            plan_name: None,
+            last_fetched_at: last_fetched_at.to_string(),
+            fetch_error: Some(msg.to_string()),
+            model_details: None,
+        };
+    }
+
+    let username = body
+        .get("username")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("Anonymous");
+
+    let kudos = body
+        .get("kudos")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let worker_count = body
+        .get("worker_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let tokens_used = body
+        .get("records")
+        .and_then(|r| r.get("usage"))
+        .and_then(|u| u.get("tokens"))
+        .and_then(|t| t.as_i64())
+        .or_else(|| {
+            body.get("usage")
+                .and_then(|u| u.get("tokens"))
+                .and_then(|t| t.as_i64())
+        })
+        .unwrap_or(0);
+
+    let plan_name = format!("{username} (Kudos: {kudos:.0}, Workers: {worker_count})");
+    let session_limit = kudos.max(0.0) as i64;
+
+    openproxy_types::AccountQuota {
+        session_used: Some(tokens_used),
+        session_limit: Some(session_limit),
+        session_reset_at: None,
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        plan_name: Some(plan_name),
+        last_fetched_at: last_fetched_at.to_string(),
+        fetch_error: None,
+        model_details: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_horde_metadata() {
+        let a = HordeAdapter::new();
+        let meta = a.metadata();
+        assert!(meta.supports_quota);
+        assert!(meta.quota_refresh_supported);
+        assert!(meta.built_in);
+        assert!(!meta.deletable);
+    }
+
+    #[test]
+    fn test_parse_horde_quota_authenticated() {
+        let json = serde_json::json!({
+            "username": "AIArtist",
+            "kudos": 1520.4,
+            "worker_count": 3,
+            "records": {
+                "usage": {
+                    "tokens": 4200
+                }
+            }
+        });
+        let quota = parse_horde_quota(&json, "1700000000");
+        assert_eq!(quota.session_limit, Some(1520));
+        assert_eq!(quota.session_used, Some(4200));
+        assert_eq!(
+            quota.plan_name,
+            Some("AIArtist (Kudos: 1520, Workers: 3)".to_string())
+        );
+        assert_eq!(quota.last_fetched_at, "1700000000");
+        assert!(quota.fetch_error.is_none());
+    }
+
+    #[test]
+    fn test_parse_horde_quota_anonymous_or_default() {
+        let json = serde_json::json!({
+            "username": "",
+            "kudos": 0.0,
+            "worker_count": 0
+        });
+        let quota = parse_horde_quota(&json, "1700000000");
+        assert_eq!(quota.session_limit, Some(0));
+        assert_eq!(quota.session_used, Some(0));
+        assert_eq!(
+            quota.plan_name,
+            Some("Anonymous (Kudos: 0, Workers: 0)".to_string())
+        );
+        assert_eq!(quota.last_fetched_at, "1700000000");
+        assert!(quota.fetch_error.is_none());
+    }
+
+    #[test]
+    fn test_parse_horde_quota_error_response() {
+        let json = serde_json::json!({
+            "message": "Invalid API Key"
+        });
+        let quota = parse_horde_quota(&json, "1700000000");
+        assert_eq!(quota.fetch_error, Some("Invalid API Key".to_string()));
+        assert!(quota.session_limit.is_none());
+        assert!(quota.session_used.is_none());
+        assert!(quota.plan_name.is_none());
+        assert_eq!(quota.last_fetched_at, "1700000000");
+    }
 
     #[test]
     fn test_horde_adapter_config() {
@@ -572,6 +1584,313 @@ mod tests {
         assert_eq!(v["source_mask"], "bWFzaw==");
         assert_eq!(v["source_processing"], "inpainting");
         assert_eq!(v["params"]["denoising_strength"], 1.0);
+    }
+
+    #[test]
+    fn test_is_vision_model() {
+        assert!(HordeAdapter::is_vision_model("horde/vision"));
+        assert!(HordeAdapter::is_vision_model("vision"));
+        assert!(HordeAdapter::is_vision_model("HORDE/VISION"));
+        assert!(HordeAdapter::is_vision_model("custom/vision"));
+        assert!(!HordeAdapter::is_vision_model("horde/sdxl"));
+        assert!(!HordeAdapter::is_vision_model("gpt-4o"));
+    }
+
+    #[test]
+    fn test_build_interrogate_payload() {
+        let bytes = HordeAdapter::build_interrogate_payload("data:image/png;base64,iVBORw0KGgo=", &[]).unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(val["source_image"], "iVBORw0KGgo=");
+        assert_eq!(val["forms"][0]["name"], "caption");
+
+        let bytes_custom = HordeAdapter::build_interrogate_payload("https://example.com/cat.jpg", &["caption", "nsfw"]).unwrap();
+        let val_custom: serde_json::Value = serde_json::from_slice(&bytes_custom).unwrap();
+        assert_eq!(val_custom["source_image"], "https://example.com/cat.jpg");
+        assert_eq!(val_custom["forms"].as_array().unwrap().len(), 2);
+        assert_eq!(val_custom["forms"][0]["name"], "caption");
+        assert_eq!(val_custom["forms"][1]["name"], "nsfw");
+    }
+
+    #[test]
+    fn test_extract_image_from_messages() {
+        use openproxy_types::OpenAIMessage;
+
+        // 1. OpenAI format with data URI in image_url object
+        let msg1 = OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!([
+                {"type": "text", "text": "What is in this picture?"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,dGVzdGltYWdl"}}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(
+            HordeAdapter::extract_image_from_messages(&[msg1]),
+            Some("dGVzdGltYWdl".into())
+        );
+
+        // 2. OpenAI format with plain URL string
+        let msg2 = OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!([
+                {"type": "image_url", "image_url": "https://example.com/dog.png"}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(
+            HordeAdapter::extract_image_from_messages(&[msg2]),
+            Some("https://example.com/dog.png".into())
+        );
+
+        // 3. Anthropic format with source object
+        let msg3 = OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!([
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "YW50aHJvcGlj"}}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(
+            HordeAdapter::extract_image_from_messages(&[msg3]),
+            Some("YW50aHJvcGlj".into())
+        );
+
+        // 4. Plain string with data URI
+        let msg4 = OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::Value::String("data:image/png;base64,c3RyaW5nZGF0YQ==".into())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(
+            HordeAdapter::extract_image_from_messages(&[msg4]),
+            Some("c3RyaW5nZGF0YQ==".into())
+        );
+
+        // 5. No image
+        let msg5 = OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::Value::String("Just plain text".into())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        };
+        assert_eq!(HordeAdapter::extract_image_from_messages(&[msg5]), None);
+    }
+
+    #[test]
+    fn test_parse_interrogate_status_caption() {
+        // Forms format with caption in result object
+        let status_json1 = serde_json::json!({
+            "id": "1234-abcd",
+            "state": "done",
+            "forms": [
+                {
+                    "name": "caption",
+                    "state": "done",
+                    "result": {
+                        "caption": "a cute fluffy orange kitten playing with yarn"
+                    }
+                }
+            ]
+        });
+        assert_eq!(
+            HordeAdapter::parse_interrogate_status_caption(&status_json1),
+            Some("a cute fluffy orange kitten playing with yarn".into())
+        );
+
+        // Forms format with direct string result
+        let status_json2 = serde_json::json!({
+            "id": "1234-abcd",
+            "state": "done",
+            "forms": [
+                {
+                    "name": "caption",
+                    "state": "done",
+                    "result": "a beautiful landscape with mountains"
+                }
+            ]
+        });
+        assert_eq!(
+            HordeAdapter::parse_interrogate_status_caption(&status_json2),
+            Some("a beautiful landscape with mountains".into())
+        );
+
+        // Top level caption / result fallback
+        let status_json3 = serde_json::json!({
+            "id": "1234-abcd",
+            "state": "done",
+            "caption": "a sunset on the beach"
+        });
+        assert_eq!(
+            HordeAdapter::parse_interrogate_status_caption(&status_json3),
+            Some("a sunset on the beach".into())
+        );
+    }
+
+    #[test]
+    fn test_is_interrogate_done() {
+        let done_json = serde_json::json!({"state": "done"});
+        assert_eq!(HordeAdapter::is_interrogate_done(&done_json), (true, false));
+
+        let faulted_json = serde_json::json!({"state": "faulted"});
+        assert_eq!(HordeAdapter::is_interrogate_done(&faulted_json), (false, true));
+
+        let waiting_json = serde_json::json!({"state": "waiting"});
+        assert_eq!(HordeAdapter::is_interrogate_done(&waiting_json), (false, false));
+    }
+
+    #[test]
+    fn test_parse_prompt_directives_loras() {
+        let prompt = "A girl in armor <lora:detail:0.8> <lora:face_v2:0.9:0.7> <lora:style> <LoRA:cyber:-0.5>";
+        let parsed = parse_prompt_directives(prompt);
+
+        assert_eq!(parsed.clean_prompt, "A girl in armor");
+        assert_eq!(parsed.loras.len(), 4);
+
+        assert_eq!(parsed.loras[0].name, "detail");
+        assert_eq!(parsed.loras[0].model, 0.8);
+        assert_eq!(parsed.loras[0].clip, 0.8);
+
+        assert_eq!(parsed.loras[1].name, "face_v2");
+        assert_eq!(parsed.loras[1].model, 0.9);
+        assert_eq!(parsed.loras[1].clip, 0.7);
+
+        assert_eq!(parsed.loras[2].name, "style");
+        assert_eq!(parsed.loras[2].model, 1.0);
+        assert_eq!(parsed.loras[2].clip, 1.0);
+
+        assert_eq!(parsed.loras[3].name, "cyber");
+        assert_eq!(parsed.loras[3].model, -0.5);
+        assert_eq!(parsed.loras[3].clip, -0.5);
+    }
+
+    #[test]
+    fn test_parse_prompt_directives_tis_and_embeddings() {
+        let prompt = "sunset landscape <ti:bad_hands:0.9> <ti:easynegative> <emb:deepneg:0.6> <EMB:fastneg>";
+        let parsed = parse_prompt_directives(prompt);
+
+        assert_eq!(parsed.clean_prompt, "sunset landscape");
+        assert_eq!(parsed.tis.len(), 4);
+
+        assert_eq!(parsed.tis[0].name, "bad_hands");
+        assert_eq!(parsed.tis[0].strength, 0.9);
+
+        assert_eq!(parsed.tis[1].name, "easynegative");
+        assert_eq!(parsed.tis[1].strength, 1.0);
+
+        assert_eq!(parsed.tis[2].name, "deepneg");
+        assert_eq!(parsed.tis[2].strength, 0.6);
+
+        assert_eq!(parsed.tis[3].name, "fastneg");
+        assert_eq!(parsed.tis[3].strength, 1.0);
+    }
+
+    #[test]
+    fn test_parse_prompt_directives_flags() {
+        let prompt = "cyberpunk city --sampler k_dpmpp_2m --steps 35 --cfg 7.5 --clip_skip 2 --hires --hires_denoising 0.4 --seed 123456 --control canny --post GFPGAN --upscale RealESRGAN_x4plus --allow_slow --any_worker --worker node_77 --no blurry, low res";
+        let parsed = parse_prompt_directives(prompt);
+
+        assert_eq!(parsed.clean_prompt, "cyberpunk city");
+        assert_eq!(parsed.sampler_name.as_deref(), Some("k_dpmpp_2m"));
+        assert_eq!(parsed.steps, Some(35));
+        assert_eq!(parsed.cfg_scale, Some(7.5));
+        assert_eq!(parsed.clip_skip, Some(2));
+        assert_eq!(parsed.hires_fix, Some(true));
+        assert_eq!(parsed.hires_fix_denoising_strength, Some(0.4));
+        assert_eq!(parsed.seed, Some(123456));
+        assert_eq!(parsed.control_type.as_deref(), Some("canny"));
+        assert_eq!(parsed.post_processing, vec!["GFPGAN", "RealESRGAN_x4plus"]);
+        assert_eq!(parsed.slow_workers, Some(true));
+        assert_eq!(parsed.trusted_workers, Some(false));
+        assert_eq!(parsed.workers, vec!["node_77"]);
+        assert_eq!(parsed.negative_prompts, vec!["blurry, low res"]);
+    }
+
+    #[test]
+    fn test_parse_prompt_directives_clamping() {
+        let prompt = "test --steps 5 --cfg 0.2 --clip_skip 0 --hires_denoising 2.5";
+        let parsed = parse_prompt_directives(prompt);
+        assert_eq!(parsed.steps, Some(10));
+        assert_eq!(parsed.cfg_scale, Some(1.0));
+        assert_eq!(parsed.clip_skip, Some(1));
+        assert_eq!(parsed.hires_fix_denoising_strength, Some(1.0));
+
+        let prompt_high = "test --steps 500 --cfg 100.0 --clip_skip 20";
+        let parsed_high = parse_prompt_directives(prompt_high);
+        assert_eq!(parsed_high.steps, Some(100));
+        assert_eq!(parsed_high.cfg_scale, Some(30.0));
+        assert_eq!(parsed_high.clip_skip, Some(12));
+    }
+
+    #[test]
+    fn test_clean_residual_prompt() {
+        assert_eq!(clean_residual_prompt("  A  cat , , on a tree , "), "A cat, on a tree");
+        assert_eq!(clean_residual_prompt("A mountain, , highly detailed, "), "A mountain, highly detailed");
+        assert_eq!(clean_residual_prompt(", leading comma, "), "leading comma");
+    }
+
+    #[test]
+    fn test_build_horde_payload_with_all_directives() {
+        let a = HordeAdapter::new();
+        let req = ImageGenerationRequest {
+            prompt: "A fantasy warrior <lora:armor:0.85:0.7> <ti:bad_hands:0.95> --sampler k_euler_a --steps 40 --cfg 8.0 --clip_skip 2 --hires --hires_denoising 0.35 --seed 9999 --control depth --post CodeFormers --worker fast_gpu_1 --no bad anatomy, extra limbs".into(),
+            model: "SDXL 1.0".into(),
+            n: Some(1),
+            quality: None,
+            response_format: None,
+            size: Some("1024x1024".into()),
+            style: None,
+            user: None,
+            aspect_ratio: None,
+            seed: None,
+            negative_prompt: Some("blurry".into()),
+        };
+
+        let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(v["prompt"], "A fantasy warrior ### blurry, bad anatomy, extra limbs");
+        assert_eq!(v["params"]["width"], 1024);
+        assert_eq!(v["params"]["height"], 1024);
+        assert_eq!(v["params"]["steps"], 40);
+        assert_eq!(v["params"]["sampler_name"], "k_euler_a");
+        assert_eq!(v["params"]["cfg_scale"], 8.0);
+        assert_eq!(v["params"]["clip_skip"], 2);
+        assert_eq!(v["params"]["seed"], 9999);
+        assert!(v["params"]["hires_fix"].as_bool().unwrap());
+        assert_eq!(v["params"]["hires_fix_denoising_strength"], 0.35);
+        assert_eq!(v["params"]["control_type"], "depth");
+        assert_eq!(v["params"]["post_processing"][0], "CodeFormers");
+
+        let loras = v["params"]["loras"].as_array().unwrap();
+        assert_eq!(loras.len(), 1);
+        assert_eq!(loras[0]["name"], "armor");
+        assert_eq!(loras[0]["model"], 0.85);
+        assert_eq!(loras[0]["clip"], 0.7);
+
+        let tis = v["params"]["tis"].as_array().unwrap();
+        assert_eq!(tis.len(), 1);
+        assert_eq!(tis[0]["name"], "bad_hands");
+        assert_eq!(tis[0]["strength"], 0.95);
+
+        let workers = v["params"]["workers"].as_array().unwrap();
+        assert_eq!(workers[0], "fast_gpu_1");
+
+        assert_eq!(v["slow_workers"], false);
+        assert_eq!(v["trusted_workers"], true);
     }
 }
 

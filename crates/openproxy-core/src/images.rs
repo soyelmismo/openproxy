@@ -406,7 +406,7 @@ fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
-fn png_crc32_chunk(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
+fn png_crc32_chunk(chunk_type: [u8; 4], data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in chunk_type.iter().chain(data.iter()) {
         crc ^= u32::from(b);
@@ -421,10 +421,10 @@ fn png_crc32_chunk(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
     !crc
 }
 
-fn write_png_chunk(buf: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+fn write_png_chunk(buf: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) {
     let len = data.len() as u32;
     buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(chunk_type);
+    buf.extend_from_slice(&chunk_type);
     buf.extend_from_slice(data);
     let crc = png_crc32_chunk(chunk_type, data);
     buf.extend_from_slice(&crc.to_be_bytes());
@@ -562,9 +562,9 @@ pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
     ihdr.push(0); // compression method (zlib)
     ihdr.push(0); // filter method (adaptive)
     ihdr.push(0); // interlace method (none)
-    write_png_chunk(&mut out, b"IHDR", &ihdr);
-    write_png_chunk(&mut out, b"IDAT", &compressed_mask);
-    write_png_chunk(&mut out, b"IEND", &[]);
+    write_png_chunk(&mut out, *b"IHDR", &ihdr);
+    write_png_chunk(&mut out, *b"IDAT", &compressed_mask);
+    write_png_chunk(&mut out, *b"IEND", &[]);
 
     Some(out)
 }
@@ -1287,7 +1287,7 @@ mod tests {
     #[test]
     fn test_png_crc32() {
         // CRC32 of chunk b"IEND" with empty data
-        let crc = png_crc32_chunk(b"IEND", &[]);
+        let crc = png_crc32_chunk(*b"IEND", &[]);
         assert_eq!(crc, 0xAE42_6082);
     }
 
@@ -1310,9 +1310,9 @@ mod tests {
         ihdr.push(0);
         ihdr.push(0);
         ihdr.push(0);
-        write_png_chunk(&mut out, b"IHDR", &ihdr);
-        write_png_chunk(&mut out, b"IDAT", &compressed);
-        write_png_chunk(&mut out, b"IEND", &[]);
+        write_png_chunk(&mut out, *b"IHDR", &ihdr);
+        write_png_chunk(&mut out, *b"IDAT", &compressed);
+        write_png_chunk(&mut out, *b"IEND", &[]);
         out
     }
 
