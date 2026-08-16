@@ -82,7 +82,7 @@ impl ProviderAdapter for HordeAdapter {
         } else {
             api_key.trim()
         };
-        Some(("apikey".into(), key.to_string()))
+        Some(("Authorization".into(), format!("Bearer {key}")))
     }
 
     fn build_headers(
@@ -91,10 +91,14 @@ impl ProviderAdapter for HordeAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(3);
-        if let Some((name, val)) = self.build_auth_header(api_key) {
-            headers.push((name, val));
-        }
+        let key = if api_key.trim().is_empty() {
+            "0000000000"
+        } else {
+            api_key.trim()
+        };
+        let mut headers = Vec::with_capacity(4);
+        headers.push(("Authorization".into(), format!("Bearer {key}")));
+        headers.push(("apikey".into(), key.to_string()));
         headers.push((
             "Client-Agent".into(),
             concat!("openproxy:", env!("CARGO_PKG_VERSION")).into(),
@@ -103,8 +107,12 @@ impl ProviderAdapter for HordeAdapter {
         headers
     }
 
+    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
+        "https://oai.aihorde.net/v1/chat/completions".to_string()
+    }
+
     fn models_url(&self) -> Option<String> {
-        Some(format!("{}/status/models?type=image", self.config.base_url))
+        Some("https://oai.aihorde.net/v1/models".to_string())
     }
 
     async fn fetch_models(
@@ -116,51 +124,97 @@ impl ProviderAdapter for HordeAdapter {
         let header_refs: Vec<(&str, &str)> =
             headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-        // Fetch image generation models from AI Horde
+        let mut discovered = Vec::new();
+
+        // 1. Fetch text models from official OpenAI-compatible endpoint
+        let oai_models_url = "https://oai.aihorde.net/v1/models";
+        if let Ok(json_val) =
+            crate::adapters::upstream_get_json(upstream_client, oai_models_url, &header_refs).await
+            && let Some(arr) = json_val.get("data").and_then(|v| v.as_array())
+        {
+            let mut text_models: Vec<(u64, DiscoveredModel)> = arr
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id")?.as_str()?.to_string();
+                    let clean_name = item
+                        .get("clean_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&id)
+                        .to_string();
+                    let workers = item
+                        .get("worker_threads")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if workers < 1 {
+                        return None;
+                    }
+                    let family = openproxy_types::capabilities::infer_family(&id)
+                        .or_else(|| Some("instruct".into()));
+
+                    Some((
+                        workers,
+                        DiscoveredModel {
+                            model_id: ModelId::new(id),
+                            display_name: Some(format!("{clean_name} ({workers}w)")),
+                            target_format: TargetFormat::Openai,
+                            context_length: None,
+                            max_output_tokens: None,
+                            input_modalities: Some(vec!["text".into()]),
+                            output_modalities: Some(vec!["text".into()]),
+                            model_type: Some("chat".into()),
+                            family,
+                            capabilities: None,
+                        },
+                    ))
+                })
+                .collect();
+
+            text_models.sort_by_key(|b| std::cmp::Reverse(b.0));
+            discovered.extend(text_models.into_iter().map(|(_, m)| m));
+        }
+
+        // 2. Fetch image generation models from AI Horde API
         let image_url = format!("{}/status/models?type=image", self.config.base_url);
-        let Ok(json_val) =
+        if let Ok(json_val) =
             crate::adapters::upstream_get_json(upstream_client, &image_url, &header_refs).await
-        else {
-            return Ok(vec![]);
-        };
+            && let Some(arr) = json_val.as_array()
+        {
+            let mut image_models: Vec<(u64, u64, DiscoveredModel)> = arr
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-        let Some(arr) = json_val.as_array() else {
-            return Ok(vec![]);
-        };
+                    if count < 1 || eta >= 60 {
+                        return None;
+                    }
 
-        let mut image_models: Vec<(u64, u64, DiscoveredModel)> = arr
-            .iter()
-            .filter_map(|item| {
-                let name = item.get("name")?.as_str()?.to_string();
-                let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+                    let family = infer_horde_family(&name);
+                    Some((
+                        count,
+                        eta,
+                        DiscoveredModel {
+                            model_id: ModelId::new(name.clone()),
+                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
+                            target_format: TargetFormat::Openai,
+                            context_length: None,
+                            max_output_tokens: None,
+                            input_modalities: Some(vec!["text".into()]),
+                            output_modalities: Some(vec!["image".into()]),
+                            model_type: Some("image".into()),
+                            family: Some(family),
+                            capabilities: None,
+                        },
+                    ))
+                })
+                .collect();
 
-                if count < 1 || eta >= 60 {
-                    return None;
-                }
+            image_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            discovered.extend(image_models.into_iter().map(|(_, _, m)| m));
+        }
 
-                let family = infer_horde_family(&name);
-                Some((
-                    count,
-                    eta,
-                    DiscoveredModel {
-                        model_id: ModelId::new(name.clone()),
-                        display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
-                        target_format: TargetFormat::Openai,
-                        context_length: None,
-                        max_output_tokens: None,
-                        input_modalities: Some(vec!["text".into()]),
-                        output_modalities: Some(vec!["image".into()]),
-                        model_type: Some("image".into()),
-                        family: Some(family),
-                        capabilities: None,
-                    },
-                ))
-            })
-            .collect();
-
-        image_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        Ok(image_models.into_iter().map(|(_, _, m)| m).collect())
+        Ok(discovered)
     }
 
     fn build_image_url(&self) -> String {
@@ -343,11 +397,11 @@ mod tests {
         assert!(a.config().anonymous_fallback);
         assert_eq!(
             a.build_chat_url(TargetFormat::Openai, &ModelId::new("any")),
-            "https://aihorde.net/api/v2/chat/completions"
+            "https://oai.aihorde.net/v1/chat/completions"
         );
         assert_eq!(
             a.models_url().unwrap(),
-            "https://aihorde.net/api/v2/status/models?type=image"
+            "https://oai.aihorde.net/v1/models"
         );
     }
 
@@ -355,12 +409,12 @@ mod tests {
     fn test_horde_auth_header_anonymous() {
         let a = HordeAdapter::new();
         let (name, val) = a.build_auth_header("").unwrap();
-        assert_eq!(name, "apikey");
-        assert_eq!(val, "0000000000");
+        assert_eq!(name, "Authorization");
+        assert_eq!(val, "Bearer 0000000000");
 
         let (name, val) = a.build_auth_header("my-custom-key").unwrap();
-        assert_eq!(name, "apikey");
-        assert_eq!(val, "my-custom-key");
+        assert_eq!(name, "Authorization");
+        assert_eq!(val, "Bearer my-custom-key");
     }
 
     #[test]
