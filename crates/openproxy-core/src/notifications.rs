@@ -26,8 +26,9 @@
 //! 6. The frontend handles the new kind in the notifications view.
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+
 use std::sync::OnceLock;
 use tokio::sync::broadcast;
 
@@ -161,175 +162,12 @@ pub struct SystemPayload {
     pub details: Option<serde_json::Value>,
 }
 
-// ---------- DB operations ----------
+// ---------- DB operations (re-exported from openproxy-db) ----------
 
-/// A notification row, as returned by [`list`] and (conceptually) [`get`].
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NotificationRow {
-    pub id: i64,
-    pub kind: String,
-    pub payload: serde_json::Value,
-    pub read_at: Option<String>,
-    pub archived_at: Option<String>,
-    pub created_at: String,
-    pub dedup_key: Option<String>,
-    pub provider_id: Option<String>,
-}
-
-/// Insert a notification row. Uses `INSERT OR IGNORE` so the dedup unique
-/// index silently drops duplicates within the same UTC day.
-///
-/// Returns the row id (`Some`) if a new row was inserted, or `None` if the
-/// insert was ignored due to dedup *and* no matching existing row could be
-/// located. When the insert is deduped, the function attempts to look up
-/// the existing row's id and returns `Some(existing_id)` so callers can
-/// still broadcast (the broadcast is idempotent on the client side because
-/// the dashboard dedupes by id).
-pub fn insert(
-    conn: &Connection,
-    kind: &str,
-    payload: &serde_json::Value,
-    dedup_key: Option<&str>,
-    provider_id: Option<&str>,
-) -> Result<Option<i64>> {
-    let payload_str = serde_json::to_string(payload)?;
-    let changed = conn.execute(
-        "INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![kind, payload_str, dedup_key, provider_id],
-    )?;
-    if changed == 0 {
-        // Dedup hit — find the existing row id. We match on the same
-        // triple the unique index uses so we resolve to exactly the row
-        // that blocked the insert.
-        let existing: Option<i64> = if let Some(dk) = dedup_key {
-            conn.query_row(
-                "SELECT id FROM notifications
-                 WHERE kind = ?1 AND dedup_key = ?2 AND date(created_at) = date('now')
-                 LIMIT 1",
-                params![kind, dk],
-                |row| row.get(0),
-            )
-            .optional()?
-        } else {
-            None
-        };
-        Ok(existing)
-    } else {
-        Ok(Some(conn.last_insert_rowid()))
-    }
-}
-
-/// Insert multiple notification rows. Uses `INSERT OR IGNORE` and batching.
-/// Returns a Vec of `(id, payload)` matching the inserted/deduped rows.
-pub fn insert_many(
-    conn: &Connection,
-    kind: &str,
-    rows: &[(serde_json::Value, Option<String>, Option<String>)], // (payload, dedup_key, provider_id)
-) -> Result<Vec<(i64, serde_json::Value)>> {
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut all_results = Vec::with_capacity(rows.len());
-
-    let chunk_size = (openproxy_db::batch::SQLITE_MAX_VARIABLE_NUMBER / 4)
-        .clamp(1, openproxy_db::batch::DEFAULT_CHUNK_SIZE);
-    for chunk in rows.chunks(chunk_size) {
-        let sql = openproxy_db::batch::build_insert_sql(
-            "INSERT OR IGNORE INTO",
-            "notifications",
-            &["kind", "payload_json", "dedup_key", "provider_id"],
-            chunk.len(),
-            Some("RETURNING id, dedup_key"),
-        );
-        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() * 4);
-
-        for row in chunk {
-            params.push(kind.to_owned().into());
-            params.push(serde_json::to_string(&row.0)?.into());
-            match &row.1 {
-                Some(k) => params.push(k.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            match &row.2 {
-                Some(p) => params.push(p.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-        }
-
-        let mut stmt = conn.prepare(&sql)?;
-        let mut returned_rows = stmt.query(rusqlite::params_from_iter(params))?;
-
-        let mut inserted_ids_by_dedup = std::collections::HashMap::new();
-        let mut inserted_ids_no_dedup = Vec::new();
-
-        while let Some(r) = returned_rows.next()? {
-            let id: i64 = r.get(0)?;
-            let dedup_key: Option<String> = r.get(1)?;
-            if let Some(dk) = dedup_key {
-                inserted_ids_by_dedup.insert(dk, id);
-            } else {
-                inserted_ids_no_dedup.push(id);
-            }
-        }
-
-        let mut no_dedup_idx = 0;
-        let mut missing_dedup_keys = Vec::new();
-
-        // Pass 1: map inserted rows and collect missing dedups
-        for (i, row) in chunk.iter().enumerate() {
-            if let Some(dk) = &row.1
-                && !inserted_ids_by_dedup.contains_key(dk)
-            {
-                missing_dedup_keys.push((i, dk.to_owned()));
-            }
-        }
-
-        let mut existing_ids = std::collections::HashMap::new();
-        if !missing_dedup_keys.is_empty() {
-            let dedup_keys: Vec<&str> = missing_dedup_keys
-                .iter()
-                .map(|(_, dk)| dk.as_str())
-                .collect();
-            let missing_rows: Vec<(i64, String)> =
-                openproxy_db::batch::query_in_chunks_with_params(
-                    conn,
-                    "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
-                    &[&kind as &dyn rusqlite::ToSql],
-                    &dedup_keys,
-                    openproxy_db::batch::DEFAULT_CHUNK_SIZE,
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?;
-            for (id, dk) in missing_rows {
-                existing_ids.insert(dk, id);
-            }
-        }
-
-        // Pass 2: resolve all IDs
-        for row in chunk {
-            let id = if let Some(dk) = &row.1 {
-                if let Some(&inserted_id) = inserted_ids_by_dedup.get(dk) {
-                    Some(inserted_id)
-                } else if let Some(&existing_id) = existing_ids.get(dk) {
-                    Some(existing_id)
-                } else {
-                    None
-                }
-            } else {
-                let id = inserted_ids_no_dedup.get(no_dedup_idx).copied();
-                no_dedup_idx += 1;
-                id
-            };
-
-            if let Some(id) = id {
-                all_results.push((id, row.0.clone()));
-            }
-        }
-    }
-
-    Ok(all_results)
-}
+pub use openproxy_db::notifications::{
+    NotificationRow, archive, archive_all, delete, insert, insert_many, list, mark_all_read,
+    mark_read, unread_count,
+};
 
 /// Same as [`insert`] but also broadcasts the event to WS clients if a new
 /// row was inserted (or an existing dedup row was found). This is the
@@ -362,11 +200,8 @@ pub fn broadcast_one(
     kind: &str,
     payload: &serde_json::Value,
 ) -> Result<()> {
-    let created_at: String = conn.query_row(
-        "SELECT created_at FROM notifications WHERE id = ?1",
-        params![id],
-        |row| row.get(0),
-    )?;
+    let created_at = openproxy_db::notifications::get_created_at(conn, id)?
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     if let Some(tx) = try_get_tx() {
         // `broadcast::send` returns Err when there are no active
         // receivers; that's not a real error, so we swallow it.
@@ -401,143 +236,13 @@ pub fn record_system(
     insert_and_broadcast(conn, KIND_SYSTEM, &payload, Some(code), provider_id)
 }
 
-// ---------- Query API for the dashboard ----------
-
-/// List notifications, most recent first (by descending id).
-///
-/// - `unread_only`: if `true`, filter to `read_at IS NULL`.
-/// - `limit`: max rows to return, clamped to `[1, 200]`.
-/// - `before_id`: for cursor pagination — only return rows with `id < before_id`.
-///
-/// Archived rows (`archived_at IS NOT NULL`) are always excluded; they are
-/// audit-only and hidden from the tray UI.
-pub fn list(
-    conn: &Connection,
-    unread_only: bool,
-    limit: i64,
-    before_id: Option<i64>,
-) -> Result<Vec<NotificationRow>> {
-    let limit = limit.clamp(1, 200);
-    // We always bind both named params (using COALESCE so a NULL
-    // `:before` degenerates to "no upper bound"). This avoids the
-    // rusqlite "Invalid parameter name" error that fires when the SQL
-    // doesn't reference a param we tried to bind.
-    let sql =
-        format!(
-        "SELECT id, kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id
-         FROM notifications
-         WHERE archived_at IS NULL{unread}
-           AND id < COALESCE(:before, 9223372036854775807)
-         ORDER BY id DESC LIMIT :limit",
-        unread = if unread_only { " AND read_at IS NULL" } else { "" }
-    );
-
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(
-        &[
-            (":before", &before_id as &dyn rusqlite::ToSql),
-            (":limit", &limit as &dyn rusqlite::ToSql),
-        ],
-        |row| {
-            let payload_str: String = row.get(2)?;
-            let payload: serde_json::Value =
-                serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
-            Ok(NotificationRow {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                payload,
-                read_at: row.get(3)?,
-                archived_at: row.get(4)?,
-                created_at: row.get(5)?,
-                dedup_key: row.get(6)?,
-                provider_id: row.get(7)?,
-            })
-        },
-    )?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r?);
-    }
-    Ok(out)
-}
-
-/// Count unread, non-archived notifications. For the sidebar badge.
-pub fn unread_count(conn: &Connection) -> Result<i64> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM notifications
-         WHERE read_at IS NULL AND archived_at IS NULL",
-        [],
-        |row| row.get(0),
-    )?;
-    Ok(count)
-}
-
-/// Mark a single notification as read (sets `read_at` to now). Idempotent.
-pub fn mark_read(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute(
-        "UPDATE notifications SET read_at = datetime('now') WHERE id = ?1 AND read_at IS NULL",
-        params![id],
-    )?;
-    Ok(())
-}
-
-/// Mark all unread, non-archived notifications as read. Returns the number
-/// of rows updated.
-pub fn mark_all_read(conn: &Connection) -> Result<usize> {
-    let changed = conn.execute(
-        "UPDATE notifications SET read_at = datetime('now')
-         WHERE read_at IS NULL AND archived_at IS NULL",
-        [],
-    )?;
-    Ok(changed)
-}
-
-/// Archive all non-archived notifications (sets `archived_at` to now).
-/// Returns the number of rows updated.
-pub fn archive_all(conn: &Connection) -> Result<usize> {
-    let changed = conn.execute(
-        "UPDATE notifications SET archived_at = datetime('now')
-         WHERE archived_at IS NULL",
-        [],
-    )?;
-    Ok(changed)
-}
-
-/// Archive a single notification (sets `archived_at` to now). The row is
-/// preserved for audit. Idempotent.
-pub fn archive(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute(
-        "UPDATE notifications SET archived_at = datetime('now')
-         WHERE id = ?1 AND archived_at IS NULL",
-        params![id],
-    )?;
-    Ok(())
-}
-
-/// Permanently delete a notification. Only allowed for `kind = 'system'`
-/// or rows older than 30 days (to preserve `model_*` audit history).
-///
-/// Returns `Ok(true)` if a row was deleted, `Ok(false)` if the row was
-/// not eligible (or didn't exist). The HTTP handler maps `Ok(false)` to
-/// HTTP 403 so the client knows the delete was refused, not silently
-/// dropped.
-pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
-    let changed = conn.execute(
-        "DELETE FROM notifications
-         WHERE id = ?1 AND (
-             kind = 'system'
-             OR created_at < datetime('now', '-30 days')
-         )",
-        params![id],
-    )?;
-    Ok(changed > 0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     fn fresh_db() -> Connection {
+
         let mut conn = Connection::open_in_memory().unwrap();
         openproxy_db::migrations::run(&mut conn).unwrap();
         conn

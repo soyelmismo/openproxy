@@ -573,3 +573,159 @@ fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::
         current_proxy_id,
     })
 }
+
+pub struct RawAccount {
+    pub api_key_encrypted: Option<Vec<u8>>,
+    pub label: Option<String>,
+    pub access_token_encrypted: Option<Vec<u8>>,
+    pub refresh_token_encrypted: Option<Vec<u8>>,
+    pub expires_at: Option<String>,
+    pub oauth_provider_specific: Option<String>,
+    pub quota_session_reset_at: Option<String>,
+    pub quota_model_details: Option<String>,
+}
+
+pub struct KiroMeta {
+    pub region: Option<String>,
+    pub profile_arn: Option<String>,
+}
+
+pub type AccountsMetaMaps = (
+    std::collections::HashMap<i64, RawAccount>,
+    std::collections::HashMap<i64, KiroMeta>,
+    std::collections::HashMap<i64, String>,
+);
+
+pub fn get_accounts_meta(
+    conn: &Connection,
+    account_ids: &[AccountId],
+) -> Result<AccountsMetaMaps> {
+    let mut raw_map = std::collections::HashMap::new();
+    let mut kiro_map = std::collections::HashMap::new();
+    let mut ag_map = std::collections::HashMap::new();
+    for id in account_ids {
+        let row = conn.query_row(
+            "SELECT api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email, extra_config_json FROM accounts WHERE id = ?1",
+            params![id.0],
+            |r| {
+                Ok((
+                    r.get::<_, Option<Vec<u8>>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<Vec<u8>>>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                ))
+            }
+        ).optional().map_err(crate::error::map_db_error_ctx("query accounts"))?;
+        if let Some((
+            api_key,
+            label,
+            access,
+            refresh,
+            expires,
+            oauth_prov,
+            _email,
+            extra_json,
+        )) = row
+        {
+            if let Some(ref oauth_json) = oauth_prov
+                && let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json)
+                && let Some(pid) = meta
+                    .get("projectId")
+                    .or_else(|| meta.get("project_id"))
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+            {
+                ag_map.insert(id.0, pid.to_string());
+            }
+
+            raw_map.insert(
+                id.0,
+                RawAccount {
+                    api_key_encrypted: api_key,
+                    label,
+                    access_token_encrypted: access,
+                    refresh_token_encrypted: refresh,
+                    expires_at: expires,
+                    oauth_provider_specific: oauth_prov,
+                    quota_session_reset_at: None,
+                    quota_model_details: None,
+                },
+            );
+
+            if let Some(cfg_str) = extra_json
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
+            {
+                let region = val
+                    .get("region")
+                    .or(val.get("aws_region"))
+                    .and_then(|v| v.as_str())
+                    .map(std::string::ToString::to_string);
+                let profile_arn = val
+                    .get("profile_arn")
+                    .or(val.get("aws_role_arn"))
+                    .and_then(|v| v.as_str())
+                    .map(std::string::ToString::to_string);
+                if region.is_some() || profile_arn.is_some() {
+                    kiro_map.insert(
+                        id.0,
+                        KiroMeta {
+                            region,
+                            profile_arn,
+                        },
+                    );
+                }
+            }
+        } else {
+            return Err(CoreError::Validation(format!(
+                "account {} not found",
+                id.0
+            )));
+        }
+    }
+    Ok((raw_map, kiro_map, ag_map))
+}
+
+pub fn update_antigravity_project_id(
+    conn: &Connection,
+    account_id: i64,
+    new_project_id: &str,
+) -> Result<()> {
+    let current_json_opt: Option<String> = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            params![account_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(crate::error::map_db_error_ctx("query account"))?
+        .flatten();
+
+    let mut meta = if let Some(json_str) = current_json_opt {
+        serde_json::from_str::<serde_json::Value>(&json_str)
+            .unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert(
+            "projectId".to_string(),
+            serde_json::Value::String(new_project_id.to_string()),
+        );
+    }
+
+    let new_json_str = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
+
+    conn.execute(
+        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+        params![new_json_str, account_id],
+    )
+    .map_err(crate::error::map_db_error_ctx("update account"))?;
+
+    Ok(())
+}

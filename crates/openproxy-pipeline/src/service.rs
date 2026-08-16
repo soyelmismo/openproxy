@@ -166,16 +166,15 @@ where
             };
 
             // 3. Flatten sub-combos.
-            let flat_targets = match pipeline.flatten_targets(&combo.id, targets.clone()).await {
+            let flat_targets = match pipeline.flatten_targets(&combo.id, targets).await {
                 Ok(t) => t,
                 Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
             };
 
             // 4. Filter out accounts that the circuit breaker marks unhealthy.
-            let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
-            let mut eligible: Vec<ComboTarget> = flat_targets
+            let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) = flat_targets
                 .into_iter()
-                .filter(|t| match t.account_id {
+                .partition(|t| match t.account_id {
                     Some(aid) => {
                         let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
                             aid,
@@ -185,17 +184,17 @@ where
                         pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
                     }
                     None => true,
-                })
-                .collect();
+                });
 
-            if eligible.is_empty() && !pre_cb_snapshot.is_empty() {
+            if eligible.is_empty() && !parked.is_empty() {
                 tracing::warn!(
                     combo_id = combo.id.0,
-                    parked = pre_cb_snapshot.len(),
+                    parked = parked.len(),
                     "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
                 );
-                eligible = pre_cb_snapshot.clone();
+                eligible = parked;
             }
+
 
             if eligible.is_empty() {
                 if attempt == 1 {

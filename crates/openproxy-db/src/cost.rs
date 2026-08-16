@@ -242,9 +242,51 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
             }
         }
     }
-
     Ok(total_updated)
 }
+
+
+pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
+    conn.execute(
+        "UPDATE usage SET client_responded = 1 WHERE id = ?1",
+        params![row_id.0],
+    )
+    .map(|_| ())
+    .map_err(crate::error::map_db_error_ctx("mark_client_response"))
+}
+
+pub fn mark_winner_usage_row(
+    conn: &Connection,
+    request_id: &str,
+    attempt: u8,
+    target_id: openproxy_types::ids::ComboTargetId,
+) -> openproxy_types::Result<()> {
+    conn.execute(
+        "UPDATE usage SET was_winner = 1, client_response = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
+        params![request_id, attempt, target_id.0],
+    )
+    .map(|_| ())
+    .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))
+}
+
+pub fn record_no_healthy_targets_row(
+    conn: &Connection,
+    request_id: &str,
+    trace_id: &str,
+    combo_id: openproxy_types::ids::ComboId,
+    elapsed: u64,
+    created_str: &str,
+    error_msg: &str,
+) -> openproxy_types::Result<()> {
+    conn.execute(
+        "INSERT INTO usage(request_id, trace_id, combo_id, total_ms, created_at, status_code, error_msg, error_message, was_winner, client_response, prompt_tokens, completion_tokens, provider_id, upstream_model_id, attempt, race_total, race_lost) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 502, ?6, ?6, 1, 0, 0, 0, 'virtual', 'none', 1, 1, 0)",
+        params![request_id, trace_id, combo_id.0, elapsed as i64, created_str, error_msg],
+    )
+    .map(|_| ())
+    .map_err(crate::error::map_db_error_ctx("insert no_healthy_targets usage"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -26,3 +26,4 @@ pub mod error;
 pub mod free_proxies;
 pub mod maintenance;
 pub mod models;
+pub mod notifications;

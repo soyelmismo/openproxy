@@ -1767,6 +1767,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tiktoken-rs",
+ "tracing",
 ]
 
 [[package]]
@@ -1810,7 +1812,6 @@ dependencies = [
  "tdigest",
  "tempfile",
  "thiserror",
- "tiktoken-rs",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -1924,7 +1925,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "tiktoken-rs",
  "tracing",
  "uuid",
 ]

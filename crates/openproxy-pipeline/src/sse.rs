@@ -98,9 +98,21 @@ impl UpstreamSseChunk {
     /// ready for direct socket write. Avoids the intermediate `String`
     /// allocation when the frame is immediately written to the socket.
     pub fn into_sse_bytes(self) -> bytes::Bytes {
-        build_sse_frame(&self.into_json_string())
+        if let Some(raw) = self.raw_payload {
+            return build_sse_frame(&raw);
+        }
+        use bytes::BufMut;
+        let mut b = bytes::BytesMut::with_capacity(256);
+        b.extend_from_slice(b"data: ");
+        if serde_json::to_writer((&mut b).writer(), &self.payload).is_err() {
+            b.clear();
+            b.extend_from_slice(b"data: {}");
+        }
+        b.extend_from_slice(b"\n\n");
+        b.freeze()
     }
 }
+
 
 /// Build a `data: <payload>\n\n` SSE frame as `Bytes`, ready for socket write.
 /// The `+ 16` covers `"data: "` (6) + `"\n\n"` (2) + slack for BytesMut's

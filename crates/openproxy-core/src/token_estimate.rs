@@ -1,3 +1,4 @@
-//! Token estimation re-exports from `openproxy_types`.
+//! Token estimation re-exports from `openproxy_compression`.
 
-pub use openproxy_types::token_estimate::*;
+pub use openproxy_compression::token_estimate::*;
+

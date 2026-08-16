@@ -141,6 +141,58 @@ pub fn is_provider_proxy_in_cooldown(
     false
 }
 
+pub fn record_cooldown(
+    conn: &rusqlite::Connection,
+    target_id: ComboTargetId,
+    reason: &str,
+    mode: openproxy_types::CooldownMode,
+    base_secs: u64,
+    max_secs: u64,
+    factor: u32,
+) -> openproxy_types::error::Result<()> {
+    if mode == openproxy_types::CooldownMode::None || base_secs == 0 {
+        return Ok(());
+    }
+
+    let current_count: u32 = conn
+        .query_row(
+            "SELECT failure_count FROM target_cooldowns WHERE combo_target_id = ?1",
+            rusqlite::params![target_id.0],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let new_count = current_count + 1;
+
+    let cooldown_secs = match mode {
+        openproxy_types::CooldownMode::None => return Ok(()),
+        openproxy_types::CooldownMode::Flat => base_secs,
+        openproxy_types::CooldownMode::Exponential => {
+            let mut exp_secs =
+                base_secs.saturating_mul(u64::from(factor).saturating_pow(current_count));
+            if exp_secs > max_secs {
+                exp_secs = max_secs;
+            }
+            exp_secs
+        }
+    };
+
+    let cooldown_until = chrono::Utc::now() + chrono::Duration::seconds(cooldown_secs as i64);
+    let cooldown_until_str = cooldown_until.to_rfc3339();
+    conn.execute(
+        "INSERT INTO target_cooldowns (combo_target_id, cooldown_until, reason, failure_count, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, datetime('now')) \
+         ON CONFLICT(combo_target_id) DO UPDATE SET \
+             cooldown_until = excluded.cooldown_until, \
+             reason = excluded.reason, \
+             failure_count = excluded.failure_count, \
+             updated_at = excluded.updated_at",
+        rusqlite::params![target_id.0, cooldown_until_str, reason, new_count],
+    )
+    .map(|_| ())
+    .map_err(crate::error::map_db_error_ctx("record_cooldown"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

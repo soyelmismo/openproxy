@@ -159,3 +159,25 @@ impl crate::crud::FromRow for Provider {
         row_to_provider(row)
     }
 }
+
+pub fn get_auth_types(
+    conn: &Connection,
+    provider_ids: &[ProviderId],
+) -> Result<std::collections::HashMap<String, String>> {
+    use rusqlite::OptionalExtension;
+    let mut map = std::collections::HashMap::new();
+    for id in provider_ids {
+        let auth: Option<String> = conn
+            .query_row(
+                "SELECT auth_type FROM providers WHERE id = ?1",
+                params![id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(crate::error::map_db_error_ctx("query providers auth_type"))?;
+        if let Some(a) = auth {
+            map.insert(id.as_str().to_string(), a);
+        }
+    }
+    Ok(map)
+}

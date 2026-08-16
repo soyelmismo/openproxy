@@ -112,11 +112,8 @@ fn resolve_lkgp(
             }
             pick -= w;
         }
-        let picked = targets.remove(idx);
-        let mut out = Vec::with_capacity(targets.len() + 1);
-        out.push(picked);
-        out.extend(targets);
-        return out;
+        targets[..=idx].rotate_right(1);
+        return targets;
     }
 
     // Exploitation branch: sort by `last_success` DESC, with
@@ -166,11 +163,8 @@ fn resolve_weighted(mut targets: Vec<ComboTarget>) -> Vec<ComboTarget> {
         }
         pick -= u64::from(*w);
     }
-    let picked = targets.remove(idx);
-    let mut out = Vec::with_capacity(targets.len() + 1);
-    out.push(picked);
-    out.extend(targets);
-    out
+    targets[..=idx].rotate_right(1);
+    targets
 }
 
 /// Least-used: sort by `request_count` ASC (fewest first). Ties
@@ -215,9 +209,6 @@ fn resolve_p2c(
     let ci = registry.request_count_within(targets[i].id, window_secs);
     let cj = registry.request_count_within(targets[j].id, window_secs);
     let winner = if ci <= cj { i } else { j };
-    let picked = targets.remove(winner);
-    let mut out = Vec::with_capacity(targets.len() + 1);
-    out.push(picked);
-    out.extend(targets);
-    out
+    targets[..=winner].rotate_right(1);
+    targets
 }

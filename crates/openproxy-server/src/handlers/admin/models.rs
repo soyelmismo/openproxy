@@ -217,8 +217,8 @@ pub(crate) async fn run_test_for_model(
 
     // 1. Load the model row.
     let res = {
-        let w = s.db_pool().writer();
-        match core_models::get_by_row_id(&w, row_id) {
+        let r = s.db_pool().reader();
+        match core_models::get_by_row_id(&r, row_id) {
             Ok(Some(m)) => Ok(m),
             Ok(None) => Err(ApiError(CoreError::ModelNotFound {
                 provider: "<unknown>".into(),
@@ -291,9 +291,9 @@ pub(crate) async fn run_test_for_model(
     //    This lets bearer providers like opencode-zen work without
     //    accounts while still using accounts when they exist.
     let (is_anonymous, accounts_list) = {
-        let w = s.db_pool().writer();
-        let provider_row = core_providers::get(&w, &model.provider_id).unwrap_or_default();
-        let accs = core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
+        let r = s.db_pool().reader();
+        let provider_row = core_providers::get(&r, &model.provider_id).unwrap_or_default();
+        let accs = core_accounts::list(&r, Some(&model.provider_id), s.master_key().as_ref())
             .unwrap_or_default();
         let anon = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
@@ -328,15 +328,15 @@ pub(crate) async fn run_test_for_model(
             }
         };
 
-        // 4. Decrypt the API key. Drop the writer guard immediately.
+        // 4. Decrypt the API key. Drop the reader guard immediately.
         //    OAuth accounts store the token in access_token_encrypted,
         //    not api_key_encrypted, so we fall back to that if the
         //    primary decrypt fails (e.g. NULL column).
         let api_key = match account_id {
             Some(aid) => {
                 let account = tokio::task::block_in_place(|| {
-                    let w = s.db_pool().writer();
-                    core_accounts::get(&w, aid, s.master_key().as_ref())
+                    let r = s.db_pool().reader();
+                    core_accounts::get(&r, aid, s.master_key().as_ref())
                         .ok()
                         .flatten()
                 });
@@ -373,11 +373,11 @@ pub(crate) async fn run_test_for_model(
                     }
                 } else {
                     match {
-                        let w = s.db_pool().writer();
-                        core_accounts::decrypt_api_key(&w, aid, s.master_key().as_ref()).or_else(
+                        let r = s.db_pool().reader();
+                        core_accounts::decrypt_api_key(&r, aid, s.master_key().as_ref()).or_else(
                             |_| {
                                 core_accounts::decrypt_access_token(
-                                    &w,
+                                    &r,
                                     aid,
                                     s.master_key().as_ref(),
                                 )

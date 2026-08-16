@@ -17,6 +17,9 @@ regex = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 memchr = "2"
+tracing = { workspace = true }
+tiktoken-rs = "0.12.0"
+
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }

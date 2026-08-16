@@ -178,7 +178,9 @@ pub fn get_or_assign_provider_proxy(
         )));
     }
 
-    Ok(None)
+    Err(openproxy_types::error::CoreError::Validation(format!(
+        "use_proxies is enabled for provider '{provider_id}', but no alive proxies are available in pool"
+    )))
 }
 
 /// Lookup proxy status by url string.

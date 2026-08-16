@@ -36,10 +36,9 @@ impl PipelineStage for RouterStage {
             Err(e) => return Err(e),
         };
 
-        let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
-        let mut eligible: Vec<ComboTarget> = flat_targets
+        let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) = flat_targets
             .into_iter()
-            .filter(|t| match t.account_id {
+            .partition(|t| match t.account_id {
                 Some(aid) => {
                     let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
                         aid,
@@ -49,17 +48,17 @@ impl PipelineStage for RouterStage {
                     ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
                 }
                 None => true,
-            })
-            .collect();
+            });
 
-        if eligible.is_empty() && !pre_cb_snapshot.is_empty() {
+        if eligible.is_empty() && !parked.is_empty() {
             tracing::warn!(
                 combo_id = combo.id.0,
-                parked = pre_cb_snapshot.len(),
+                parked = parked.len(),
                 "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
             );
-            eligible = pre_cb_snapshot;
+            eligible = parked;
         }
+
 
         if eligible.is_empty() {
             if attempt == 1 {

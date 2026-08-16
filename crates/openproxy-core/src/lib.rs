@@ -14,6 +14,7 @@ pub mod accounts;
 
 pub mod admin;
 pub mod analytics;
+pub mod audio;
 
 pub mod api_keys;
 pub mod bootstrap;

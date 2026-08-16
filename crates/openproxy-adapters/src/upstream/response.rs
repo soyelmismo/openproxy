@@ -162,12 +162,21 @@ impl UpstreamBodyStream {
     /// see the start instant + `now` vs. `total_deadline` to
     /// disambiguate; we only carry one phase here for simplicity).
     pub async fn collect_all(mut self) -> UpstreamResult<Bytes> {
-        let mut buf = Vec::new();
+        let Some(first_chunk) = self.next_chunk().await? else {
+            return Ok(Bytes::new());
+        };
+        let Some(second_chunk) = self.next_chunk().await? else {
+            return Ok(first_chunk);
+        };
+        let mut buf = Vec::with_capacity(first_chunk.len() + second_chunk.len());
+        buf.extend_from_slice(&first_chunk);
+        buf.extend_from_slice(&second_chunk);
         while let Some(chunk) = self.next_chunk().await? {
             buf.extend_from_slice(&chunk);
         }
         Ok(Bytes::from(buf))
     }
+
 
     /// Yield the next chunk. Returns `Ok(None)` at end of stream.
     ///
