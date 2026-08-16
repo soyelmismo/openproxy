@@ -116,93 +116,51 @@ impl ProviderAdapter for HordeAdapter {
         let header_refs: Vec<(&str, &str)> =
             headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-        let mut discovered = Vec::new();
-
-        // 1. Fetch text generation models (standard OpenAI-compatible LLMs)
-        let text_url = format!("{}/status/models?type=text", self.config.base_url);
-        if let Ok(json_val) =
-            crate::adapters::upstream_get_json(upstream_client, &text_url, &header_refs).await
-            && let Some(arr) = json_val.as_array()
-        {
-            let mut text_models: Vec<(u64, u64, DiscoveredModel)> = arr
-                .iter()
-                .filter_map(|item| {
-                    let name = item.get("name")?.as_str()?.to_string();
-                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-
-                    if count < 1 {
-                        return None;
-                    }
-
-                    let family = openproxy_types::capabilities::infer_family(&name)
-                        .or_else(|| Some("instruct".into()));
-
-                    Some((
-                        count,
-                        eta,
-                        DiscoveredModel {
-                            model_id: ModelId::new(name.clone()),
-                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
-                            target_format: TargetFormat::Openai,
-                            context_length: None,
-                            max_output_tokens: None,
-                            input_modalities: Some(vec!["text".into()]),
-                            output_modalities: Some(vec!["text".into()]),
-                            model_type: Some("chat".into()),
-                            family,
-                            capabilities: None,
-                        },
-                    ))
-                })
-                .collect();
-
-            text_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-            discovered.extend(text_models.into_iter().map(|(_, _, m)| m));
-        }
-
-        // 2. Fetch image generation models
+        // Fetch image generation models from AI Horde
         let image_url = format!("{}/status/models?type=image", self.config.base_url);
-        if let Ok(json_val) =
+        let Ok(json_val) =
             crate::adapters::upstream_get_json(upstream_client, &image_url, &header_refs).await
-            && let Some(arr) = json_val.as_array()
-        {
-            let mut image_models: Vec<(u64, u64, DiscoveredModel)> = arr
-                .iter()
-                .filter_map(|item| {
-                    let name = item.get("name")?.as_str()?.to_string();
-                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+        else {
+            return Ok(vec![]);
+        };
 
-                    if count < 1 || eta >= 60 {
-                        return None;
-                    }
+        let Some(arr) = json_val.as_array() else {
+            return Ok(vec![]);
+        };
 
-                    let family = infer_horde_family(&name);
-                    Some((
-                        count,
-                        eta,
-                        DiscoveredModel {
-                            model_id: ModelId::new(name.clone()),
-                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
-                            target_format: TargetFormat::Openai,
-                            context_length: None,
-                            max_output_tokens: None,
-                            input_modalities: Some(vec!["text".into()]),
-                            output_modalities: Some(vec!["image".into()]),
-                            model_type: Some("image".into()),
-                            family: Some(family),
-                            capabilities: None,
-                        },
-                    ))
-                })
-                .collect();
+        let mut image_models: Vec<(u64, u64, DiscoveredModel)> = arr
+            .iter()
+            .filter_map(|item| {
+                let name = item.get("name")?.as_str()?.to_string();
+                let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-            image_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-            discovered.extend(image_models.into_iter().map(|(_, _, m)| m));
-        }
+                if count < 1 || eta >= 60 {
+                    return None;
+                }
 
-        Ok(discovered)
+                let family = infer_horde_family(&name);
+                Some((
+                    count,
+                    eta,
+                    DiscoveredModel {
+                        model_id: ModelId::new(name.clone()),
+                        display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
+                        target_format: TargetFormat::Openai,
+                        context_length: None,
+                        max_output_tokens: None,
+                        input_modalities: Some(vec!["text".into()]),
+                        output_modalities: Some(vec!["image".into()]),
+                        model_type: Some("image".into()),
+                        family: Some(family),
+                        capabilities: None,
+                    },
+                ))
+            })
+            .collect();
+
+        image_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        Ok(image_models.into_iter().map(|(_, _, m)| m).collect())
     }
 
     fn build_image_url(&self) -> String {
