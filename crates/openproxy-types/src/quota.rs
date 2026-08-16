@@ -34,8 +34,7 @@ pub fn now_unix_secs_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     secs.to_string()
 }
 pub fn parse_reset_time(s: &str) -> Option<u64> {

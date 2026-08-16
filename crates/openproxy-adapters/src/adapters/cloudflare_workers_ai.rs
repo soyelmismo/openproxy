@@ -1,4 +1,4 @@
-use super::*;
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, fetch_models_with_auth};
 
 // =====================================================================
 // Cloudflare Workers AI
@@ -132,7 +132,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             "{}/{}/ai/models/search",
             self.config.base_url, account_label
         );
-        let auth = format!("Bearer {}", api_key);
+        let auth = format!("Bearer {api_key}");
         fetch_models_with_auth(
             &url,
             upstream_client,
@@ -145,8 +145,8 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
                     model_id: ModelId::new(name),
                     display_name: Some(name.to_string()),
                     target_format: TargetFormat::Openai,
-                    context_length: raw.get("max_total_tokens").and_then(|v| v.as_i64()),
-                    max_output_tokens: raw.get("max_total_tokens").and_then(|v| v.as_i64()),
+                    context_length: raw.get("max_total_tokens").and_then(serde_json::Value::as_i64),
+                    max_output_tokens: raw.get("max_total_tokens").and_then(serde_json::Value::as_i64),
                     input_modalities: None,
                     output_modalities: None,
                     model_type: None,
@@ -168,7 +168,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         view.temperature = None;
 
         // Remove null fields from extra
-        let has_nulls = view.extra.values().any(|v| v.is_null());
+        let has_nulls = view.extra.values().any(serde_json::Value::is_null);
         if has_nulls {
             let extra_mut = view.extra.to_mut();
             extra_mut.retain(|_, v| !v.is_null());
@@ -225,7 +225,7 @@ mod tests {
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
-                extra: Default::default(),
+                extra: serde_json::Map::default(),
             }]),
             temperature: Some(0.7),
             max_tokens: None,

@@ -34,7 +34,7 @@ impl TargetFormatter for OpenaiFormatter {
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!("serialize openai request: {}", e))),
+            Err(e) => Err(CoreError::Parse(format!("serialize openai request: {e}"))),
         }
     }
 }
@@ -58,8 +58,7 @@ impl TargetFormatter for AnthropicFormatter {
         match serde_json::to_vec(&anthro) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
             Err(e) => Err(CoreError::Parse(format!(
-                "serialize anthropic request: {}",
-                e
+                "serialize anthropic request: {e}"
             ))),
         }
     }
@@ -233,8 +232,7 @@ impl TargetFormatter for ResponsesFormatter {
         match serde_json::to_vec(&Value::Object(obj)) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
             Err(e) => Err(CoreError::Parse(format!(
-                "serialize responses request: {}",
-                e
+                "serialize responses request: {e}"
             ))),
         }
     }

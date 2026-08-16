@@ -151,7 +151,7 @@ fn resolve_weighted(mut targets: Vec<ComboTarget>) -> Vec<ComboTarget> {
         .iter()
         .map(|t| if t.weight <= 0 { 1 } else { t.weight as u32 })
         .collect();
-    let total: u64 = weights.iter().map(|w| *w as u64).sum();
+    let total: u64 = weights.iter().map(|w| u64::from(*w)).sum();
     if total == 0 {
         // All-zero weights (shouldn't happen given the `<= 0` → `1`
         // clamp above, but defense in depth). Fall back to strict
@@ -162,11 +162,11 @@ fn resolve_weighted(mut targets: Vec<ComboTarget>) -> Vec<ComboTarget> {
     let mut pick = rng.random_range(0..total);
     let mut idx = 0;
     for (i, w) in weights.iter().enumerate() {
-        if pick < *w as u64 {
+        if pick < u64::from(*w) {
             idx = i;
             break;
         }
-        pick -= *w as u64;
+        pick -= u64::from(*w);
     }
     let picked = targets.remove(idx);
     let mut out = Vec::with_capacity(targets.len() + 1);

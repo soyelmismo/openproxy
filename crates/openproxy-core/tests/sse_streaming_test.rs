@@ -15,7 +15,7 @@ fn payload_value(chunk: &UpstreamSseChunk) -> serde_json::Value {
     if let Some(ref raw) = chunk.raw_payload {
         serde_json::from_str(raw).unwrap()
     } else {
-        chunk.payload.to_owned()
+        chunk.payload.clone()
     }
 }
 
@@ -338,12 +338,11 @@ fn gemini_stream_finish_only_no_text() {
 #[test]
 fn openai_stream_many_small_chunks() {
     let mut sse_lines: Vec<String> = Vec::new();
-    let expected: String = (0..1000).map(|i| format!("{} ", i)).collect();
+    let expected: String = (0..1000).map(|i| format!("{i} ")).collect();
 
     for i in 0..1000 {
         sse_lines.push(format!(
-            r#"data: {{"id":"1","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{{"index":0,"delta":{{"content":"{} "}},"finish_reason":null}}]}}"#,
-            i
+            r#"data: {{"id":"1","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{{"index":0,"delta":{{"content":"{i} "}},"finish_reason":null}}]}}"#
         ));
     }
     sse_lines.push("data: [DONE]".to_string());

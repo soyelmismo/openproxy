@@ -307,7 +307,7 @@ pub fn insert_many(
         }
 
         // Pass 2: resolve all IDs
-        for row in chunk.iter() {
+        for row in chunk {
             let id = if let Some(dk) = &row.1 {
                 if let Some(&inserted_id) = inserted_ids_by_dedup.get(dk) {
                     Some(inserted_id)
@@ -323,7 +323,7 @@ pub fn insert_many(
             };
 
             if let Some(id) = id {
-                all_results.push((id, row.0.to_owned()));
+                all_results.push((id, row.0.clone()));
             }
         }
     }
@@ -390,7 +390,7 @@ pub fn record_system(
     code: &str,
     message: &str,
     provider_id: Option<&str>,
-    details: Option<serde_json::Value>,
+    details: Option<&serde_json::Value>,
 ) -> Result<Option<i64>> {
     let payload = serde_json::json!({
         "code": code,
@@ -694,7 +694,7 @@ mod tests {
                 &conn,
                 KIND_MODEL_NEW,
                 &serde_json::json!({"i": i}),
-                Some(&format!("p1:m{}", i)),
+                Some(&format!("p1:m{i}")),
                 Some("p1"),
             )
             .unwrap();
@@ -821,7 +821,7 @@ mod tests {
         for i in 0..count {
             rows.push((
                 serde_json::json!({"item": i}),
-                Some(format!("dedup_{}", i)),
+                Some(format!("dedup_{i}")),
                 Some("test_provider".to_string()),
             ));
         }

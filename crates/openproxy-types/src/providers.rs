@@ -71,7 +71,7 @@ impl ProviderFormat {
             "gemini" => Ok(ProviderFormat::Gemini),
             "responses" => Ok(ProviderFormat::Responses),
             "atomesus" => Ok(ProviderFormat::Atomesus),
-            other => Err(format!("invalid provider format: {}", other)),
+            other => Err(format!("invalid provider format: {other}")),
         }
     }
 }
@@ -104,7 +104,7 @@ impl AuthType {
             "goog-api-key" => Ok(AuthType::GoogApiKey),
             "oauth" => Ok(AuthType::OAuth),
             "none" => Ok(AuthType::None),
-            other => Err(format!("invalid auth_type: {}", other)),
+            other => Err(format!("invalid auth_type: {other}")),
         }
     }
 }
@@ -129,7 +129,7 @@ impl RateLimitScope {
         match s {
             "account" => Ok(RateLimitScope::Account),
             "model" => Ok(RateLimitScope::Model),
-            other => Err(format!("invalid rate_limit_scope: {}", other)),
+            other => Err(format!("invalid rate_limit_scope: {other}")),
         }
     }
 }

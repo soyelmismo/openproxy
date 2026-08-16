@@ -29,7 +29,7 @@ impl EndpointKind {
             "image" => Ok(Self::Image),
             "embedding" => Ok(Self::Embedding),
             "video" => Ok(Self::Video),
-            other => Err(format!("invalid endpoint kind: {}", other)),
+            other => Err(format!("invalid endpoint kind: {other}")),
         }
     }
 }

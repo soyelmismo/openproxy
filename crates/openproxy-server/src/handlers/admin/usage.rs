@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize, json, AppState, ApiError, analytics, StreamExt, HeaderMap, WebSocketUpgrade, IntoResponse, StatusCode, authenticate_admin_ws, CoreError, WebSocket, Message, ADMIN_LOCK_TIMEOUT, UsageFilter, ProviderId, AccountId, ComboId, ApiKeyId};
 use crate::handlers::admin::debug::json_text;
 use axum::{
     Json,
@@ -205,7 +205,7 @@ pub async fn usage_stream(
             .unwrap_or("");
 
         let is_same_host = !host.is_empty()
-            && (origin == format!("http://{}", host) || origin == format!("https://{}", host));
+            && (origin == format!("http://{host}") || origin == format!("https://{host}"));
 
         // Allow localhost origins (dev mode / same-host dashboard).
         let is_localhost = origin == "http://localhost"
@@ -260,8 +260,7 @@ pub async fn usage_detail(
     match row {
         Some(r) => Ok(Json(UsageDetailResponse { row: r })),
         None => Err(ApiError(CoreError::Internal(format!(
-            "usage row not found for query {:?}",
-            q
+            "usage row not found for query {q:?}"
         )))),
     }
 }
@@ -306,7 +305,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
         // — setting it to `None` makes the arm a permanent no-op
         // until the connection closes.
         let mut notification_rx = openproxy_core::notifications::try_get_tx()
-            .map(|tx| tx.subscribe());
+            .map(tokio::sync::broadcast::Sender::subscribe);
 
         // 2. Spawn a DEDICATED sender task that owns `ws_sender.send`.
         //    The receiver loop forwards every broadcast event into
@@ -507,7 +506,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                             .await;
                         }
                         NotifRxEvent::Lagged(skipped) => {
-                            outbox_try_send(&outbox_tx, json!({
+                            outbox_try_send(&outbox_tx, &json!({
                                 "type": "lag_warning",
                                 "skipped": skipped,
                                 "channel": "notifications",
@@ -515,7 +514,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                     "notifications broadcast channel lagged; {} event(s) skipped — refetch via GET /admin/api/notifications",
                                     skipped
                                 ),
-                            })).await;
+                            }));
                         }
                         NotifRxEvent::Closed => {
                             // Channel closed (server shutting down). Drop
@@ -536,10 +535,10 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                             let msg: ClientWsMessage = match serde_json::from_str(&text) {
                                 Ok(msg) => msg,
                                 Err(e) => {
-                                    outbox_try_send(&outbox_tx, json!({
+                                    outbox_try_send(&outbox_tx, &json!({
                                         "type": "error",
                                         "message": format!("invalid client message: {e}"),
-                                    })).await;
+                                    }));
                                     continue;
                                 }
                             };
@@ -571,13 +570,13 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                 }
                                 "ping" => {
                                     let now_str = chrono::Utc::now().to_rfc3339();
-                                    outbox_try_send(&outbox_tx, json!({ "type": "pong", "server_time": now_str })).await;
+                                    outbox_try_send(&outbox_tx, &json!({ "type": "pong", "server_time": now_str }));
                                 }
                                 _ => {
-                                    outbox_try_send(&outbox_tx, json!({
+                                    outbox_try_send(&outbox_tx, &json!({
                                         "type": "error",
                                         "message": format!("unknown message type: {}", msg.msg_type),
-                                    })).await;
+                                    }));
                                 }
                             }
                         }
@@ -609,8 +608,8 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
 }
 
 pub(crate) fn run_analytics_query_with_filter<T, F>(
-    s: &AppState,
-    f: &core_usage::UsageFilter,
+    state: &AppState,
+    filter: &core_usage::UsageFilter,
     query_name: &str,
     query_fn: F,
 ) -> Result<T, ApiError>
@@ -618,7 +617,7 @@ where
     F: Fn(&openproxy_db::conn::ReaderGuard<'_>, &core_usage::UsageFilter) -> Result<T, CoreError>,
 {
     // First attempt: use the reader connection.
-    let r = s
+    let reader = state
         .db_pool()
         .try_reader_for(ADMIN_LOCK_TIMEOUT)
         .ok_or_else(|| {
@@ -627,22 +626,22 @@ where
                     .into(),
             ))
         })?;
-    match query_fn(&r, f) {
+    match query_fn(&reader, filter) {
         Ok(result) => Ok(result),
-        Err(e) => {
+        Err(err) => {
             // Check if this is a disk I/O error (SQLITE_IOERR_*).
-            let err_str = format!("{:?}", e);
+            let err_str = format!("{err:?}");
             let is_disk_io = err_str.contains("disk I/O")
                 || err_str.contains("SQLITE_IOERR")
                 || err_str.contains("database disk image is malformed")
                 || err_str.contains("database is locked");
 
             if !is_disk_io {
-                return Err(ApiError(e));
+                return Err(ApiError(err));
             }
 
             tracing::warn!(
-                error = %e,
+                error = %err,
                 query = %query_name,
                 "analytics query failed with disk I/O error; attempting WAL checkpoint + retry"
             );
@@ -650,14 +649,14 @@ where
             // Drop the reader guard before taking the writer (avoids
             // a potential deadlock if the reader and writer share any
             // internal SQLite state).
-            drop(r);
+            drop(reader);
 
             // Force a WAL checkpoint on the writer connection. This
             // flushes the WAL file into the main DB and releases any
             // pages that were locked by the WAL. `TRUNCATE` mode also
             // truncates the WAL file to zero bytes.
             {
-                let w = s.db_pool().writer();
+                let w = state.db_pool().writer();
                 let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
             }
 
@@ -672,15 +671,15 @@ where
                 query = %query_name,
                 "analytics retry: reopening DB connections to clear stale page cache"
             );
-            if let Err(e) = s.db_pool().reopen() {
+            if let Err(reopen_err) = state.db_pool().reopen() {
                 tracing::warn!(
-                    error = %e,
+                    error = %reopen_err,
                     "analytics retry: reopen failed (continuing with existing connection)"
                 );
             }
 
             // Retry on the (now fresh) reader connection.
-            let r2 = s
+            let reader2 = state
                 .db_pool()
                 .try_reader_for(ADMIN_LOCK_TIMEOUT)
                 .ok_or_else(|| {
@@ -688,7 +687,7 @@ where
                         "reader lock busy on retry; the database may be under heavy load".into(),
                     ))
                 })?;
-            query_fn(&r2, f).map_err(ApiError)
+            query_fn(&reader2, filter).map_err(ApiError)
         }
     }
 }
@@ -770,8 +769,7 @@ pub(crate) fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, A
         // silently miss a window due to a typo.
         "custom" => Ok(None),
         other => Err(CoreError::Validation(format!(
-            "preset must be one of today|7d|30d|this_month|last_month|last_6_months|ytd|custom; got `{}`",
-            other
+            "preset must be one of today|7d|30d|this_month|last_month|last_6_months|ytd|custom; got `{other}`"
         ))
         .into()),
     }
@@ -793,9 +791,8 @@ pub(crate) fn parse_usage_timestamp(s: &str, field: &str) -> Result<String, ApiE
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     Err(CoreError::Validation(format!(
-        "{} must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or \
-         SQLite-style (e.g. 2026-06-18 07:00:00); got `{}`",
-        field, s
+        "{field} must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or \
+         SQLite-style (e.g. 2026-06-18 07:00:00); got `{s}`"
     ))
     .into())
 }
@@ -827,11 +824,11 @@ pub(crate) async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: s
     }
 }
 
-pub(crate) async fn outbox_try_send(
+pub(crate) fn outbox_try_send(
     tx: &tokio::sync::mpsc::Sender<String>,
-    value: serde_json::Value,
+    value: &serde_json::Value,
 ) {
-    let text: String = match json_text(&value) {
+    let text: String = match json_text(value) {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(error = %e, "stream_usage_rows: json_text failed in outbox_try_send");
@@ -839,11 +836,10 @@ pub(crate) async fn outbox_try_send(
         }
     };
     match tx.try_send(text) {
-        Ok(()) => {}
+        Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             tracing::debug!("stream_usage_rows: outbox full, dropping non-critical WS message");
         }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
     }
 }
 
@@ -933,7 +929,7 @@ impl UsageQuery {
             && f > t
         {
             return Err(
-                CoreError::Validation(format!("from ({}) must be <= to ({})", f, t)).into(),
+                CoreError::Validation(format!("from ({f}) must be <= to ({t})")).into(),
             );
         }
         let account_id = self.account_id.map(AccountId::new);
@@ -978,7 +974,7 @@ mod tests {
                 assert!(msg.contains("must be an RFC-3339 timestamp"));
                 assert!(msg.contains("from"));
             }
-            _ => panic!("Expected Validation error, got {:?}", err),
+            _ => panic!("Expected Validation error, got {err:?}"),
         }
     }
 }

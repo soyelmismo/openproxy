@@ -97,7 +97,7 @@ impl UsageTracker {
             combo_id: Some(combo.id),
             combo_target_id: None,
             model_row_id: None,
-            upstream_model_id: req.openai_request.model.to_owned(),
+            upstream_model_id: req.openai_request.model.clone(),
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
@@ -161,7 +161,7 @@ impl UsageTracker {
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
         let request_headers =
-            crate::redact::redact_btreemap_sensitive(req.request_headers.to_owned());
+            crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
@@ -380,8 +380,8 @@ impl<'a> UsageRecordBuilder<'a> {
         let (compression_savings_pct, compression_techniques) = {
             let guard = self.tracker.compression_stats_cell.read();
             (
-                guard.as_ref().and_then(|s| s.savings_pct_opt()),
-                guard.as_ref().and_then(|s| s.techniques_csv()),
+                guard.as_ref().and_then(openproxy_compression::CompressionStats::savings_pct_opt),
+                guard.as_ref().and_then(openproxy_compression::CompressionStats::techniques_csv),
             )
         };
 
@@ -418,7 +418,9 @@ impl<'a> UsageRecordBuilder<'a> {
                             .and_then(|c| c.as_str())
                     })
                     .unwrap_or("");
-                if !completion_text.is_empty() {
+                if completion_text.is_empty() {
+                    (None, false)
+                } else {
                     let est = openproxy_types::token_estimate::estimate_completion_tokens(
                         completion_text,
                     );
@@ -428,17 +430,15 @@ impl<'a> UsageRecordBuilder<'a> {
                         "upstream did not report usage; estimated completion tokens from response body"
                     );
                     (Some(est), true)
-                } else {
-                    (None, false)
                 }
             }
         };
 
         let input = UsageInput {
             request_id: self.req.request_id,
-            trace_id: self.trace_id.to_owned(),
+            trace_id: self.trace_id.clone(),
             attempt: self.attempt,
-            provider_id: self.target.provider_id.to_owned(),
+            provider_id: self.target.provider_id.clone(),
             account_id: self.target.account_id,
             combo_id: Some(self.combo.id),
             combo_target_id: Some(self.target.id),
@@ -454,12 +454,12 @@ impl<'a> UsageRecordBuilder<'a> {
             ttft_ms: self.ttft_ms,
             total_ms: self.total_ms,
             status_code: self.status_code,
-            error_msg: self.err.map(|e| format!("{}", e)),
+            error_msg: self.err.map(|e| format!("{e}")),
             race_total: self.total_targets,
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
-                self.req.request_body_json.to_owned().or_else(|| {
+                self.req.request_body_json.clone().or_else(|| {
                     serde_json::to_vec(&*self.req.openai_request)
                         .ok()
                         .map(bytes::Bytes::from)
@@ -482,19 +482,19 @@ impl<'a> UsageRecordBuilder<'a> {
             } else {
                 None
             },
-            error_message: self.err.map(|e| format!("{}", e)),
+            error_message: self.err.map(|e| format!("{e}")),
             race_attempts: self.race_size,
             is_streaming: self.is_streaming,
             stream_complete: self.stream_complete,
-            stop_reason: self.stop_reason.to_owned(),
+            stop_reason: self.stop_reason.clone(),
             compression_savings_pct,
             compression_techniques,
             client_response: false,
             prompt_tokens_estimated,
             completion_tokens_estimated,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-            proxy_url: self.proxy_url.to_owned(),
-            proxy_status: self.proxy_status.to_owned(),
+            proxy_url: self.proxy_url.clone(),
+            proxy_status: self.proxy_status.clone(),
             is_proxy_rotated: self.is_proxy_rotated,
         };
 
@@ -511,7 +511,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()).0);
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: self.req.request_id.to_string(),
-                trace_id: self.trace_id.to_string(),
+                trace_id: self.trace_id.clone(),
                 provider_id: None,
                 upstream_model_id: None,
                 stage: stage_label.into(),
@@ -521,13 +521,13 @@ impl<'a> UsageRecordBuilder<'a> {
                 status_code: Some(self.status_code),
                 error: error_str,
 
-                stop_reason: self.stop_reason.to_owned(),
+                stop_reason: self.stop_reason.clone(),
                 timestamp: None,
                 endpoint_kind: None,
             });
         }
 
-        let err_msg = self.err.map(|e| e.to_string());
+        let err_msg = self.err.map(std::string::ToString::to_string);
         let is_health_issue = if let Some(e) = self.err {
             is_upstream_health_issue(e)
         } else {

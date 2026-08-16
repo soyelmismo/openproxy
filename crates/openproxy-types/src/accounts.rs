@@ -23,7 +23,7 @@ impl HealthStatus {
             "healthy" => Ok(Self::Healthy),
             "degraded" => Ok(Self::Degraded),
             "unhealthy" => Ok(Self::Unhealthy),
-            other => Err(format!("invalid health: {}", other)),
+            other => Err(format!("invalid health: {other}")),
         }
     }
 }

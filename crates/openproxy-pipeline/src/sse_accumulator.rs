@@ -155,7 +155,7 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
                 if let Some(existing) = obj.get_mut("reasoning_content")
                     && let Some(s) = existing.as_str()
                 {
-                    let new = format!("{}{}", s, combined);
+                    let new = format!("{s}{combined}");
                     *existing = serde_json::Value::String(new);
                 } else {
                     obj.insert(
@@ -357,14 +357,14 @@ impl ResponseAccumulator {
                 let has_empty_choices = v
                     .get("choices")
                     .and_then(|c| c.as_array())
-                    .is_none_or(|arr| arr.is_empty());
+                    .is_none_or(std::vec::Vec::is_empty);
                 if !has_empty_choices {
                     continue;
                 }
                 if let Some(error_obj) = v.get("error") {
                     let code = error_obj
                         .get("code")
-                        .and_then(|c| c.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(502) as u16;
                     let message = error_obj
                         .get("message")
@@ -408,7 +408,7 @@ impl ResponseAccumulator {
         {
             for tc in tool_calls {
                 if let Some(tc_obj) = tc.as_object() {
-                    let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                    let index = tc_obj.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
                     let id = tc_obj.get("id").and_then(|i| i.as_str());
                     let name = tc_obj
                         .get("function")
@@ -545,10 +545,10 @@ impl ResponseAccumulator {
         // has no typed fields for them.
         let mut message = Map::new();
         message.insert("role".to_string(), Value::String("assistant".to_string()));
-        if !content.is_empty() {
-            message.insert("content".to_string(), Value::String(content.to_owned()));
-        } else {
+        if content.is_empty() {
             message.insert("content".to_string(), Value::Null);
+        } else {
+            message.insert("content".to_string(), Value::String(content.to_owned()));
         }
         let mut extra = Map::new();
         if let Some(reasoning) = &self.reasoning {
@@ -588,7 +588,7 @@ impl ResponseAccumulator {
         if !self.raw_response_body.is_empty() {
             extra.insert(
                 "raw_response_body".to_string(),
-                Value::String(self.raw_response_body.to_owned()),
+                Value::String(self.raw_response_body.clone()),
             );
         }
 
@@ -603,8 +603,7 @@ impl ResponseAccumulator {
             "finish_reason".to_string(),
             self.stop_reason
                 .as_ref()
-                .map(|s| Value::String(s.to_owned()))
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |s| Value::String(s.to_owned())),
         );
 
         let mut response = Map::new();
@@ -721,8 +720,7 @@ mod tests {
         // Push a payload whose extracted content is exactly at the cap.
         let big_content = "x".repeat(MAX_ACCUMULATED_BYTES);
         let payload = format!(
-            r#"{{"choices":[{{"index":0,"delta":{{"content":"{}"}},"finish_reason":null}}]}}"#,
-            big_content
+            r#"{{"choices":[{{"index":0,"delta":{{"content":"{big_content}"}},"finish_reason":null}}]}}"#
         );
         acc.append_openai_raw(&payload);
         assert!(!acc.is_truncated());

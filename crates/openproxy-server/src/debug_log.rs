@@ -48,6 +48,7 @@ use std::sync::OnceLock;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::Serialize;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
@@ -139,19 +140,18 @@ pub fn init() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
 
-            let mut file = match tokio::fs::OpenOptions::new()
+            let Ok(mut file) = tokio::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .open(&path)
                 .await
-            {
-                Ok(f) => f,
-                Err(_) => return, // Fail silently if cannot write
+            else {
+                return; // Fail silently if cannot write
             };
 
             let mut rotation_interval =
-                tokio::time::interval(std::time::Duration::from_secs(12 * 3600));
+                tokio::time::interval(std::time::Duration::from_hours(12));
             rotation_interval.tick().await; // Consume immediate first tick
 
             loop {
@@ -173,7 +173,6 @@ pub fn init() {
                             Some(entry) => {
                                 if let Ok(mut json) = serde_json::to_string(&entry) {
                                     json.push('\n');
-                                    use tokio::io::AsyncWriteExt;
                                     let _ = file.write_all(json.as_bytes()).await;
                                     let _ = file.flush().await;
                                 }
@@ -221,7 +220,7 @@ pub fn latest_seq() -> u64 {
         return 0;
     };
     let guard = buf.lock();
-    guard.entries.back().map(|e| e.seq).unwrap_or(0)
+    guard.entries.back().map_or(0, |e| e.seq)
 }
 
 /// Clear all entries from the buffer. Used by `POST /admin/debug/clear`
@@ -302,7 +301,7 @@ where
         // Push into the global buffer.
         let file_entry = if let Some(buf) = DEBUG_LOG_BUFFER.get() {
             let mut guard = buf.lock();
-            let to_send = entry.to_owned();
+            let to_send = entry.clone();
             guard.push(entry);
             to_send
         } else {
@@ -339,7 +338,7 @@ impl Visit for MessageVisitor {
         // caller uses `%value` syntax. The Debug formatting of
         // `DisplayValue` wraps the string in quotes — we strip them
         // so the extracted value matches what the caller passed.
-        let value_str = format!("{:?}", value);
+        let value_str = format!("{value:?}");
         let cleaned = strip_debug_quotes(&value_str);
         match name {
             "message" => self.message = Some(cleaned.to_string()),
@@ -421,6 +420,8 @@ impl MessageVisitor {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::prelude::*;
 
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -443,7 +444,7 @@ mod tests {
                     timestamp: format!("2026-01-01T00:00:{:02}Z", i % 60),
                     level: "WARN".into(),
                     target: "test".into(),
-                    message: format!("entry {}", i),
+                    message: format!("entry {i}"),
                     request_id: None,
                     trace_id: None,
                     span_path: None,
@@ -474,10 +475,10 @@ mod tests {
             for i in 0..5 {
                 guard.push(DebugLogEntry {
                     seq: 0,
-                    timestamp: format!("2026-01-01T00:00:0{}Z", i),
+                    timestamp: format!("2026-01-01T00:00:0{i}Z"),
                     level: "INFO".into(),
                     target: "test".into(),
-                    message: format!("entry {}", i),
+                    message: format!("entry {i}"),
                     request_id: None,
                     trace_id: None,
                     span_path: None,
@@ -534,8 +535,6 @@ mod tests {
         // hermetic. The `tracing_subscriber::prelude::*` import
         // pulls in `SubscriberExt` (for `Registry::with`) and
         // `Layer` (for `with_filter`).
-        use tracing_subscriber::filter::LevelFilter;
-        use tracing_subscriber::prelude::*;
         let _guard = tracing_subscriber::registry()
             .with(DebugLogLayer.with_filter(LevelFilter::WARN))
             .set_default();

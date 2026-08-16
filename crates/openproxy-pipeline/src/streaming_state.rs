@@ -200,10 +200,10 @@ impl StreamingChunkStage for ReasoningNormalizer {
 
     fn finalize(&mut self) -> Option<String> {
         let (clean_content, _) = self.think_extractor.flush();
-        if !clean_content.is_empty() {
-            Some(clean_content)
-        } else {
+        if clean_content.is_empty() {
             None
+        } else {
+            Some(clean_content)
         }
     }
 }
@@ -293,14 +293,14 @@ impl StreamingState {
             .req
             .race_cancel
             .as_ref()
-            .is_some_and(|rc| rc.is_cancelled())
+            .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
             && !processor.state.done_sent
         {
             return Ok(ChunkResult::Return(Box::new(
                 dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
-                        proxy_url: ctx.proxy_url.to_owned(),
-                        proxy_status: ctx.proxy_status.to_owned(),
+                        proxy_url: ctx.proxy_url.clone(),
+                        proxy_status: ctx.proxy_status.clone(),
                         req: ctx.req.to_owned(),
                         combo: ctx.combo,
                         target: ctx.target,
@@ -327,7 +327,7 @@ pub(crate) struct ChunkProcessor<'a> {
     pub state: &'a mut StreamingState,
     pub dispatcher: &'a crate::upstream_dispatcher::UpstreamDispatcher,
 }
-impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
+impl crate::streaming::ChunkInterceptor for ChunkProcessor<'_> {
     async fn process_chunk(
         &mut self,
         ctx: &StreamContext<'_>,
@@ -381,13 +381,13 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             .req
             .race_cancel
             .as_ref()
-            .is_some_and(|rc| rc.is_cancelled())
+            .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
         {
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
-                        proxy_url: ctx.proxy_url.to_owned(),
-                        proxy_status: ctx.proxy_status.to_owned(),
+                        proxy_url: ctx.proxy_url.clone(),
+                        proxy_status: ctx.proxy_status.clone(),
                         req: ctx.req.to_owned(),
                         combo: ctx.combo,
                         target: ctx.target,
@@ -424,7 +424,7 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
 // the slow path (state.usage / finish_reason / inline errors).
 // `process_translated_format` handles Gemini and Anthropic by first
 // translating to OpenAI shape and then forwarding.
-impl<'a> ChunkProcessor<'a> {
+impl ChunkProcessor<'_> {
     /// OpenAI-format SSE handler (fast + slow paths).
     async fn process_openai_format(
         &mut self,
@@ -464,12 +464,12 @@ impl<'a> ChunkProcessor<'a> {
         if json_payload == "[DONE]" {
             // Race cancellation guard: if another target
             // already won, discard this chunk instantly.
-            if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+            if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
                 return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.to_owned(),
-                            proxy_status: ctx.proxy_status.to_owned(),
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.to_owned(),
                             combo,
                             target,
@@ -495,8 +495,8 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         crate::race_sink::StreamSinkError::Lost,
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.to_owned(),
-                            proxy_status: ctx.proxy_status.to_owned(),
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.to_owned(),
                             combo,
                             target,
@@ -549,7 +549,7 @@ impl<'a> ChunkProcessor<'a> {
                 message: Option<&'a str>,
             }
             if let Ok(ec) = serde_json::from_str::<ErrorChunk>(json_payload) {
-                let has_empty_choices = ec.choices.as_ref().is_none_or(|arr| arr.is_empty());
+                let has_empty_choices = ec.choices.as_ref().is_none_or(std::vec::Vec::is_empty);
                 if has_empty_choices && let Some(error_obj) = ec.error {
                     let code = error_obj.code.unwrap_or(502) as u16;
                     let message = error_obj
@@ -586,8 +586,8 @@ impl<'a> ChunkProcessor<'a> {
                                 combo,
                                 target,
                                 ctx: FailureContext {
-                                    proxy_url: ctx.proxy_url.to_owned(),
-                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     attempt,
                                     race_size,
                                     err: &err,
@@ -669,12 +669,12 @@ impl<'a> ChunkProcessor<'a> {
                     // Race cancellation guard: if another
                     // target won the race, discard this
                     // chunk to prevent interleaving.
-                    if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                    if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
                         return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.to_owned(),
-                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.to_owned(),
                                     combo,
                                     target,
@@ -714,8 +714,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.to_owned(),
-                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.to_owned(),
                                     combo,
                                     target,
@@ -813,12 +813,12 @@ impl<'a> ChunkProcessor<'a> {
 
             // Race cancellation guard: check before
             // writing to the shared sink.
-            if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+            if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
                 return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.to_owned(),
-                            proxy_status: ctx.proxy_status.to_owned(),
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.to_owned(),
                             combo,
                             target,
@@ -853,8 +853,8 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         e,
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: ctx.proxy_url.to_owned(),
-                            proxy_status: ctx.proxy_status.to_owned(),
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.to_owned(),
                             combo,
                             target,
@@ -966,12 +966,12 @@ impl<'a> ChunkProcessor<'a> {
                     // H4 fix: record the fact that we sent
                     // the upstream's [DONE] so the post-loop
                     // sentinel below does not double-emit.
-                    if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                    if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
                         return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.to_owned(),
-                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.to_owned(),
                                     combo,
                                     target,
@@ -997,8 +997,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 crate::race_sink::StreamSinkError::Lost,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.to_owned(),
-                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.to_owned(),
                                     combo,
                                     target,
@@ -1026,11 +1026,11 @@ impl<'a> ChunkProcessor<'a> {
                     // after [DONE] to the client, causing
                     // chunk overlapping and output corruption.
                     return Ok(crate::streaming::ChunkEvent::Done);
-                } else {
-                    // Extract metadata before consuming chunk.
-                    if chunk.usage.is_some() {
-                        state.usage = chunk.usage.take();
-                    }
+                }
+                // Extract metadata before consuming chunk.
+                if chunk.usage.is_some() {
+                    state.usage = chunk.usage.take();
+                }
                     if chunk.stop_reason.is_some() && state.stop_reason.is_none() {
                         state.stop_reason = chunk.stop_reason.take();
                     }
@@ -1128,8 +1128,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.to_owned(),
-                                    proxy_status: ctx.proxy_status.to_owned(),
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.to_owned(),
                                     combo,
                                     target,
@@ -1148,7 +1148,6 @@ impl<'a> ChunkProcessor<'a> {
                             ),
                         )));
                     }
-                }
             }
             Ok(None) => return Ok(crate::streaming::ChunkEvent::Skip),
             Err(e) => {
@@ -1172,8 +1171,8 @@ impl<'a> ChunkProcessor<'a> {
                             combo,
                             target,
                             ctx: crate::FailureContext {
-                                proxy_url: ctx.proxy_url.to_owned(),
-                                proxy_status: ctx.proxy_status.to_owned(),
+                                proxy_url: ctx.proxy_url.clone(),
+                                proxy_status: ctx.proxy_status.clone(),
                                 attempt,
                                 race_size,
                                 err: &e,
@@ -1208,13 +1207,11 @@ mod tests {
         let mut normalizer = ReasoningNormalizer::new();
         let payload = r#"{"choices":[{"delta":{"content":"<think>reasoning</think>answer"}}]}"#;
         let action = normalizer.process_chunk(payload);
-        match action {
-            StreamAction::Mutate(mutated) => {
-                assert!(mutated.contains("\"reasoning_content\":\"reasoning\""));
-                assert!(mutated.contains("\"content\":\"answer\""));
-            }
-            other => panic!("expected StreamAction::Mutate, got {:?}", other),
-        }
+        let StreamAction::Mutate(mutated) = action else {
+            panic!("expected StreamAction::Mutate, got {action:?}");
+        };
+        assert!(mutated.contains("\"reasoning_content\":\"reasoning\""));
+        assert!(mutated.contains("\"content\":\"answer\""));
     }
 
     #[test]

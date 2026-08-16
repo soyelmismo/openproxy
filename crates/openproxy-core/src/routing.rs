@@ -187,12 +187,12 @@ pub fn resolve(conn: &Connection, model_str: &str) -> Result<RoutingPlan> {
     }
 
     // 4. Not found.
-    let hint = if combo_name != stripped {
+    let hint = if combo_name == stripped {
+        None
+    } else {
         // The original input had a `combo:` prefix; include the
         // normalised name in the hint.
-        Some(format!("combo:{}", combo_name))
-    } else {
-        None
+        Some(format!("combo:{combo_name}"))
     };
     Ok(RoutingPlan::NotFound {
         model: model_str.to_string(),
@@ -261,8 +261,7 @@ fn provider_active_and_scope(
         )
         .optional()
         .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "provider_active_and_scope({})",
-            provider_id
+            "provider_active_and_scope({provider_id})"
         )))?;
     match row {
         Some((active, scope_str)) => {
@@ -394,10 +393,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-routing-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-routing-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("routing.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -467,17 +465,15 @@ mod tests {
         let model_row = seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
-        match plan {
-            RoutingPlan::Combo { targets, .. } => {
-                assert_eq!(targets[0].provider_id, ProviderId::new("openrouter"));
-                assert_eq!(targets[0].model_row_id, Some(model_row));
-                assert!(
-                    targets[0].account_id.is_none(),
-                    "resolver always uses auto-rotation"
-                );
-            }
-            other => panic!("expected Combo, got {:?}", other),
-        }
+        let RoutingPlan::Combo { targets, .. } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
+        assert_eq!(targets[0].provider_id, ProviderId::new("openrouter"));
+        assert_eq!(targets[0].model_row_id, Some(model_row));
+        assert!(
+            targets[0].account_id.is_none(),
+            "resolver always uses auto-rotation"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -491,17 +487,15 @@ mod tests {
         let combo_id = combos::create_combo(&conn, "smart", Strategy::Priority, 1).expect("create");
 
         let plan = resolve(&conn, "combo:smart").expect("resolve");
-        match plan {
-            RoutingPlan::Combo {
-                combo_id: got_id,
-                combo_name,
-                ..
-            } => {
-                assert_eq!(got_id, combo_id);
-                assert_eq!(combo_name, "smart");
-            }
-            other => panic!("expected Combo, got {:?}", other),
-        }
+        let RoutingPlan::Combo {
+            combo_id: got_id,
+            combo_name,
+            ..
+        } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
+        assert_eq!(got_id, combo_id);
+        assert_eq!(combo_name, "smart");
     }
 
     #[test]
@@ -511,17 +505,15 @@ mod tests {
         let combo_id = combos::create_combo(&conn, "smart", Strategy::Priority, 1).expect("create");
 
         let plan = resolve(&conn, "smart").expect("resolve");
-        match plan {
-            RoutingPlan::Combo {
-                combo_id: got_id,
-                combo_name,
-                ..
-            } => {
-                assert_eq!(got_id, combo_id);
-                assert_eq!(combo_name, "smart");
-            }
-            other => panic!("expected Combo, got {:?}", other),
-        }
+        let RoutingPlan::Combo {
+            combo_id: got_id,
+            combo_name,
+            ..
+        } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
+        assert_eq!(got_id, combo_id);
+        assert_eq!(combo_name, "smart");
     }
 
     // -----------------------------------------------------------------------
@@ -536,13 +528,11 @@ mod tests {
         seed_model(&conn, "openrouter", "real-model");
         // The probe name is neither a model nor a combo.
         let plan = resolve(&conn, "ghost").expect("resolve");
-        match plan {
-            RoutingPlan::NotFound { model, hint } => {
-                assert_eq!(model, "ghost");
-                assert!(hint.is_none(), "no combo: prefix → no hint");
-            }
-            other => panic!("expected NotFound, got {:?}", other),
-        }
+        let RoutingPlan::NotFound { model, hint } = plan else {
+            panic!("expected NotFound, got {plan:?}");
+        };
+        assert_eq!(model, "ghost");
+        assert!(hint.is_none(), "no combo: prefix → no hint");
     }
 
     // -----------------------------------------------------------------------
@@ -562,10 +552,9 @@ mod tests {
         providers::set_active(&conn, &ProviderId::new("openrouter"), false).expect("deactivate");
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
-        match plan {
-            RoutingPlan::NotFound { .. } => {}
-            other => panic!("expected NotFound for inactive provider, got {:?}", other),
-        }
+        let RoutingPlan::NotFound { .. } = plan else {
+            panic!("expected NotFound for inactive provider, got {plan:?}");
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -585,15 +574,13 @@ mod tests {
         seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
-        match plan {
-            RoutingPlan::Combo { targets, .. } => {
-                assert!(
-                    targets[0].account_id.is_none(),
-                    "no healthy account → account_id is None for auto-rotation"
-                );
-            }
-            other => panic!("expected Combo, got {:?}", other),
-        }
+        let RoutingPlan::Combo { targets, .. } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
+        assert!(
+            targets[0].account_id.is_none(),
+            "no healthy account → account_id is None for auto-rotation"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -612,10 +599,9 @@ mod tests {
         seed_model(&conn, "openrouter", "foo/bar");
 
         let plan = resolve(&conn, "openrouter/foo/bar").expect("resolve");
-        match plan {
-            RoutingPlan::Combo { .. } => {}
-            other => panic!("expected Combo, got {:?}", other),
-        }
+        let RoutingPlan::Combo { .. } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -634,10 +620,9 @@ mod tests {
         seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
-        match plan {
-            RoutingPlan::Combo { .. } => {}
-            other => panic!("expected Combo, got {:?}", other),
-        }
+        let RoutingPlan::Combo { .. } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
     }
 
     // -----------------------------------------------------------------------

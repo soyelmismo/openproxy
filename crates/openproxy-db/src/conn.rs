@@ -85,9 +85,9 @@ impl DbPool {
             let p_str = parent.to_string_lossy();
             if !p_str.is_empty() {
                 // This PRAGMA is deprecated but still works and sets the global temp dir
-                let p_escaped = p_str.replace("'", "''");
+                let p_escaped = p_str.replace('\'', "''");
                 let _ = writer.execute(
-                    &format!("PRAGMA temp_store_directory = '{}'", p_escaped),
+                    &format!("PRAGMA temp_store_directory = '{p_escaped}'"),
                     [],
                 );
             }
@@ -279,9 +279,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = base.join(format!("openproxy-db-test-{}-{}", pid, nanos));
+            .map_or(0, |d| d.as_nanos());
+        let dir = base.join(format!("openproxy-db-test-{pid}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         dir
     }
@@ -301,8 +300,7 @@ mod tests {
         assert!(result.is_none(), "lock should not be acquirable while held");
         assert!(
             elapsed < std::time::Duration::from_millis(150),
-            "try_writer_for waited {:?}; should have failed fast",
-            elapsed
+            "try_writer_for waited {elapsed:?}; should have failed fast"
         );
     }
 

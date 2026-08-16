@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, AppState, ApiError, ProviderId, CoreError, seed, resolve_adapter, refresh_oauth_if_needed};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -121,10 +121,9 @@ pub async fn delete_provider(
     // of which path the rejection took.
     if seed::is_builtin(&id) {
         return Err(ApiError(CoreError::Validation(format!(
-            "provider '{}' is a built-in and cannot be deleted. Use POST \
-             /admin/providers/{}/active with {{\"active\": false}} to \
-             deactivate it instead.",
-            id, id
+            "provider '{id}' is a built-in and cannot be deleted. Use POST \
+             /admin/providers/{id}/active with {{\"active\": false}} to \
+             deactivate it instead."
         ))));
     }
     // Scope the writer guard so it is dropped BEFORE
@@ -165,7 +164,7 @@ pub async fn set_provider_active(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let active = body
         .get("active")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
     let w = s.db_pool().writer();
     let provider_id = ProviderId::new(&id);
@@ -185,7 +184,7 @@ pub async fn update_provider(
     let provider_id = ProviderId::new(&id);
     {
         let w = s.db_pool().writer();
-        core_admin::update_provider(&w, &provider_id, body)?;
+        core_admin::update_provider(&w, &provider_id, &body)?;
     }
     // Hot-reload so the chat pipeline sees the updated
     // `base_url`/`auth_type`/`extra_headers` on the
@@ -233,7 +232,7 @@ pub(crate) async fn run_provider_refresh(
 
     // 3. Resolve a healthy/degraded account for this provider.
     let selected_account_id =
-        match crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q).await {
+        match crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q) {
             Ok((Some(account_id), _)) => Some(account_id),
             Ok((None, _)) => None,
             Err(e) => return Err(e),
@@ -385,16 +384,14 @@ fn enrich_provider_with_oauth(
 
     let metadata = adapters
         .iter()
-        .find(|a| a.id() == &p.id)
-        .map(|a| a.metadata())
-        .unwrap_or_else(|| {
+        .find(|a| a.id() == &p.id).map_or_else(|| {
             // Fallback for custom providers that aren't loaded in the adapter registry yet
             let built_in = openproxy_core::providers::is_builtin(p.id.as_str());
             let mut meta = openproxy_core::providers::ProviderMetadata::custom_default();
             meta.built_in = built_in;
             meta.deletable = !built_in;
             meta
-        });
+        }, openproxy_adapters::ProviderAdapterEnum::metadata);
 
     let active_models: i64 = r
         .query_row(

@@ -158,9 +158,8 @@ pub fn load_proxy_test_url(conn: &Connection) -> Result<String> {
         let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
         if let Ok(s) = serde_json::from_str::<String>(&raw) {
             return Ok(s);
-        } else {
-            return Ok(raw);
         }
+        return Ok(raw);
     }
     Ok(PROXY_TEST_URL_DEFAULT.to_string())
 }
@@ -188,9 +187,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = base.join(format!("openproxy-appcfg-test-{}-{}", pid, nanos));
+            .map_or(0, |d| d.as_nanos());
+        let dir = base.join(format!("openproxy-appcfg-test-{pid}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir
     }
@@ -207,8 +205,8 @@ mod tests {
             connect_ms: 1234,
             request_send_ms: 5678,
             ttft_ms: 91011,
-            idle_chunk_ms: 121314,
-            total_ms: 600000,
+            idle_chunk_ms: 121_314,
+            total_ms: 600_000,
         };
         {
             let w = pool.writer();

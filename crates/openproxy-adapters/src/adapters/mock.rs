@@ -16,7 +16,7 @@ impl MockAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new(id),
-                name: format!("Mock {}", id),
+                name: format!("Mock {id}"),
                 base_url: base_url.to_string(),
                 auth_type: AdapterAuthType::Bearer,
                 format,
@@ -53,7 +53,7 @@ impl std::fmt::Debug for MockAdapter {
         f.debug_struct("MockAdapter")
             .field("config", &self.config)
             .field("fail_fetch", &self.fail_fetch)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

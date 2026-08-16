@@ -38,6 +38,9 @@
 //! The default axum body limit of 32 MiB (set in `router.rs`) covers
 //! Whisper's 25 MB upload ceiling; no per-route override is needed.
 
+use std::fmt::Write as _;
+use std::time::Instant;
+
 use axum::{
     extract::{Multipart, State},
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -50,10 +53,9 @@ use openproxy_core::{
 };
 use openproxy_pipeline::circuit_breaker::CircuitBreakerKey;
 use openproxy_types::{
-    CoreError,
+    CoreError, UsageInput,
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
 };
-use std::time::Instant;
 
 use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};
 
@@ -106,23 +108,20 @@ pub async fn transcribe(
     // 5. Multi-target dispatch loop
     for target in targets {
         attempt += 1;
-        let adapter = match adapters
+        let Some(adapter) = adapters
             .iter()
-            .find(|a| a.id() == &target.provider_id)
+            .find(|a| a.id() == &target.provider)
             .cloned()
-        {
-            Some(a) => a,
-            None => {
-                last_error = Some(ApiError(CoreError::Internal(format!(
-                    "no adapter registered for provider '{}'",
-                    target.provider_id
-                ))));
-                continue;
-            }
+        else {
+            last_error = Some(ApiError(CoreError::Internal(format!(
+                "no adapter registered for provider '{}'",
+                target.provider
+            ))));
+            continue;
         };
         let upstream_url = adapter.build_transcription_url();
 
-        let api_key = match resolve_api_key(&state, target.account_id, &target.provider_id) {
+        let api_key = match resolve_api_key(&state, target.account_id, &target.provider) {
             Ok(k) => k,
             Err(e) => {
                 last_error = Some(e);
@@ -139,7 +138,7 @@ pub async fn transcribe(
             openproxy_adapters::adapters::ProviderAdapterEnum::clone(&adapter),
             &upstream_url,
             &api_key,
-            &target.upstream_model_id,
+            &target.upstream_model,
             body_clone,
         )
         .await
@@ -153,7 +152,7 @@ pub async fn transcribe(
                 }
                 tracing::warn!(
                     "Audio target failed (connection error): provider={}, error={:?}",
-                    target.provider_id,
+                    target.provider,
                     e
                 );
                 last_error = Some(e);
@@ -172,7 +171,7 @@ pub async fn transcribe(
         let body_bytes = match response.collect().await {
             Ok(b) => b,
             Err(e) => {
-                let err = ApiError(CoreError::UpstreamConnection(format!("read body: {:?}", e)));
+                let err = ApiError(CoreError::UpstreamConnection(format!("read body: {e:?}")));
                 if let Some(account_id) = target.account_id {
                     state
                         .circuit_breaker()
@@ -180,7 +179,7 @@ pub async fn transcribe(
                 }
                 tracing::warn!(
                     "Audio target body read failed: provider={}, error={:?}",
-                    target.provider_id,
+                    target.provider,
                     err
                 );
                 last_error = Some(err);
@@ -196,12 +195,11 @@ pub async fn transcribe(
             }
             tracing::warn!(
                 "Audio target returned error status: provider={}, status={}",
-                target.provider_id,
+                target.provider,
                 status_code
             );
             last_error = Some(ApiError(CoreError::UpstreamConnection(format!(
-                "upstream status {}",
-                status_code
+                "upstream status {status_code}"
             ))));
             continue;
         }
@@ -212,11 +210,11 @@ pub async fn transcribe(
             state: &state,
             request_id: RequestId::new(),
             api_key_id,
-            provider_id: &target.provider_id,
+            provider_id: &target.provider,
             account_id: target.account_id,
             combo_id: target.combo_id,
             model_row_id: target.model_row_id,
-            upstream_model_id: &target.upstream_model_id,
+            upstream_model_id: &target.upstream_model,
             status_code: status_code.as_u16(),
             error_msg: None,
             total_ms,
@@ -301,10 +299,10 @@ async fn parse_multipart_body(mut multipart: Multipart) -> Result<ParsedAudioBod
 }
 
 struct AudioTargets {
-    provider_id: ProviderId,
+    provider: ProviderId,
     account_id: Option<AccountId>,
     model_row_id: Option<ModelRowId>,
-    upstream_model_id: String,
+    upstream_model: String,
     combo_id: Option<ComboId>,
 }
 
@@ -321,33 +319,30 @@ fn resolve_audio_targets(
             let r = state.db_pool().reader();
             let targets = openproxy_core::routing::flatten_targets(&r, targets).map_err(|e| {
                 ApiError(CoreError::Validation(format!(
-                    "flatten_targets failed: {}",
-                    e
+                    "flatten_targets failed: {e}"
                 )))
             })?;
             let targets =
                 openproxy_core::routing::expand_account_rotation(&r, targets).map_err(|e| {
                     ApiError(CoreError::Validation(format!(
-                        "expand_account_rotation failed: {}",
-                        e
+                        "expand_account_rotation failed: {e}"
                     )))
                 })?;
 
             let mut audio_targets = Vec::with_capacity(targets.len());
             for target in targets {
                 if let Some(model_row_id) = target.model_row_id {
-                    let (provider_id, upstream_model_id) = {
-                        let model = match models::get_by_row_id(&r, model_row_id) {
-                            Ok(Some(m)) => m,
-                            _ => continue, // skip invalid models
+                    let (provider, upstream_model) = {
+                        let Ok(Some(model)) = models::get_by_row_id(&r, model_row_id) else {
+                            continue; // skip invalid models
                         };
                         (model.provider_id, model.model_id.as_str().to_string())
                     };
                     audio_targets.push(AudioTargets {
-                        provider_id,
+                        provider,
                         account_id: target.account_id,
                         model_row_id: Some(model_row_id),
-                        upstream_model_id,
+                        upstream_model,
                         combo_id: Some(combo_id),
                     });
                 }
@@ -373,9 +368,9 @@ fn resolve_audio_targets(
                 error_msg: Some("model_not_found".to_string()),
                 total_ms: started.elapsed().as_millis() as u64,
             });
-            let mut msg = format!("model not found: {}", model);
+            let mut msg = format!("model not found: {model}");
             if let Some(h) = hint {
-                msg.push_str(&format!(" (hint: {})", h));
+                let _ = write!(msg, " (hint: {h})");
             }
             Err(ApiError(CoreError::ModelNotFound {
                 provider: "<unknown>".into(),
@@ -401,23 +396,23 @@ async fn dispatch_audio_request(
     let mut payload = Vec::new();
 
     // model field
-    payload.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
     payload.extend_from_slice(upstream_model_id.as_bytes());
     payload.extend_from_slice(b"\r\n");
 
     // form fields
     for (k, v) in &body.form_fields {
-        payload.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         payload.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", k).as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{k}\"\r\n\r\n").as_bytes(),
         );
         payload.extend_from_slice(v.as_bytes());
         payload.extend_from_slice(b"\r\n");
     }
 
     // file field
-    payload.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     payload.extend_from_slice(
         format!(
             "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
@@ -431,9 +426,9 @@ async fn dispatch_audio_request(
     payload.extend_from_slice(b"\r\n");
 
     // end
-    payload.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
-    let content_type = format!("multipart/form-data; boundary={}", boundary);
+    let content_type = format!("multipart/form-data; boundary={boundary}");
     let mut req = openproxy_adapters::upstream::UpstreamRequest::post_multipart(
         upstream_url,
         &content_type,
@@ -465,8 +460,7 @@ async fn dispatch_audio_request(
         .await
         .map_err(|e| {
             ApiError(CoreError::UpstreamConnection(format!(
-                "{}: {:?}",
-                upstream_url, e
+                "{upstream_url}: {e:?}"
             )))
         })
 }
@@ -520,8 +514,7 @@ fn resolve_api_key(
             match providers::get(&r, provider_id).map_err(ApiError)? {
                 Some(p) if matches!(p.auth_type, providers::AuthType::None) => Ok(String::new()),
                 _ => Err(ApiError(CoreError::Auth(format!(
-                    "no api key available for provider '{}'",
-                    provider_id
+                    "no api key available for provider '{provider_id}'"
                 )))),
             }
         }
@@ -569,7 +562,6 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) {
         error_msg,
         total_ms,
     } = args;
-    use openproxy_types::UsageInput;
     let input = UsageInput {
         proxy_url: None,
         proxy_status: None,

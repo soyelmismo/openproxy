@@ -155,7 +155,7 @@ impl AppState {
     ///    `OPENPROXY_MASTER_KEY` env var.
     /// 4. Construct the shared HTTP client for upstream calls.
     /// 5. Materialize the registry of built-in provider adapters.
-    pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
+    pub fn new(config: AppConfig) -> anyhow::Result<Self> {
         let db_pool = Arc::new(init_database(&config)?);
         let mut config = config;
         let mut recording_ttl_secs = db::app_config::RECORDING_TTL_DEFAULT_SECS;
@@ -170,13 +170,19 @@ impl AppState {
             &mut compression_mode,
         )?;
 
-        let master_key = Arc::new(MasterKey::from_env()?);
-        let adapters = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let usage_tx = usage::init_usage_broadcast();
         let stage_tx = usage::init_stage_broadcast();
         openproxy_core::notifications::init_broadcast();
 
         let recording_ttl_secs_cell = Arc::new(RwLock::new(recording_ttl_secs));
+        let idle_chunk_retryable_cell = Arc::new(AtomicBool::new(idle_chunk_retryable));
+        let compression_mode_cell = Arc::new(RwLock::new(compression_mode));
+        let quota_protection_cell = Arc::new(RwLock::new(config.quota_protection.clone()));
+
+        let master_key = Arc::new(MasterKey::from_env()?);
+        let adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>> =
+            Arc::new(RwLock::new(Arc::new(Vec::new())));
+
         let maintenance_cell = Arc::new(RwLock::new(config.storage.maintenance.clone()));
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
         let upstream_client = UpstreamClient::new();
@@ -192,26 +198,21 @@ impl AppState {
             adapters: Arc::clone(&adapters),
             upstream_client: Arc::clone(&upstream_client),
             oauth_provider_registry: Arc::clone(&oauth_provider_registry),
-        })
-        .await;
+        });
 
-        let discovery_scheduler = Arc::new(
-            start_discovery_scheduler(
-                Arc::clone(&db_pool),
-                Arc::clone(&master_key),
-                Arc::clone(&adapters),
-                Arc::clone(&upstream_client),
-            )
-            .await,
-        );
+        let discovery_scheduler = Arc::new(start_discovery_scheduler(
+            Arc::clone(&db_pool),
+            Arc::clone(&master_key),
+            &adapters,
+            Arc::clone(&upstream_client),
+        ));
 
         openproxy_core::smart_warmup::start_smart_warmup_scheduler(
             Arc::clone(&db_pool),
             config.clone(),
             Arc::clone(&upstream_client),
             Arc::clone(&master_key),
-        )
-        .await;
+        );
 
         let timeouts_initial = config.timeouts;
         let rate_limiter_config = crate::rate_limit::RateLimitConfig {
@@ -229,8 +230,6 @@ impl AppState {
             },
         );
         spawn_memory_cleanup(Arc::clone(&selection_registry), circuit_breaker.clone());
-
-        let quota_protection = config.quota_protection.clone();
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
         let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(
@@ -257,12 +256,12 @@ impl AppState {
             stage_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
-            compression_mode_cell: Arc::new(RwLock::new(compression_mode)),
+            compression_mode_cell,
             recording_ttl_secs_cell,
             discovery_scheduler,
             oauth_provider_registry,
-            idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
-            quota_protection_cell: Arc::new(RwLock::new(quota_protection)),
+            idle_chunk_retryable_cell,
+            quota_protection_cell,
             selection_registry,
             circuit_breaker,
             maintenance_cell,
@@ -288,7 +287,7 @@ impl AppState {
     /// scheduler's tick cadence construct their own scheduler
     /// directly via [`openproxy_core::discovery_scheduler::start`]
     /// rather than going through `for_test`.
-    pub async fn for_test(
+    pub fn for_test(
         config: AppConfig,
         db_pool: Arc<db::DbPool>,
         master_key: Arc<MasterKey>,
@@ -313,8 +312,7 @@ impl AppState {
             adapters: Arc::clone(&adapters),
             upstream_client: Arc::clone(&upstream_client),
             oauth_provider_registry: Arc::clone(&oauth_provider_registry),
-        })
-        .await;
+        });
 
         let adapters_snapshot = Arc::clone(&adapters.read());
         let discovery_scheduler = discovery_scheduler::start(
@@ -326,8 +324,7 @@ impl AppState {
                 interval_secs: 3_600,
                 initial_stagger_secs: 0,
             },
-        )
-        .await;
+        );
 
         let rate_limiter_config = crate::rate_limit::RateLimitConfig {
             max_requests: config.server.rate_limit_requests_per_minute,
@@ -372,7 +369,7 @@ impl AppState {
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
-            quota_protection_cell: Arc::new(RwLock::new(config.quota_protection.clone())),
+            quota_protection_cell: Arc::new(RwLock::new(config.quota_protection)),
             selection_registry,
             circuit_breaker,
             maintenance_cell,
@@ -807,10 +804,10 @@ struct SpawnBackgroundTasksArgs {
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
 
-async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
+fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
     let SpawnBackgroundTasksArgs {
         db_pool,
-        config: _config,
+        config,
         recording_ttl_secs_cell,
         maintenance_cell,
         vacuum_status,
@@ -821,19 +818,19 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
     } = args;
     let prune_pool = Arc::clone(&db_pool);
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
         tick.tick().await;
         loop {
             tick.tick().await;
-            let _w = prune_pool.writer();
-            let _ = openproxy_pipeline::repository::prune_expired_cooldowns(&_w);
+            let w = prune_pool.writer();
+            let _ = openproxy_pipeline::repository::prune_expired_cooldowns(&w);
         }
     });
 
     let recording_ttl_pool = Arc::clone(&db_pool);
     let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
         tick.tick().await;
         loop {
             tick.tick().await;
@@ -880,22 +877,19 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
     }
 
     let qs_pool = Arc::clone(&db_pool);
-    let qs_config = _config;
+    let qs_config = config;
     let qs_upstream = Arc::clone(&upstream_client);
     let qs_key = Arc::clone(&master_key);
     let qs_adapters = Arc::clone(&adapters);
     let qs_registry = Arc::clone(&oauth_provider_registry);
-    tokio::spawn(async move {
-        openproxy_core::quota_sync::start_quota_sync_scheduler(
-            qs_pool,
-            qs_config,
-            qs_upstream,
-            qs_key,
-            qs_adapters,
-            qs_registry,
-        )
-        .await;
-    });
+    openproxy_core::quota_sync::start_quota_sync_scheduler(
+        qs_pool,
+        qs_config,
+        qs_upstream,
+        qs_key,
+        qs_adapters,
+        qs_registry,
+    );
 
     let proxy_sync_pool = Arc::clone(&db_pool);
     tokio::spawn(async move {
@@ -939,7 +933,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
     let maint_cell = Arc::clone(&maintenance_cell);
     let vac_status = Arc::clone(&vacuum_status);
     tokio::spawn(async move {
-        let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        let mut prune_tick = tokio::time::interval(std::time::Duration::from_hours(1));
         let mut vacuum_counter: u32 = 0;
         loop {
             prune_tick.tick().await;
@@ -963,7 +957,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
 }
 
 fn prune_usage_and_dead_proxies(prune_pool: &openproxy_db::DbPool, retention_days: u32) {
-    let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
+    let retention_secs: i64 = i64::from(retention_days) * 24 * 3600;
     if retention_secs > 0 {
         let _ =
             openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
@@ -1003,7 +997,7 @@ fn execute_vacuum_cycle(
         st.last_run = Some(now);
         st.last_result = Some(result_str);
         if auto_vacuum {
-            let next = chrono::Utc::now() + chrono::Duration::hours(interval_hours as i64);
+            let next = chrono::Utc::now() + chrono::Duration::hours(i64::from(interval_hours));
             st.next_scheduled = Some(next.to_rfc3339());
         } else {
             st.next_scheduled = None;
@@ -1011,10 +1005,10 @@ fn execute_vacuum_cycle(
     }
 }
 
-async fn start_discovery_scheduler(
+fn start_discovery_scheduler(
     db_pool: Arc<openproxy_db::DbPool>,
     master_key: Arc<openproxy_db::secrets::MasterKey>,
-    adapters: Arc<RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>>,
+    adapters: &Arc<RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>>,
     upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
 ) -> openproxy_core::discovery_scheduler::DiscoveryScheduler {
     let adapters_clone = Arc::clone(&adapters.read());
@@ -1025,12 +1019,11 @@ async fn start_discovery_scheduler(
         upstream_client,
         openproxy_core::discovery_scheduler::DiscoverySchedulerConfig::default(),
     )
-    .await
 }
 
 fn spawn_rate_limiter_cleanup(rate_limiter: Arc<crate::rate_limit::RateLimiter>) {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+        let mut tick = tokio::time::interval(std::time::Duration::from_mins(5));
         tick.tick().await;
         loop {
             tick.tick().await;
@@ -1044,7 +1037,7 @@ fn spawn_memory_cleanup(
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
 ) {
     tokio::spawn(async move {
-        let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut fast_tick = tokio::time::interval(std::time::Duration::from_mins(1));
         let mut slow_counter: u32 = 0;
         fast_tick.tick().await;
         loop {
@@ -1054,8 +1047,8 @@ fn spawn_memory_cleanup(
             }
             slow_counter = slow_counter.wrapping_add(1);
             if slow_counter.is_multiple_of(10) {
-                let _ = selection_registry.prune_stale(std::time::Duration::from_secs(3600));
-                let _ = circuit_breaker.prune_idle(std::time::Duration::from_secs(3600));
+                let _ = selection_registry.prune_stale(std::time::Duration::from_hours(1));
+                let _ = circuit_breaker.prune_idle(std::time::Duration::from_hours(1));
             }
         }
     });
@@ -1092,10 +1085,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-state-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-state-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");
@@ -1120,7 +1112,7 @@ mod tests {
         let adapters = Arc::new(RwLock::new(Arc::new(
             Vec::<adapters::ProviderAdapterEnum>::new(),
         )));
-        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
+        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters)
     }
 
     /// Regression test for the frozen-registry bug.
@@ -1146,8 +1138,7 @@ mod tests {
             .collect();
         assert!(
             initial_ids.iter().any(|id| id == "openrouter"),
-            "openrouter built-in must be present after first rebuild: {:?}",
-            initial_ids
+            "openrouter built-in must be present after first rebuild: {initial_ids:?}"
         );
 
         // 2. Insert a custom provider via the same helper the admin
@@ -1181,8 +1172,7 @@ mod tests {
             .collect();
         assert!(
             !pre_reload_ids.iter().any(|id| id == "hot-reload-test"),
-            "registry must NOT contain the new provider before rebuild: {:?}",
-            pre_reload_ids
+            "registry must NOT contain the new provider before rebuild: {pre_reload_ids:?}"
         );
 
         // 4. Hot-reload. After this the registry must contain the
@@ -1195,14 +1185,12 @@ mod tests {
             .collect();
         assert!(
             post_reload_ids.iter().any(|id| id == "hot-reload-test"),
-            "registry MUST contain the new provider after rebuild: {:?}",
-            post_reload_ids
+            "registry MUST contain the new provider after rebuild: {post_reload_ids:?}"
         );
         // Built-ins must still be there.
         assert!(
             post_reload_ids.iter().any(|id| id == "openrouter"),
-            "openrouter built-in must remain after rebuild: {:?}",
-            post_reload_ids
+            "openrouter built-in must remain after rebuild: {post_reload_ids:?}"
         );
     }
 
@@ -1256,8 +1244,7 @@ mod tests {
             .collect();
         assert!(
             !ids_after_delete.iter().any(|id| id == "will-be-deleted"),
-            "deleted provider must be gone from registry after rebuild: {:?}",
-            ids_after_delete
+            "deleted provider must be gone from registry after rebuild: {ids_after_delete:?}"
         );
         // Built-ins untouched.
         assert!(

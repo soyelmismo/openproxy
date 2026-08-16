@@ -167,8 +167,7 @@ impl UpstreamConnectionPool {
             .lock()
             .expect("pool mutex poisoned")
             .get(key)
-            .map(|e| e.reuses.load(Ordering::SeqCst))
-            .unwrap_or(0)
+            .map_or(0, |e| e.reuses.load(Ordering::SeqCst))
     }
 
     /// Record that a request to `key` just used a freshly-dialed
@@ -276,7 +275,7 @@ mod tests {
         assert_eq!(pool.host_count(), 2);
 
         // Everything should be kept if max_age is large
-        let evicted = pool.evict_older_than(Duration::from_secs(3600));
+        let evicted = pool.evict_older_than(Duration::from_hours(1));
         assert_eq!(evicted, 0);
         assert_eq!(pool.host_count(), 2);
 

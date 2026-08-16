@@ -67,7 +67,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
 
         let changed = mutate_message_text(&mut msg, |text| Some(text.replace("   ", " ")));
@@ -87,7 +87,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
 
         let changed = mutate_message_text(&mut msg, |text| Some(text.replace("   ", " ")));
@@ -107,7 +107,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
 
         let changed = mutate_message_text(&mut msg, |_| None);

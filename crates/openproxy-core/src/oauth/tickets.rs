@@ -249,15 +249,14 @@ mod tests {
         let conn = fresh_conn();
         let id = create_ticket(&conn, "kiro", &sample_dar("DEV-1", "USER-1")).expect("create");
         assert!(id > 0);
-        match lookup_active(&conn, "DEV-1").expect("lookup") {
-            TicketStatus::Active(t) => {
-                assert_eq!(t.provider, "kiro");
-                assert_eq!(t.user_code, "USER-1");
-                assert!(t.account_id.is_none());
-                assert!(t.consumed_at.is_none());
-            }
-            other => panic!("expected Active, got {:?}", other),
-        }
+        let status = lookup_active(&conn, "DEV-1").expect("lookup");
+        let TicketStatus::Active(t) = status else {
+            panic!("expected Active, got {status:?}");
+        };
+        assert_eq!(t.provider, "kiro");
+        assert_eq!(t.user_code, "USER-1");
+        assert!(t.account_id.is_none());
+        assert!(t.consumed_at.is_none());
     }
 
     #[test]
@@ -271,10 +270,10 @@ mod tests {
     #[test]
     fn lookup_unknown_returns_unknown() {
         let conn = fresh_conn();
-        match lookup_active(&conn, "NEVER-EXISTED").expect("lookup") {
-            TicketStatus::Unknown => {}
-            other => panic!("expected Unknown, got {:?}", other),
-        }
+        let status = lookup_active(&conn, "NEVER-EXISTED").expect("lookup");
+        let TicketStatus::Unknown = status else {
+            panic!("expected Unknown, got {status:?}");
+        };
     }
 
     #[test]
@@ -283,10 +282,10 @@ mod tests {
         create_ticket(&conn, "kiro", &sample_dar("DEV-3", "USER-3")).expect("create");
         mark_consumed(&conn, "DEV-3").expect("consume");
         // A second poll must NOT see Active.
-        match lookup_active(&conn, "DEV-3").expect("lookup") {
-            TicketStatus::Consumed => {}
-            other => panic!("expected Consumed, got {:?}", other),
-        }
+        let status = lookup_active(&conn, "DEV-3").expect("lookup");
+        let TicketStatus::Consumed = status else {
+            panic!("expected Consumed, got {status:?}");
+        };
     }
 
     #[test]
@@ -296,10 +295,10 @@ mod tests {
         mark_consumed(&conn, "DEV-4").expect("first consume");
         // Second call must return NotFound because the WHERE clause
         // asserts consumed_at IS NULL.
-        match mark_consumed(&conn, "DEV-4") {
-            Err(CoreError::NotFound { .. }) => {}
-            other => panic!("expected NotFound on double consume, got {:?}", other),
-        }
+        let res = mark_consumed(&conn, "DEV-4");
+        let Err(CoreError::NotFound { .. }) = res else {
+            panic!("expected NotFound on double consume, got {res:?}");
+        };
     }
 
     #[test]
@@ -314,10 +313,10 @@ mod tests {
             params!["kiro", "DEV-EXPIRED", "USER-X", "2000-01-01T00:00:00Z"],
         )
         .expect("insert expired");
-        match lookup_active(&conn, "DEV-EXPIRED").expect("lookup") {
-            TicketStatus::Expired => {}
-            other => panic!("expected Expired, got {:?}", other),
-        }
+        let status = lookup_active(&conn, "DEV-EXPIRED").expect("lookup");
+        let TicketStatus::Expired = status else {
+            panic!("expected Expired, got {status:?}");
+        };
     }
 
     #[test]
@@ -358,9 +357,9 @@ mod tests {
             interval: Some(5),
         };
         create_ticket(&conn, "kiro", &dar).expect("create");
-        let t = match lookup_active(&conn, "DEV-CLAMP").expect("lookup") {
-            TicketStatus::Active(t) => t,
-            other => panic!("expected Active, got {:?}", other),
+        let status = lookup_active(&conn, "DEV-CLAMP").expect("lookup");
+        let TicketStatus::Active(t) = status else {
+            panic!("expected Active, got {status:?}");
         };
         let dt = chrono::DateTime::parse_from_rfc3339(&t.expires_at)
             .expect("parse expires_at")
@@ -368,9 +367,7 @@ mod tests {
         let lifetime_secs = (dt - chrono::Utc::now()).num_seconds();
         assert!(
             lifetime_secs <= HARD_TTL_SECS + 2, // +2 for clock skew
-            "expires_in=86400 must clamp to <= {} sec; got {}",
-            HARD_TTL_SECS,
-            lifetime_secs
+            "expires_in=86400 must clamp to <= {HARD_TTL_SECS} sec; got {lifetime_secs}"
         );
     }
 }

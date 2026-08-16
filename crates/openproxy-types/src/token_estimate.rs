@@ -200,7 +200,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -210,8 +210,7 @@ mod tests {
         let tokens = estimate_completion_tokens("Hello world");
         assert!(
             (1..=5).contains(&tokens),
-            "expected 1-5 tokens, got {}",
-            tokens
+            "expected 1-5 tokens, got {tokens}"
         );
     }
 
@@ -227,8 +226,7 @@ mod tests {
         let tokens = estimate_completion_tokens("你好世界");
         assert!(
             (2..=6).contains(&tokens),
-            "expected 2-6 tokens, got {}",
-            tokens
+            "expected 2-6 tokens, got {tokens}"
         );
     }
 
@@ -240,8 +238,7 @@ mod tests {
         // we get a reasonable count (not 0, not absurdly high).
         assert!(
             (5..=30).contains(&tokens),
-            "expected 5-30 tokens, got {}",
-            tokens
+            "expected 5-30 tokens, got {tokens}"
         );
     }
 
@@ -253,8 +250,7 @@ mod tests {
         // "Hello" ≈ 1 token, "Hi there!" ≈ 2 tokens → total ≈ 11.
         assert!(
             (10..=20).contains(&tokens),
-            "expected 10-20 tokens, got {}",
-            tokens
+            "expected 10-20 tokens, got {tokens}"
         );
     }
 
@@ -269,11 +265,11 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let tokens = estimate_prompt_tokens(&messages);
         // 1 message × 4 overhead + content tokens
-        assert!(tokens >= 5, "expected at least 5 tokens, got {}", tokens);
+        assert!(tokens >= 5, "expected at least 5 tokens, got {tokens}");
     }
 
     #[test]
@@ -291,14 +287,13 @@ mod tests {
                     "arguments": "{\"query\": \"hello world\"}"
                 }
             })]),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let tokens = estimate_prompt_tokens(&messages);
         // Should include both the text content AND the tool_call arguments
         assert!(
             tokens >= 8,
-            "expected at least 8 tokens (4 overhead + content + args), got {}",
-            tokens
+            "expected at least 8 tokens (4 overhead + content + args), got {tokens}"
         );
     }
 
@@ -310,8 +305,7 @@ mod tests {
         // 3 messages × 4 overhead = 12 (empty strings produce 0 content tokens)
         assert!(
             tokens >= 12,
-            "expected at least 12 tokens (3×4 overhead), got {}",
-            tokens
+            "expected at least 12 tokens (3×4 overhead), got {tokens}"
         );
     }
 
@@ -324,8 +318,7 @@ mod tests {
         // should be ~5-15 tokens, not 25+.
         assert!(
             tokens <= 30,
-            "expected ≤30 tokens for whitespace-heavy text, got {}",
-            tokens
+            "expected ≤30 tokens for whitespace-heavy text, got {tokens}"
         );
     }
 
@@ -345,8 +338,7 @@ mod tests {
         // 3-5 tokens (the spaces merge into the adjacent word tokens).
         assert!(
             bpe_tokens <= 10,
-            "BPE should be efficient with whitespace, got {}",
-            bpe_tokens
+            "BPE should be efficient with whitespace, got {bpe_tokens}"
         );
         // The heuristic might give a different number — that's fine,
         // the point is they CAN differ (proving BPE is real).
@@ -365,8 +357,7 @@ mod tests {
         // len/4.
         assert!(
             (5..=30).contains(&tokens),
-            "expected 5-30 tokens for JSON, got {}",
-            tokens
+            "expected 5-30 tokens for JSON, got {tokens}"
         );
     }
 
@@ -380,13 +371,11 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(
             tokens > 1000,
-            "expected >1000 tokens for 110KB text, got {}",
-            tokens
+            "expected >1000 tokens for 110KB text, got {tokens}"
         );
         assert!(
             elapsed.as_millis() < 2000,
-            "tokenization took {:?} — should be < 2s for 110KB",
-            elapsed
+            "tokenization took {elapsed:?} — should be < 2s for 110KB"
         );
     }
 
@@ -405,7 +394,7 @@ mod tests {
                     "arguments": "{\"query\": \"test\"}"
                 }
             })]),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         let text = message_content_to_text(&msg);
         assert!(text.contains("text content"));

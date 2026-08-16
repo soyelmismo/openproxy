@@ -169,7 +169,7 @@ impl AppConfig {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| CoreError::Config(format!("read {}: {}", path.as_ref().display(), e)))?;
         let cfg: AppConfig =
-            toml::from_str(&contents).map_err(|e| CoreError::Config(format!("parse: {}", e)))?;
+            toml::from_str(&contents).map_err(|e| CoreError::Config(format!("parse: {e}")))?;
         Ok(cfg)
     }
 
@@ -192,8 +192,7 @@ impl AppConfig {
                 Ok(v) => cfg.cooldown.cooldown_secs = v,
                 Err(e) => {
                     return Err(CoreError::Config(format!(
-                        "OPENPROXY_COOLDOWN_SECS: invalid u64 '{}': {}",
-                        raw, e
+                        "OPENPROXY_COOLDOWN_SECS: invalid u64 '{raw}': {e}"
                     )));
                 }
             }
@@ -208,7 +207,7 @@ impl AppConfig {
         {
             return PathBuf::from(self.storage.database_path.replacen(
                 "~/",
-                &format!("{}/", home),
+                &format!("{home}/"),
                 1,
             ));
         }
@@ -252,8 +251,7 @@ mod tests {
         {
             assert!(
                 p.starts_with(&home),
-                "expected to start with home dir, got {:?}",
-                p
+                "expected to start with home dir, got {p:?}"
             );
         }
     }

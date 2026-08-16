@@ -20,6 +20,7 @@
 use openproxy_types::OpenAIMessage;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
+use std::fmt::Write;
 
 type Messages = Vec<OpenAIMessage>;
 
@@ -63,7 +64,7 @@ pub fn crush_json_string(text: &str) -> Option<(String, &'static str)> {
         Some(a) if a.len() >= MIN_ITEMS => a,
         _ => return None,
     };
-    if !arr.iter().all(|v| v.is_object()) {
+    if !arr.iter().all(serde_json::Value::is_object) {
         return None;
     }
     // Try lossless CSV-schema first.
@@ -157,21 +158,21 @@ fn check_field_coverage(arr: &[Value], fields: &[&str]) -> bool {
 fn csv_escape(s: &str) -> String {
     if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         let escaped = s.replace('"', "\"\"");
-        format!("\"{}\"", escaped)
+        format!("\"{escaped}\"")
     } else {
         s.to_string()
     }
 }
 
 /// Render a JSON value as a CSV cell.
-fn json_value_to_csv_cell(v: &Value) -> String {
-    match v {
+fn json_value_to_csv_cell(val: &Value) -> String {
+    match val {
         Value::Null => String::new(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => csv_escape(s),
         // Nested objects/arrays: embed compact JSON, escaped as needed.
-        other => csv_escape(&other.to_string()),
+        Value::Array(_) | Value::Object(_) => csv_escape(&val.to_string()),
     }
 }
 
@@ -218,7 +219,7 @@ fn value_has_error_token(v: &Value) -> bool {
         Value::String(s) => string_has_error_token(s),
         Value::Array(a) => a.iter().any(value_has_error_token),
         Value::Object(o) => o.values().any(value_has_error_token),
-        _ => false,
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
 
@@ -274,9 +275,9 @@ fn try_lossy(arr: &[Value]) -> Option<String> {
     }
 
     let mut out = String::with_capacity(64 + kept * 64);
-    out.push_str(&format!("[#crushed: kept {} of {} items]\n", kept, n));
+    let _ = writeln!(out, "[#crushed: kept {kept} of {n} items]");
     out.push_str(&Value::Array(kept_items).to_string());
-    out.push_str(&format!("\n{{\"_dropped\":{}}}", dropped));
+    let _ = write!(out, "\n{{\"_dropped\":{dropped}}}");
     Some(out)
 }
 
@@ -292,7 +293,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -312,7 +313,7 @@ mod tests {
         assert_eq!(applied, vec![LOSSLESS_TECHNIQUE]);
         let out = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         // Keys serialize alphabetically (BTreeMap default): id, name, status.
-        assert!(out.starts_with("#schema:id,name,status"), "got: {}", out);
+        assert!(out.starts_with("#schema:id,name,status"), "got: {out}");
         assert!(out.contains("user1"));
         assert!(out.contains("user10"));
         // No JSON braces should remain in a CSV rendering.
@@ -334,7 +335,7 @@ mod tests {
             // That makes the ≥80% coverage check fail and we land on the
             // lossy path.
             let mut obj = serde_json::Map::new();
-            obj.insert(format!("k{}", i), Value::String("v".to_string()));
+            obj.insert(format!("k{i}"), Value::String("v".to_string()));
             obj.insert("status".to_string(), Value::String(status.to_string()));
             items.push(Value::Object(obj));
         }
@@ -343,11 +344,11 @@ mod tests {
         let applied = smart_crush_tool_results(&mut msgs);
         assert_eq!(applied, vec![LOSSY_TECHNIQUE]);
         let out = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert!(out.starts_with("[#crushed:"), "got: {}", out);
+        assert!(out.starts_with("[#crushed:"), "got: {out}");
         // All three error items must be retained, regardless of position
         // (one is in the head, one in the middle, one in the tail).
         let error_count = out.matches("error").count();
-        assert_eq!(error_count, 3, "expected 3 error items kept, got: {}", out);
+        assert_eq!(error_count, 3, "expected 3 error items kept, got: {out}");
     }
 
     #[test]
@@ -411,10 +412,9 @@ mod tests {
         // {b:y},{b:y} (dedup → 1). Total kept = 2, dropped = 8.
         assert!(
             out.contains("[{\"a\":\"x\"},{\"b\":\"y\"}]"),
-            "got: {}",
-            out
+            "got: {out}"
         );
-        assert!(out.contains("\"_dropped\":8"), "got: {}", out);
+        assert!(out.contains("\"_dropped\":8"), "got: {out}");
     }
 
     #[test]
@@ -437,8 +437,7 @@ mod tests {
         let applied = smart_crush_tool_results(&mut msgs);
         assert!(
             applied.is_empty(),
-            "expected no technique, got: {:?}",
-            applied
+            "expected no technique, got: {applied:?}"
         );
         assert_eq!(
             msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap(),

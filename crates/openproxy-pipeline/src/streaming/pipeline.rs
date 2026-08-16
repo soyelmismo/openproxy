@@ -15,7 +15,7 @@ pub(crate) async fn run_pipeline(
             .req
             .race_cancel
             .as_ref()
-            .is_some_and(|rc| rc.is_cancelled())
+            .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
         {
             return Ok(ChunkResult::Break);
         }
@@ -39,12 +39,12 @@ pub(crate) async fn run_pipeline(
                     | UpstreamError::Http(msg)
                     | UpstreamError::Decode(msg)
                     | UpstreamError::Invalid(msg) => {
-                        CoreError::UpstreamConnection(format!("stream read: {}", msg))
+                        CoreError::UpstreamConnection(format!("stream read: {msg}"))
                     }
                     UpstreamError::Timeout(_) => {
-                        CoreError::UpstreamConnection(format!("stream read: {}", e))
+                        CoreError::UpstreamConnection(format!("stream read: {e}"))
                     }
-                    _ => CoreError::UpstreamConnection(format!("stream read: {:?}", e)),
+                    _ => CoreError::UpstreamConnection(format!("stream read: {e:?}")),
                 };
                 return Err(err);
             }
@@ -59,7 +59,7 @@ pub(crate) async fn run_pipeline(
                 .req
                 .race_cancel
                 .as_ref()
-                .is_some_and(|rc| rc.is_cancelled())
+                .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
             {
                 return Ok(ChunkResult::Break);
             }
@@ -70,7 +70,7 @@ pub(crate) async fn run_pipeline(
                 .req
                 .race_cancel
                 .as_ref()
-                .is_some_and(|rc| rc.is_cancelled())
+                .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
             {
                 return Ok(ChunkResult::Break);
             }
@@ -98,14 +98,14 @@ pub(crate) async fn run_pipeline(
             .req
             .race_cancel
             .as_ref()
-            .is_some_and(|rc| rc.is_cancelled())
+            .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
         {
             event = processor.process_chunk(ctx, stream, event).await?;
             if !ctx
                 .req
                 .race_cancel
                 .as_ref()
-                .is_some_and(|rc| rc.is_cancelled())
+                .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
             {
                 match event {
                     ChunkEvent::Data(bytes) => {

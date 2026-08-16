@@ -40,7 +40,7 @@ pub fn normalize_model_id(id: &str) -> String {
         s = s.trim_end_matches(suffix);
     }
 
-    let s = s.replace(":", "-");
+    let s = s.replace(':', "-");
 
     let s: String = DATE_SUFFIX_RE.replace_all(&s, "").into_owned();
     let s: String = strip_compact_yyyymmdd(&s).unwrap_or(s);
@@ -74,7 +74,7 @@ fn strip_compact_yyyymmdd(s: &str) -> Option<String> {
 
 fn normalize_family(s: &str) -> String {
     if s.starts_with("gemini-") {
-        return s.replace("_", ".");
+        return s.replace('_', ".");
     }
     s.to_string()
 }

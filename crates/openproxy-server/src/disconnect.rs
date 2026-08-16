@@ -408,9 +408,8 @@ mod tests {
         let result = poll_once(&mut body);
         match result {
             Poll::Ready(Some(Err(_))) => {}
-            other => panic!(
-                "expected the wrapper to propagate the inner Err arm, got {:?}",
-                other
+            other @ (Poll::Ready(_) | Poll::Pending) => panic!(
+                "expected the wrapper to propagate the inner Err arm, got {other:?}"
             ),
         }
 

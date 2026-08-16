@@ -6,20 +6,20 @@ async fn main() {
     let url = "https://proxy.webshare.io/api/v2/proxy/list/download/lrudumdwkaeblzdpofyztfcfzcqeirkioveeirws/-/any/username/direct/-/?plan_id=13938906";
     let name = "bigdataligma@gmail.com";
 
-    println!("Fetching from: {}", url);
+    println!("Fetching from: {url}");
     match fetch_custom_proxy_source(name, url, 0).await {
         Ok(list) => {
             println!("Fetched {} proxies", list.len());
             for p in list.iter().take(2) {
-                println!("{:?}", p);
+                println!("{p:?}");
             }
 
             // Try upsert
             let pool = DbPool::open(std::path::Path::new("/root/.openproxy/data.db")).unwrap();
             let mut conn = pool.writer();
             match upsert_scraped_proxies(&mut conn, &list) {
-                Ok(_) => println!("Upsert successful"),
-                Err(e) => println!("Upsert failed: {:?}", e),
+                Ok(()) => println!("Upsert successful"),
+                Err(e) => println!("Upsert failed: {e:?}"),
             }
 
             // Check count
@@ -30,10 +30,10 @@ async fn main() {
                     |r| r.get(0),
                 )
                 .unwrap();
-            println!("Count in DB for {}: {}", name, count);
+            println!("Count in DB for {name}: {count}");
         }
         Err(e) => {
-            println!("Error: {:?}", e);
+            println!("Error: {e:?}");
         }
     }
 }

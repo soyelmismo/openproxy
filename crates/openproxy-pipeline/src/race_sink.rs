@@ -53,7 +53,7 @@ impl RaceSink {
         let sink = Arc::new(Self {
             inner,
             winner: AtomicUsize::new(0),
-            worker_tokens: worker_tokens.to_vec(),
+            worker_tokens: worker_tokens.clone(),
         });
         (sink, worker_tokens)
     }

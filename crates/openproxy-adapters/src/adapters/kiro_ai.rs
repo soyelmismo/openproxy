@@ -1,4 +1,4 @@
-use super::*;
+use super::{Serialize, Deserialize, ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, ModelId, TargetFormat, Arc, UpstreamClient, Result, UpstreamRequest, HeaderValue, CancellationToken, TimeoutProfile, CoreError};
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -32,7 +32,7 @@ impl KiroAdapter {
         }
     }
 
-    fn parse_models_response(&self, json: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
+    fn parse_models_response(json: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         let models_arr = json
             .get("models")
             .and_then(|v| v.as_array())
@@ -150,7 +150,7 @@ impl ProviderAdapter for KiroAdapter {
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         let req: openproxy_types::OpenAIRequest = serde_json::from_slice(&body).map_err(|e| {
-            openproxy_types::error::CoreError::Validation(format!("Invalid OpenAI request: {}", e))
+            openproxy_types::error::CoreError::Validation(format!("Invalid OpenAI request: {e}"))
         })?;
 
         let profile_arn = resolved_target
@@ -161,8 +161,7 @@ impl ProviderAdapter for KiroAdapter {
         let kiro_req = build_kiro_request(&req, profile_arn);
         let kiro_bytes = serde_json::to_vec(&kiro_req).map_err(|e| {
             openproxy_types::error::CoreError::Validation(format!(
-                "Failed to serialize Kiro request: {}",
-                e
+                "Failed to serialize Kiro request: {e}"
             ))
         })?;
 
@@ -229,7 +228,7 @@ impl ProviderAdapter for KiroAdapter {
                 && resp.status.is_success()
                 && let Ok(body_bytes) = resp.collect().await
                 && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                && let Some(models) = self.parse_models_response(&json)
+                && let Some(models) = Self::parse_models_response(&json)
             {
                 return Ok(models);
             }
@@ -274,11 +273,11 @@ pub fn kiro_runtime_url(region: &str) -> String {
         region
     };
     let host = if region == "us-east-1" {
-        format!("https://codewhisperer.{}.amazonaws.com", region)
+        format!("https://codewhisperer.{region}.amazonaws.com")
     } else {
-        format!("https://q.{}.amazonaws.com", region)
+        format!("https://q.{region}.amazonaws.com")
     };
-    format!("{}/generateAssistantResponse", host)
+    format!("{host}/generateAssistantResponse")
 }
 
 impl KiroAdapter {
@@ -360,7 +359,7 @@ impl KiroAdapter {
                                             .or_else(|| p.get("profileArn"))
                                             .and_then(|v| v.as_str())
                                     })
-                                    .map(|s| s.to_string())
+                                    .map(std::string::ToString::to_string)
                             } else {
                                 None
                             }
@@ -474,7 +473,7 @@ impl KiroAdapter {
             .get("nextDateReset")
             .or_else(|| data.get("resetDate"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         let usage_list = data.get("usageBreakdownList").and_then(|v| v.as_array());
 
@@ -490,13 +489,13 @@ impl KiroAdapter {
                 if resource_type.to_lowercase() == "agentic_request" {
                     let current = breakdown
                         .get("currentUsageWithPrecision")
-                        .and_then(|v| v.as_f64())
-                        .or_else(|| breakdown.get("currentUsage").and_then(|v| v.as_f64()))
+                        .and_then(serde_json::Value::as_f64)
+                        .or_else(|| breakdown.get("currentUsage").and_then(serde_json::Value::as_f64))
                         .map(|v| v.round() as i64);
                     let limit = breakdown
                         .get("usageLimitWithPrecision")
-                        .and_then(|v| v.as_f64())
-                        .or_else(|| breakdown.get("usageLimit").and_then(|v| v.as_f64()))
+                        .and_then(serde_json::Value::as_f64)
+                        .or_else(|| breakdown.get("usageLimit").and_then(serde_json::Value::as_f64))
                         .map(|v| v.round() as i64);
 
                     session_used = current;
@@ -510,7 +509,7 @@ impl KiroAdapter {
             .get("subscriptionInfo")
             .and_then(|v| v.get("subscriptionTitle"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .or_else(|| Some("Kiro".to_string()));
 
         Ok(openproxy_types::AccountQuota {
@@ -673,7 +672,7 @@ fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> Kiro
             },
             chat_trigger_type: "MANUAL".to_string(),
         },
-        profile_arn: profile_arn.map(|s| s.to_string()),
+        profile_arn: profile_arn.map(std::string::ToString::to_string),
         inference_config,
     }
 }

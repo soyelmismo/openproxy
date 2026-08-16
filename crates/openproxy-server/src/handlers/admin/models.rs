@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, AppState, ApiError, CoreError, core_models, ModelRowId, AccountId, Arc, core_providers, core_accounts, core_oauth, adapters, RequestId, TraceId, ComboId, refresh_oauth_if_needed, ProviderId};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,7 +13,7 @@ pub async fn toggle_model(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let active = body
         .get("active")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
     let w = s.db_pool().writer();
     core_models::set_active(&w, ModelRowId(id), active)?;
@@ -83,7 +83,7 @@ pub async fn test_model(
                 (aid, purl)
             }
             Err(e) => {
-                return Err(ApiError(CoreError::Parse(format!("Invalid JSON: {}", e))));
+                return Err(ApiError(CoreError::Parse(format!("Invalid JSON: {e}"))));
             }
         }
     };
@@ -222,7 +222,7 @@ pub(crate) async fn run_test_for_model(
             Ok(Some(m)) => Ok(m),
             Ok(None) => Err(ApiError(CoreError::ModelNotFound {
                 provider: "<unknown>".into(),
-                model: format!("row_id={}", model_row_id),
+                model: format!("row_id={model_row_id}"),
             })),
             Err(e) => Err(ApiError(e)),
         }
@@ -307,7 +307,7 @@ pub(crate) async fn run_test_for_model(
     // needed by providers whose URL embeds account-level metadata
     // (e.g. CloudFlare Workers AI uses the label as its account ID).
     let mut raw_account_opt = None;
-    let (_account_id_opt, _account_label, api_key) = if is_anonymous {
+    let (_account_id_opt, account_label, api_key) = if is_anonymous {
         (None, String::new(), String::new()) // Anonymous: no account, empty key
     } else {
         let account_id = match account_id {
@@ -357,7 +357,7 @@ pub(crate) async fn run_test_for_model(
                         Ok(token) => token,
                         Err(e) => {
                             let elapsed_ms = start.elapsed().as_millis() as u64;
-                            let err_msg = format!("resolve oauth token: {}", e);
+                            let err_msg = format!("resolve oauth token: {e}");
                             return (
                                 TestResult {
                                     row_id: model_row_id,
@@ -484,12 +484,12 @@ pub(crate) async fn run_test_for_model(
         let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Anthropic,
             &model.model_id,
-            &_account_label,
+            &account_label,
         );
         match serde_json::to_value(&anthropic_req) {
             Ok(v) => (url, v),
             Err(e) => {
-                let err = CoreError::Internal(format!("serialize anthropic req: {}", e));
+                let err = CoreError::Internal(format!("serialize anthropic req: {e}"));
                 return (
                     TestResult {
                         row_id: model_row_id,
@@ -510,12 +510,12 @@ pub(crate) async fn run_test_for_model(
         let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Gemini,
             &model.model_id,
-            &_account_label,
+            &account_label,
         );
         match serde_json::to_value(&gemini_req) {
             Ok(v) => (url, v),
             Err(e) => {
-                let err = CoreError::Internal(format!("serialize gemini req: {}", e));
+                let err = CoreError::Internal(format!("serialize gemini req: {e}"));
                 return (
                     TestResult {
                         row_id: model_row_id,
@@ -535,7 +535,7 @@ pub(crate) async fn run_test_for_model(
         let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Responses,
             &model.model_id,
-            &_account_label,
+            &account_label,
         );
         let mut responses_req = openai_req;
         responses_req.max_tokens = None;
@@ -571,7 +571,7 @@ pub(crate) async fn run_test_for_model(
             Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
                 Ok(v) => (url, v),
                 Err(e) => {
-                    let err = CoreError::Internal(format!("serialize responses req: {}", e));
+                    let err = CoreError::Internal(format!("serialize responses req: {e}"));
                     return (
                         TestResult {
                             row_id: model_row_id,
@@ -609,12 +609,12 @@ pub(crate) async fn run_test_for_model(
         let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Openai,
             &model.model_id,
-            &_account_label,
+            &account_label,
         );
         match serde_json::to_value(&openai_req) {
             Ok(v) => (url, v),
             Err(e) => {
-                let err = CoreError::Internal(format!("serialize openai req: {}", e));
+                let err = CoreError::Internal(format!("serialize openai req: {e}"));
                 return (
                     TestResult {
                         row_id: model_row_id,
@@ -666,7 +666,7 @@ pub(crate) async fn run_test_for_model(
             .as_ref()
             .and_then(|a| a.oauth_provider_specific.as_ref())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .map(|v| {
+            .map_or((None, None), |v| {
                 let r = v.get("region").and_then(|x| x.as_str()).map(String::from);
                 let p = v
                     .get("profileArn")
@@ -674,8 +674,7 @@ pub(crate) async fn run_test_for_model(
                     .and_then(|x| x.as_str())
                     .map(String::from);
                 (r, p)
-            })
-            .unwrap_or((None, None));
+            });
 
         custom_meta = Some(openproxy_types::context::CustomProviderMeta {
             access_token: api_key.clone(),
@@ -709,7 +708,7 @@ pub(crate) async fn run_test_for_model(
         },
         model,
         api_key,
-        api_key_label: Some(_account_label),
+        api_key_label: Some(account_label),
         custom_meta,
     };
 
@@ -732,16 +731,14 @@ pub(crate) async fn run_test_for_model(
                                 elapsed_ms: 0,
                                 error_msg: Some(
                                     openproxy_core::cost::redact_error_msg(&format!(
-                                        "failed to wrap request: {}",
-                                        e
+                                        "failed to wrap request: {e}"
                                     ))
                                     .0,
                                 ),
                                 skipped: true,
                                 skip_reason: Some(
                                     openproxy_core::cost::redact_error_msg(&format!(
-                                        "failed to wrap request: {}",
-                                        e
+                                        "failed to wrap request: {e}"
                                     ))
                                     .0,
                                 ),
@@ -759,16 +756,14 @@ pub(crate) async fn run_test_for_model(
                         elapsed_ms: 0,
                         error_msg: Some(
                             openproxy_core::cost::redact_error_msg(&format!(
-                                "failed to serialize request: {}",
-                                e
+                                "failed to serialize request: {e}"
                             ))
                             .0,
                         ),
                         skipped: true,
                         skip_reason: Some(
                             openproxy_core::cost::redact_error_msg(&format!(
-                                "failed to serialize request: {}",
-                                e
+                                "failed to serialize request: {e}"
                             ))
                             .0,
                         ),
@@ -822,15 +817,15 @@ pub(crate) async fn run_test_for_model(
         },
     );
 
-    let request_headers_map = if !opts.in_combo_fanout {
+    let request_headers_map = if opts.in_combo_fanout {
+        None
+    } else {
         Some(
             req.headers
                 .iter()
                 .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
                 .collect::<std::collections::HashMap<_, _>>(),
         )
-    } else {
-        None
     };
 
     let result = client.call(req, profile, cancel).await;
@@ -865,7 +860,7 @@ pub(crate) async fn run_test_for_model(
             // / timeout). The schema doesn't constrain this — `0` is a
             // distinct sentinel that the dashboard renders as a network
             // error.
-            (0, Some(format!("{:?}", e)))
+            (0, Some(format!("{e:?}")))
         }
     };
 
@@ -875,7 +870,7 @@ pub(crate) async fn run_test_for_model(
     //     per-row path only; the combo fan-out does not want its
     //     transient probe to overwrite the row's last-test status.
     if !opts.in_combo_fanout {
-        let status_i32 = status as i32;
+        let status_i32 = i32::from(status);
         if let Err(e) = {
             let w = s.db_pool().writer();
             core_models::set_test_status(&w, row_id, status_i32)
@@ -1054,7 +1049,7 @@ pub(crate) fn resolve_adapter(
     // doesn't serialize through the writer mutex (chat hot path).
     let r = s.db_pool().reader();
     let provider_row = core_providers::get(&r, provider_id)
-        .map_err(|e| CoreError::ProviderNotFound(format!("{}: {}", provider_id, e)))?;
+        .map_err(|e| CoreError::ProviderNotFound(format!("{provider_id}: {e}")))?;
     drop(r);
     match provider_row {
         Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(

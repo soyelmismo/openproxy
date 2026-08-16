@@ -60,7 +60,7 @@ fn fresh_db() -> Connection {
 fn discovered(id: &str, fmt: TargetFormat) -> DiscoveredModel {
     DiscoveredModel {
         model_id: ModelId::new(id),
-        display_name: Some(format!("Display {}", id)),
+        display_name: Some(format!("Display {id}")),
         target_format: fmt,
         context_length: None,
         max_output_tokens: None,
@@ -109,7 +109,7 @@ fn target_format_parse_roundtrip() {
 
     // Invalid input is a Validation error, not a panic.
     let err = TargetFormat::parse("xml").unwrap_err();
-    assert!(matches!(err, CoreError::Validation(_)), "got {:?}", err);
+    assert!(matches!(err, CoreError::Validation(_)), "got {err:?}");
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn upsert_inserts_new() {
             discovered("m1", TargetFormat::Openai),
             discovered("m2", TargetFormat::Anthropic),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("upsert_many");
 
@@ -163,15 +163,15 @@ fn upsert_updates_existing() {
             family: None,
             capabilities: None,
         }],
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )
     .expect("first upsert");
 
     let original = list_all(&conn).unwrap();
     assert_eq!(original.len(), 1);
     let original_row_id = original[0].row_id;
-    let original_discovered = original[0].discovered_at.to_owned();
-    let original_expires = original[0].expires_at.to_owned();
+    let original_discovered = original[0].discovered_at.clone();
+    let original_expires = original[0].expires_at.clone();
 
     // Second discovery: same model, now anthropic + new name.
     let n = upsert_many(
@@ -189,7 +189,7 @@ fn upsert_updates_existing() {
             family: None,
             capabilities: None,
         }],
-        Duration::from_secs(7200),
+        Duration::from_hours(2),
     )
     .expect("second upsert");
     assert_eq!(n.touched, 1, "update should report 1 changed row");
@@ -245,7 +245,7 @@ fn upsert_persists_openrouter_metadata() {
         }),
     }];
 
-    upsert_many(&conn, &provider, &models, Duration::from_secs(3600)).unwrap();
+    upsert_many(&conn, &provider, &models, Duration::from_hours(1)).unwrap();
 
     let row = list_all(&conn).unwrap().pop().unwrap();
     assert_eq!(row.context_length, Some(1_048_576));
@@ -286,7 +286,7 @@ fn upsert_refreshes_metadata_on_re_upsert() {
             max_output_tokens: Some(4_096),
             ..minimal("test/model")
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .unwrap();
 
@@ -299,7 +299,7 @@ fn upsert_refreshes_metadata_on_re_upsert() {
             max_output_tokens: Some(8_192),
             ..minimal("test/model")
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .unwrap();
 
@@ -332,7 +332,7 @@ fn upsert_preserves_metadata_when_excluded_is_null() {
             context_length: Some(128_000),
             ..minimal("test/model")
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .unwrap();
 
@@ -345,7 +345,7 @@ fn upsert_preserves_metadata_when_excluded_is_null() {
             context_length: None,
             ..minimal("test/model")
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .unwrap();
 
@@ -384,7 +384,7 @@ fn upsert_preserves_discovered_at_on_re_upsert() {
             family: None,
             capabilities: None,
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("first upsert");
     assert_eq!(n.touched, 1);
@@ -415,7 +415,7 @@ fn upsert_preserves_discovered_at_on_re_upsert() {
             family: None,
             capabilities: None,
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("second upsert");
     assert_eq!(n2.touched, 1, "re-upsert should report 1 changed row");
@@ -466,7 +466,7 @@ fn apply_auto_activation_does_not_affect_old_re_upserted_model() {
             family: None,
             capabilities: None,
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("first upsert");
     assert_eq!(n.touched, 1);
@@ -511,7 +511,7 @@ fn apply_auto_activation_does_not_affect_old_re_upserted_model() {
             family: None,
             capabilities: None,
         }],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("refresh upsert");
     assert_eq!(n2.touched, 1, "refresh should report 1 changed row");
@@ -755,7 +755,7 @@ fn get_by_row_id_returns_some_and_none() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )
     .expect("upsert");
     let stored = list_all(&conn).expect("list");
@@ -822,7 +822,7 @@ fn set_active_toggles_visibility() {
     );
 
     // Toggling a missing id is a silent no-op (no error, no panic).
-    set_active(&conn, ModelRowId(424242), false).expect("toggle missing is a no-op");
+    set_active(&conn, ModelRowId(424_242), false).expect("toggle missing is a no-op");
 }
 
 #[test]
@@ -862,7 +862,7 @@ fn set_active_bulk_updates_non_custom_only() {
             .into_iter()
             .find(|m| m.model_id.as_str() == id)
             .expect("present");
-        assert!(!m.active, "non-custom {} should be inactive", id);
+        assert!(!m.active, "non-custom {id} should be inactive");
     }
     let z = list_all(&conn)
         .unwrap()
@@ -883,7 +883,7 @@ fn set_active_bulk_updates_non_custom_only() {
             .into_iter()
             .find(|m| m.model_id.as_str() == id)
             .expect("present");
-        assert!(m.active, "non-custom {} should be active again", id);
+        assert!(m.active, "non-custom {id} should be active again");
     }
     let z2 = list_all(&conn)
         .unwrap()
@@ -901,7 +901,7 @@ fn set_test_status_stamps_both_columns() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )
     .expect("upsert");
     let row_id = list_all(&conn).unwrap()[0].row_id;
@@ -1016,8 +1016,7 @@ fn create_custom_with_unknown_provider_fails_validation() {
     .expect_err("FK violation");
     assert!(
         matches!(err, CoreError::Validation(_)),
-        "expected Validation, got {:?}",
-        err
+        "expected Validation, got {err:?}"
     );
 }
 
@@ -1038,7 +1037,7 @@ fn apply_auto_activation_with_keyword_matches_substring() {
             discovered("gpt-4", TargetFormat::Openai),
             discovered("gemini-pro", TargetFormat::Openai),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
 
@@ -1073,7 +1072,7 @@ fn apply_auto_activation_with_no_keyword_enables_all() {
             discovered("b", TargetFormat::Openai),
             discovered("c", TargetFormat::Openai),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
     // Start with all rows inactive to make the test meaningful.
@@ -1100,7 +1099,7 @@ fn apply_auto_activation_skips_custom_rows() {
             discovered("claude-3", TargetFormat::Openai),
             discovered("gpt-4", TargetFormat::Openai),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
     // Pre-seed a custom row that is currently INACTIVE to prove
@@ -1180,7 +1179,7 @@ fn apply_auto_activation_skips_old_models() {
             .into_iter()
             .find(|m| m.model_id.as_str() == id)
             .expect("present");
-        assert!(!m.active, "old row {} must keep its hand-set active=0", id);
+        assert!(!m.active, "old row {id} must keep its hand-set active=0");
     }
     // The new row is now active.
     let new_c = list_all(&conn)
@@ -1271,7 +1270,7 @@ fn apply_auto_activation_no_new_models_is_noop() {
             .into_iter()
             .find(|m| m.model_id.as_str() == id)
             .expect("present");
-        assert!(!m.active, "row {} stays inactive", id);
+        assert!(!m.active, "row {id} stays inactive");
     }
 }
 
@@ -1291,7 +1290,7 @@ fn delete_model_nulls_combo_target_model_row_id() {
             discovered("m1", TargetFormat::Openai),
             discovered("m2", TargetFormat::Anthropic),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
     let all = list_all(&conn).unwrap();
@@ -1431,7 +1430,7 @@ fn upsert_many_deletes_models_dropped_by_upstream() {
             discovered("m2", TargetFormat::Openai),
             discovered("m3", TargetFormat::Openai),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("first upsert");
 
@@ -1455,7 +1454,7 @@ fn upsert_many_deletes_models_dropped_by_upstream() {
             discovered("m1", TargetFormat::Openai),
             discovered("m2", TargetFormat::Openai),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("second upsert");
 
@@ -1500,7 +1499,7 @@ fn upsert_many_preserves_custom_rows_when_not_in_diff() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("first upsert");
 
@@ -1527,7 +1526,7 @@ fn upsert_many_preserves_custom_rows_when_not_in_diff() {
             discovered("m1", TargetFormat::Openai),
             discovered("m2", TargetFormat::Openai),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("second upsert");
 
@@ -1575,7 +1574,7 @@ fn upsert_many_with_empty_discovered_deletes_all_non_custom() {
             discovered("m1", TargetFormat::Openai),
             discovered("m2", TargetFormat::Anthropic),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
 
@@ -1601,7 +1600,7 @@ fn upsert_many_with_empty_discovered_deletes_all_non_custom() {
     assert_eq!(pre_total, 3, "pre-condition: 3 rows for prov-c");
 
     // Upstream returns an empty catalog.
-    upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).expect("empty upsert");
+    upsert_many(&conn, &provider, &[], Duration::from_hours(1)).expect("empty upsert");
 
     // list_active for prov-c returns just the custom row.
     let active: Vec<String> = list_active(&conn, &provider)
@@ -1671,7 +1670,7 @@ fn expires_at_in_the_past_with_active_1_is_visible() {
         &conn,
         &provider,
         &[discovered("stale", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
 
@@ -1853,7 +1852,7 @@ fn upsert_many_reconnects_orphan_combo_targets() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed m1");
     let m1_row_id_v1 = list_all(&conn)
@@ -1876,7 +1875,7 @@ fn upsert_many_reconnects_orphan_combo_targets() {
         &conn,
         &provider,
         &[discovered("m2", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("upsert without m1");
 
@@ -1898,7 +1897,7 @@ fn upsert_many_reconnects_orphan_combo_targets() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("re-upsert m1");
 
@@ -1960,7 +1959,7 @@ fn upsert_many_does_not_reconnect_wrong_model() {
         &conn,
         &provider,
         &[discovered("m_a", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed m_a");
     let m_a_v1 = list_all(&conn)
@@ -1979,7 +1978,7 @@ fn upsert_many_does_not_reconnect_wrong_model() {
         .expect("insert target");
 
     // m_a disappears.
-    upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).expect("upsert empty");
+    upsert_many(&conn, &provider, &[], Duration::from_hours(1)).expect("upsert empty");
     let (orphan_fk, orphan_up) = read_target_row(&conn, combo_id);
     assert!(orphan_fk.is_none(), "orphan after empty upsert");
     assert_eq!(orphan_up.as_deref(), Some("m_a"));
@@ -1989,7 +1988,7 @@ fn upsert_many_does_not_reconnect_wrong_model() {
         &conn,
         &provider,
         &[discovered("m_b", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed m_b");
     let m_b_id = list_all(&conn)
@@ -2005,8 +2004,7 @@ fn upsert_many_does_not_reconnect_wrong_model() {
     let (post_fk, post_up) = read_target_row(&conn, combo_id);
     assert!(
         post_fk.is_none(),
-        "wrong-model reconnect: target bound to m_b ({:?}) instead of staying orphan",
-        post_fk
+        "wrong-model reconnect: target bound to m_b ({post_fk:?}) instead of staying orphan"
     );
     assert_eq!(post_up.as_deref(), Some("m_a"));
     // Sanity: m_b actually exists in the models table, so the
@@ -2039,7 +2037,7 @@ fn upsert_many_atomic_orphan_reconnection() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed m1");
     let m1_v1 = list_all(&conn)
@@ -2056,7 +2054,7 @@ fn upsert_many_atomic_orphan_reconnection() {
         .expect("insert target");
 
     // m1 disappears.
-    upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).expect("upsert empty");
+    upsert_many(&conn, &provider, &[], Duration::from_hours(1)).expect("upsert empty");
     let (orphan_fk, _orphan_up) = read_target_row(&conn, combo_id);
     assert!(orphan_fk.is_none(), "orphan baseline");
 
@@ -2082,12 +2080,11 @@ fn upsert_many_atomic_orphan_reconnection() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     );
     assert!(
         result.is_err(),
-        "expected the simulated constraint failure, got {:?}",
-        result
+        "expected the simulated constraint failure, got {result:?}"
     );
 
     // Post-failure: orphan target must be exactly as it was
@@ -2128,7 +2125,7 @@ fn upsert_many_atomic_orphan_reconnection() {
         &conn,
         &provider,
         &[discovered("m1", TargetFormat::Openai)],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("clean re-upsert");
     let m1_v2 = list_all(&conn)
@@ -2172,7 +2169,7 @@ fn delete_model_sets_combo_target_model_row_id_to_null() {
             discovered("m-to-delete", TargetFormat::Openai),
             discovered("m-keep", TargetFormat::Anthropic),
         ],
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     )
     .expect("seed");
     let all = list_all(&conn).unwrap();
@@ -2324,7 +2321,7 @@ fn upsert_many_does_not_duplicate_notifications_on_rediscovery() {
 
     // First discovery creates notification
     let d = [discovered("m1", TargetFormat::Openai)];
-    upsert_many(&conn, &provider, &d, Duration::from_secs(3600)).unwrap();
+    upsert_many(&conn, &provider, &d, Duration::from_hours(1)).unwrap();
 
     let count: i64 = conn
         .query_row(
@@ -2336,10 +2333,10 @@ fn upsert_many_does_not_duplicate_notifications_on_rediscovery() {
     assert_eq!(count, 1);
 
     // Model temporarily disappears (upstream flap)
-    upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).unwrap();
+    upsert_many(&conn, &provider, &[], Duration::from_hours(1)).unwrap();
 
     // Model reappears
-    upsert_many(&conn, &provider, &d, Duration::from_secs(3600)).unwrap();
+    upsert_many(&conn, &provider, &d, Duration::from_hours(1)).unwrap();
 
     // Notification count must still be 1 (never re-notified)
     let count_after: i64 = conn

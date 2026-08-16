@@ -23,9 +23,7 @@ pub async fn request_id(mut req: Request, next: Next) -> Response {
         .headers()
         .get(X_REQUEST_ID)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .map(RequestId)
-        .unwrap_or_else(RequestId::new);
+        .and_then(|s| Uuid::parse_str(s).ok()).map_or_else(RequestId::new, RequestId);
 
     req.extensions_mut().insert(id);
 

@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn test_truncation_preserves_head_tail() {
-        let text: Vec<String> = (0..100).map(|i| format!("line {}", i)).collect();
+        let text: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
         let text = text.join("\n");
         let config = CompiledTruncateConfig {
             max_lines: 20,

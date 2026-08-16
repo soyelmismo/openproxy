@@ -98,7 +98,7 @@ impl PipelineRunner {
         tokio::spawn(async move {
             tokio::select! {
                 _ = done_rx => {}
-                _ = tokio::time::sleep(std::time::Duration::from_millis(budget_ms)) => {
+                () = tokio::time::sleep(std::time::Duration::from_millis(budget_ms)) => {
                     tracing::warn!(
                         budget_ms,
                         "watchdog timer fired — cancelling pipeline (this is a total-budget timeout, NOT a client disconnect)"

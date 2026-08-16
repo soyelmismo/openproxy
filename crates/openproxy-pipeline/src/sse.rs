@@ -155,14 +155,12 @@ impl AnthropicToolUseAccumulator {
     pub fn new_with_bounds(index: u32, id: String, name: String) -> Result<Self> {
         if id.len() > MAX_TOOL_ID_BYTES {
             return Err(CoreError::Parse(format!(
-                "Anthropic tool_use id exceeds maximum length of {} bytes",
-                MAX_TOOL_ID_BYTES
+                "Anthropic tool_use id exceeds maximum length of {MAX_TOOL_ID_BYTES} bytes"
             )));
         }
         if name.len() > MAX_TOOL_NAME_BYTES {
             return Err(CoreError::Parse(format!(
-                "Anthropic tool_use name exceeds maximum length of {} bytes",
-                MAX_TOOL_NAME_BYTES
+                "Anthropic tool_use name exceeds maximum length of {MAX_TOOL_NAME_BYTES} bytes"
             )));
         }
         Ok(Self {
@@ -177,8 +175,7 @@ impl AnthropicToolUseAccumulator {
     pub fn push_arguments(&mut self, fragment: &str) -> Result<()> {
         if self.arguments.len() + fragment.len() > MAX_TOOL_ARGUMENTS_BYTES {
             return Err(CoreError::Parse(format!(
-                "Anthropic tool_use arguments exceeds maximum length of {} bytes",
-                MAX_TOOL_ARGUMENTS_BYTES
+                "Anthropic tool_use arguments exceeds maximum length of {MAX_TOOL_ARGUMENTS_BYTES} bytes"
             )));
         }
         self.arguments.push_str(fragment);
@@ -710,7 +707,7 @@ pub fn translate_anthropic_sse_payload(
                 .and_then(|r| r.as_str());
 
             let finish_reason = match stop_reason {
-                Some("end_turn") | Some("stop_sequence") => Some("stop".to_string()),
+                Some("end_turn" | "stop_sequence") => Some("stop".to_string()),
                 Some("max_tokens") => Some("length".to_string()),
                 _ => None,
             };
@@ -719,13 +716,13 @@ pub fn translate_anthropic_sse_payload(
                 crate::translation::OpenAIUsage {
                     prompt_tokens: u
                         .get("input_tokens")
-                        .and_then(|t| t.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0)
                         .try_into()
                         .unwrap_or(u32::MAX),
                     completion_tokens: u
                         .get("output_tokens")
-                        .and_then(|t| t.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0)
                         .try_into()
                         .unwrap_or(u32::MAX),
@@ -750,7 +747,7 @@ pub fn translate_anthropic_sse_payload(
                 payload: chunk,
                 done: true,
                 usage,
-                stop_reason: stop_reason.map(|s| s.to_string()),
+                stop_reason: stop_reason.map(std::string::ToString::to_string),
                 delta_reasoning: None,
                 delta_tool_calls: Vec::new(),
                 // message_delta carries only stop_reason + usage —
@@ -1028,8 +1025,8 @@ pub fn translate_anthropic_sse_event(
             *tool_call_index_counter += 1;
             *tool_use_acc = Some(AnthropicToolUseAccumulator::new_with_bounds(
                 index,
-                id.to_owned(),
-                name.to_owned(),
+                id.clone(),
+                name.clone(),
             )?);
             // Emit the initial OpenAI-style tool_call chunk with
             // id+type+name and empty arguments (the standard
@@ -1475,11 +1472,11 @@ mod tests {
     fn gemini_chunk_metadata_fields() {
         let payload = serde_json::json!({"candidates":[{"content":{"parts":[{"text":"hi"}]}}]});
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
-        let chunk = parse_gemini_sse_line(&line, "chunk-42", 1234567890, "gemini-pro")
+        let chunk = parse_gemini_sse_line(&line, "chunk-42", 1_234_567_890, "gemini-pro")
             .unwrap()
             .unwrap();
         assert_eq!(chunk.payload["id"].as_str().unwrap(), "chunk-42");
-        assert_eq!(chunk.payload["created"].as_u64().unwrap(), 1234567890);
+        assert_eq!(chunk.payload["created"].as_u64().unwrap(), 1_234_567_890);
         assert_eq!(chunk.payload["model"].as_str().unwrap(), "gemini-pro");
         assert_eq!(
             chunk.payload["object"].as_str().unwrap(),
@@ -1924,7 +1921,7 @@ mod tests {
             chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
                 .as_str()
                 .unwrap();
-        let concatenated = format!("{}{}", fragment1, fragment2);
+        let concatenated = format!("{fragment1}{fragment2}");
         let parsed: serde_json::Value = serde_json::from_str(&concatenated)
             .expect("concatenated fragments must parse as valid JSON");
         assert_eq!(parsed["q"], "sf");
@@ -2122,7 +2119,7 @@ mod tests {
             r#"data: {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
             "",
             "event: message_stop",
-            r#"data: {}"#,
+            r"data: {}",
             "",
         ];
 
@@ -2212,8 +2209,8 @@ mod tests {
         for i in 0..N {
             let barrier = Arc::clone(&barrier);
             joins.spawn(async move {
-                let chunk_id = format!("chatcmpl-{}", i);
-                let model = format!("claude-isolated-{}", i);
+                let chunk_id = format!("chatcmpl-{i}");
+                let model = format!("claude-isolated-{i}");
                 let mut tool_use_acc: Option<AnthropicToolUseAccumulator> = None;
                 let mut tool_call_index_counter: u32 = 0;
 
@@ -2224,11 +2221,10 @@ mod tests {
                 // Sequence: content_block_start (tool_use) → deltas →
                 // message_delta (stop). Each task sees a distinct
                 // tool id+name so any cross-talk would be visible.
-                let id = format!("toolu_{:08x}", i);
-                let name = format!("fn_{}", i);
+                let id = format!("toolu_{i:08x}");
+                let name = format!("fn_{i}");
                 let start_payload = format!(
-                    "content_block_start\n{{\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{}\",\"name\":\"{}\",\"input\":{{}}}}}}",
-                    id, name
+                    "content_block_start\n{{\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{id}\",\"name\":\"{name}\",\"input\":{{}}}}}}"
                 );
                 let delta_payload = "content_block_delta\n{\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}".to_string();
                 let stop_payload = "message_delta\n{\"delta\":{\"stop_reason\":\"tool_use\"}}".to_string();
@@ -2255,10 +2251,10 @@ mod tests {
         while let Some(j) = joins.join_next().await {
             let (i, chunk_id, model, outs) = j.expect("join");
             // chunk_id must round-trip exactly, no cross-talk from peers.
-            assert_eq!(chunk_id, format!("chatcmpl-{}", i));
-            assert_eq!(model, format!("claude-isolated-{}", i));
-            assert!(seen_ids.insert(chunk_id.to_owned()), "duplicate chunk_id");
-            assert!(seen_models.insert(model.to_owned()), "duplicate model");
+            assert_eq!(chunk_id, format!("chatcmpl-{i}"));
+            assert_eq!(model, format!("claude-isolated-{i}"));
+            assert!(seen_ids.insert(chunk_id.clone()), "duplicate chunk_id");
+            assert!(seen_models.insert(model.clone()), "duplicate model");
 
             // First chunk must carry THIS task's tool id and name,
             // not any other task's.
@@ -2272,12 +2268,12 @@ mod tests {
                     .expect("tool name");
             assert_eq!(
                 tool_id,
-                format!("toolu_{:08x}", i),
+                format!("toolu_{i:08x}"),
                 "tool id leaked from another parallel task"
             );
             assert_eq!(
                 tool_name,
-                format!("fn_{}", i),
+                format!("fn_{i}"),
                 "tool name leaked from another parallel task"
             );
 
@@ -2286,7 +2282,7 @@ mod tests {
             assert_eq!(first_payload["model"].as_str().unwrap(), model);
             assert_eq!(first_payload["id"].as_str().unwrap(), chunk_id);
         }
-        assert_eq!(seen_ids.len(), N, "expected {} unique chunk_ids", N);
+        assert_eq!(seen_ids.len(), N, "expected {N} unique chunk_ids");
     }
 }
 
@@ -2441,11 +2437,11 @@ pub fn parse_responses_sse_stream_line(
         && let Ok(mut u_parsed) = <OpenAIUsage as serde::Deserialize>::deserialize(u)
     {
         if u.get("input_tokens").is_some() {
-            let val = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let val = u.get("input_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
             u_parsed.prompt_tokens = val.try_into().unwrap_or(u32::MAX);
         }
         if u.get("output_tokens").is_some() {
-            let val = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let val = u.get("output_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
             u_parsed.completion_tokens = val.try_into().unwrap_or(u32::MAX);
         }
         if u_parsed.total_tokens == 0 {

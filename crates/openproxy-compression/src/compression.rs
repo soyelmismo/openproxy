@@ -26,7 +26,7 @@ impl TextCompressor for LiteCompressor {
     fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
         lite::apply_lite(messages)
             .into_iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     }
 }
@@ -45,7 +45,7 @@ impl TextCompressor for LiteRtkCompressor {
     fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
         let mut techniques = lite::apply_lite(messages)
             .into_iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
         techniques.extend(content_router::apply_content_routing(messages));
         techniques.extend(rtk::apply_rtk(messages));
@@ -96,7 +96,7 @@ pub fn measure_compression<C: TextCompressor>(
 pub fn would_compress(messages: &[OpenAIMessage], mode: CompressionMode) -> bool {
     match mode {
         CompressionMode::Off => false,
-        _ => {
+        CompressionMode::Lite | CompressionMode::Rtk | CompressionMode::LiteRtk => {
             let chars = count_content_chars(messages);
             chars > 1000
         }
@@ -121,6 +121,7 @@ fn count_content_chars(msgs: &[OpenAIMessage]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write;
     use openproxy_types::OpenAIMessage;
     use serde_json::Value;
 
@@ -131,7 +132,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -151,16 +152,14 @@ mod tests {
         let techniques = stats.techniques;
         assert!(
             techniques.iter().any(|t| t.starts_with("lite::")),
-            "expected at least one lite:: technique, got: {:?}",
-            techniques
+            "expected at least one lite:: technique, got: {techniques:?}"
         );
         // rtk rules are formatted as "{filter_id}::{rule}" where filter_id is
         // e.g. "git-status" or "generic". Distinguish them from lite rules
         // by requiring a non-lite prefix.
         assert!(
             techniques.iter().any(|t| !t.starts_with("lite::")),
-            "expected at least one non-lite (rtk-derived) technique, got: {:?}",
-            techniques
+            "expected at least one non-lite (rtk-derived) technique, got: {techniques:?}"
         );
         assert!(stats.compressed_chars <= stats.original_chars);
     }
@@ -178,7 +177,7 @@ mod tests {
                 name: None,
                 tool_call_id: Some("call_1".into()),
                 tool_calls: None,
-                extra: Default::default(),
+                extra: serde_json::Map::default(),
             },
         ];
         let stats = apply_compression(&mut messages, CompressionMode::Lite);
@@ -226,7 +225,7 @@ mod tests {
             name: None,
             tool_call_id: Some("call_1".into()),
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let stats = apply_compression(&mut messages, CompressionMode::Rtk);
         assert!(
@@ -265,7 +264,7 @@ mod tests {
         diff.push_str("+++ b/foo.rs\n");
         diff.push_str("@@ -1,40 +1,40 @@\n");
         for i in 0..40 {
-            diff.push_str(&format!(" context line {}\n", i));
+            let _ = writeln!(diff, " context line {i}");
         }
         // Add some actual changes
         diff.push_str("+new line 1\n");
@@ -278,7 +277,7 @@ mod tests {
             name: None,
             tool_call_id: Some("call_1".into()),
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let stats = apply_compression(&mut messages, CompressionMode::Rtk);
         assert!(
@@ -309,7 +308,7 @@ mod tests {
         // patterns: pytest banner + ≥5 lines with error/fail keywords.
         let mut log = String::from("===== test session starts =====\n");
         for i in 0..50 {
-            log.push_str(&format!("test_module_{} PASSED\n", i));
+            let _ = writeln!(log, "test_module_{i} PASSED");
         }
         // 5 FAILED lines satisfy the "generic ≥5 error-token lines" pattern
         log.push_str("test_critical FAILED\n");
@@ -325,7 +324,7 @@ mod tests {
             name: None,
             tool_call_id: Some("call_1".into()),
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let stats = apply_compression(&mut messages, CompressionMode::Rtk);
         assert!(

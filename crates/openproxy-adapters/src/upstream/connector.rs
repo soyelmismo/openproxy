@@ -280,7 +280,7 @@ impl std::error::Error for PhasedConnectorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.kind {
             PhasedErrorKind::Io(e) => Some(e),
-            _ => None,
+            PhasedErrorKind::Timeout | PhasedErrorKind::InvalidUri(_) => None,
         }
     }
 }
@@ -489,7 +489,7 @@ async fn run_phased_connect(
     };
 
     // ---- Resolve Proxy Config --------------------------------------------
-    let proxy_opt = CALL_PROXY.try_with(|p| p.clone()).unwrap_or(None);
+    let proxy_opt = CALL_PROXY.try_with(std::clone::Clone::clone).unwrap_or(None);
     let mut proxy_config_opt = None;
     if let Some(ref proxy_url) = proxy_opt {
         match parse_proxy_url(proxy_url) {
@@ -497,7 +497,7 @@ async fn run_phased_connect(
             Err(e) => {
                 return Err(Box::new(PhasedConnectorError {
                     phase: UpstreamPhase::Dns,
-                    kind: PhasedErrorKind::InvalidUri(format!("Invalid proxy config: {}", e)),
+                    kind: PhasedErrorKind::InvalidUri(format!("Invalid proxy config: {e}")),
                 }));
             }
         }
@@ -657,8 +657,7 @@ async fn run_phased_connect(
                 return Err(Box::new(PhasedConnectorError {
                     phase: UpstreamPhase::Dial,
                     kind: PhasedErrorKind::Io(io::Error::other(format!(
-                        "Proxy handshake failed: {}",
-                        e
+                        "Proxy handshake failed: {e}"
                     ))),
                 }));
             }
@@ -798,10 +797,12 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     static DNS_CACHE: std::sync::LazyLock<
         dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
     > = std::sync::LazyLock::new(dashmap::DashMap::new);
+    static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    const DNS_TTL: std::time::Duration = std::time::Duration::from_mins(5);
+
     let cache = &*DNS_CACHE;
-    let cache_key = format!("{}:{}", host, port);
+    let cache_key = format!("{host}:{port}");
     let now = std::time::Instant::now();
-    const DNS_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
     if let Some(entry) = cache.get(&cache_key)
         && now < entry.1
@@ -810,7 +811,7 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     }
 
     // Cache miss or expired — do the actual DNS lookup.
-    let lookup = format!("{}:{}", host, port);
+    let lookup = format!("{host}:{port}");
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host(lookup).await?.collect();
     // Cache the result (even if empty — an empty result for 60s is
     // better than hammering getaddrinfo on a misconfigured host).
@@ -820,10 +821,9 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // insert. The sweep runs every 5 minutes and drops entries whose
     // TTL has expired. Idempotent via `OnceLock` on the sweep-started
     // flag — only the first caller spawns the task.
-    static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     SWEEP_STARTED.get_or_init(|| {
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+            let mut tick = tokio::time::interval(std::time::Duration::from_mins(5));
             tick.tick().await; // skip immediate first tick
             loop {
                 tick.tick().await;
@@ -893,7 +893,7 @@ struct ProxyConfig {
 fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     let uri: http::Uri = url
         .parse()
-        .map_err(|e: http::uri::InvalidUri| format!("Invalid proxy URL: {}", e))?;
+        .map_err(|e: http::uri::InvalidUri| format!("Invalid proxy URL: {e}"))?;
     let scheme = uri
         .scheme_str()
         .ok_or_else(|| "Missing proxy scheme".to_string())?
@@ -1019,13 +1019,12 @@ async fn run_proxy_tunnel(
             let auth_header = if let Some(ref auth) = proxy.auth {
                 use base64::Engine;
                 let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
-                format!("Proxy-Authorization: Basic {}\r\n", encoded)
+                format!("Proxy-Authorization: Basic {encoded}\r\n")
             } else {
-                "".to_string()
+                String::new()
             };
             let request = format!(
-                "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: Keep-Alive\r\n{}\r\n",
-                dest_host, dest_port, dest_host, dest_port, auth_header
+                "CONNECT {dest_host}:{dest_port} HTTP/1.1\r\nHost: {dest_host}:{dest_port}\r\nProxy-Connection: Keep-Alive\r\n{auth_header}\r\n"
             );
             stream.write_all(request.as_bytes()).await?;
 
@@ -1046,8 +1045,7 @@ async fn run_proxy_tunnel(
             let first_line = resp_str.lines().next().unwrap_or("");
             if !first_line.contains(" 200 ") {
                 return Err(io::Error::other(format!(
-                    "HTTP CONNECT proxy returned error: {}",
-                    first_line
+                    "HTTP CONNECT proxy returned error: {first_line}"
                 ))
                 .into());
             }

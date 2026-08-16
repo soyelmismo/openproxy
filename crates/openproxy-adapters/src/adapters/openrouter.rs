@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, Arc, UpstreamClient, Result, DiscoveredModel, upstream_get_json, ModelId, TargetFormat, UpstreamRequest, CancellationToken, TimeoutProfile};
 
 // =====================================================================
 // OpenRouter
@@ -201,7 +201,7 @@ impl OpenRouterAdapter {
                 weekly_reset_at: None,
                 plan_name: None,
                 last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some(format!("HTTP {}: {}", status, snippet)),
+                fetch_error: Some(format!("HTTP {status}: {snippet}")),
                 model_details: None,
             });
         }
@@ -255,11 +255,11 @@ fn parse_openrouter_quota(
 ) -> openproxy_types::AccountQuota {
     let data = body.get("data");
 
-    let raw_usage = data.and_then(|d| d.get("usage")).and_then(|v| v.as_f64());
-    let raw_limit = data.and_then(|d| d.get("limit")).and_then(|v| v.as_f64());
+    let raw_usage = data.and_then(|d| d.get("usage")).and_then(serde_json::Value::as_f64);
+    let raw_limit = data.and_then(|d| d.get("limit")).and_then(serde_json::Value::as_f64);
     let is_free = data
         .and_then(|d| d.get("is_free_tier"))
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .is_some_and(|b| b);
     let rate_limit = data.and_then(|d| d.get("rate_limit"));
 
@@ -275,7 +275,7 @@ fn parse_openrouter_quota(
     let rate_limit_text = rate_limit.and_then(format_rate_limit_suffix);
 
     let plan_name = match rate_limit_text {
-        Some(rl) => format!("{} · {}", plan_name, rl),
+        Some(rl) => format!("{plan_name} · {rl}"),
         None => plan_name,
     };
 
@@ -303,7 +303,7 @@ fn parse_openrouter_quota(
 }
 
 fn format_rate_limit_suffix(rl: &serde_json::Value) -> Option<String> {
-    let reqs = rl.get("requests").and_then(|v| v.as_i64())?;
+    let reqs = rl.get("requests").and_then(serde_json::Value::as_i64)?;
     let interval = rl.get("interval").and_then(|v| v.as_str())?;
 
     if reqs < 0 {
@@ -318,7 +318,7 @@ fn format_rate_limit_suffix(rl: &serde_json::Value) -> Option<String> {
         _ => return None,
     };
 
-    Some(format!("{} req/{}", reqs, unit))
+    Some(format!("{reqs} req/{unit}"))
 }
 
 #[derive(Debug, Deserialize)]

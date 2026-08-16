@@ -35,9 +35,9 @@ fn bench_generate_events(c: &mut Criterion) {
                     let mut m = Vec::new();
                     for i in 0..1000 {
                         m.push((
-                            format!("model_{}", i),
-                            i as i64,
-                            Some(format!("Model {}", i)),
+                            format!("model_{i}"),
+                            i64::from(i),
+                            Some(format!("Model {i}")),
                         ));
                     }
                     m
@@ -47,7 +47,7 @@ fn bench_generate_events(c: &mut Criterion) {
             let _ = generate_events(&tx, &provider, &diff).unwrap();
 
             tx.rollback().unwrap();
-        })
+        });
     });
 }
 

@@ -32,10 +32,10 @@ impl RetryPolicy {
             return None;
         }
         // exp backoff: base * factor^(attempt-1) (for attempt=1 first retry, base * factor^0 = base)
-        let exp = (self.backoff_factor as u64).saturating_pow((attempt - 1) as u32);
+        let exp = u64::from(self.backoff_factor).saturating_pow(u32::from(attempt - 1));
         let base = (self.backoff_base.as_millis() as u64).saturating_mul(exp);
         // jitter ±N%
-        let jitter_amp = base.saturating_mul(self.backoff_jitter_pct as u64) / 100;
+        let jitter_amp = base.saturating_mul(u64::from(self.backoff_jitter_pct)) / 100;
         let mut rng = rand::rng();
         let jitter: i64 =
             rand::RngExt::random_range(&mut rng, -(jitter_amp as i64)..=(jitter_amp as i64));
@@ -48,7 +48,7 @@ impl RetryPolicy {
         err: &openproxy_types::error::CoreError,
         idle_chunk_retryable: bool,
     ) -> bool {
-        use openproxy_types::error::CoreError::*;
+        use openproxy_types::error::CoreError::{UpstreamTimeout, UpstreamConnection, RateLimited, UpstreamError, Cancelled, RaceLost};
         match err {
             UpstreamTimeout { phase, .. } => match phase.as_str() {
                 // idle_chunk is the ONLY switchable exception. It

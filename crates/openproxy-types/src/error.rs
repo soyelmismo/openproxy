@@ -44,13 +44,13 @@ impl fmt::Display for ErrorContext {
             self.request_id, self.trace_id, self.phase
         )?;
         if let Some(p) = &self.provider {
-            write!(f, " provider={}", p)?;
+            write!(f, " provider={p}")?;
         }
         if let Some(a) = self.account {
-            write!(f, " account={}", a)?;
+            write!(f, " account={a}")?;
         }
         if let Some(m) = &self.model {
-            write!(f, " model={}", m)?;
+            write!(f, " model={m}")?;
         }
         Ok(())
     }
@@ -146,11 +146,28 @@ impl CoreError {
         match self {
             CoreError::UpstreamError {
                 is_proxy_rotated, ..
-            } => *is_proxy_rotated,
-            CoreError::RateLimited {
+            }
+            | CoreError::RateLimited {
                 is_proxy_rotated, ..
             } => *is_proxy_rotated,
-            _ => false,
+            CoreError::Config(_)
+            | CoreError::Database { .. }
+            | CoreError::Migration { .. }
+            | CoreError::ProviderNotFound(_)
+            | CoreError::AccountNotFound(_)
+            | CoreError::ComboNotFound(_)
+            | CoreError::ModelNotFound { .. }
+            | CoreError::NoHealthyTargets(_)
+            | CoreError::UpstreamTimeout { .. }
+            | CoreError::UpstreamConnection(_)
+            | CoreError::Parse(_)
+            | CoreError::Cancelled(_)
+            | CoreError::RaceLost
+            | CoreError::Auth(_)
+            | CoreError::Validation(_)
+            | CoreError::Internal(_)
+            | CoreError::ServiceUnavailable(_)
+            | CoreError::NotFound { .. } => false,
         }
     }
 

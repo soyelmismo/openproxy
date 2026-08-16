@@ -120,7 +120,7 @@ fn flatten_refs(
             // [FIX #952] 无法解析的 $ref: 转换为宽松的 string 类型，避免 API 400 错误
             // 这比让请求失败要好，至少工具调用仍可进行
             map.insert("type".to_string(), serde_json::json!("string"));
-            let hint = format!("(Unresolved $ref: {})", ref_path);
+            let hint = format!("(Unresolved $ref: {ref_path})");
             let desc_val = map
                 .entry("description".to_string())
                 .or_insert_with(|| Value::String(String::new()));
@@ -231,8 +231,7 @@ fn clean_object_properties_and_items(map: &mut serde_json::Map<String, Value>, d
         {
             req_arr.retain(|r| {
                 r.as_str()
-                    .map(|s| !nullable_keys.contains(s) && !dropped_keys.contains(s))
-                    .unwrap_or(true)
+                    .is_none_or(|s| !nullable_keys.contains(s) && !dropped_keys.contains(s))
             });
             if req_arr.is_empty() {
                 map.remove("required");
@@ -430,7 +429,7 @@ fn sanitize_schema_fields(
     if is_effectively_nullable {
         let desc_val = map
             .entry("description".to_string())
-            .or_insert_with(|| Value::String("".to_string()));
+            .or_insert_with(|| Value::String(String::new()));
         if let Value::String(s) = desc_val
             && !s.contains("nullable")
         {
@@ -515,7 +514,7 @@ fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
             if let Value::Array(req_arr) = existing_reqs {
                 let mut current_reqs: std::collections::HashSet<String> = req_arr
                     .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                     .collect();
                 for req in merged_required {
                     if current_reqs.insert(req.clone()) {
@@ -532,13 +531,13 @@ fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
 fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: &str) {
     let desc_val = map
         .entry("description".to_string())
-        .or_insert_with(|| Value::String("".to_string()));
+        .or_insert_with(|| Value::String(String::new()));
 
     if let Value::String(s) = desc_val {
         if s.is_empty() {
             *s = hint.to_string();
         } else if !s.contains(hint) {
-            *s = format!("{} {}", s, hint);
+            *s = format!("{s} {hint}");
         }
     }
 }
@@ -557,7 +556,7 @@ fn move_constraints_to_description(map: &mut serde_json::Map<String, Value>) {
             } else {
                 val.to_string()
             };
-            hints.push(format!("{}: {}", label, val_str));
+            hints.push(format!("{label}: {val_str}"));
         }
     }
 

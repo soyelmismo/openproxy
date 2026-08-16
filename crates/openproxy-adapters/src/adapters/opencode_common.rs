@@ -4,7 +4,7 @@
 //! request headers (including client spoofing and per-format auth branching),
 //! and model list discovery format.
 
-use super::*;
+use super::{TargetFormat, ProviderAdapter, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, upstream_get_json, OpenAIModelsResponse, ModelId};
 use crate::spoofer::{ClientSpoofer, OpenCodeSpoofer};
 
 /// Heuristic for picking the wire format of a model in OpenCode's catalogue.

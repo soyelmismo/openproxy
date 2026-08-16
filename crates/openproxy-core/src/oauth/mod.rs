@@ -9,10 +9,12 @@
 use crate::accounts::HealthStatus;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
+use governor::{Quota, RateLimiter};
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 // Re-export account-level OAuth helpers for convenience.
@@ -44,7 +46,7 @@ pub enum DbRef<'a> {
     Connection(&'a parking_lot::Mutex<rusqlite::Connection>),
 }
 
-impl<'a> DbRef<'a> {
+impl DbRef<'_> {
     pub fn with_conn<R>(
         &self,
         f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<R>,
@@ -768,9 +770,8 @@ pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
 
 /// Returns the refresh lead time in seconds for a given provider.
 pub fn oauth_expires_soon(account: &crate::accounts::Account, provider_id: &str) -> bool {
-    let expires_at = match &account.expires_at {
-        Some(ts) => ts,
-        None => return false,
+    let Some(expires_at) = &account.expires_at else {
+        return false;
     };
 
     let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(expires_at) else {
@@ -876,8 +877,6 @@ async fn tick_refresh_cycle(
         })
     };
 
-    use governor::{Quota, RateLimiter};
-    use std::num::NonZeroU32;
     let quota = match Quota::with_period(std::time::Duration::from_secs(STAGGER_DELAY_SECS)) {
         Some(q) => q.allow_burst(NonZeroU32::MIN),
         None => Quota::per_second(NonZeroU32::MIN),
@@ -886,15 +885,12 @@ async fn tick_refresh_cycle(
     let mut join_set = tokio::task::JoinSet::new();
 
     for account in accounts {
-        let provider = match registry.get(account.provider_id.as_str()) {
-            Some(p) => p,
-            None => {
-                tracing::debug!(
-                    provider = %account.provider_id,
-                    "oauth refresh: no provider impl found, skipping"
-                );
-                continue;
-            }
+        let Some(provider) = registry.get(account.provider_id.as_str()) else {
+            tracing::debug!(
+                provider = %account.provider_id,
+                "oauth refresh: no provider impl found, skipping"
+            );
+            continue;
         };
 
         let account_id = account.id.0;

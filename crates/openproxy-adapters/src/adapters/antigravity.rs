@@ -1,4 +1,4 @@
-use super::*;
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, TargetFormat, ModelId, CoreError, Result, Arc, UpstreamClient, UpstreamRequest, Bytes, HeaderValue, CancellationToken, TimeoutProfile};
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
 // =====================================================================
@@ -11,9 +11,25 @@ use crate::upstream::UpstreamError;
 /// - Auth: `Authorization: Bearer <token>` (OAuth)
 /// - Chat URL: `${base}/v1internal:generateContent`
 /// - No model discovery endpoint (models are hardcoded)
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct AntigravityAdapter {
     config: ProviderAdapterConfig,
+}
+
+impl<'de> serde::Deserialize<'de> for AntigravityAdapter {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            config: ProviderAdapterConfig,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        Ok(Self {
+            config: helper.config,
+        })
+    }
 }
 
 pub const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
@@ -35,7 +51,7 @@ impl AntigravityAdapter {
     }
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
-    fn parse_models_response(&self, body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
+    fn parse_models_response(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         tracing::info!(
             "Antigravity fetchAvailableModels response: {}",
             serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string())
@@ -47,19 +63,19 @@ impl AntigravityAdapter {
             let display_name = model_data
                 .get("displayName")
                 .and_then(|d| d.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
 
             // Read maxTokens as context_length (fallback to contextLength)
             let context_length = model_data
                 .get("maxTokens")
-                .and_then(|c| c.as_u64())
-                .or_else(|| model_data.get("contextLength").and_then(|c| c.as_u64()))
+                .and_then(serde_json::Value::as_u64)
+                .or_else(|| model_data.get("contextLength").and_then(serde_json::Value::as_u64))
                 .map(|v| v as i64);
 
             // Read maxOutputTokens as max_output_tokens
             let max_output_tokens = model_data
                 .get("maxOutputTokens")
-                .and_then(|c| c.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as i64)
                 .or(Some(8192));
 
@@ -68,11 +84,11 @@ impl AntigravityAdapter {
             // Infer capabilities from upstream fields
             let supports_thinking = model_data
                 .get("supportsThinking")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let supports_images = model_data
                 .get("supportsImages")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let tool_formatter_type = model_data
                 .get("toolFormatterType")
@@ -80,7 +96,7 @@ impl AntigravityAdapter {
                 .is_some();
             let supports_cumulative_context = model_data
                 .get("supportsCumulativeContext")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 
             let capabilities = openproxy_types::ModelCapabilities {
@@ -165,7 +181,7 @@ impl ProviderAdapter for AntigravityAdapter {
         let gemini_req = crate::adapters::gemini::openai_to_gemini(req, messages);
         serde_json::to_vec(&gemini_req)
             .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Parse(format!("serialize antigravity gemini request: {}", e)))
+            .map_err(|e| CoreError::Parse(format!("serialize antigravity gemini request: {e}")))
     }
 
     fn translate_non_streaming_response(
@@ -188,7 +204,7 @@ impl ProviderAdapter for AntigravityAdapter {
         _model: &ModelId,
     ) -> Vec<(String, String)> {
         let mut headers_vec = Vec::with_capacity(10);
-        headers_vec.push(("Authorization".into(), format!("Bearer {}", api_key)));
+        headers_vec.push(("Authorization".into(), format!("Bearer {api_key}")));
         headers_vec.push(("Content-Type".into(), "application/json".into()));
         headers_vec.extend(AntigravitySpoofer::new().headers());
 
@@ -273,7 +289,7 @@ impl ProviderAdapter for AntigravityAdapter {
                 && resp.status.is_success()
                 && let Ok(body_bytes) = resp.collect().await
                 && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                && let Some(models) = self.parse_models_response(&json)
+                && let Some(models) = Self::parse_models_response(&json)
             {
                 return Ok(models);
             }
@@ -336,12 +352,12 @@ impl AntigravityAdapter {
                     if summary_quota.weekly_used.is_some() {
                         models_quota.weekly_used = summary_quota.weekly_used;
                         models_quota.weekly_limit = summary_quota.weekly_limit;
-                        models_quota.weekly_reset_at = summary_quota.weekly_reset_at.clone();
+                        models_quota.weekly_reset_at.clone_from(&summary_quota.weekly_reset_at);
                     }
                     if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
                         models_quota.session_used = summary_quota.session_used;
                         models_quota.session_limit = summary_quota.session_limit;
-                        models_quota.session_reset_at = summary_quota.session_reset_at.clone();
+                        models_quota.session_reset_at.clone_from(&summary_quota.session_reset_at);
                     }
                 }
 
@@ -406,9 +422,8 @@ impl AntigravityAdapter {
             if let Ok(resp) = response
                 && resp.status.is_success()
             {
-                let body = match resp.collect().await {
-                    Ok(b) => b,
-                    Err(_) => continue,
+                let Ok(body) = resp.collect().await else {
+                    continue;
                 };
                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
                     return parse_antigravity_models_response(&json);
@@ -529,9 +544,8 @@ impl AntigravityAdapter {
             if let Ok(resp) = response
                 && resp.status.is_success()
             {
-                let body = match resp.collect().await {
-                    Ok(b) => b,
-                    Err(_) => continue,
+                let Ok(body) = resp.collect().await else {
+                    continue;
                 };
                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
                     let paid_name = json.pointer("/paidTier/name").and_then(|v| v.as_str());
@@ -556,7 +570,7 @@ impl AntigravityAdapter {
                         {
                             for t in allowed {
                                 if t.get("isDefault")
-                                    .and_then(|v| v.as_bool())
+                                    .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false)
                                 {
                                     let name = t.get("name").and_then(|v| v.as_str());
@@ -634,7 +648,7 @@ fn parse_antigravity_models_response(
 
         let remaining_fraction = quota_info
             .get("remainingFraction")
-            .and_then(|f| f.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
 
         let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
@@ -655,7 +669,7 @@ fn parse_antigravity_models_response(
 
         if remaining_fraction < worst_remaining {
             worst_remaining = remaining_fraction;
-            worst_model_id = model_id.clone();
+            worst_model_id.clone_from(model_id);
         }
     }
 
@@ -707,9 +721,8 @@ fn parse_antigravity_user_quota_summary(
     for group in groups {
         let group_plan = group.get("displayName").and_then(|n| n.as_str());
 
-        let buckets = match group.get("buckets").and_then(|b| b.as_array()) {
-            Some(b) => b,
-            None => continue,
+        let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) else {
+            continue;
         };
 
         for bucket in buckets {
@@ -721,7 +734,7 @@ fn parse_antigravity_user_quota_summary(
 
             let remaining_fraction = bucket
                 .get("remainingFraction")
-                .and_then(|f| f.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
 
             let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
@@ -739,14 +752,14 @@ fn parse_antigravity_user_quota_summary(
                 weekly_limit = Some(NORMALIZED_BASE);
                 weekly_reset_at = reset_time;
                 if plan_name.is_none() {
-                    plan_name = group_plan.map(|s| s.to_string());
+                    plan_name = group_plan.map(std::string::ToString::to_string);
                 }
             } else if !is_weekly && session_used.is_none() {
                 session_used = Some(used);
                 session_limit = Some(NORMALIZED_BASE);
                 session_reset_at = reset_time;
                 if plan_name.is_none() {
-                    plan_name = group_plan.map(|s| s.to_string());
+                    plan_name = group_plan.map(std::string::ToString::to_string);
                 }
             }
         }
@@ -850,8 +863,7 @@ pub async fn load_code_assist(
         let body_str =
             String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(format!(
-            "antigravity loadCodeAssist status {}: {}",
-            status, body_str
+            "antigravity loadCodeAssist status {status}: {body_str}"
         ));
     }
 
@@ -866,13 +878,13 @@ pub async fn load_code_assist(
     let project_id = value
         .get("cloudaicompanionProject")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .or_else(|| {
             value
                 .get("cloudaicompanionProject")
                 .and_then(|v| v.get("id"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
         });
 
     Ok(project_id)
@@ -915,8 +927,7 @@ pub async fn onboard_user(
         let body_str =
             String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(format!(
-            "antigravity onboardUser status {}: {}",
-            status, body_str
+            "antigravity onboardUser status {status}: {body_str}"
         ));
     }
 
@@ -933,7 +944,7 @@ pub async fn onboard_user(
         .and_then(|v| v.get("id"))
         .and_then(|v| v.as_str())
         .or_else(|| value.get("projectId").and_then(|v| v.as_str()))
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     Ok(project_id)
 }

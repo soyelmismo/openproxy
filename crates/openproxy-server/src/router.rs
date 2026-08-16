@@ -651,7 +651,7 @@ mod tests {
         let adapters = Arc::new(RwLock::new(Arc::new(
             Vec::<adapters::ProviderAdapterEnum>::new(),
         )));
-        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
+        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters)
     }
 
     fn fresh_pool() -> (core_db::DbPool, PathBuf) {
@@ -660,10 +660,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-router-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-router-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");
@@ -724,7 +723,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/admin/api/does-not-exist-12345")
-                    .header("Authorization", format!("Bearer {}", api_key))
+                    .header("Authorization", format!("Bearer {api_key}"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )

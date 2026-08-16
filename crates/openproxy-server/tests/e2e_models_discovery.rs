@@ -145,7 +145,7 @@ impl TestMockAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new(id),
-                name: format!("Mock {}", id),
+                name: format!("Mock {id}"),
                 base_url: base_url.to_string(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,
@@ -289,7 +289,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
             admin::CreateProviderInput {
                 id: adapter.id().as_str().to_string(),
                 name: "E2E Mock Provider".into(),
-                base_url: adapter.config().base_url.to_owned(),
+                base_url: adapter.config().base_url.clone(),
                 auth_type: "bearer".into(),
                 format: "openai".into(),
                 extra_headers_json: None,
@@ -320,7 +320,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
         parking_lot::RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>,
     > = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
 
-    AppState::for_test(AppConfig::default(), pool, mk, adapters).await
+    AppState::for_test(AppConfig::default(), pool, mk, adapters)
 }
 
 /// Read every `(model_id, active, custom)` for a provider straight
@@ -665,7 +665,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             &w,
             combos::AddTargetInput {
                 combo_id,
-                provider_id: provider.to_owned(),
+                provider_id: provider.clone(),
                 account_id: Some(account_id),
                 model_row_id: Some(c_row_id),
                 sub_combo_id: None,
@@ -829,7 +829,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             &w,
             combos::AddTargetInput {
                 combo_id,
-                provider_id: provider.to_owned(),
+                provider_id: provider.clone(),
                 account_id: Some(account_id),
                 model_row_id: Some(ModelRowId(new_c_id)),
                 sub_combo_id: None,

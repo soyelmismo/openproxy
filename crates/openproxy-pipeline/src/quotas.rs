@@ -44,7 +44,7 @@ pub(crate) fn evaluate_account_quota(
                     return QuotaStatus::Exhausted;
                 }
                 if quota_protection_enabled {
-                    let threshold_fraction = (threshold_percentage as f64) / 100.0;
+                    let threshold_fraction = f64::from(threshold_percentage) / 100.0;
                     if detail.remaining_fraction <= threshold_fraction {
                         return QuotaStatus::Protected;
                     }

@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, OpenAIModelEntry,
+    ProviderAdapter, ProviderAdapterConfig, Result, TargetFormat, UpstreamClient,
+    upstream_get_json,
+};
 
 // =====================================================================
 // Custom (user-defined) adapter
@@ -31,8 +35,10 @@ impl CustomAdapter {
     pub fn from_provider_row(provider: &openproxy_types::Provider) -> Self {
         let auth_type = match provider.auth_type {
             // OAuth tokens are still passed as Bearer on the wire.
-            openproxy_types::AuthType::OAuth => AdapterAuthType::Bearer,
-            other => other,
+            openproxy_types::AuthType::OAuth | openproxy_types::AuthType::Bearer => AdapterAuthType::Bearer,
+            openproxy_types::AuthType::XApiKey => AdapterAuthType::XApiKey,
+            openproxy_types::AuthType::GoogApiKey => AdapterAuthType::GoogApiKey,
+            openproxy_types::AuthType::None => AdapterAuthType::None,
         };
 
         let format = provider.format;
@@ -109,7 +115,6 @@ impl ProviderAdapter for CustomAdapter {
         // Try OpenAI format first: {"data": [{"id": "...", ...}]}
         if let Some(arr) = body.get("data").and_then(|v| v.as_array()) {
             let target_format = match self.config.format {
-                AdapterFormat::Openai => TargetFormat::Openai,
                 AdapterFormat::Anthropic => TargetFormat::Anthropic,
                 AdapterFormat::Gemini => TargetFormat::Gemini,
                 AdapterFormat::Responses => TargetFormat::Responses,
@@ -117,7 +122,7 @@ impl ProviderAdapter for CustomAdapter {
                 // For Mixed providers, default to Openai; the model's
                 // stored target_format in the DB will be used at routing
                 // time.
-                AdapterFormat::Mixed => TargetFormat::Openai,
+                AdapterFormat::Openai | AdapterFormat::Mixed => TargetFormat::Openai,
             };
 
             let models: Vec<DiscoveredModel> = arr
@@ -151,9 +156,7 @@ impl ProviderAdapter for CustomAdapter {
                     let id = full_name.strip_prefix("models/").unwrap_or(full_name);
                     let display_name = m
                         .get("displayName")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| id.to_string());
+                        .and_then(|v| v.as_str()).map_or_else(|| id.to_string(), std::string::ToString::to_string);
                     Some(DiscoveredModel {
                         model_id: ModelId::new(id.to_string()),
                         display_name: Some(display_name),
@@ -186,6 +189,7 @@ impl ProviderAdapter for CustomAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openproxy_types::ProviderId;
 
     #[test]
     fn test_build_chat_url() {

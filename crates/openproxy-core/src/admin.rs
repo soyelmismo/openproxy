@@ -116,10 +116,9 @@ pub fn list_providers(conn: &Connection) -> Result<Vec<providers::Provider>> {
 pub fn delete_provider(conn: &Connection, id: &ProviderId) -> Result<()> {
     if crate::seed::is_builtin(id.as_str()) {
         return Err(CoreError::Validation(format!(
-            "provider '{}' is a built-in and cannot be deleted. Use POST \
-             /admin/providers/{}/active with {{\"active\": false}} to \
-             deactivate it instead.",
-            id, id
+            "provider '{id}' is a built-in and cannot be deleted. Use POST \
+             /admin/providers/{id}/active with {{\"active\": false}} to \
+             deactivate it instead."
         )));
     }
     providers::delete(conn, id)
@@ -208,23 +207,22 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::BaseUrl => out.base_url = Some(map.next_value()?),
                         Field::ExtraHeadersJson => {
                             let raw: serde_json::Value = map.next_value()?;
-                            out.extra_headers_json = Some(match raw {
-                                serde_json::Value::Null => None,
-                                serde_json::Value::String(s) => Some(s),
-                                other => {
-                                    return Err(serde::de::Error::custom(format!(
-                                        "extra_headers_json must be string or null, got {}",
-                                        other
-                                    )));
-                                }
+                            out.extra_headers_json = Some(if let serde_json::Value::String(s) = raw {
+                                Some(s)
+                            } else if raw.is_null() {
+                                None
+                            } else {
+                                return Err(serde::de::Error::custom(format!(
+                                    "extra_headers_json must be string or null, got {raw}"
+                                )));
                             });
                         }
                         Field::UseProxies => out.use_proxies = Some(map.next_value()?),
                         Field::ProxyRotationErrors => {
-                            out.proxy_rotation_errors = Some(map.next_value()?)
+                            out.proxy_rotation_errors = Some(map.next_value()?);
                         }
                         Field::ProxyRotationMode => {
-                            out.proxy_rotation_mode = Some(map.next_value()?)
+                            out.proxy_rotation_mode = Some(map.next_value()?);
                         }
                         Field::RateLimitScope => out.rate_limit_scope = Some(map.next_value()?),
                         Field::AutoActivateKeyword => {
@@ -234,15 +232,14 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                             // `Option<Option<String>>` would collapse
                             // these two into the same variant.
                             let raw: serde_json::Value = map.next_value()?;
-                            out.auto_activate_keyword = Some(match raw {
-                                serde_json::Value::Null => None,
-                                serde_json::Value::String(s) => Some(s),
-                                other => {
-                                    return Err(serde::de::Error::custom(format!(
-                                        "auto_activate_keyword must be string or null, got {}",
-                                        other
-                                    )));
-                                }
+                            out.auto_activate_keyword = Some(if let serde_json::Value::String(s) = raw {
+                                Some(s)
+                            } else if raw.is_null() {
+                                None
+                            } else {
+                                return Err(serde::de::Error::custom(format!(
+                                    "auto_activate_keyword must be string or null, got {raw}"
+                                )));
                             });
                         }
                     }
@@ -261,7 +258,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
 pub fn update_provider(
     conn: &Connection,
     id: &ProviderId,
-    input: UpdateProviderInput,
+    input: &UpdateProviderInput,
 ) -> Result<()> {
     input.validate()?;
     // Validate base_url if it is being updated.
@@ -357,7 +354,7 @@ pub fn update_account_api_key(
     conn: &Connection,
     master_key: &MasterKey,
     id: AccountId,
-    input: UpdateAccountApiKeyInput,
+    input: &UpdateAccountApiKeyInput,
 ) -> Result<()> {
     accounts::update_api_key(conn, id, input.api_key.as_deref(), master_key)
 }
@@ -373,7 +370,7 @@ pub struct UpdateAccountLabelInput {
 pub fn update_account_label(
     conn: &Connection,
     id: AccountId,
-    input: UpdateAccountLabelInput,
+    input: &UpdateAccountLabelInput,
 ) -> Result<()> {
     accounts::update_label(conn, id, input.label.as_deref())
 }
@@ -487,8 +484,7 @@ pub async fn fetch_account_quota(
             plan_name: None,
             last_fetched_at: now_unix_secs_str(),
             fetch_error: Some(format!(
-                "quota fetching not implemented for provider '{}'",
-                provider_id
+                "quota fetching not implemented for provider '{provider_id}'"
             )),
             model_details: None,
         }
@@ -503,8 +499,7 @@ pub(crate) fn now_unix_secs_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     secs.to_string()
 }
 
@@ -587,7 +582,7 @@ pub struct AddTargetInput {
 /// candidate provider exists the combo is still created — it just stays
 /// empty and the pipeline's `auto_populate` fallback will try again on
 /// the next chat request.
-pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboId> {
+pub fn create_combo(conn: &Connection, input: &CreateComboInput) -> Result<ComboId> {
     let strategy =
         openproxy_types::combos::Strategy::parse(&input.strategy).map_err(CoreError::Validation)?;
     // Default of 1 is the "serial / one target at a time" race
@@ -989,10 +984,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-admin-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-admin-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("admin.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -1074,13 +1068,11 @@ mod tests {
             let has_fetcher = providers_with_fetcher.contains(&id);
             assert_eq!(
                 metadata.supports_quota, has_quota,
-                "provider {} supports_quota mismatch: expected {}",
-                id, has_quota
+                "provider {id} supports_quota mismatch: expected {has_quota}"
             );
             assert_eq!(
                 metadata.quota_refresh_supported, has_fetcher,
-                "provider {} quota_refresh_supported mismatch: expected {}",
-                id, has_fetcher
+                "provider {id} quota_refresh_supported mismatch: expected {has_fetcher}"
             );
         }
     }
@@ -1222,7 +1214,7 @@ mod tests {
         // Default race_size: 1; valid strategy string parses.
         let combo_id = create_combo(
             &conn,
-            CreateComboInput {
+            &CreateComboInput {
                 name: "primary".into(),
                 strategy: "priority".into(),
                 race_size: None,
@@ -1248,7 +1240,7 @@ mod tests {
         // Custom race_size is honored.
         let combo_rr = create_combo(
             &conn,
-            CreateComboInput {
+            &CreateComboInput {
                 name: "rr".into(),
                 strategy: "round_robin".into(),
                 race_size: Some(3),
@@ -1311,7 +1303,7 @@ mod tests {
         // Validation: invalid strategy.
         let err = create_combo(
             &conn,
-            CreateComboInput {
+            &CreateComboInput {
                 name: "bad".into(),
                 strategy: "fifo".into(),
                 race_size: None,
@@ -1392,7 +1384,7 @@ mod tests {
         ));
         match res {
             Err(CoreError::ProviderNotFound(id)) => assert_eq!(id, "does-not-exist"),
-            other => panic!("expected ProviderNotFound, got {:?}", other),
+            other => panic!("expected ProviderNotFound, got {other:?}"),
         }
     }
 
@@ -1425,7 +1417,7 @@ mod tests {
         update_provider(
             &conn,
             &ProviderId::new("p"),
-            UpdateProviderInput {
+            &UpdateProviderInput {
                 rate_limit_scope: None,
                 name: Some("Renamed".into()),
                 base_url: None,
@@ -1445,7 +1437,7 @@ mod tests {
         update_provider(
             &conn,
             &ProviderId::new("p"),
-            UpdateProviderInput {
+            &UpdateProviderInput {
                 rate_limit_scope: None,
                 name: None,
                 base_url: None,
@@ -1464,7 +1456,7 @@ mod tests {
         let err = update_provider(
             &conn,
             &ProviderId::new("nope"),
-            UpdateProviderInput::default(),
+            &UpdateProviderInput::default(),
         )
         .expect_err("missing id");
         assert!(matches!(err, CoreError::ProviderNotFound(_)));
@@ -1559,27 +1551,22 @@ mod tests {
         for builtin_id in crate::seed::builtin_provider_ids() {
             let id = ProviderId::new(&builtin_id);
             let err = delete_provider(&conn, &id).expect_err("built-in delete must fail");
-            match &err {
-                CoreError::Validation(msg) => {
-                    assert!(
-                        msg.contains("built-in"),
-                        "error message should call out the built-in status, got: {}",
-                        msg
-                    );
-                    assert!(
-                        msg.contains(&builtin_id),
-                        "error message should name the provider, got: {}",
-                        msg
-                    );
-                }
-                other => panic!("expected Validation, got {:?}", other),
-            }
+            let CoreError::Validation(msg) = err else {
+                panic!("expected Validation, got {err:?}");
+            };
+            assert!(
+                msg.contains("built-in"),
+                "error message should call out the built-in status, got: {msg}"
+            );
+            assert!(
+                msg.contains(&builtin_id),
+                "error message should name the provider, got: {msg}"
+            );
             // The row must still be present — we rejected the delete,
             // we did not silently swallow it.
             assert!(
                 providers::get(&conn, &id).expect("get").is_some(),
-                "row for {} must still be present",
-                builtin_id
+                "row for {builtin_id} must still be present"
             );
         }
     }
@@ -1669,7 +1656,7 @@ mod tests {
         });
         let combo_id = create_combo(
             conn,
-            CreateComboInput {
+            &CreateComboInput {
                 name: "two-target".into(),
                 strategy: "priority".into(),
                 race_size: None,
@@ -1743,19 +1730,16 @@ mod tests {
         let conn = pool.writer();
         let fx = seed_combo_with_two_targets(&conn);
 
-        let other_combo = ComboId(99999);
+        let other_combo = ComboId(99_999);
         let err = delete_combo_target(&conn, other_combo, fx.t1)
             .expect_err("cross-combo delete must fail");
-        match &err {
-            CoreError::Validation(msg) => {
-                assert!(
-                    msg.contains("not in combo"),
-                    "error message must explain the cross-combo mismatch, got: {}",
-                    msg
-                );
-            }
-            other => panic!("expected Validation, got {:?}", other),
-        }
+        let CoreError::Validation(msg) = err else {
+            panic!("expected Validation, got {err:?}");
+        };
+        assert!(
+            msg.contains("not in combo"),
+            "error message must explain the cross-combo mismatch, got: {msg}"
+        );
 
         // t1 is still present in the original combo.
         let remaining = list_combo_targets(&conn, fx.combo_id).expect("list");

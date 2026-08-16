@@ -19,6 +19,7 @@
 use openproxy_types::OpenAIMessage;
 use regex::Regex;
 use serde_json::Value;
+use std::fmt::Write;
 use std::sync::LazyLock;
 
 type Messages = Vec<OpenAIMessage>;
@@ -147,8 +148,7 @@ fn compress_diff_content(text: &str) -> Option<String> {
         return None;
     }
     let output = format!(
-        "[#diff_compressed: was {} lines]\n{}",
-        original_lines, compressed_body
+        "[#diff_compressed: was {original_lines} lines]\n{compressed_body}"
     );
     // Never produce a larger message.
     if output.len() >= text.len() {
@@ -276,17 +276,11 @@ fn compress_files(files: &[DiffFile]) -> String {
             }
         }
         if truncated_hunks > 0 {
-            out.push_str(&format!(
-                "[#diff: {} more hunks in this file]\n",
-                truncated_hunks
-            ));
+            let _ = writeln!(out, "[#diff: {truncated_hunks} more hunks in this file]");
         }
     }
     if truncated_files > 0 {
-        out.push_str(&format!(
-            "[#diff: truncated {} more files]\n",
-            truncated_files
-        ));
+        let _ = writeln!(out, "[#diff: truncated {truncated_files} more files]");
     }
     out
 }
@@ -307,7 +301,7 @@ fn cap_hunks(hunks: &[Hunk]) -> (Vec<&Hunk>, usize) {
     if hunks.len() <= MAX_HUNKS_PER_FILE {
         return (hunks.iter().collect(), 0);
     }
-    let has_changes: Vec<bool> = hunks.iter().map(|h| h.has_changes()).collect();
+    let has_changes: Vec<bool> = hunks.iter().map(Hunk::has_changes).collect();
     let mut kept_indices: Vec<usize> = Vec::new();
     // First pass: hunks with changes.
     for (i, &has) in has_changes.iter().enumerate() {
@@ -404,7 +398,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -426,12 +420,12 @@ mod tests {
         ];
         for h in 0..5u32 {
             let base = (h * 10 + 1) as usize;
-            lines.push(format!("@@ -{},8 +{},8 @@", base, base));
+            lines.push(format!("@@ -{base},8 +{base},8 @@"));
             for c in 0..3u32 {
-                lines.push(format!(" context_{}_{}", h, c));
+                lines.push(format!(" context_{h}_{c}"));
             }
-            lines.push(format!("-old_line_{}", h));
-            lines.push(format!("+new_line_{}", h));
+            lines.push(format!("-old_line_{h}"));
+            lines.push(format!("+new_line_{h}"));
             for c in 0..3u32 {
                 lines.push(format!(" context_{}_{}", h, c + 3));
             }
@@ -453,8 +447,7 @@ mod tests {
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress basic diff, got: {:?}",
-            applied
+            "should compress basic diff, got: {applied:?}"
         );
         let compressed = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert!(
@@ -465,9 +458,7 @@ mod tests {
         let compressed_context = count_lines_starting_with(compressed, ' ');
         assert!(
             compressed_context < original_context,
-            "context should be reduced: {} < {}",
-            compressed_context,
-            original_context
+            "context should be reduced: {compressed_context} < {original_context}"
         );
         assert!(
             compressed.len() < content.len(),
@@ -478,14 +469,12 @@ mod tests {
         // All additions and deletions preserved.
         for h in 0..5u32 {
             assert!(
-                compressed.contains(&format!("-old_line_{}", h)),
-                "deletion {} should be preserved",
-                h
+                compressed.contains(&format!("-old_line_{h}")),
+                "deletion {h} should be preserved"
             );
             assert!(
-                compressed.contains(&format!("+new_line_{}", h)),
-                "addition {} should be preserved",
-                h
+                compressed.contains(&format!("+new_line_{h}")),
+                "addition {h} should be preserved"
             );
         }
     }
@@ -501,30 +490,27 @@ mod tests {
         ];
         for h in 0..15u32 {
             let base = (h * 5 + 1) as usize;
-            lines.push(format!("@@ -{},3 +{},3 @@", base, base));
-            lines.push(format!(" ctx_{}", h));
-            lines.push(format!("-old_{}", h));
-            lines.push(format!("+new_{}", h));
+            lines.push(format!("@@ -{base},3 +{base},3 @@"));
+            lines.push(format!(" ctx_{h}"));
+            lines.push(format!("-old_{h}"));
+            lines.push(format!("+new_{h}"));
         }
         let content = lines.join("\n");
         let mut msgs = vec![msg("tool", &content)];
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress, got: {:?}",
-            applied
+            "should compress, got: {applied:?}"
         );
         let compressed = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert!(
             compressed.contains("[#diff: 5 more hunks in this file]"),
-            "should have hunks truncation marker, got: {}",
-            compressed
+            "should have hunks truncation marker, got: {compressed}"
         );
         let hunk_count = count_substring(compressed, "@@ -");
         assert_eq!(
             hunk_count, 10,
-            "should keep exactly 10 hunks, got {}",
-            hunk_count
+            "should keep exactly 10 hunks, got {hunk_count}"
         );
     }
 
@@ -533,34 +519,31 @@ mod tests {
         // 25 files, each with 1 hunk. Only 19 + marker should be kept.
         let mut lines: Vec<String> = Vec::new();
         for f in 0..25u32 {
-            lines.push(format!("diff --git a/f{}.rs b/f{}.rs", f, f));
+            lines.push(format!("diff --git a/f{f}.rs b/f{f}.rs"));
             lines.push("index abc..def 100644".to_string());
-            lines.push(format!("--- a/f{}.rs", f));
-            lines.push(format!("+++ b/f{}.rs", f));
+            lines.push(format!("--- a/f{f}.rs"));
+            lines.push(format!("+++ b/f{f}.rs"));
             lines.push("@@ -1,3 +1,3 @@".to_string());
-            lines.push(format!(" ctx_{}", f));
-            lines.push(format!("-old_{}", f));
-            lines.push(format!("+new_{}", f));
+            lines.push(format!(" ctx_{f}"));
+            lines.push(format!("-old_{f}"));
+            lines.push(format!("+new_{f}"));
         }
         let content = lines.join("\n");
         let mut msgs = vec![msg("tool", &content)];
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress, got: {:?}",
-            applied
+            "should compress, got: {applied:?}"
         );
         let compressed = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert!(
             compressed.contains("[#diff: truncated 6 more files]"),
-            "should have files truncation marker, got: {}",
-            compressed
+            "should have files truncation marker, got: {compressed}"
         );
         let file_count = count_substring(compressed, "diff --git ");
         assert_eq!(
             file_count, 19,
-            "should keep exactly 19 files, got {}",
-            file_count
+            "should keep exactly 19 files, got {file_count}"
         );
     }
 
@@ -574,21 +557,21 @@ mod tests {
             "@@ -1,12 +1,12 @@".to_string(),
         ];
         for i in 0..5u32 {
-            lines.push(format!(" ctx_before_{}", i));
+            lines.push(format!(" ctx_before_{i}"));
         }
         lines.push("-del1".to_string());
         lines.push("+add1".to_string());
         for i in 0..5u32 {
-            lines.push(format!(" ctx_after_{}", i));
+            lines.push(format!(" ctx_after_{i}"));
         }
         lines.push("@@ -20,12 +20,12 @@".to_string());
         for i in 0..5u32 {
-            lines.push(format!(" ctx2_before_{}", i));
+            lines.push(format!(" ctx2_before_{i}"));
         }
         lines.push("-del2".to_string());
         lines.push("+add2".to_string());
         for i in 0..5u32 {
-            lines.push(format!(" ctx2_after_{}", i));
+            lines.push(format!(" ctx2_after_{i}"));
         }
         let content = lines.join("\n");
         // 4 metadata + (1 header + 12 body) * 2 = 4 + 26 = 30 lines.
@@ -597,8 +580,7 @@ mod tests {
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress, got: {:?}",
-            applied
+            "should compress, got: {applied:?}"
         );
         let compressed = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert!(
@@ -623,15 +605,14 @@ mod tests {
     fn test_compress_diff_skips_non_diff() {
         let mut lines: Vec<String> = Vec::new();
         for i in 0..50u32 {
-            lines.push(format!("This is plain text line {}", i));
+            lines.push(format!("This is plain text line {i}"));
         }
         let content = lines.join("\n");
         let mut msgs = vec![msg("tool", &content)];
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.is_empty(),
-            "should not compress plain text, got: {:?}",
-            applied
+            "should not compress plain text, got: {applied:?}"
         );
         let after = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert_eq!(after, content, "content should be unchanged");
@@ -655,8 +636,7 @@ index abc..def 100644\n\
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.is_empty(),
-            "should not compress short diff, got: {:?}",
-            applied
+            "should not compress short diff, got: {applied:?}"
         );
         let after = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert_eq!(after, content, "content should be unchanged");
@@ -674,8 +654,8 @@ index abc..def 100644\n\
             "@@ -1,13 +1,13 @@".to_string(),
         ];
         for i in 0..13u32 {
-            lines.push(format!("-old_{}", i));
-            lines.push(format!("+new_{}", i));
+            lines.push(format!("-old_{i}"));
+            lines.push(format!("+new_{i}"));
         }
         let content = lines.join("\n");
         // 5 header + 26 body = 31 lines.
@@ -684,8 +664,7 @@ index abc..def 100644\n\
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.is_empty(),
-            "should not produce larger output, got: {:?}",
-            applied
+            "should not produce larger output, got: {applied:?}"
         );
         let after = msgs[0].content.as_ref().unwrap().as_str().unwrap();
         assert_eq!(after, content, "content should be unchanged");
@@ -699,8 +678,7 @@ index abc..def 100644\n\
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.is_empty(),
-            "should not compress system/user messages, got: {:?}",
-            applied
+            "should not compress system/user messages, got: {applied:?}"
         );
         for m in &msgs {
             let after = m.content.as_ref().unwrap().as_str().unwrap();
@@ -715,8 +693,7 @@ index abc..def 100644\n\
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress assistant messages, got: {:?}",
-            applied
+            "should compress assistant messages, got: {applied:?}"
         );
     }
 }

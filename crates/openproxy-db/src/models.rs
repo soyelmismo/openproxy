@@ -25,7 +25,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
                 rusqlite::types::Type::Text,
                 Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("invalid target_format in db: {}", other),
+                    format!("invalid target_format in db: {other}"),
                 )),
             ));
         }
@@ -41,7 +41,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
                 rusqlite::types::Type::Integer,
                 Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("invalid active bit in db: {}", other),
+                    format!("invalid active bit in db: {other}"),
                 )),
             ));
         }
@@ -57,7 +57,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
                 rusqlite::types::Type::Integer,
                 Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("invalid custom bit in db: {}", other),
+                    format!("invalid custom bit in db: {other}"),
                 )),
             ));
         }
@@ -155,7 +155,7 @@ pub fn mark_expired(conn: &Connection) -> Result<usize> {
 }
 
 pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()> {
-    let bit = if active { 1i64 } else { 0i64 };
+    let bit = i64::from(active);
     conn.execute(
         "UPDATE models SET active = ?1 WHERE id = ?2",
         params![bit, id.0],
@@ -168,15 +168,14 @@ pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()>
 }
 
 pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -> Result<u64> {
-    let bit = if active { 1i64 } else { 0i64 };
+    let bit = i64::from(active);
     let n = conn
         .execute(
             "UPDATE models SET active = ?1 WHERE provider_id = ?2 AND custom = 0",
             params![bit, provider.as_str()],
         )
         .map_err(map_db_error_ctx(format!(
-            "set_active_bulk for {}",
-            provider
+            "set_active_bulk for {provider}"
         )))?;
     Ok(n as u64)
 }
@@ -268,7 +267,7 @@ pub fn create_custom(
     let expires_expr = if ttl_seconds <= 0 {
         "NULL".to_string()
     } else {
-        format!("datetime('now', '+' || {} || ' seconds')", ttl_seconds)
+        format!("datetime('now', '+' || {ttl_seconds} || ' seconds')")
     };
 
     let normalized = normalize_model_id(model_id.as_str());
@@ -304,12 +303,11 @@ pub fn create_custom(
             let msg = e.to_string();
             if msg.contains("FOREIGN KEY") {
                 openproxy_types::CoreError::Validation(format!(
-                    "provider_id does not exist: {}",
-                    provider_id
+                    "provider_id does not exist: {provider_id}"
                 ))
             } else {
                 openproxy_types::CoreError::Database {
-                    message: format!("create_custom model for {}: {}", provider_id, e),
+                    message: format!("create_custom model for {provider_id}: {e}"),
                     source: Some(Box::new(e)),
                 }
             }
@@ -381,8 +379,7 @@ pub fn apply_auto_activation(
         ),
     }
     .map_err(map_db_error_ctx(format!(
-        "apply_auto_activation for {}",
-        provider
+        "apply_auto_activation for {provider}"
     )))?;
 
     let notifications_present: bool = tx
@@ -508,7 +505,7 @@ pub fn upsert_many(
             .map_err(map_db_error)?;
 
         for d in discovered {
-            let caps_json = d.capabilities.as_ref().and_then(|c| c.to_json());
+            let caps_json = d.capabilities.as_ref().and_then(openproxy_types::ModelCapabilities::to_json);
             let input_mods_json = d
                 .input_modalities
                 .as_ref()

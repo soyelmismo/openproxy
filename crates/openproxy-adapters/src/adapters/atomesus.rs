@@ -1,4 +1,5 @@
-use super::*;
+use std::fmt::Write;
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Result, CoreError, Arc, UpstreamClient, DiscoveredModel};
 
 // =====================================================================
 // Atomesus Adapter
@@ -88,9 +89,9 @@ impl ProviderAdapter for AtomesusAdapter {
                         full_prompt.push_str("\n\n");
                     }
                     if role == "system" {
-                        full_prompt.push_str(&format!("[System Instructions]\n{}", content));
+                        let _ = write!(full_prompt, "[System Instructions]\n{content}");
                     } else if role == "assistant" {
-                        full_prompt.push_str(&format!("[Assistant]\n{}", content));
+                        let _ = write!(full_prompt, "[Assistant]\n{content}");
                     } else {
                         full_prompt.push_str(&content);
                     }
@@ -122,7 +123,7 @@ impl ProviderAdapter for AtomesusAdapter {
 
         serde_json::to_vec(&atomesus_payload)
             .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Internal(format!("failed to serialize atomesus body: {}", e)))
+            .map_err(|e| CoreError::Internal(format!("failed to serialize atomesus body: {e}")))
     }
 
     async fn fetch_models(

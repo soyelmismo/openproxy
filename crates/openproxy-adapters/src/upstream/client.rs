@@ -225,7 +225,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TestTransport")
             .field("phase_hint", &self.phase_hint)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -401,7 +401,7 @@ impl UpstreamClient {
 
         // Build the hyper::Request<Full<Bytes>> for the legacy client.
         let body_bytes = spec.body;
-        let body_len = body_bytes.as_ref().map(|b| b.len());
+        let body_len = body_bytes.as_ref().map(bytes::Bytes::len);
         let body: Full<Bytes> = match body_bytes {
             Some(bytes) => Full::new(bytes),
             None => Full::new(Bytes::new()),
@@ -514,12 +514,12 @@ impl UpstreamClient {
         tokio::pin!(cancel_wait);
         let response = tokio::select! {
             biased;
-            _ = &mut cancel_wait => return Err(UpstreamError::Cancel),
+            () = &mut cancel_wait => return Err(UpstreamError::Cancel),
             // OUTERMOST ceiling: the absolute total budget. We
             // attribute it to `Total` so the error message correctly
             // says "upstream timeout in phase total after Nms" instead
             // of the misleading "headers" label.
-            _ = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Total)),
+            () = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Total)),
             // Dispatch-supplied phase hint. When the test harness
             // (or any future production wrapper) declares a
             // `phase_hint`, we honour its exact deadline and
@@ -527,18 +527,18 @@ impl UpstreamClient {
             // `if phase_hint.is_some()` so production dispatches
             // (which return `None`) keep racing against the
             // generic per-phase ceilings below.
-            _ = &mut phase_hint_sleep, if phase_hint.is_some() => {
+            () = &mut phase_hint_sleep, if phase_hint.is_some() => {
                 return Err(UpstreamError::Timeout(phase_hint.unwrap_or(UpstreamPhase::Headers)));
             }
             // OUTER per-phase ceiling. Fires at `start + write_ms`.
             // Labelled `Write` so a slow body upload is correctly
             // attributed.
-            _ = &mut write_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Write)),
+            () = &mut write_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Write)),
             // INNER per-phase ceiling. Fires at `start + headers_ms`
             // but ONLY if `write_sleep` is still pending. Labelled
             // `Headers` so a slow server (but prompt body upload) is
             // correctly attributed.
-            _ = &mut headers_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Headers)),
+            () = &mut headers_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Headers)),
             res = &mut send_fut => match res {
                 Ok(r) => r,
                 Err(e) => {
@@ -604,7 +604,7 @@ fn spawn_eviction_loop(pool: Pool) {
             // design uses `Instant` (monotonic) so eviction is
             // independent of request volume.
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            let evicted = pool.evict_older_than(std::time::Duration::from_secs(60));
+            let evicted = pool.evict_older_than(std::time::Duration::from_mins(1));
             if evicted > 0 {
                 tracing::debug!(evicted, "upstream pool eviction sweep");
             }
@@ -656,12 +656,11 @@ fn hyper_source_connector_error(e: &hyper_util::client::legacy::Error) -> Option
                             "in phase `{}`: {}",
                             p.phase, io_err
                         )));
-                    } else {
-                        return Some(UpstreamError::Connection(format!(
-                            "in phase `{}`: {}",
-                            p.phase, io_err
-                        )));
                     }
+                    return Some(UpstreamError::Connection(format!(
+                        "in phase `{}`: {}",
+                        p.phase, io_err
+                    )));
                 }
             }
         }
@@ -718,7 +717,7 @@ where
 {
     fn execute(&self, future: F) {
         let timeouts = CALL_TIMEOUTS.try_with(|t| *t).ok();
-        let proxy = CALL_PROXY.try_with(|p| p.clone()).ok().flatten();
+        let proxy = CALL_PROXY.try_with(std::clone::Clone::clone).ok().flatten();
 
         let fut = async move {
             match (timeouts, proxy) {

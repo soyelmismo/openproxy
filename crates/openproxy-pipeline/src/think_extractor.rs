@@ -63,7 +63,7 @@ const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "
 pub fn extract_think_from_response(
     mut resp: crate::translation::OpenAIResponse,
 ) -> crate::translation::OpenAIResponse {
-    for choice in resp.choices.iter_mut() {
+    for choice in &mut resp.choices {
         if choice.message.role != "assistant" {
             continue;
         }
@@ -166,8 +166,7 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
 
         let after_tag_content = &after_open[after_open
             .find('>')
-            .map(|p| p + 1)
-            .unwrap_or(after_open.len())..];
+            .map_or(after_open.len(), |p| p + 1)..];
 
         let (think_text, rest) = match &close_tag {
             Some(ct) => {
@@ -350,7 +349,7 @@ impl crate::streaming::StreamingChunkStage for ThinkStreamExtractor {
 
     fn finalize(&mut self) -> Option<String> {
         let (clean, _) = self.flush();
-        if !clean.is_empty() { Some(clean) } else { None }
+        if clean.is_empty() { None } else { Some(clean) }
     }
 }
 
@@ -382,7 +381,7 @@ impl ThinkStreamExtractor {
                 let open_from_close = format!("<{}>", &ct[2..ct.len() - 1]);
                 tag_str.eq_ignore_ascii_case(&open_from_close)
             })
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         self.close_tag = close_tag;
         self.inside_think = true;
@@ -402,7 +401,7 @@ impl ThinkStreamExtractor {
         let final_content = if more_content.is_empty() {
             content_before
         } else {
-            format!("{}{}", content_before, more_content)
+            format!("{content_before}{more_content}")
         };
         (final_content, reasoning)
     }
@@ -436,7 +435,7 @@ impl ThinkStreamExtractor {
                 let final_reasoning = if more_reasoning.is_empty() {
                     reasoning
                 } else {
-                    format!("{}{}", reasoning, more_reasoning)
+                    format!("{reasoning}{more_reasoning}")
                 };
                 (more_content, final_reasoning)
             }
@@ -761,8 +760,7 @@ mod tests {
             .unwrap_or("");
         assert_eq!(
             rc, "Let me think about this.",
-            "reasoning_content must not be duplicated when the upstream sent it natively; got: {:?}",
-            rc
+            "reasoning_content must not be duplicated when the upstream sent it natively; got: {rc:?}"
         );
     }
 

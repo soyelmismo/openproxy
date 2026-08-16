@@ -120,7 +120,7 @@ async fn run_parallel<T: 'static>(config: &RaceConfig, lanes: Vec<Lane<T>>) -> R
     // Drive all lanes concurrently. We move the boxed combined futures out of the slots and
     // into a `FuturesUnordered` that yields `(index, result)` for each completion.
     let mut stream = FuturesUnordered::new();
-    for slot in slots.iter_mut() {
+    for slot in &mut slots {
         let idx = slot.index;
         let fut = slot.combined.take().expect("combined future missing");
         let wrapped = async move {
@@ -172,7 +172,7 @@ async fn run_parallel<T: 'static>(config: &RaceConfig, lanes: Vec<Lane<T>>) -> R
     let grace = Duration::from_millis(config.abort_grace_ms);
     let winner_idx = winner.as_ref().map(|(i, _)| *i);
 
-    for slot in slots.iter_mut() {
+    for slot in &mut slots {
         if Some(slot.index) == winner_idx {
             // The winner's task owns the response stream that the caller will keep reading.
             // We do NOT abort it: aborting would cancel the very response we just won.
@@ -224,7 +224,7 @@ struct LaneSlot<T> {
 /// `AllFailed` variant carries the error with the lowest priority value (i.e. highest
 /// priority) seen.
 pub fn error_priority(err: &CoreError) -> u8 {
-    use crate::error::CoreError::*;
+    use crate::error::CoreError::{UpstreamTimeout, UpstreamError, RateLimited, UpstreamConnection, Parse};
     match err {
         UpstreamTimeout { .. } => 0,
         UpstreamError { status, .. } if *status == 502 || *status == 503 || *status == 504 => 1,
@@ -304,7 +304,7 @@ mod tests {
                         assert_eq!(phase, "ttft");
                         assert_eq!(ms, 500);
                     }
-                    other => panic!("expected UpstreamTimeout, got {:?}", other),
+                    other => panic!("expected UpstreamTimeout, got {other:?}"),
                 }
             }
             RaceResult::Won { .. } => panic!("expected AllFailed"),
@@ -385,8 +385,7 @@ mod tests {
                     assert_eq!(ms, 200);
                 }
                 other => panic!(
-                    "expected highest-priority (UpstreamTimeout) error, got {:?}",
-                    other
+                    "expected highest-priority (UpstreamTimeout) error, got {other:?}"
                 ),
             },
             RaceResult::Won { .. } => panic!("expected AllFailed"),
@@ -429,8 +428,7 @@ mod tests {
         // Total time should be much less than the 500ms the loser would have taken.
         assert!(
             elapsed < Duration::from_millis(grace_ms + 200),
-            "race took too long ({:?}), grace exceeded",
-            elapsed
+            "race took too long ({elapsed:?}), grace exceeded"
         );
     }
 
@@ -485,8 +483,7 @@ mod tests {
         // would hang. We bound it to grace + a generous epsilon.
         assert!(
             elapsed < Duration::from_millis(grace_ms + 500),
-            "run did not hard-abort the handle within grace: took {:?}",
-            elapsed
+            "run did not hard-abort the handle within grace: took {elapsed:?}"
         );
     }
 

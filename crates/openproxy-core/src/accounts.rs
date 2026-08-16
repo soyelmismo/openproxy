@@ -49,10 +49,10 @@ pub fn create(
         // FK violation → unknown provider.
         let msg = e.to_string();
         if msg.contains("FOREIGN KEY") {
-            CoreError::Validation(format!("provider_id does not exist: {}", provider_id))
+            CoreError::Validation(format!("provider_id does not exist: {provider_id}"))
         } else {
             CoreError::Database {
-                message: format!("insert account for {}: {}", provider_id, e),
+                message: format!("insert account for {provider_id}: {e}"),
                 source: Some(Box::new(e)),
             }
         }
@@ -770,10 +770,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-accounts-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-accounts-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("accounts.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -900,8 +899,8 @@ mod tests {
         assert_eq!(recovered, plaintext);
 
         // Missing id → AccountNotFound.
-        let err = decrypt_api_key(&conn, AccountId(424242), &mk).expect_err("missing");
-        assert!(matches!(err, CoreError::AccountNotFound(424242)));
+        let err = decrypt_api_key(&conn, AccountId(424_242), &mk).expect_err("missing");
+        assert!(matches!(err, CoreError::AccountNotFound(424_242)));
 
         // Wrong key → decryption failure (Internal).
         let other = MasterKey::generate();
@@ -936,8 +935,8 @@ mod tests {
         assert_eq!(recovered_label.as_deref(), Some(label));
 
         // Missing id → AccountNotFound.
-        let err = decrypt_api_key_and_label(&conn, AccountId(424242), &mk).expect_err("missing");
-        assert!(matches!(err, CoreError::AccountNotFound(424242)));
+        let err = decrypt_api_key_and_label(&conn, AccountId(424_242), &mk).expect_err("missing");
+        assert!(matches!(err, CoreError::AccountNotFound(424_242)));
 
         // Wrong key → decryption failure (Internal).
         let other = MasterKey::generate();
@@ -1139,7 +1138,7 @@ mod tests {
             session_limit: Some(5000),
             session_reset_at: Some("1700000000".into()),
             weekly_used: Some(80000),
-            weekly_limit: Some(500000),
+            weekly_limit: Some(500_000),
             weekly_reset_at: Some("1700003600".into()),
             plan_name: Some("Coding Plan".into()),
             last_fetched_at: "1700000001".into(),
@@ -1154,7 +1153,7 @@ mod tests {
         assert_eq!(a.quota_session_limit, Some(5000));
         assert_eq!(a.quota_session_reset_at.as_deref(), Some("1700000000"));
         assert_eq!(a.quota_weekly_used, Some(80000));
-        assert_eq!(a.quota_weekly_limit, Some(500000));
+        assert_eq!(a.quota_weekly_limit, Some(500_000));
         assert_eq!(a.quota_weekly_reset_at.as_deref(), Some("1700003600"));
         assert_eq!(a.quota_plan_name.as_deref(), Some("Coding Plan"));
         assert_eq!(a.quota_last_fetched_at.as_deref(), Some("1700000001"));
@@ -1729,8 +1728,7 @@ mod tests {
         let err = decrypt_api_key(&conn, id, &mk).expect_err("OAuth account has no key");
         assert!(
             matches!(err, CoreError::Validation(ref msg) if msg.contains("no API key")),
-            "expected Validation error about missing API key, got: {:?}",
-            err
+            "expected Validation error about missing API key, got: {err:?}"
         );
     }
 

@@ -223,9 +223,8 @@ impl UpstreamBodyStream {
 
         #[cfg(feature = "upstream-hyper")]
         {
-            let stream = match self.inner.as_mut() {
-                Some(s) => s,
-                None => return Ok(None),
+            let Some(stream) = self.inner.as_mut() else {
+                return Ok(None);
             };
 
             // PERF: reset the reusable Sleep instead of creating a fresh
@@ -238,7 +237,7 @@ impl UpstreamBodyStream {
                 _ = self.cancel_rx.changed() => {
                     Err(UpstreamError::Cancel)
                 }
-                _ = &mut self.sleep => {
+                () = &mut self.sleep => {
                     // Distinguish chunk-gap timeout from total-deadline
                     // timeout. When `last_chunk_at` is Some, the sleep
                     // was set to `last_chunk_at + body_chunk_ms` — this
@@ -321,6 +320,6 @@ impl std::fmt::Debug for UpstreamBodyStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UpstreamBodyStream")
             .field("cancelled", &self.cancel.is_cancelled())
-            .finish()
+            .finish_non_exhaustive()
     }
 }

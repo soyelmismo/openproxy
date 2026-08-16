@@ -1,4 +1,4 @@
-use super::*;
+use super::{ProviderAdapterConfig, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, fetch_openai_models, UpstreamRequest, CancellationToken, TimeoutProfile};
 use crate::upstream::UpstreamError;
 // =====================================================================
 // MiniMax (Coding)
@@ -116,7 +116,7 @@ impl MiniMaxAdapter {
                 .await
             {
                 Ok(quota) => return Ok(quota),
-                Err(e) => last_err = Some(format!("{}: {}", url, e)),
+                Err(e) => last_err = Some(format!("{url}: {e}")),
             }
         }
 
@@ -152,7 +152,12 @@ impl MiniMaxAdapter {
                 UpstreamError::Cancel => {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
                 }
-                other => CoreError::UpstreamConnection(format!("{}: {}", url, other)),
+                UpstreamError::Timeout(_)
+                | UpstreamError::Connection(_)
+                | UpstreamError::Tls(_)
+                | UpstreamError::Http(_)
+                | UpstreamError::Decode(_)
+                | UpstreamError::Invalid(_) => CoreError::UpstreamConnection(format!("{url}: {e}")),
             })?;
 
         if !response.status.is_success() {
@@ -166,10 +171,10 @@ impl MiniMaxAdapter {
         let body = response
             .collect()
             .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("{}: {}", url, e)))?;
+            .map_err(|e| CoreError::UpstreamConnection(format!("{url}: {e}")))?;
 
         let json: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
+            .map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
         parse_minimax_quota(&json, url)
     }
 }
@@ -181,15 +186,15 @@ fn parse_minimax_quota(
     let plan_name = body
         .get("plan_name")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let entries = body
         .get("model_remains")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| CoreError::Parse(format!("{}: missing 'model_remains' array", url)))?;
+        .ok_or_else(|| CoreError::Parse(format!("{url}: missing 'model_remains' array")))?;
 
     if entries.is_empty() {
-        return Err(CoreError::Parse(format!("{}: empty model_remains", url)));
+        return Err(CoreError::Parse(format!("{url}: empty model_remains")));
     }
 
     let target = entries
@@ -223,11 +228,11 @@ fn parse_minimax_quota(
 
     let session_reset_at = target
         .get("remains_time")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .and_then(ms_epoch_to_secs_str);
     let weekly_reset_at = target
         .get("weekly_remains_time")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .and_then(ms_epoch_to_secs_str);
 
     Ok(openproxy_types::AccountQuota {
@@ -250,15 +255,15 @@ fn extract_used_limit(
     limit_count_key: &str,
     remaining_pct_key: &str,
 ) -> (Option<i64>, Option<i64>) {
-    let used = entry.get(used_count_key).and_then(|v| v.as_i64());
-    let limit = entry.get(limit_count_key).and_then(|v| v.as_i64());
+    let used = entry.get(used_count_key).and_then(serde_json::Value::as_i64);
+    let limit = entry.get(limit_count_key).and_then(serde_json::Value::as_i64);
     if let (Some(u), Some(l)) = (used, limit)
         && l > 0
     {
         return (Some(u), Some(l));
     }
 
-    let remaining = entry.get(remaining_pct_key).and_then(|v| v.as_i64());
+    let remaining = entry.get(remaining_pct_key).and_then(serde_json::Value::as_i64);
     if let Some(rp) = remaining
         && (0..=100).contains(&rp)
     {

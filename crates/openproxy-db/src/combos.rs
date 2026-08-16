@@ -1,9 +1,9 @@
 use openproxy_types::ProviderId;
-use openproxy_types::combos::*;
+use openproxy_types::combos::{Strategy, Combo, MAX_SUB_COMBO_DEPTH, ComboTarget, ComboTargetWithModel, PriorityMode};
 use openproxy_types::config::CooldownMode;
 use openproxy_types::error::CoreError;
 use openproxy_types::error::Result;
-use openproxy_types::ids::*;
+use openproxy_types::ids::{ComboId, AccountId, ModelRowId, ComboTargetId};
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Row, params};
 pub fn create_combo(
@@ -15,14 +15,13 @@ pub fn create_combo(
     // Validate race_size against the schema CHECK constraint (1..=8).
     if !(1..=8).contains(&race_size) {
         return Err(CoreError::Validation(format!(
-            "race_size must be in 1..=8, got {}",
-            race_size
+            "race_size must be in 1..=8, got {race_size}"
         )));
     }
 
     let result = conn.execute(
         "INSERT INTO combos(name, strategy, race_size) VALUES (?1, ?2, ?3)",
-        params![name, strategy.as_str(), race_size as i64],
+        params![name, strategy.as_str(), i64::from(race_size)],
     );
 
     match result {
@@ -31,13 +30,11 @@ pub fn create_combo(
             let msg = e.to_string();
             if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
                 return Err(CoreError::Validation(format!(
-                    "combo name already exists: {}",
-                    name
+                    "combo name already exists: {name}"
                 )));
             }
             return Err(crate::error::map_db_error_ctx(format!(
-                "insert combo {}",
-                name
+                "insert combo {name}"
             ))(e));
         }
     }
@@ -344,8 +341,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
             let msg = e.to_string();
             if msg.contains("FOREIGN KEY") {
                 return Err(CoreError::Validation(format!(
-                    "provider_id or sub_combo_id does not exist: {}",
-                    provider_id
+                    "provider_id or sub_combo_id does not exist: {provider_id}"
                 )));
             }
             if msg.contains("UNIQUE") {
@@ -667,13 +663,12 @@ pub fn update_target_weight(
 ) -> Result<()> {
     if weight <= 0 {
         return Err(CoreError::Validation(format!(
-            "weight must be a positive integer, got {}",
-            weight
+            "weight must be a positive integer, got {weight}"
         )));
     }
     conn.execute(
         "UPDATE combo_targets SET weight = ?1 WHERE id = ?2",
-        params![weight as i64, target_id.0],
+        params![i64::from(weight), target_id.0],
     )
     .map_err(crate::error::map_db_error_ctx(format!(
         "update weight for combo_target {}",
@@ -689,7 +684,7 @@ pub fn update_target_active(
 ) -> Result<()> {
     conn.execute(
         "UPDATE combo_targets SET active = ?1 WHERE id = ?2",
-        params![if active { 1_i64 } else { 0_i64 }, target_id.0],
+        params![i64::from(active), target_id.0],
     )
     .map_err(crate::error::map_db_error_ctx(format!(
         "update active for combo_target {}",
@@ -760,7 +755,7 @@ pub fn update_target_cooldown_factor(
 ) -> Result<()> {
     conn.execute(
         "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
-        params![factor.map(|v| v as i64), target_id.0],
+        params![factor.map(i64::from), target_id.0],
     )
     .map_err(crate::error::map_db_error_ctx(format!(
         "update cooldown_factor for combo_target {}",
@@ -813,9 +808,9 @@ pub fn reorder_targets(
     // "not belonging to this combo" case falls out for free because
     // the SELECT above is scoped by `combo_id`.
     let mut current_sorted = current;
-    current_sorted.sort();
+    current_sorted.sort_unstable();
     let mut incoming: Vec<i64> = ordered_ids.iter().map(|i| i.0).collect();
-    incoming.sort();
+    incoming.sort_unstable();
     if current_sorted != incoming {
         return Err(CoreError::Validation(
             "target_ids must be a permutation of the combo's current targets".into(),
@@ -865,14 +860,13 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
     if let Some(rs) = race_size {
         if !(1..=8).contains(&rs) {
             return Err(CoreError::Validation(format!(
-                "race_size must be in 1..=8, got {}",
-                rs
+                "race_size must be in 1..=8, got {rs}"
             )));
         }
         let affected = conn
             .execute(
                 "UPDATE combos SET race_size = ?1 WHERE id = ?2",
-                params![rs as i64, id.0],
+                params![i64::from(rs), id.0],
             )
             .map_err(crate::error::map_db_error_ctx(format!(
                 "update race_size for combo {}",
@@ -995,7 +989,7 @@ pub fn update_cooldown_settings(
                 mode_value,
                 base.map(|v| v as i64),
                 max.map(|v| v as i64),
-                factor.map(|v| v as i64),
+                factor.map(i64::from),
                 id.0
             ],
         )
@@ -1074,7 +1068,7 @@ pub fn update_cooldown_factor(conn: &Connection, id: ComboId, factor: Option<u32
     let affected = conn
         .execute(
             "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
-            params![factor.map(|v| v as i64), id.0],
+            params![factor.map(i64::from), id.0],
         )
         .map_err(crate::error::map_db_error_ctx(format!(
             "update cooldown_factor for combo {}",
@@ -1103,8 +1097,7 @@ pub fn update_lkgp_settings(
         && !(0.0..=1.0).contains(&rate)
     {
         return Err(CoreError::Validation(format!(
-            "lkgp_exploration_rate must be in [0.0, 1.0], got {}",
-            rate
+            "lkgp_exploration_rate must be in [0.0, 1.0], got {rate}"
         )));
     }
     let affected = conn
@@ -1197,8 +1190,7 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
             3,
             rusqlite::types::Type::Integer,
             Box::new(FromStrError(format!(
-                "race_size out of range: {}",
-                race_size
+                "race_size out of range: {race_size}"
             ))),
         ));
     }
@@ -1384,8 +1376,7 @@ fn compute_effective_context_window_recursive(
                     |row| row.get(0),
                 )
                 .map_err(crate::error::map_db_error_ctx(format!(
-                    "get context_length for model {}",
-                    row_id
+                    "get context_length for model {row_id}"
                 )))?;
             model_cw
         } else {
@@ -1444,9 +1435,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("openproxy-crud-test-{}-{}-{}", pid, nanos, n));
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("openproxy-crud-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("crud.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -1489,18 +1479,12 @@ mod tests {
         // Race size 0 is invalid
         let err = create_combo(&conn, combo_name, strategy, 0)
             .expect_err("create combo should fail with race size 0");
-        match err {
-            CoreError::Validation(msg) => assert!(msg.contains("race_size must be in 1..=8")),
-            _ => panic!("Expected Validation error, got {:?}", err),
-        }
+        assert!(matches!(err, CoreError::Validation(ref msg) if msg.contains("race_size must be in 1..=8")), "Expected Validation error, got {err:?}");
 
         // Race size 9 is invalid
         let err2 = create_combo(&conn, combo_name, strategy, 9)
             .expect_err("create combo should fail with race size 9");
-        match err2 {
-            CoreError::Validation(msg) => assert!(msg.contains("race_size must be in 1..=8")),
-            _ => panic!("Expected Validation error, got {:?}", err2),
-        }
+        assert!(matches!(err2, CoreError::Validation(ref msg) if msg.contains("race_size must be in 1..=8")), "Expected Validation error, got {err2:?}");
     }
 
     #[test]
@@ -1519,13 +1503,7 @@ mod tests {
         let err = create_combo(&conn, combo_name, strategy, race_size)
             .expect_err("create duplicate combo should fail");
 
-        match err {
-            CoreError::Validation(msg) => assert!(msg.contains("combo name already exists")),
-            _ => panic!(
-                "Expected Validation error for duplicate name, got {:?}",
-                err
-            ),
-        }
+        assert!(matches!(err, CoreError::Validation(ref msg) if msg.contains("combo name already exists")), "Expected Validation error for duplicate name, got {err:?}");
     }
 
     #[test]
@@ -1553,8 +1531,7 @@ mod tests {
             );
         } else {
             panic!(
-                "Expected Database error with CHECK constraint failure, got {:?}",
-                err
+                "Expected Database error with CHECK constraint failure, got {err:?}"
             );
         }
     }
@@ -1566,7 +1543,6 @@ mod tests {
 
         // C1 -> C2 -> C3
         let c1 = ComboId(1);
-        let _c2 = ComboId(2);
         let c3 = ComboId(3);
 
         conn.execute_batch(
@@ -1597,8 +1573,6 @@ mod tests {
 
         // C1 -> C2 -> C3 -> C1
         let c1 = ComboId(1);
-        let _c2 = ComboId(2);
-        let _c3 = ComboId(3);
 
         conn.execute_batch(
             "

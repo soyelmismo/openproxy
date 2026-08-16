@@ -1,3 +1,6 @@
+use std::fmt::Write as _;
+use std::sync::Arc;
+
 use axum::{
     extract::{Request, State},
     http::HeaderMap,
@@ -10,7 +13,6 @@ use openproxy_types::{
     CoreError, OpenAIRequest,
     ids::{ApiKeyId, ComboId, RequestId},
 };
-use std::sync::Arc;
 
 use crate::{
     error::ApiError,
@@ -45,7 +47,7 @@ pub async fn routing_middleware(
     let api_key_id = auth_token.as_ref().map(|t| t.key_id);
 
     let openai_req = parsed_chat_req.parsed;
-    let plan = resolve_routing_plan(&state, req.headers(), &openai_req, &auth_token)?;
+    let plan = resolve_routing_plan(&state, req.headers(), &openai_req, auth_token.as_ref())?;
     let (combo_id, combo_override, targets_override) =
         translate_plan_to_targets(&state, plan, api_key_id)?;
 
@@ -65,7 +67,7 @@ fn resolve_routing_plan(
     state: &AppState,
     headers: &HeaderMap,
     openai_req: &OpenAIRequest,
-    auth_result: &Option<ValidatedApiToken>,
+    auth_result: Option<&ValidatedApiToken>,
 ) -> Result<RoutingPlan, ApiError> {
     let legacy_combo_name = headers
         .get("x-openproxy-combo")
@@ -146,9 +148,9 @@ fn translate_plan_to_targets(
         }
         RoutingPlan::NotFound { model, hint } => {
             record_model_not_found_usage_row(state, RequestId::new(), api_key_id, &model);
-            let mut msg = format!("model not found: {}", model);
+            let mut msg = format!("model not found: {model}");
             if let Some(h) = hint {
-                msg.push_str(&format!(" (hint: {})", h));
+                let _ = write!(msg, " (hint: {h})");
             }
             Err(ApiError(CoreError::ModelNotFound {
                 provider: "<unknown>".into(),

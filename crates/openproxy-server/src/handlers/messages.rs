@@ -82,7 +82,7 @@ pub async fn anthropic_messages(
             inner: merged,
             has_started: false,
             has_finished: false,
-            message_id: format!("msg_{}", request_id),
+            message_id: format!("msg_{request_id}"),
             model,
             block_index: 0,
             in_text_block: false,
@@ -349,8 +349,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                     if s.starts_with("event: error") || s.starts_with(": keep-alive") {
                         return Poll::Ready(Some(Ok(chunk)));
                     }
-
-                    continue; // Skip chunk and poll next
+                    // Skip chunk and poll next
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,

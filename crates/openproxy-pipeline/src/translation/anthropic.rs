@@ -1,4 +1,4 @@
-use crate::translation::types::*;
+use crate::translation::types::{AnthropicRequest, AnthropicMessage, DEFAULT_MAX_TOKENS, AnthropicResponse, OpenAIResponse, OpenAIChoice, OpenAIUsage, AnthropicUsage};
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::{Value, json};
 
@@ -142,18 +142,18 @@ pub fn openai_to_anthropic(
                 // [tool_result..., text]). Otherwise emit the text as
                 // a plain string user message.
                 let text = m.extract_text();
-                if !pending_tool_results.is_empty() {
+                if pending_tool_results.is_empty() {
+                    conversation.push(AnthropicMessage {
+                        role: "user".to_string(),
+                        content: serde_json::Value::String(text),
+                    });
+                } else {
                     pending_tool_results.push(json!({"type": "text", "text": text}));
                     conversation.push(AnthropicMessage {
                         role: "user".to_string(),
                         content: serde_json::Value::Array(std::mem::take(
                             &mut pending_tool_results,
                         )),
-                    });
-                } else {
-                    conversation.push(AnthropicMessage {
-                        role: "user".to_string(),
-                        content: serde_json::Value::String(text),
                     });
                 }
             }
@@ -191,7 +191,7 @@ pub fn openai_to_anthropic(
         temperature: req.temperature,
         top_p: req.top_p,
         top_k: req.top_k,
-        stop_sequences: req.stop.to_owned(),
+        stop_sequences: req.stop.clone(),
         // Translate OpenAI-shaped `tools` to Anthropic shape. MiniMax
         // (which exposes an Anthropic-compatible API) and real Anthropic
         // both expect `{name, description, input_schema}` — forwarding
@@ -335,10 +335,10 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     };
 
     OpenAIResponse {
-        id: resp.id.to_owned(),
+        id: resp.id.clone(),
         object: "chat.completion".to_string(),
         created: 0,
-        model: resp.model.to_owned(),
+        model: resp.model.clone(),
         choices: vec![choice],
         usage: Some(OpenAIUsage {
             prompt_tokens,
@@ -369,7 +369,7 @@ pub fn map_finish_reason(stop_reason: &str) -> String {
 }
 
 pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
-    let mut messages = Vec::with_capacity(req.messages.len() + req.system.is_some() as usize);
+    let mut messages = Vec::with_capacity(req.messages.len() + usize::from(req.system.is_some()));
     if let Some(sys) = req.system {
         let sys_str = if let Some(s) = sys.as_str() {
             s.to_string()
@@ -589,7 +589,7 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
 
     let anthropic_stop = match finish_reason {
         Some("length") => Some("max_tokens".to_string()),
-        Some("tool_calls") | Some("function_call") => Some("tool_use".to_string()),
+        Some("tool_calls" | "function_call") => Some("tool_use".to_string()),
         Some("content_filter") => Some("stop_sequence".to_string()),
         Some(_) => Some("end_turn".to_string()),
         None => None,
@@ -658,9 +658,9 @@ fn log_anthropic_translation_diagnostics(conversation: &[AnthropicMessage]) {
         }
     }
     let use_set: std::collections::HashSet<&str> =
-        tool_use_ids.iter().map(|s| s.as_str()).collect();
+        tool_use_ids.iter().map(std::string::String::as_str).collect();
     let result_set: std::collections::HashSet<&str> =
-        tool_result_ids.iter().map(|s| s.as_str()).collect();
+        tool_result_ids.iter().map(std::string::String::as_str).collect();
     let missing_results: Vec<&str> = use_set.difference(&result_set).copied().collect();
     let orphan_results: Vec<&str> = result_set.difference(&use_set).copied().collect();
     tracing::debug!(

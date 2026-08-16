@@ -1,5 +1,5 @@
-use crate::error::*;
-use crate::ids::*;
+use crate::error::Result;
+use crate::ids::{ProviderId, AccountId, ComboId, ApiKeyId, UsageId, ComboTargetId, ModelRowId};
 use rusqlite::{Connection, OptionalExtension, ToSql, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -220,7 +220,7 @@ impl BuiltWhere {
         }
         if let Some(pid) = &f.provider_id {
             clauses.push("provider_id = ?");
-            params.push(Box::new(pid.0.to_owned()));
+            params.push(Box::new(pid.0.clone()));
         }
         if let Some(mid) = &f.model_id {
             clauses.push("upstream_model_id = ?");
@@ -659,13 +659,12 @@ pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>>
         .query_map(params_from_iter(params_slice), |row| {
             let status_code: i64 = row.get(0)?;
             let count: i64 = row.get(1)?;
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     0,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -693,7 +692,7 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
     if !w.sql.is_empty() {
         // Strip the leading "WHERE " to get bare clauses we can AND with more.
         let bare = w.sql.trim_start_matches("WHERE ").to_string();
-        clauses.push(format!("({})", bare));
+        clauses.push(format!("({bare})"));
     }
     clauses.push("status_code >= 400".to_string());
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
@@ -703,15 +702,14 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
         &mut sql,
         "SELECT request_id, trace_id, provider_id, upstream_model_id, \
                 status_code, error_msg_redacted, created_at \
-         FROM usage {} \
+         FROM usage {where_clause} \
          ORDER BY created_at DESC, id DESC \
          LIMIT ?",
-        where_clause,
     )
     .expect("writing to String never fails");
 
     // `limit` is a u32 — well under i64::MAX — so this cast is safe.
-    let limit_param: i64 = limit as i64;
+    let limit_param: i64 = i64::from(limit);
     let mut all_params: Vec<Box<dyn ToSql>> = w.params;
     all_params.push(Box::new(limit_param));
     let params_slice = to_params(&all_params);
@@ -729,13 +727,12 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
             let status_code: i64 = row.get(4)?;
             let error_msg_redacted: Option<String> = row.get(5)?;
             let created_at: String = row.get(6)?;
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     4,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -845,7 +842,7 @@ pub fn recent(
     // hasn't seen yet. The long-poll feed returns rows in id ASC order
     // (oldest first) so the client processes them in arrival order;
     // the dashboard's `mergeLogsByDescId` sorts by id DESC for display.
-    let limit_param: i64 = limit as i64;
+    let limit_param: i64 = i64::from(limit);
     let mut stmt = conn
         .prepare(
             "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
@@ -941,13 +938,12 @@ pub fn recent(
             col_idx += 1;
             let cached_tokens: Option<i64> = row.get(col_idx)?;
 
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     5,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -956,8 +952,7 @@ pub fn recent(
                     6,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {}",
-                        total_ms
+                        "total_ms unexpectedly negative: {total_ms}"
                     ))),
                 ));
             }
@@ -1033,7 +1028,7 @@ pub fn recent_desc(
     // showed a checkmark on rows where `client_response` was actually
     // `false`. The WS broadcast sends individual rows, so the history
     // fetch must too.
-    let limit_param: i64 = limit as i64;
+    let limit_param: i64 = i64::from(limit);
     let mut stmt = conn
         .prepare(
             "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
@@ -1128,13 +1123,12 @@ pub fn recent_desc(
             col_idx += 1;
             let cached_tokens: Option<i64> = row.get(col_idx)?;
 
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     5,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -1143,8 +1137,7 @@ pub fn recent_desc(
                     6,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {}",
-                        total_ms
+                        "total_ms unexpectedly negative: {total_ms}"
                     ))),
                 ));
             }
@@ -1310,13 +1303,12 @@ pub fn row_for_broadcast_by_id(
             col_idx += 1;
             let cached_tokens: Option<i64> = row.get(col_idx)?;
 
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     5,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -1455,13 +1447,12 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
 
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     16,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -1470,8 +1461,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     14,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {}",
-                        total_ms
+                        "total_ms unexpectedly negative: {total_ms}"
                     ))),
                 ));
             }
@@ -1604,13 +1594,12 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             col_idx += 1;
             let is_proxy_rotated: i64 = row.get(col_idx)?;
 
-            if !(0..=u16::MAX as i64).contains(&status_code) {
+            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     16,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {}",
-                        status_code
+                        "status_code out of u16 range: {status_code}"
                     ))),
                 ));
             }
@@ -1619,8 +1608,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     14,
                     rusqlite::types::Type::Integer,
                     Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {}",
-                        total_ms
+                        "total_ms unexpectedly negative: {total_ms}"
                     ))),
                 ));
             }
@@ -1688,8 +1676,7 @@ fn collect_rows<T>(
     let mut out = Vec::new();
     for r in iter {
         out.push(r.map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "read {} row",
-            query_name
+            "read {query_name} row"
         )))?);
     }
     Ok(out)
@@ -1702,7 +1689,7 @@ fn as_u64(v: i64, field: &'static str) -> rusqlite::Result<u64> {
         return Err(rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Integer,
-            Box::new(SimpleErr(format!("{} unexpectedly negative: {}", field, v))),
+            Box::new(SimpleErr(format!("{field} unexpectedly negative: {v}"))),
         ));
     }
     Ok(v as u64)

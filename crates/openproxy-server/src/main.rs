@@ -52,10 +52,10 @@ async fn main() -> anyhow::Result<()> {
     openproxy_server::telemetry::init(&config.logging)?;
 
     // 3. Build state
-    let state = openproxy_server::state::AppState::new(config).await?;
+    let state = openproxy_server::state::AppState::new(config)?;
 
     // 4. Build router (state is moved into the router).
-    let bind_addr = state.config().server.bind.to_owned();
+    let bind_addr = state.config().server.bind.clone();
     let app = openproxy_server::router::build_router(state);
 
     // 5. Bind and serve

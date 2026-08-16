@@ -17,6 +17,7 @@
 use openproxy_types::OpenAIMessage;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
+use std::fmt::Write;
 
 type Messages = Vec<OpenAIMessage>;
 
@@ -126,10 +127,7 @@ fn compress_log_content(text: &str) -> Option<String> {
     let kept = selected.len();
     let mut out = String::with_capacity(text.len() / 2);
     if kept < total {
-        out.push_str(&format!(
-            "[#log_compressed: kept {} of {} lines]\n",
-            kept, total
-        ));
+        let _ = writeln!(out, "[#log_compressed: kept {kept} of {total} lines]");
     }
     let mut first = true;
     for &idx in &selected {
@@ -394,8 +392,7 @@ fn dedup_key(line: &str) -> String {
             let byte_idx = line
                 .char_indices()
                 .nth(idx)
-                .map(|(b, _)| b)
-                .unwrap_or(line.len());
+                .map_or(line.len(), |(b, _)| b);
             // Include the separator in the prefix.
             let sep_end = (byte_idx + 1).min(line.len());
             let prefix = &line[..sep_end];
@@ -479,7 +476,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -491,10 +488,10 @@ mod tests {
             "========================= test session starts =========================".to_string(),
         );
         for i in 0..95 {
-            lines.push(format!("test_module.py::test_pass_{} PASSED [ 50%]", i));
+            lines.push(format!("test_module.py::test_pass_{i} PASSED [ 50%]"));
         }
         for i in 0..3 {
-            lines.push(format!("test_module.py::test_fail_{} FAILED [ 50%]", i));
+            lines.push(format!("test_module.py::test_fail_{i} FAILED [ 50%]"));
         }
         lines.push(
             "========================= 3 failed, 95 passed in 5.0s ========================="
@@ -506,19 +503,16 @@ mod tests {
         let applied = compress_logs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress pytest output, got: {:?}",
-            applied
+            "should compress pytest output, got: {applied:?}"
         );
         let output = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         assert!(
             output.contains("FAILED"),
-            "should keep FAILED lines: {}",
-            output
+            "should keep FAILED lines: {output}"
         );
         assert!(
             output.contains("passed"),
-            "should keep summary line: {}",
-            output
+            "should keep summary line: {output}"
         );
         assert!(output.contains("[#log_compressed:"));
         assert!(output.len() < content.len());
@@ -530,7 +524,7 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         lines.push("running 80 tests".to_string());
         for i in 0..78 {
-            lines.push(format!("test test_{} ... ok", i));
+            lines.push(format!("test test_{i} ... ok"));
         }
         lines.push(
             "test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s".to_string(),
@@ -541,14 +535,12 @@ mod tests {
         let applied = compress_logs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress cargo output, got: {:?}",
-            applied
+            "should compress cargo output, got: {applied:?}"
         );
         let output = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         assert!(
             output.contains("test result:"),
-            "should keep test result line: {}",
-            output
+            "should keep test result line: {output}"
         );
         assert!(output.contains("[#log_compressed:"));
         assert!(output.len() < content.len());
@@ -557,7 +549,7 @@ mod tests {
     #[test]
     fn test_compress_skips_short_logs() {
         // 10-line output: too short (< MIN_LOG_LINES=30).
-        let lines: Vec<String> = (0..10).map(|i| format!("test {} PASSED", i)).collect();
+        let lines: Vec<String> = (0..10).map(|i| format!("test {i} PASSED")).collect();
         let content = lines.join("\n");
         let mut msgs = vec![msg("tool", &content)];
         let applied = compress_logs(&mut msgs);
@@ -575,8 +567,7 @@ mod tests {
         let lines: Vec<String> = (0..30)
             .map(|i| {
                 format!(
-                    "This is line {} of the prose. The quick brown fox jumps over the lazy dog.",
-                    i
+                    "This is line {i} of the prose. The quick brown fox jumps over the lazy dog."
                 )
             })
             .collect();
@@ -599,7 +590,7 @@ mod tests {
             lines.push("warning: unused variable: x".to_string());
         }
         for i in 0..10 {
-            lines.push(format!("test test_{} ... ok", i));
+            lines.push(format!("test test_{i} ... ok"));
         }
         assert_eq!(lines.len(), 30);
         let content = lines.join("\n");
@@ -607,15 +598,13 @@ mod tests {
         let applied = compress_logs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress, got: {:?}",
-            applied
+            "should compress, got: {applied:?}"
         );
         let output = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         let count = output.matches("warning: unused variable: x").count();
         assert_eq!(
             count, 1,
-            "should keep only 1 of 20 identical warnings, got {}: {}",
-            count, output
+            "should keep only 1 of 20 identical warnings, got {count}: {output}"
         );
         assert!(output.contains("[#log_compressed:"));
     }
@@ -634,8 +623,7 @@ mod tests {
         let applied = compress_logs(&mut msgs);
         assert!(
             applied.is_empty(),
-            "should skip when compression would be larger, got: {:?}",
-            applied
+            "should skip when compression would be larger, got: {applied:?}"
         );
         assert_eq!(
             msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap(),
@@ -652,7 +640,7 @@ mod tests {
             "========================= test session starts =========================".to_string(),
         );
         for i in 0..25 {
-            lines.push(format!("test_module.py::test_{} PASSED [ 50%]", i));
+            lines.push(format!("test_module.py::test_{i} PASSED [ 50%]"));
         }
         lines.push("Traceback (most recent call last):".to_string());
         lines.push("  File \"test.py\", line 5, in <module>".to_string());
@@ -666,24 +654,20 @@ mod tests {
         let applied = compress_logs(&mut msgs);
         assert!(
             applied.contains(&TECHNIQUE),
-            "should compress, got: {:?}",
-            applied
+            "should compress, got: {applied:?}"
         );
         let output = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         assert!(
             output.contains("Traceback"),
-            "should keep Traceback line: {}",
-            output
+            "should keep Traceback line: {output}"
         );
         assert!(
             output.contains("File \"test.py\""),
-            "should keep stack trace File lines: {}",
-            output
+            "should keep stack trace File lines: {output}"
         );
         assert!(
             output.contains("ValueError"),
-            "should keep final error line: {}",
-            output
+            "should keep final error line: {output}"
         );
         assert!(output.contains("[#log_compressed:"));
         assert!(output.len() < content.len());

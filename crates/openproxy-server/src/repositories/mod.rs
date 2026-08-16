@@ -179,7 +179,7 @@ impl AccountRepository for SqliteRepository {
         input: openproxy_core::admin::UpdateAccountApiKeyInput,
     ) -> Result<(), CoreError> {
         let w = self.writer();
-        openproxy_core::admin::update_account_api_key(&w, master_key, id, input)
+        openproxy_core::admin::update_account_api_key(&w, master_key, id, &input)
     }
 
     fn get_account_api_key(
@@ -197,7 +197,7 @@ impl AccountRepository for SqliteRepository {
         input: openproxy_core::admin::UpdateAccountLabelInput,
     ) -> Result<(), CoreError> {
         let w = self.writer();
-        openproxy_core::admin::update_account_label(&w, id, input)
+        openproxy_core::admin::update_account_label(&w, id, &input)
     }
 }
 

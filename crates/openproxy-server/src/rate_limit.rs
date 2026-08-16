@@ -22,7 +22,7 @@ impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
             max_requests: 60, // 60 requests per minute per key
-            window: Duration::from_secs(60),
+            window: Duration::from_mins(1),
         }
     }
 }
@@ -60,9 +60,8 @@ impl RateLimiter {
             } else if *count < max {
                 *count += 1;
                 return true;
-            } else {
-                return false;
             }
+            return false;
         }
 
         self.windows.insert(key.to_string(), (1, now));
@@ -87,7 +86,7 @@ mod tests {
     fn allows_up_to_limit() {
         let rl = RateLimiter::new(RateLimitConfig {
             max_requests: 3,
-            window: Duration::from_secs(60),
+            window: Duration::from_mins(1),
         });
         assert!(rl.check("key1"));
         assert!(rl.check("key1"));
@@ -99,7 +98,7 @@ mod tests {
     fn different_keys_independent() {
         let rl = RateLimiter::new(RateLimitConfig {
             max_requests: 2,
-            window: Duration::from_secs(60),
+            window: Duration::from_mins(1),
         });
         assert!(rl.check("key1"));
         assert!(rl.check("key1"));

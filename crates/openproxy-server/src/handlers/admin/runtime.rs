@@ -1,4 +1,4 @@
-use super::*;
+use super::{Serialize, TimeoutsConfig, RetriesConfig, CircuitBreakerConfig, RacingConfig, AppState, ApiError, core_db, CoreError};
 use axum::{Json, extract::State};
 
 /// Read-only view of the relevant `AppConfig` sections.
@@ -97,7 +97,7 @@ pub async fn put_idle_chunk_retryable(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let val = body
         .get("idle_chunk_retryable")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| {
             ApiError(CoreError::Validation(
                 "idle_chunk_retryable must be a boolean".into(),
@@ -164,13 +164,13 @@ pub async fn put_maintenance_config(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut cfg = s.maintenance_config();
-    if let Some(v) = body.get("auto_vacuum").and_then(|v| v.as_bool()) {
+    if let Some(v) = body.get("auto_vacuum").and_then(serde_json::Value::as_bool) {
         cfg.auto_vacuum = v;
     }
-    if let Some(v) = body.get("vacuum_interval_hours").and_then(|v| v.as_u64()) {
+    if let Some(v) = body.get("vacuum_interval_hours").and_then(serde_json::Value::as_u64) {
         cfg.interval_secs = v.max(1) * 3600;
     }
-    if let Some(v) = body.get("usage_retention_days").and_then(|v| v.as_u64()) {
+    if let Some(v) = body.get("usage_retention_days").and_then(serde_json::Value::as_u64) {
         cfg.usage_retention_days = v as u32;
     }
     let auto_vacuum = cfg.auto_vacuum;
@@ -210,7 +210,7 @@ pub async fn put_recording_ttl(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let ttl_secs = body
         .get("recording_ttl_secs")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CoreError::Validation("missing 'recording_ttl_secs' integer".into()))?;
     if ttl_secs < 0 {
         return Err(

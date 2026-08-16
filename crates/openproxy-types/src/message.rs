@@ -32,8 +32,7 @@ impl TargetFormat {
             "responses" => Ok(TargetFormat::Responses),
             "atomesus" => Ok(TargetFormat::Atomesus),
             other => Err(CoreError::Validation(format!(
-                "invalid target_format: {}",
-                other
+                "invalid target_format: {other}"
             ))),
         }
     }
@@ -82,7 +81,7 @@ pub fn extract_content_part_text(part: &serde_json::Value) -> String {
     match part {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
-        other => other.to_string(),
+        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => part.to_string(),
     }
 }
 
@@ -230,7 +229,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg.extract_text(), "hello world");
         assert_eq!(msg.extract_text_lossless(), Some("hello world"));
@@ -247,7 +246,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg.extract_text(), "hello world");
         assert_eq!(msg.extract_text_lossless(), None);
@@ -264,7 +263,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg.extract_text(), "foo bar");
         assert_eq!(msg.extract_text_lossless(), None);
@@ -278,7 +277,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg.extract_text(), "hello world");
         assert_eq!(msg.extract_text_lossless(), None);
@@ -296,7 +295,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg.extract_text(), "first second third");
         assert_eq!(msg.extract_text_lossless(), None);
@@ -310,7 +309,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg_none.extract_text(), "");
         assert_eq!(msg_none.extract_text_lossless(), None);
@@ -321,7 +320,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         assert_eq!(msg_null.extract_text(), "");
         assert_eq!(msg_null.extract_text_lossless(), None);

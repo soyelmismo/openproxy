@@ -105,7 +105,7 @@ pub struct DiscoveryScheduler {
     cancel: CancellationToken,
     /// Kept for symmetry / introspection; the live task count is
     /// visible in tests via a future enhancement.
-    _task_count: usize,
+    pub task_count: usize,
 }
 
 impl DiscoveryScheduler {
@@ -128,7 +128,7 @@ impl DiscoveryScheduler {
 impl std::fmt::Debug for DiscoveryScheduler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DiscoveryScheduler")
-            .field("task_count", &self._task_count)
+            .field("task_count", &self.task_count)
             .finish_non_exhaustive()
     }
 }
@@ -145,7 +145,7 @@ impl std::fmt::Debug for DiscoveryScheduler {
 /// step through ticks deterministically.
 ///
 /// Start the discovery scheduler using a `ServiceContainer` for dependency injection.
-pub async fn start_with_container(
+pub fn start_with_container(
     services: &crate::di::ServiceContainer,
     config: DiscoverySchedulerConfig,
 ) -> crate::error::Result<DiscoveryScheduler> {
@@ -153,10 +153,10 @@ pub async fn start_with_container(
     let master_key = services.master_key()?;
     let adapters = services.adapters()?;
     let upstream_client = services.upstream_client()?;
-    Ok(start(db_pool, master_key, adapters, upstream_client, config).await)
+    Ok(start(db_pool, master_key, adapters, upstream_client, config))
 }
 
-pub async fn start(
+pub fn start(
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,
     adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>,
@@ -258,8 +258,8 @@ pub async fn start(
     tokio::spawn(async move {
         let initial_wait = Duration::from_secs(supervisor_interval.min(60));
         tokio::select! {
-            _ = sleep(initial_wait) => {}
-            _ = supervisor_cancel.cancelled() => return,
+            () = sleep(initial_wait) => {}
+            () = supervisor_cancel.cancelled() => return,
         }
 
         loop {
@@ -291,21 +291,21 @@ pub async fn start(
                 .await;
 
                 tokio::select! {
-                    _ = sleep(Duration::from_millis(200)) => {}
-                    _ = supervisor_cancel.cancelled() => return,
+                    () = sleep(Duration::from_millis(200)) => {}
+                    () = supervisor_cancel.cancelled() => return,
                 }
             }
 
             tokio::select! {
-                _ = sleep(Duration::from_secs(supervisor_interval)) => {}
-                _ = supervisor_cancel.cancelled() => return,
+                () = sleep(Duration::from_secs(supervisor_interval)) => {}
+                () = supervisor_cancel.cancelled() => return,
             }
         }
     });
 
     DiscoveryScheduler {
         cancel: parent_cancel,
-        _task_count: task_count,
+        task_count,
     }
 }
 
@@ -352,8 +352,8 @@ async fn run_one_provider(params: RunProviderParams) {
     // return without ever calling `refresh_models`.
     if !first_delay.is_zero() {
         tokio::select! {
-            _ = sleep(first_delay) => {}
-            _ = cancel.cancelled() => {
+            () = sleep(first_delay) => {}
+            () = cancel.cancelled() => {
                 tracing::info!(
                     provider = %provider,
                     "discovery scheduler for {provider} shutting down",
@@ -374,8 +374,8 @@ async fn run_one_provider(params: RunProviderParams) {
         .await;
 
         tokio::select! {
-            _ = sleep(Duration::from_secs(interval_secs)) => {}
-            _ = cancel.cancelled() => {
+            () = sleep(Duration::from_secs(interval_secs)) => {}
+            () = cancel.cancelled() => {
                 tracing::info!(
                     provider = %provider,
                     "discovery scheduler for {provider} shutting down",
@@ -474,7 +474,7 @@ async fn run_one_tick(
     .await;
 
     let duration_ms = started.elapsed().as_millis();
-    handle_discovery_outcome(db_pool, &provider, &provider_row, result, duration_ms).await;
+    handle_discovery_outcome(db_pool, &provider, provider_row.as_ref(), result, duration_ms).await;
 
     if let Some(ref p) = provider_row
         && p.favicon_base64.is_none()
@@ -530,13 +530,12 @@ async fn resolve_account_credentials(
                 "discovery tick: anonymous provider, no accounts; using empty api key",
             );
             return Some((String::new(), String::new()));
-        } else {
-            tracing::info!(
-                provider = %provider,
-                "discovery tick: provider has no accounts; skipping silently",
-            );
-            return None;
         }
+        tracing::info!(
+            provider = %provider,
+            "discovery tick: provider has no accounts; skipping silently",
+        );
+        return None;
     }
 
     let Some(acc) = accounts_list.first() else {
@@ -599,7 +598,7 @@ async fn record_decrypt_failed_notification(
             let _ = crate::notifications::record_system(
                 &notif_conn,
                 crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
-                &format!("account_id={}: {}", acc_id, err_str),
+                &format!("account_id={acc_id}: {err_str}"),
                 Some(&provider_str),
                 None,
             );
@@ -611,7 +610,7 @@ async fn record_decrypt_failed_notification(
 async fn handle_discovery_outcome(
     db_pool: &Arc<DbPool>,
     provider: &ProviderId,
-    provider_row: &Option<providers::Provider>,
+    provider_row: Option<&providers::Provider>,
     result: openproxy_types::Result<models::UpsertResult>,
     duration_ms: u128,
 ) {
@@ -628,7 +627,6 @@ async fn handle_discovery_outcome(
             let db_pool_clone = Arc::clone(db_pool);
             let provider_clone = provider.clone();
             let keyword = provider_row
-                .as_ref()
                 .and_then(|p| p.auto_activate_keyword.clone());
             let _ = tokio::task::spawn_blocking(move || match db_pool_clone.open_connection() {
                 Ok(aa_conn) => {
@@ -706,10 +704,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-discovery-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-discovery-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("discovery.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -773,8 +770,8 @@ mod tests {
     fn three_models() -> Vec<DiscoveredModel> {
         (0..3)
             .map(|i| DiscoveredModel {
-                model_id: ModelId::new(format!("mock-model-{}", i)),
-                display_name: Some(format!("Mock Model {}", i)),
+                model_id: ModelId::new(format!("mock-model-{i}")),
+                display_name: Some(format!("Mock Model {i}")),
                 target_format: TargetFormat::Openai,
                 context_length: None,
                 max_output_tokens: None,
@@ -841,8 +838,7 @@ mod tests {
                 // tick.
                 initial_stagger_secs: 1,
             },
-        )
-        .await;
+        );
 
         // Step the runtime forward enough for 1s stagger + 1
         // full tick (2s) = 3s total, plus a 1s safety margin.
@@ -929,8 +925,7 @@ mod tests {
                 interval_secs: 1,
                 initial_stagger_secs: 0,
             },
-        )
-        .await;
+        );
 
         // Step forward 3s — long enough for at least 2 ticks.
         tokio::time::advance(Duration::from_secs(3)).await;
@@ -1032,8 +1027,7 @@ mod tests {
                 interval_secs: 3_600,
                 initial_stagger_secs: 0,
             },
-        )
-        .await;
+        );
 
         // Advance a hair so the first tick of every task lands.
         // Each of the 4 adapters should have been called exactly
@@ -1072,7 +1066,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         // 1h + 1s of virtual time, in 1s chunks.
-        for _ in 0..(3_600 + 1) {
+        for _ in 0..=3_600 {
             tokio::time::advance(Duration::from_secs(1)).await;
             for _ in 0..4 {
                 tokio::task::yield_now().await;
@@ -1128,9 +1122,8 @@ mod tests {
             adapters,
             UpstreamClient::new(),
             fast_config(),
-        )
-        .await;
-        assert_eq!(sched._task_count, 0, "no providers had an adapter");
+        );
+        assert_eq!(sched.task_count, 0, "no providers had an adapter");
     }
 
     // -----------------------------------------------------------------
@@ -1181,7 +1174,7 @@ mod tests {
                     capabilities: None,
                 })
                 .collect::<Vec<_>>(),
-            Duration::from_secs(3600),
+            Duration::from_hours(1),
         )
         .expect("upsert_many seed");
     }
@@ -1362,8 +1355,7 @@ mod tests {
                 interval_secs: 2,
                 initial_stagger_secs: 1,
             },
-        )
-        .await;
+        );
 
         // Drive the virtual clock long enough for stagger + ≥1 tick.
         for _ in 0..6 {
@@ -1461,7 +1453,7 @@ mod tests {
                     family: None,
                     capabilities: None,
                 }],
-                Duration::from_secs(3600),
+                Duration::from_hours(1),
             )
             .expect("seed gpt-old");
             // Force it to inactive.
@@ -1498,8 +1490,7 @@ mod tests {
                 interval_secs: 2,
                 initial_stagger_secs: 1,
             },
-        )
-        .await;
+        );
 
         for _ in 0..6 {
             tokio::time::advance(Duration::from_secs(1)).await;

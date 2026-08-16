@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize, AppState, ApiError, ADMIN_LOCK_TIMEOUT, CoreError};
 use axum::{
     Json,
     extract::{Query, State},
@@ -59,7 +59,7 @@ pub async fn debug_logs(
         entries.drain(0..drop);
     }
 
-    let latest_seq = entries.last().map(|e| e.seq).unwrap_or(since);
+    let latest_seq = entries.last().map_or(since, |e| e.seq);
 
     Ok(Json(DebugLogsResponse {
         entries,
@@ -109,7 +109,7 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
         // Step 2: Integrity check.
         let integrity: String = w
             .query_row("PRAGMA integrity_check;", [], |r| r.get::<_, String>(0))
-            .unwrap_or_else(|e| format!("integrity_check error: {}", e));
+            .unwrap_or_else(|e| format!("integrity_check error: {e}"));
         tracing::info!("VACUUM step 2: integrity_check = {}", integrity);
 
         if integrity != "ok" {
@@ -136,15 +136,14 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "VACUUM: incremental_vacuum also failed");
-                    s.record_vacuum_result(&format!("failed: {}", e));
+                    s.record_vacuum_result(&format!("failed: {e}"));
                     return Err(ApiError(CoreError::Database {
                         message: format!(
-                            "VACUUM failed: {}. The database has integrity issues: {}. \
+                            "VACUUM failed: {e}. The database has integrity issues: {integrity}. \
                              To repair: stop the server and run \
                              'sqlite3 data.db \".recover\" > recovered.sql && \
                              mv data.db data.db.bak && \
-                             sqlite3 data.db < recovered.sql'",
-                            e, integrity
+                             sqlite3 data.db < recovered.sql'"
                         ),
                         source: Some(Box::new(e)),
                     }));
@@ -196,13 +195,12 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
                     }
                     Err(e2) => {
                         tracing::warn!(error = %e2, "VACUUM: both full and incremental failed");
-                        s.record_vacuum_result(&format!("failed: {}", e2));
+                        s.record_vacuum_result(&format!("failed: {e2}"));
                         Err(ApiError(CoreError::Database {
                             message: format!(
-                                "VACUUM failed: {}. The disk may be full or the DB file \
+                                "VACUUM failed: {e2}. The disk may be full or the DB file \
                                  may be locked by another process. Free disk space and retry, \
-                                 or restart the server.",
-                                e2
+                                 or restart the server."
                             ),
                             source: Some(Box::new(e2)),
                         }))
@@ -224,7 +222,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         // Take the writer lock and hold it.
         let w = s
             .db_pool()
-            .try_writer_for(std::time::Duration::from_secs(60))
+            .try_writer_for(std::time::Duration::from_mins(1))
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
                     "writer lock busy: cannot repair while requests are in flight".into(),
@@ -249,7 +247,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
 
         let integrity: String = w
             .query_row("PRAGMA integrity_check;", [], |r| r.get::<_, String>(0))
-            .unwrap_or_else(|e| format!("error: {}", e));
+            .unwrap_or_else(|e| format!("error: {e}"));
 
         tracing::info!(
             integrity = %integrity,
@@ -261,16 +259,16 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         let mut stmt = w
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
             .map_err(|e| ApiError(CoreError::Database {
-                message: format!("repair: list tables: {}", e),
+                message: format!("repair: list tables: {e}"),
                 source: Some(Box::new(e)),
             }))?;
         let table_names: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| ApiError(CoreError::Database {
-                message: format!("repair: query tables: {}", e),
+                message: format!("repair: query tables: {e}"),
                 source: Some(Box::new(e)),
             }))?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         drop(stmt);
 
@@ -290,7 +288,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                 continue;
             }
             let count_result: rusqlite::Result<i64> = w.query_row(
-                &format!("SELECT COUNT(*) FROM \"{}\"", table),
+                &format!("SELECT COUNT(*) FROM \"{table}\""),
                 [],
                 |r| r.get(0),
             );
@@ -324,7 +322,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         // connections, rename the file, and create a new one.
         // That requires a server restart. So we return the
         // diagnostic info + instructions.
-        s.record_vacuum_result(&format!("recovery diagnostic ({} rows readable)", total_rows_recovered));
+        s.record_vacuum_result(&format!("recovery diagnostic ({total_rows_recovered} rows readable)"));
 
         if integrity == "ok" {
             return Ok(Json(serde_json::json!({
@@ -380,7 +378,7 @@ pub async fn set_recording(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let enabled = body
         .get("enabled")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| CoreError::Validation("missing 'enabled' bool".into()))?;
     s.set_recording(enabled);
     Ok(Json(serde_json::json!({ "recording": enabled })))

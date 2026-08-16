@@ -59,6 +59,6 @@ async fn test_resolve_service_resolves_combo() {
     };
 
     let res = service.call(state).await.unwrap();
-    println!("DEBUG res = {:?}", res);
+    println!("DEBUG res = {res:?}");
     assert_eq!(res.status_code, 200);
 }

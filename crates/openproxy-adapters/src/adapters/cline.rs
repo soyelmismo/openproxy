@@ -1,4 +1,4 @@
-use super::*;
+use super::{UpstreamRequest, ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, Arc, UpstreamClient, Result, DiscoveredModel, upstream_get_json, ModelId, TargetFormat};
 pub use crate::spoofer::CLINE_SPOOFING_HEADERS;
 use crate::spoofer::{ClientSpoofer, ClineSpoofer};
 
@@ -68,9 +68,9 @@ impl ProviderAdapter for ClineAdapter {
         let token = if access_token.starts_with("workos:") {
             access_token.to_string()
         } else {
-            format!("workos:{}", access_token)
+            format!("workos:{access_token}")
         };
-        Some(("Authorization".into(), format!("Bearer {}", token)))
+        Some(("Authorization".into(), format!("Bearer {token}")))
     }
 
     fn models_url(&self) -> Option<String> {
@@ -92,7 +92,7 @@ impl ProviderAdapter for ClineAdapter {
 
         let payload: ClineRecommendedModels =
             <ClineRecommendedModels as serde::Deserialize>::deserialize(&body).map_err(|e| {
-                openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e))
+                openproxy_types::error::CoreError::Parse(format!("cline parse error: {e}"))
             })?;
 
         let mut discovered = Vec::new();
@@ -119,8 +119,8 @@ impl ProviderAdapter for ClineAdapter {
                     model_id: ModelId::new(id),
                     display_name: Some(entry.name),
                     target_format: TargetFormat::Openai,
-                    context_length: Some(128000), // Defaulting context
-                    max_output_tokens: Some(8192),
+                    context_length: Some(128_000), // Defaulting context
+                    max_output_tokens: Some(8_192),
                     input_modalities: None,
                     output_modalities: None,
                     model_type: Some("chat".to_string()),
@@ -166,7 +166,7 @@ impl ProviderAdapter for ClineAdapter {
                 *model_str = stripped.to_string();
             }
             // Cline backend ALWAYS requires stream: true, else it returns HTTP 500 "empty response content"
-            if obj.get("stream").is_none_or(|v| v.is_boolean()) {
+            if obj.get("stream").is_none_or(serde_json::Value::is_boolean) {
                 obj.insert("stream".to_string(), serde_json::Value::Bool(true));
             }
         }

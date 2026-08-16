@@ -32,13 +32,13 @@ pub enum UpstreamError {
 impl fmt::Display for UpstreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UpstreamError::Timeout(p) => write!(f, "upstream timeout in phase `{}`", p),
-            UpstreamError::Connection(m) => write!(f, "upstream connection error: {}", m),
-            UpstreamError::Tls(m) => write!(f, "upstream TLS error: {}", m),
+            UpstreamError::Timeout(p) => write!(f, "upstream timeout in phase `{p}`"),
+            UpstreamError::Connection(m) => write!(f, "upstream connection error: {m}"),
+            UpstreamError::Tls(m) => write!(f, "upstream TLS error: {m}"),
             UpstreamError::Cancel => f.write_str("upstream call cancelled"),
-            UpstreamError::Http(m) => write!(f, "upstream HTTP error: {}", m),
-            UpstreamError::Decode(m) => write!(f, "upstream decode error: {}", m),
-            UpstreamError::Invalid(m) => write!(f, "upstream invalid request: {}", m),
+            UpstreamError::Http(m) => write!(f, "upstream HTTP error: {m}"),
+            UpstreamError::Decode(m) => write!(f, "upstream decode error: {m}"),
+            UpstreamError::Invalid(m) => write!(f, "upstream invalid request: {m}"),
         }
     }
 }

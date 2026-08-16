@@ -1,4 +1,4 @@
-use super::*;
+use super::{AppState, ApiError, CoreError, AccountId, ProviderId, ProviderRefreshQuery, core_oauth};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -15,8 +15,7 @@ pub async fn oauth_authorize(
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
-                "provider '{}' does not support OAuth authorize",
-                provider
+                "provider '{provider}' does not support OAuth authorize"
             )))
         })?;
 
@@ -25,8 +24,7 @@ pub async fn oauth_authorize(
             && flow != openproxy_core::oauth::OAuthFlow::AuthorizationCode
         {
             return Err(ApiError(CoreError::Validation(format!(
-                "provider '{}' does not support authorization code flow",
-                provider
+                "provider '{provider}' does not support authorization code flow"
             ))));
         }
 
@@ -43,7 +41,7 @@ pub async fn oauth_authorize(
         // environment; a future breaking-change release could rename it
         // to `OPENPROXY_PORT`.
         let web_port = std::env::var("OPENPROXY_WEB_PORT").unwrap_or_else(|_| "8788".to_string());
-        let redirect_uri = format!("http://localhost:{}/admin/callback.html", web_port);
+        let redirect_uri = format!("http://localhost:{web_port}/admin/callback.html");
 
         let (auth_url, code_verifier, _, state) =
             provider_impl.build_auth_url(&redirect_uri).await?;
@@ -73,7 +71,7 @@ pub async fn oauth_exchange(
             .get("code_verifier")
             .and_then(|v| v.as_str())
             .unwrap_or(""); // Optional — not needed for device code flow
-        let account_id_input = input.get("account_id").and_then(|v| v.as_i64());
+        let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
         let redirect_uri = input
             .get("redirect_uri")
             .and_then(|v| v.as_str())
@@ -82,8 +80,7 @@ pub async fn oauth_exchange(
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
-                "provider '{}' does not support OAuth exchange",
-                provider
+                "provider '{provider}' does not support OAuth exchange"
             )))
         })?;
         let upstream_client = s.upstream_client();
@@ -182,8 +179,7 @@ pub async fn oauth_device_code(
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
-                "provider '{}' does not support device code authorization",
-                provider
+                "provider '{provider}' does not support device code authorization"
             )))
         })?;
 
@@ -227,7 +223,7 @@ pub async fn oauth_device_poll(
             .ok_or_else(|| CoreError::Validation("missing 'device_code'".into()))?;
         let account_id_input = input
             .get("account_id")
-            .and_then(|v| v.as_i64());
+            .and_then(serde_json::Value::as_i64);
 
         // LOW fix (#12): validate the ticket before any upstream
         // call. An expired, consumed, or unknown device_code is
@@ -246,13 +242,8 @@ pub async fn oauth_device_poll(
                             "device_code has expired; restart the OAuth flow".into(),
                         )))
                     }
-                    openproxy_core::oauth::tickets::TicketStatus::Consumed => {
-                        Err(ApiError(CoreError::NotFound {
-                            what: "oauth_device_ticket".into(),
-                            id: device_code.to_string(),
-                        }))
-                    }
-                    openproxy_core::oauth::tickets::TicketStatus::Unknown => {
+                    openproxy_core::oauth::tickets::TicketStatus::Consumed
+                    | openproxy_core::oauth::tickets::TicketStatus::Unknown => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
                             id: device_code.to_string(),
@@ -265,8 +256,7 @@ pub async fn oauth_device_poll(
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
-                "provider '{}' does not support device code polling",
-                provider
+                "provider '{provider}' does not support device code polling"
             )))
         })?;
 
@@ -402,7 +392,7 @@ pub async fn oauth_device_poll(
 }
 
 pub async fn oauth_callback(
-    Query(mut params): Query<std::collections::HashMap<String, String>>,
+    Query(mut params): Query<std::collections::BTreeMap<String, String>>,
 ) -> Json<serde_json::Value> {
     let code = params.remove("code").unwrap_or_default();
     let state = params.remove("state");

@@ -7,7 +7,7 @@ pub struct PipelineNext<'a> {
     next_index: usize,
 }
 
-impl<'a> PipelineNext<'a> {
+impl PipelineNext<'_> {
     pub async fn execute(self, ctx: &mut PipelineContext) -> Result<PipelineResult, CoreError> {
         self.chain.execute_stage(self.next_index, ctx).await
     }

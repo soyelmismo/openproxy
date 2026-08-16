@@ -150,24 +150,23 @@ async fn run_pipeline(
         });
 
     if is_stream {
-        return handle_streaming_response(
+        return Ok(handle_streaming_response(
             pipeline,
             prepared.req,
             prepared.done_tx,
             prepared.stream_rx,
-        )
-        .await;
+        ));
     }
 
     handle_sync_response(pipeline, prepared.req, prepared.done_tx).await
 }
 
-async fn handle_streaming_response(
+fn handle_streaming_response(
     pipeline: Pipeline,
     req: PipelineRequest,
     done_tx: tokio::sync::oneshot::Sender<()>,
     rx: tokio::sync::mpsc::Receiver<Bytes>,
-) -> Result<axum::response::Response, ApiError> {
+) -> axum::response::Response {
     let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
 
     tokio::spawn(async move {
@@ -195,14 +194,14 @@ async fn handle_streaming_response(
     };
 
     let body = axum::body::Body::from_stream(sse_stream);
-    Ok((
+    (
         [(
             axum::http::header::CONTENT_TYPE,
             "text/event-stream; charset=utf-8",
         )],
         body,
     )
-        .into_response())
+        .into_response()
 }
 
 async fn handle_sync_response(

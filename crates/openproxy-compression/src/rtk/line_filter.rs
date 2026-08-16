@@ -65,12 +65,12 @@ fn leak_string(s: String) -> &'static str {
 /// compile error is a programmer bug that should fail startup loudly.
 fn compile_re(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern)
-        .unwrap_or_else(|e| panic!("invalid filter pattern {:?}: {}", pattern, e))
+        .unwrap_or_else(|e| panic!("invalid filter pattern {pattern:?}: {e}"))
 }
 
 /// Pre-compute a rule name like `"git-status::strip_ansi"`.
 fn rule_name(id: &'static str, suffix: &'static str) -> &'static str {
-    leak_string(format!("{}::{}", id, suffix))
+    leak_string(format!("{id}::{suffix}"))
 }
 
 /// Build a `CompiledFilter` skeleton with all `rule_*` names pre-computed
@@ -594,7 +594,7 @@ fn truncate_unicode_safe(s: &str, max_chars: usize) -> String {
         return chars[..max_chars].iter().collect();
     }
     let prefix: String = chars[..max_chars - 3].iter().collect();
-    format!("{}...", prefix)
+    format!("{prefix}...")
 }
 
 #[cfg(test)]
@@ -693,7 +693,7 @@ mod tests {
             "generic-error",
         ];
         for id in ids {
-            assert!(BUILTIN_FILTERS.contains_key(id), "missing builtin: {}", id);
+            assert!(BUILTIN_FILTERS.contains_key(id), "missing builtin: {id}");
         }
     }
 

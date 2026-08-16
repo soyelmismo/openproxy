@@ -39,7 +39,7 @@ fn decrypt_with_wrong_key_fails() {
     // keep this resilient to internal error mapping changes.
     assert!(matches!(
         res,
-        Err(CoreError::Internal(_)) | Err(CoreError::Auth(_))
+        Err(CoreError::Internal(_) | CoreError::Auth(_))
     ));
 }
 

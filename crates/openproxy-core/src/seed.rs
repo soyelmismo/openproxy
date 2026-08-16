@@ -22,7 +22,7 @@ use rusqlite::{Connection, params};
 pub fn builtin_provider_ids() -> Vec<String> {
     openproxy_adapters::adapters::builtin_adapters()
         .iter()
-        .map(|a| a.config().id.0.to_owned())
+        .map(|a| a.config().id.0.clone())
         .collect()
 }
 
@@ -210,7 +210,7 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
                 ],
             )
             .map_err(|e| crate::error::CoreError::Database {
-                message: format!("backfill_model_metadata for {}: {}", model_id, e),
+                message: format!("backfill_model_metadata for {model_id}: {e}"),
                 source: Some(Box::new(e)),
             })?;
 
@@ -234,9 +234,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("openproxy-seed-test-{}-{}-{}", pid, nanos, n));
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("openproxy-seed-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("seed.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -274,7 +273,7 @@ mod tests {
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
-                .unwrap_or_else(|| panic!("{} not seeded", id));
+                .unwrap_or_else(|| panic!("{id} not seeded"));
             assert_eq!(p.id.as_str(), id);
         }
     }
@@ -407,7 +406,7 @@ mod tests {
     #[test]
     fn is_builtin_matches_list() {
         for id in builtin_provider_ids() {
-            assert!(is_builtin(&id), "{} should be marked built-in", id);
+            assert!(is_builtin(&id), "{id} should be marked built-in");
         }
         // A handful of negative cases: built-in predicate must not
         // match custom ids (the same string used by `create_provider`)
@@ -415,8 +414,7 @@ mod tests {
         for not_builtin in ["my-custom", "OpenRouter", "OPENROUTER", "openrouter-x", ""] {
             assert!(
                 !is_builtin(not_builtin),
-                "{} should NOT be marked built-in",
-                not_builtin
+                "{not_builtin} should NOT be marked built-in"
             );
         }
     }

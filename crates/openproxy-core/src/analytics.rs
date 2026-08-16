@@ -203,7 +203,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     let mut clauses: Vec<String> = Vec::new();
     if !w.sql.is_empty() {
         let bare = w.sql.trim_start_matches("WHERE ");
-        clauses.push(format!("({})", bare));
+        clauses.push(format!("({bare})"));
     }
     clauses.push("race_lost = 0".to_string());
     clauses.push("status_code < 400".to_string());
@@ -214,8 +214,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     write!(
         &mut sql,
         "SELECT connect_ms, ttft_ms, total_ms, tokens_per_sec \
-         FROM usage {}",
-        where_clause,
+         FROM usage {where_clause}",
     )
     .expect("writing to String never fails");
 
@@ -286,7 +285,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
 
 fn map_row_err(e: rusqlite::Error, column: &'static str) -> CoreError {
     CoreError::Database {
-        message: format!("read latency_percentiles column {}: {}", column, e),
+        message: format!("read latency_percentiles column {column}: {e}"),
         source: Some(Box::new(e)),
     }
 }
@@ -325,7 +324,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
             .replace("api_key_id", "usage.api_key_id")
             .replace("race_total", "usage.race_total")
             .replace("race_lost", "usage.race_lost");
-        clauses.push(format!("({})", qualified));
+        clauses.push(format!("({qualified})"));
     }
     clauses.push("usage.race_total > 1".to_string());
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
@@ -336,8 +335,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
         "SELECT usage.request_id, usage.race_lost, usage.combo_target_id, ct.priority_order \
          FROM usage \
          LEFT JOIN combo_targets AS ct ON ct.id = usage.combo_target_id \
-         {}",
-        where_clause,
+         {where_clause}",
     )
     .expect("writing to String never fails");
 
@@ -428,9 +426,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = base.join(format!("openproxy-analytics-test-{}-{}", pid, nanos));
+            .map_or(0, |d| d.as_nanos());
+        let dir = base.join(format!("openproxy-analytics-test-{pid}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir
     }
@@ -485,7 +482,7 @@ mod tests {
                 p.tokens_per_sec,
                 status,
                 race_total,
-                p.race_lost as i64,
+                i64::from(p.race_lost),
             ],
         )
         .expect("insert");
@@ -503,8 +500,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("req-{}", v),
-                    trace_id: &format!("trace-{}", v),
+                    request_id: &format!("req-{v}"),
+                    trace_id: &format!("trace-{v}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(v),
@@ -520,8 +517,8 @@ mod tests {
         // (200 centroids over 100 samples is overkill but spec-prescribed).
         let p50 = r.p50_connect_ms.expect("p50 connect present");
         let p95 = r.p95_connect_ms.expect("p95 connect present");
-        assert!((p50 - 49.5).abs() < 5.0, "p50 ≈ 49.5, got {}", p50);
-        assert!((p95 - 94.05).abs() < 5.0, "p95 ≈ 94.05, got {}", p95);
+        assert!((p50 - 49.5).abs() < 5.0, "p50 ≈ 49.5, got {p50}");
+        assert!((p95 - 94.05).abs() < 5.0, "p95 ≈ 94.05, got {p95}");
         // The other metrics were never populated in this fixture:
         //   - ttft_ms: column is nullable; we wrote NULL → no samples.
         //   - tokens_per_sec: column is nullable; we wrote NULL → no samples.
@@ -548,8 +545,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("w-{}", i),
-                    trace_id: &format!("wt-{}", i),
+                    request_id: &format!("w-{i}"),
+                    trace_id: &format!("wt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(1000 + i),
@@ -562,8 +559,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("l-{}", i),
-                    trace_id: &format!("lt-{}", i),
+                    request_id: &format!("l-{i}"),
+                    trace_id: &format!("lt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(i),
@@ -583,13 +580,11 @@ mod tests {
         // Winner distribution: 1000..=1009 → p50 ~1004.5, p95 ~1009.05.
         assert!(
             (p50 - 1004.5).abs() < 5.0,
-            "p50 should reflect winners (~1004.5), got {}",
-            p50
+            "p50 should reflect winners (~1004.5), got {p50}"
         );
         assert!(
             (p95 - 1009.05).abs() < 5.0,
-            "p95 should reflect winners (~1009.05), got {}",
-            p95
+            "p95 should reflect winners (~1009.05), got {p95}"
         );
     }
 
@@ -607,8 +602,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("n-{}", i),
-                    trace_id: &format!("nt-{}", i),
+                    request_id: &format!("n-{i}"),
+                    trace_id: &format!("nt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(50),
@@ -621,8 +616,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("v-{}", i),
-                    trace_id: &format!("vt-{}", i),
+                    request_id: &format!("v-{i}"),
+                    trace_id: &format!("vt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(50),
@@ -644,20 +639,17 @@ mod tests {
         let p95_ttft = r.p95_ttft_ms.expect("p95 ttft present");
         assert!(
             (p50_ttft - 200.0).abs() < 1.0,
-            "p50 ttft ≈ 200, got {}",
-            p50_ttft
+            "p50 ttft ≈ 200, got {p50_ttft}"
         );
         assert!(
             (p95_ttft - 200.0).abs() < 1.0,
-            "p95 ttft ≈ 200, got {}",
-            p95_ttft
+            "p95 ttft ≈ 200, got {p95_ttft}"
         );
         // tokens_per_sec has 5 samples (all 10.0).
         let p50_tps = r.p50_tokens_per_sec.expect("p50 tps present");
         assert!(
             (p50_tps - 10.0).abs() < 0.5,
-            "p50 tps ≈ 10, got {}",
-            p50_tps
+            "p50 tps ≈ 10, got {p50_tps}"
         );
     }
 
@@ -676,8 +668,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("ok-{}", i),
-                    trace_id: &format!("t-{}", i),
+                    request_id: &format!("ok-{i}"),
+                    trace_id: &format!("t-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(100 + i),
@@ -694,8 +686,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("err-{}", i),
-                    trace_id: &format!("et-{}", i),
+                    request_id: &format!("err-{i}"),
+                    trace_id: &format!("et-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(10000),
@@ -710,8 +702,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("disc-{}", i),
-                    trace_id: &format!("dt-{}", i),
+                    request_id: &format!("disc-{i}"),
+                    trace_id: &format!("dt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(5000),
@@ -731,13 +723,11 @@ mod tests {
         let p95 = r.p95_connect_ms.expect("p95 connect present");
         assert!(
             (p50 - 104.5).abs() < 5.0,
-            "p50 should reflect only successes (~104.5), got {}",
-            p50
+            "p50 should reflect only successes (~104.5), got {p50}"
         );
         assert!(
             (p95 - 109.05).abs() < 5.0,
-            "p95 should reflect only successes (~109.05), got {}",
-            p95
+            "p95 should reflect only successes (~109.05), got {p95}"
         );
         // If errors leaked through, p95 would be ~10000 — far outside tolerance.
     }
@@ -756,8 +746,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("r-{}", i),
-                    trace_id: &format!("wt-{}", i),
+                    request_id: &format!("r-{i}"),
+                    trace_id: &format!("wt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(50),
@@ -771,8 +761,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("r-{}", i),
-                    trace_id: &format!("lt-{}", i),
+                    request_id: &format!("r-{i}"),
+                    trace_id: &format!("lt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(60),
@@ -802,8 +792,8 @@ mod tests {
             insert(
                 &conn,
                 TestUsageParams {
-                    request_id: &format!("seq-{}", i),
-                    trace_id: &format!("seqt-{}", i),
+                    request_id: &format!("seq-{i}"),
+                    trace_id: &format!("seqt-{i}"),
                     provider: "openrouter",
                     model: "openai/gpt-4o",
                     connect_ms: Some(50),
@@ -1022,8 +1012,7 @@ mod tests {
         let avg = s.avg_winner_position.expect("avg_winner_position present");
         assert!(
             (avg - (40.0 / 3.0)).abs() < 1e-9,
-            "avg_winner_position = 40/3, got {}",
-            avg
+            "avg_winner_position = 40/3, got {avg}"
         );
 
         // MVP reserves this metric; we always return None.

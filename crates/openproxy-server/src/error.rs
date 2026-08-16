@@ -70,7 +70,10 @@ impl ApiError {
                     r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()
                 })
             }
-            _ => {
+            openproxy_types::TargetFormat::Openai
+            | openproxy_types::TargetFormat::Gemini
+            | openproxy_types::TargetFormat::Responses
+            | openproxy_types::TargetFormat::Atomesus => {
                 let error_json = serde_json::json!({
                     "error": {
                         "message": message,
@@ -89,7 +92,10 @@ impl ApiError {
             openproxy_types::TargetFormat::Anthropic => {
                 frame.extend_from_slice(b"event: error\ndata: ");
             }
-            _ => {
+            openproxy_types::TargetFormat::Openai
+            | openproxy_types::TargetFormat::Gemini
+            | openproxy_types::TargetFormat::Responses
+            | openproxy_types::TargetFormat::Atomesus => {
                 frame.extend_from_slice(b"data: ");
             }
         }

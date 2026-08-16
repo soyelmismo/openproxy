@@ -110,19 +110,21 @@ impl OAuthProvider for CodexOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("codex deviceauth: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("codex deviceauth: {other}")),
             })?;
 
         let status = response.status;
-        let body = response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let body = response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("codex deviceauth body: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("codex deviceauth body: {other}")),
         })?;
 
         if status.as_u16() == 404 {
@@ -139,14 +141,6 @@ impl OAuthProvider for CodexOAuthProvider {
                 body: String::from_utf8_lossy(&body).into(),
                 is_proxy_rotated: false,
             });
-        }
-
-        #[derive(Deserialize)]
-        struct UserCodeResp {
-            device_auth_id: String,
-            user_code: Option<String>,
-            usercode: Option<String>,
-            interval: Option<serde_json::Value>,
         }
 
         let resp: UserCodeResp = serde_json::from_slice(&body)
@@ -213,19 +207,21 @@ impl OAuthProvider for CodexOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("codex poll: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("codex poll: {other}")),
             })?;
 
         let status = response.status;
-        let body = response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let body = response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("codex poll body: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("codex poll body: {other}")),
         })?;
 
         if status.as_u16() == 403 || status.as_u16() == 404 {
@@ -240,12 +236,6 @@ impl OAuthProvider for CodexOAuthProvider {
                 body: String::from_utf8_lossy(&body).into(),
                 is_proxy_rotated: false,
             });
-        }
-
-        #[derive(Deserialize)]
-        struct PollResp {
-            authorization_code: String,
-            code_verifier: String,
         }
 
         let poll_resp: PollResp = serde_json::from_slice(&body)
@@ -269,19 +259,21 @@ impl OAuthProvider for CodexOAuthProvider {
         let token_response = upstream_client
             .call(token_req, TimeoutProfile::OAuth, CancellationToken::new())
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("codex exchange: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("codex exchange: {other}")),
             })?;
 
         let token_status = token_response.status;
-        let token_body_bytes = token_response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let token_body_bytes = token_response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("codex exchange body: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("codex exchange body: {other}")),
         })?;
 
         if !token_status.is_success() {
@@ -325,6 +317,20 @@ impl OAuthProvider for CodexOAuthProvider {
             .filter(|v| !v.is_empty())
             .map(ToString::to_string)
     }
+}
+
+#[derive(Deserialize)]
+struct UserCodeResp {
+    device_auth_id: String,
+    user_code: Option<String>,
+    usercode: Option<String>,
+    interval: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct PollResp {
+    authorization_code: String,
+    code_verifier: String,
 }
 
 fn extract_workspace_id(claims: &serde_json::Value) -> Option<String> {

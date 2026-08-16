@@ -12,7 +12,7 @@ fn benchmark_upsert(c: &mut Criterion) {
     for i in 0..500 {
         proxies.push(ScrapedProxy {
             source: "test".to_string(),
-            host: format!("127.0.0.{}", i),
+            host: format!("127.0.0.{i}"),
             port: 8080,
             r#type: "http".to_string(),
             country_code: Some("US".to_string()),
@@ -25,7 +25,7 @@ fn benchmark_upsert(c: &mut Criterion) {
     c.bench_function("upsert 500 proxies", |b| {
         b.iter(|| {
             upsert_scraped_proxies(&mut conn, &proxies).unwrap();
-        })
+        });
     });
 }
 

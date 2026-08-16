@@ -52,12 +52,12 @@ pub(crate) fn authenticate(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.trim())
+        .map(str::trim)
         .or_else(|| {
             headers
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.trim())
+                .map(str::trim)
         })
     else {
         // MEDIUM fix (audit finding #5): the previous behaviour
@@ -131,8 +131,7 @@ pub(crate) fn authenticate(
         && !allowed.iter().any(|m| m == requested_model)
     {
         return Err(ApiError(CoreError::Auth(format!(
-            "model '{}' not allowed for this key",
-            requested_model
+            "model '{requested_model}' not allowed for this key"
         ))));
     }
 
@@ -191,11 +190,10 @@ pub async fn auth_middleware(
                 return Ok(axum::response::IntoResponse::into_response(
                     axum::http::StatusCode::PAYLOAD_TOO_LARGE,
                 ));
-            } else {
-                return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
-                    err_str,
-                )));
             }
+            return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
+                err_str,
+            )));
         }
     };
 
@@ -261,7 +259,7 @@ pub async fn auth_middleware(
             if msg.role == "assistant" && !msg.extra.contains_key("reasoning_content") {
                 msg.extra.insert(
                     "reasoning_content".to_string(),
-                    serde_json::Value::String("".to_string()),
+                    serde_json::Value::String(String::new()),
                 );
             }
         }

@@ -23,9 +23,8 @@ fn tempdir() -> PathBuf {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = base.join(format!("openproxy-admin-test-{}-{}", pid, nanos));
+        .map_or(0, |d| d.as_nanos());
+    let dir = base.join(format!("openproxy-admin-test-{pid}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("mkdir");
     dir
 }
@@ -72,8 +71,7 @@ async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
         pool,
         std::sync::Arc::new(mk),
         adapters,
-    )
-    .await;
+    );
     (state, plaintext)
 }
 
@@ -115,7 +113,7 @@ async fn put_runtime_timeouts_writes_db_and_updates_slot() {
     let req = Request::builder()
         .method("PUT")
         .uri("/admin/config/timeouts")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .expect("build req");
@@ -195,7 +193,7 @@ async fn put_runtime_timeouts_malformed_body_returns_400() {
     let req = Request::builder()
         .method("PUT")
         .uri("/admin/config/timeouts")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .header("content-type", "application/json")
         // Missing `total_ms` — serde will reject.
         .body(Body::from(
@@ -293,9 +291,8 @@ async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
         let result = result.expect("authenticate_admin_ws should not panic");
         assert!(
             result.is_err(),
-            "OPENPROXY_DASHBOARD_AUTH_BYPASS={:?} must NOT bypass auth \
-                 (sentinel must be exactly \"1\")",
-            sentinel
+            "OPENPROXY_DASHBOARD_AUTH_BYPASS={sentinel:?} must NOT bypass auth \
+                 (sentinel must be exactly \"1\")"
         );
     }
 }
@@ -319,16 +316,14 @@ fn usage_filter_rejects_garbage_timestamp_with_400() {
     };
     let result = q.into_filter();
     let err = result.expect_err("garbage timestamp must be rejected");
-    let msg = format!("{:?}", err);
+    let msg = format!("{err:?}");
     assert!(
         msg.contains("from"),
-        "error must mention the bad field, got: {}",
-        msg
+        "error must mention the bad field, got: {msg}"
     );
     assert!(
         msg.contains("garbage"),
-        "error must include the bad value, got: {}",
-        msg
+        "error must include the bad value, got: {msg}"
     );
 }
 
@@ -350,11 +345,10 @@ fn usage_filter_accepts_rfc3339_and_canonicalises() {
     let f = q.into_filter().expect("RFC-3339 with offset is valid");
     let from = f.from.expect("from present");
     // The offset is normalised to UTC and the suffix is `Z`.
-    assert!(from.ends_with('Z'), "expected Z-suffix, got: {}", from);
+    assert!(from.ends_with('Z'), "expected Z-suffix, got: {from}");
     assert!(
         from.starts_with("2026-06-18T05:00:00"),
-        "expected 05:00 UTC, got: {}",
-        from
+        "expected 05:00 UTC, got: {from}"
     );
 }
 
@@ -394,11 +388,10 @@ fn usage_filter_rejects_from_after_to() {
     let err = q
         .into_filter()
         .expect_err("reversed range must be rejected");
-    let msg = format!("{:?}", err);
+    let msg = format!("{err:?}");
     assert!(
         msg.contains("must be <="),
-        "expected ordering error, got: {}",
-        msg
+        "expected ordering error, got: {msg}"
     );
 }
 
@@ -445,19 +438,16 @@ fn usage_filter_preset_this_month_resolves_to_month_bounds() {
     let to = f.to.expect("to is computed from preset");
     assert!(
         from.ends_with("T00:00:00Z"),
-        "from is midnight UTC: {}",
-        from
+        "from is midnight UTC: {from}"
     );
-    assert!(to.ends_with("T00:00:00Z"), "to is midnight UTC: {}", to);
+    assert!(to.ends_with("T00:00:00Z"), "to is midnight UTC: {to}");
     assert!(
         from.ends_with("-01T00:00:00Z"),
-        "from is the 1st of the month: {}",
-        from
+        "from is the 1st of the month: {from}"
     );
     assert!(
         to.ends_with("-01T00:00:00Z"),
-        "to is the 1st of the month: {}",
-        to
+        "to is the 1st of the month: {to}"
     );
     assert!(from < to, "from must be before to");
 }
@@ -484,13 +474,11 @@ fn usage_filter_preset_overrides_explicit_from_to() {
     // did not take precedence — assert it is not 2000.
     assert!(
         !from.starts_with("2000-"),
-        "preset must override explicit from: {}",
-        from
+        "preset must override explicit from: {from}"
     );
     assert!(
         from.starts_with("20"),
-        "from is a recent-ish year: {}",
-        from
+        "from is a recent-ish year: {from}"
     );
 }
 
@@ -530,16 +518,14 @@ fn usage_filter_preset_unknown_string_returns_400() {
     let err = q
         .into_filter()
         .expect_err("unknown preset must be rejected");
-    let msg = format!("{:?}", err);
+    let msg = format!("{err:?}");
     assert!(
         msg.contains("preset"),
-        "error must mention preset, got: {}",
-        msg
+        "error must mention preset, got: {msg}"
     );
     assert!(
         msg.contains("last_week"),
-        "error must include the bad value, got: {}",
-        msg
+        "error must include the bad value, got: {msg}"
     );
 }
 
@@ -565,8 +551,7 @@ async fn body_limit_accepts_10_mib_chat_body() {
     let app = crate::router::build_router(state);
     let big = "x".repeat(10 * 1024 * 1024);
     let body_json = format!(
-        r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{}"}}]}}"#,
-        big
+        r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{big}"}}]}}"#
     );
     let mut req = Request::builder()
         .method("POST")
@@ -597,8 +582,7 @@ async fn body_limit_rejects_100_mib_chat_body() {
     let app = crate::router::build_router(state);
     let big = "x".repeat(100 * 1024 * 1024);
     let body_json = format!(
-        r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{}"}}]}}"#,
-        big
+        r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{big}"}}]}}"#
     );
     let mut req = Request::builder()
         .method("POST")
@@ -718,7 +702,7 @@ async fn get_recording_ttl_returns_default_value() {
     let req = Request::builder()
         .method("GET")
         .uri("/admin/config/recording-ttl")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .body(Body::empty())
         .expect("build req");
 
@@ -751,7 +735,7 @@ async fn put_recording_ttl_persists_new_value() {
     let req = Request::builder()
         .method("PUT")
         .uri("/admin/config/recording-ttl")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .expect("build req");
@@ -807,7 +791,7 @@ async fn put_recording_ttl_rejects_negative_value() {
     let req = Request::builder()
         .method("PUT")
         .uri("/admin/config/recording-ttl")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .expect("build req");
@@ -816,8 +800,7 @@ async fn put_recording_ttl_rejects_negative_value() {
     let status = resp.status();
     assert!(
         status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
-        "expected 400 or 422 for negative TTL, got {:?}",
-        status
+        "expected 400 or 422 for negative TTL, got {status:?}"
     );
 
     // In-memory slot must NOT have changed.
@@ -843,7 +826,7 @@ async fn put_recording_ttl_rejects_missing_field() {
     let req = Request::builder()
         .method("PUT")
         .uri("/admin/config/recording-ttl")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .header("content-type", "application/json")
         .body(Body::from(r#"{"foo":"bar"}"#))
         .expect("build req");
@@ -852,8 +835,7 @@ async fn put_recording_ttl_rejects_missing_field() {
     let status = resp.status();
     assert!(
         status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
-        "expected 400 or 422 for missing required field, got {:?}",
-        status
+        "expected 400 or 422 for missing required field, got {status:?}"
     );
 
     // In-memory slot must NOT have changed.
@@ -877,17 +859,16 @@ async fn put_recording_ttl_rejects_invalid_json_syntax() {
     let req = Request::builder()
         .method("PUT")
         .uri("/admin/config/recording-ttl")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .header("content-type", "application/json")
-        .body(Body::from(r#"{invalid"#))
+        .body(Body::from(r"{invalid"))
         .expect("build req");
 
     let resp = app.oneshot(req).await.expect("oneshot");
     let status = resp.status();
     assert!(
         status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
-        "expected 400 or 422 for invalid JSON syntax, got {:?}",
-        status
+        "expected 400 or 422 for invalid JSON syntax, got {status:?}"
     );
 
     assert_eq!(
@@ -996,8 +977,8 @@ async fn refresh_account_quota_unsupported_provider_responds_fast() {
 
     let req = Request::builder()
         .method("POST")
-        .uri(format!("/admin/accounts/{}/refresh-quota", account_id))
-        .header("authorization", format!("Bearer {}", plaintext))
+        .uri(format!("/admin/accounts/{account_id}/refresh-quota"))
+        .header("authorization", format!("Bearer {plaintext}"))
         .body(Body::empty())
         .expect("build req");
 
@@ -1034,7 +1015,7 @@ async fn refresh_provider_models_unknown_provider_responds_fast() {
     let req = Request::builder()
         .method("POST")
         .uri("/admin/providers/nonexistent-provider/refresh")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .body(Body::empty())
         .expect("build req");
 
@@ -1072,7 +1053,7 @@ async fn refresh_account_quota_nonexistent_account_responds_fast() {
     let req = Request::builder()
         .method("POST")
         .uri("/admin/accounts/99999/refresh-quota")
-        .header("authorization", format!("Bearer {}", plaintext))
+        .header("authorization", format!("Bearer {plaintext}"))
         .body(Body::empty())
         .expect("build req");
 

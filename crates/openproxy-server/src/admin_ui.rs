@@ -203,7 +203,7 @@ pub async fn serve_i18n(lang: Path<String>) -> Response {
         )
             .into_response();
     }
-    let filename = format!("{}.json", lang);
+    let filename = format!("{lang}.json");
     let Some(file) = I18nAssets::get(&filename) else {
         return (
             StatusCode::NOT_FOUND,

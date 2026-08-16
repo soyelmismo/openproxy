@@ -24,7 +24,7 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
     let tps = match (input.completion_tokens, input.ttft_ms) {
         (Some(c), Some(ttft)) if c > 0 && input.total_ms > ttft && input.status_code < 400 => {
             let denom = (input.total_ms - ttft) as f64;
-            Some(c as f64 * 1000.0 / denom)
+            Some(f64::from(c) * 1000.0 / denom)
         }
         _ => None,
     };
@@ -123,26 +123,26 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         params![
             request_id,
             trace_id,
-            input.attempt as i64,
+            i64::from(input.attempt),
             input.provider_id.as_str(),
             input.account_id.map(|a| a.0),
             input.combo_id.map(|c| c.0),
             input.model_row_id.map(|m| m.0),
             input.upstream_model_id,
             input.combo_target_id.map(|c| c.0),
-            input.prompt_tokens.map(|p| p as i64),
-            input.completion_tokens.map(|c| c as i64),
+            input.prompt_tokens.map(i64::from),
+            input.completion_tokens.map(i64::from),
             cost_usd,
             input.connect_ms.map(|c| c as i64),
             input.ttft_ms.map(|t| t as i64),
             input.total_ms as i64,
             tps,
-            input.status_code as i64,
+            i64::from(input.status_code),
             error_msg_for_db,
             error_msg_redacted_for_db,
-            input.race_total as i64,
-            input.race_attempts as i64,
-            input.race_lost as i64,
+            i64::from(input.race_total),
+            i64::from(input.race_attempts),
+            i64::from(input.race_lost),
             input.api_key_id.map(|k| k.0),
             input
                 .request_body_json
@@ -171,18 +171,18 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             // body (which can contain internal IPs, debug stacks, and
             // PII echoed back by misbehaving upstreams).
             error_msg_redacted_for_db.as_deref(),
-            input.is_streaming as i64,
-            input.stream_complete as i64,
+            i64::from(input.is_streaming),
+            i64::from(input.stream_complete),
             input.stop_reason,
             input.compression_savings_pct,
             input.compression_techniques,
-            input.client_response as i64,
-            input.prompt_tokens_estimated as i64,
-            input.completion_tokens_estimated as i64,
+            i64::from(input.client_response),
+            i64::from(input.prompt_tokens_estimated),
+            i64::from(input.completion_tokens_estimated),
             input.endpoint_kind.as_str(),
             input.proxy_url,
             input.proxy_status,
-            input.is_proxy_rotated as i64,
+            i64::from(input.is_proxy_rotated),
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;

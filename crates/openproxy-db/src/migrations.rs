@@ -5,6 +5,7 @@
 //! numeric prefix of the filename. The runner is idempotent: a second
 //! invocation against an already-migrated DB applies zero new versions.
 
+use std::fmt::Write;
 use openproxy_types::{CoreError, Result};
 use rusqlite::Connection;
 
@@ -331,7 +332,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         conn.execute_batch("PRAGMA foreign_keys = OFF")
             .map_err(|e| CoreError::Migration {
                 version: 0,
-                message: format!("PRAGMA foreign_keys = OFF: {}", e),
+                message: format!("PRAGMA foreign_keys = OFF: {e}"),
             })?;
     }
 
@@ -339,7 +340,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| CoreError::Migration {
             version: 0,
-            message: format!("begin tx: {}", e),
+            message: format!("begin tx: {e}"),
         })?;
 
     let mut insert_sql = String::with_capacity(1024);
@@ -355,7 +356,6 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         if !first {
             insert_sql.push(',');
         }
-        use std::fmt::Write;
         write!(&mut insert_sql, "({})", m.version).expect("write to string failed");
         first = false;
     }
@@ -366,13 +366,13 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         tx.execute_batch(&insert_sql)
             .map_err(|e| CoreError::Migration {
                 version: 0,
-                message: format!("insert into schema_migrations: {}", e),
+                message: format!("insert into schema_migrations: {e}"),
             })?;
     }
 
     tx.commit().map_err(|e| CoreError::Migration {
         version: 0,
-        message: format!("commit: {}", e),
+        message: format!("commit: {e}"),
     })?;
 
     let _ = crate::cost::backfill_usage_pricing(conn);
@@ -381,7 +381,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         conn.execute_batch("PRAGMA foreign_keys = ON")
             .map_err(|e| CoreError::Migration {
                 version: 0,
-                message: format!("PRAGMA foreign_keys = ON: {}", e),
+                message: format!("PRAGMA foreign_keys = ON: {e}"),
             })?;
     }
 
@@ -427,9 +427,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = base.join(format!("openproxy-mig-test-{}-{}", pid, nanos));
+            .map_or(0, |d| d.as_nanos());
+        let dir = base.join(format!("openproxy-mig-test-{pid}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir
     }
@@ -468,7 +467,7 @@ mod tests {
                     |r| r.get(0),
                 )
                 .expect("sqlite_master");
-            assert_eq!(present, 1, "table {} missing", table);
+            assert_eq!(present, 1, "table {table} missing");
         }
     }
 

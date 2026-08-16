@@ -287,13 +287,13 @@ impl CooldownMode {
             "flat" => Ok(Self::Flat),
             "exponential" => Ok(Self::Exponential),
             "none" | "disabled" | "off" => Ok(Self::None),
-            other => Err(format!("invalid cooldown_mode: {}", other)),
+            other => Err(format!("invalid cooldown_mode: {other}")),
         }
     }
     pub fn from_db(s: Option<&str>) -> Self {
         match s {
             Some("exponential") => Self::Exponential,
-            Some("none") | Some("disabled") | Some("off") => Self::None,
+            Some("none" | "disabled" | "off") => Self::None,
             _ => Self::Flat,
         }
     }

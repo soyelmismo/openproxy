@@ -1,4 +1,4 @@
-use super::*;
+use super::{AppState, core_api_keys, ApiError, ApiKeyId, CoreError, core_usage, UsageFilter};
 use axum::{
     Json,
     extract::{Path, State},
@@ -70,13 +70,13 @@ pub async fn update_api_key(
             None
         } else {
             v.as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+                .map(|a| a.iter().filter_map(serde_json::Value::as_i64).collect())
         }
     });
     let allowed_combos_slice: Option<Option<&[i64]>> =
         allowed_combos_owned.as_ref().map(|o| o.as_deref());
 
-    let is_active = body.get("is_active").and_then(|v| v.as_bool());
+    let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
     let expires_owned: Option<Option<String>> =
         body.get("expires_at").map(|v| v.as_str().map(String::from));

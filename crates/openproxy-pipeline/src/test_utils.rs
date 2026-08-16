@@ -1,7 +1,7 @@
 pub use openproxy_adapters::MockAdapter;
 use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
 pub mod combos {
-    use super::*;
+    use super::{ComboId, ProviderId, ModelRowId, AccountId, Connection};
     pub use openproxy_types::combos::Strategy;
 
     pub struct AddTargetInput {
@@ -21,7 +21,7 @@ pub mod combos {
     ) -> Result<ComboId, openproxy_types::error::CoreError> {
         conn.execute(
             "INSERT INTO combos(name, strategy, race_size) VALUES (?1, ?2, ?3)",
-            rusqlite::params![name, strategy.as_str(), race_size as i64],
+            rusqlite::params![name, strategy.as_str(), i64::from(race_size)],
         )
         .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         let id: i64 = conn
@@ -85,9 +85,8 @@ pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("openproxy-pipeline-test-{}-{}-{}", pid, nanos, n));
+        .map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("openproxy-pipeline-test-{pid}-{nanos}-{n}"));
     std::fs::create_dir_all(&dir).expect("mkdir tempdir");
     let path = dir.join("pipeline.db");
     let pool = DbPool::open(&path).expect("open pool");
@@ -406,7 +405,7 @@ pub fn seed_target_with_account(
             provider_id: ProviderId::new(provider_id),
             model_row_id: Some(model_rowid),
             account_id: Some(account_id),
-            priority_order: priority as i64,
+            priority_order: i64::from(priority),
             sub_combo_id: None,
         },
     )

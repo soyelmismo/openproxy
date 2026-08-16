@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, upstream_get_json, ModelId, TargetFormat};
 
 // =====================================================================
 // Ollama Cloud

@@ -1,4 +1,4 @@
-use super::*;
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, fetch_models_with_auth};
 
 // =====================================================================
 // Gemini (Google AI Studio)
@@ -82,9 +82,7 @@ impl ProviderAdapter for GeminiAdapter {
                 let id = full_name.strip_prefix("models/").unwrap_or(full_name);
                 let display_name = m
                     .get("displayName")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| id.to_string());
+                    .and_then(|v| v.as_str()).map_or_else(|| id.to_string(), std::string::ToString::to_string);
                 Some(DiscoveredModel {
                     model_id: ModelId::new(id.to_string()),
                     display_name: Some(display_name),
@@ -113,7 +111,7 @@ impl ProviderAdapter for GeminiAdapter {
         let gemini_req = openai_to_gemini(req, messages);
         serde_json::to_vec(&gemini_req)
             .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Parse(format!("serialize gemini request: {}", e)))
+            .map_err(|e| CoreError::Parse(format!("serialize gemini request: {e}")))
     }
 
     fn translate_non_streaming_response(
@@ -240,7 +238,7 @@ pub fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<Gemini
     })
 }
 
-fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<GeminiPart> {
+fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<GeminiPart> {
     match content {
         Some(serde_json::Value::Array(parts)) => parts
             .iter()
@@ -261,16 +259,12 @@ fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<G
             text: Some(s.clone()),
             ..Default::default()
         }],
-        Some(serde_json::Value::Null) => vec![GeminiPart {
+        Some(serde_json::Value::Null) | None => vec![GeminiPart {
             text: Some(String::new()),
             ..Default::default()
         }],
         Some(value) => vec![GeminiPart {
             text: Some(value.to_string()),
-            ..Default::default()
-        }],
-        None => vec![GeminiPart {
-            text: Some(String::new()),
             ..Default::default()
         }],
     }
@@ -289,13 +283,13 @@ pub fn openai_to_gemini(
             "user" => {
                 contents.push(GeminiContent {
                     role: "user".to_string(),
-                    parts: message_content_to_gemini_parts(&m.content),
+                    parts: message_content_to_gemini_parts(m.content.as_ref()),
                 });
             }
             "assistant" => {
                 contents.push(GeminiContent {
                     role: "model".to_string(),
-                    parts: message_content_to_gemini_parts(&m.content),
+                    parts: message_content_to_gemini_parts(m.content.as_ref()),
                 });
             }
             _ => {}
@@ -354,7 +348,6 @@ pub fn openai_to_gemini(
 
 fn map_gemini_finish_reason(reason: &str) -> String {
     match reason {
-        "STOP" => "stop".to_string(),
         "MAX_TOKENS" => "length".to_string(),
         "SAFETY" | "RECITATION" | "BLOCKLIST" => "content_filter".to_string(),
         _ => "stop".to_string(),
@@ -495,7 +488,7 @@ mod tests {
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
-                extra: Default::default(),
+                extra: serde_json::Map::default(),
             },
             openproxy_types::OpenAIMessage {
                 role: "user".to_string(),
@@ -503,7 +496,7 @@ mod tests {
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
-                extra: Default::default(),
+                extra: serde_json::Map::default(),
             },
             openproxy_types::OpenAIMessage {
                 role: "assistant".to_string(),
@@ -514,7 +507,7 @@ mod tests {
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
-                extra: Default::default(),
+                extra: serde_json::Map::default(),
             },
         ];
 

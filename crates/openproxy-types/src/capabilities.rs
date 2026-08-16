@@ -51,9 +51,6 @@ impl ModelCapabilities {
 }
 
 pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
-    let lower = model_id.to_lowercase();
-    let mut caps = ModelCapabilities::empty();
-
     const VISION_KW: &[&str] = &[
         "gpt-4o",
         "gpt-4-vision",
@@ -68,10 +65,6 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
         "multimodal",
         "kimi",
     ];
-    if VISION_KW.iter().any(|k| lower.contains(k)) {
-        caps.vision = Some(true);
-    }
-
     const REASONING_KW: &[&str] = &[
         "o1",
         "o3",
@@ -82,6 +75,14 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
         "think",
         "opus-4",
     ];
+
+    let lower = model_id.to_lowercase();
+    let mut caps = ModelCapabilities::empty();
+
+    if VISION_KW.iter().any(|k| lower.contains(k)) {
+        caps.vision = Some(true);
+    }
+
     if REASONING_KW.iter().any(|k| lower.contains(k)) {
         caps.reasoning = Some(true);
         caps.thinking = Some(true);
@@ -111,8 +112,6 @@ pub fn infer_output_modalities() -> Vec<&'static str> {
 }
 
 pub fn infer_context_length(model_id: &str) -> Option<i64> {
-    let lower = model_id.to_lowercase();
-
     const KNOWN: &[(&str, i64)] = &[
         ("claude-3", 200_000),
         ("claude-sonnet-4", 200_000),
@@ -139,6 +138,8 @@ pub fn infer_context_length(model_id: &str) -> Option<i64> {
         ("mistral-large", 128_000),
     ];
 
+    let lower = model_id.to_lowercase();
+
     for (k, v) in KNOWN {
         if lower.contains(k) {
             return Some(*v);
@@ -148,8 +149,6 @@ pub fn infer_context_length(model_id: &str) -> Option<i64> {
 }
 
 pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
-    let lower = model_id.to_lowercase();
-
     const KNOWN: &[(&str, i64)] = &[
         ("claude-3", 8_192),
         ("claude-sonnet-4", 8_192),
@@ -160,6 +159,8 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
         ("gemini-2.5", 65_536),
         ("deepseek", 8_192),
     ];
+
+    let lower = model_id.to_lowercase();
 
     for (k, v) in KNOWN {
         if lower.contains(k) {
@@ -200,7 +201,6 @@ pub fn infer_output_modalities_json(model_id: &str) -> String {
 }
 
 pub fn infer_family(model_id: &str) -> Option<String> {
-    let lower = model_id.to_lowercase();
     const FAMILIES: &[&str] = &[
         "gpt-4o",
         "gpt-4",
@@ -229,6 +229,8 @@ pub fn infer_family(model_id: &str) -> Option<String> {
         "command-r",
         "cogito",
     ];
+
+    let lower = model_id.to_lowercase();
     for f in FAMILIES {
         if lower.contains(f) {
             return Some((*f).to_string());

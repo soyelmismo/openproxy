@@ -11,7 +11,7 @@ pub struct SyncDiff<'a> {
     pub existing_rows: Vec<(String, i64, Option<String>)>,
 }
 
-impl<'a> SyncDiff<'a> {
+impl SyncDiff<'_> {
     pub fn deleted_models(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
         self.existing_rows
             .iter()
@@ -114,7 +114,7 @@ pub fn execute_sync_transaction(
             .map_err(openproxy_db::error::map_db_error)?;
 
         for d in discovered {
-            let caps_json = d.capabilities.as_ref().and_then(|c| c.to_json());
+            let caps_json = d.capabilities.as_ref().and_then(openproxy_types::ModelCapabilities::to_json);
             let input_mods_json = d
                 .input_modalities
                 .as_ref()

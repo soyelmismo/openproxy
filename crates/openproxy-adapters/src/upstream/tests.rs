@@ -19,6 +19,7 @@
 
 use std::time::Duration;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use http::StatusCode;
@@ -132,18 +133,12 @@ async fn phase_timeout_tls() {
         .await;
     let _elapsed = t0.elapsed();
     assert!(res.is_err(), "expected error, got {res:?}");
-    match res.unwrap_err() {
-        // The phased connector should report the stalled phase
-        // (Dns or Dial). NOT Headers (the pre-fix soft-accumulation
-        // attribution).
-        UpstreamError::Timeout(UpstreamPhase::Dns)
-        | UpstreamError::Timeout(UpstreamPhase::Dial)
-        | UpstreamError::Timeout(UpstreamPhase::Write) => {}
-        // On some CI environments the DNS resolution may be cached
-        // and the dial will time out instead. Both are valid
-        // per-phase attributions.
-        other => panic!("expected Timeout(Dns|Dial|Write), got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(
+            UpstreamPhase::Dns | UpstreamPhase::Dial | UpstreamPhase::Write
+        )
+    ));
     // Sanity: the error fired within the per-phase window, not
     // after a 5s default. The dial timeout of 10ms is the
     // tightest ceiling here, so we should see at most ~500ms
@@ -172,7 +167,6 @@ async fn spawn_chunked_slow_server() -> std::net::SocketAddr {
         if let Ok((mut tcp, _peer)) = listener.accept().await {
             // Read the request until end of headers (\r\n\r\n).
             let mut buf = vec![0u8; 4096];
-            use tokio::io::AsyncReadExt;
             let _ = tcp.read(&mut buf).await;
 
             // Write a chunked response: 200 OK, then a single chunk
@@ -183,11 +177,10 @@ async fn spawn_chunked_slow_server() -> std::net::SocketAddr {
                         content-type: text/plain\r\n\
                         transfer-encoding: chunked\r\n\r\n\
                         5\r\nhello\r\n";
-            use tokio::io::AsyncWriteExt;
             let _ = tcp.write_all(body.as_bytes()).await;
             let _ = tcp.flush().await;
             // Sleep forever — the test cancels us.
-            tokio::time::sleep(Duration::from_secs(300)).await;
+            tokio::time::sleep(Duration::from_mins(5)).await;
         }
     });
     addr
@@ -217,10 +210,7 @@ async fn cancel_mid_body() {
     cancel.cancel();
     let res = resp.body.next_chunk().await;
     assert!(res.is_err(), "expected cancel error, got {res:?}");
-    match res.unwrap_err() {
-        UpstreamError::Cancel => {}
-        other => panic!("expected Cancel, got {other:?}"),
-    }
+    assert!(matches!(res.unwrap_err(), UpstreamError::Cancel));
 }
 
 // -----------------------------------------------------------------------
@@ -234,7 +224,6 @@ async fn spawn_echo_server() -> std::net::SocketAddr {
         loop {
             if let Ok((mut tcp, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     // Read until end of headers; ignore body.
                     let mut buf = [0u8; 4096];
                     let _ = tcp.read(&mut buf).await;
@@ -324,7 +313,6 @@ async fn spawn_two_chunk_slow_server() -> std::net::SocketAddr {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         if let Ok((mut tcp, _peer)) = listener.accept().await {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut buf = vec![0u8; 4096];
             let _ = tcp.read(&mut buf).await;
 
@@ -417,10 +405,10 @@ async fn phase_timeout_body_chunk_gap() {
     let gap_elapsed = t_before_second.elapsed();
 
     assert!(res.is_err(), "expected error on second chunk, got {res:?}");
-    match res.unwrap_err() {
-        UpstreamError::Timeout(UpstreamPhase::Body) => {}
-        other => panic!("expected Timeout(Body), got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Body)
+    ));
 
     // The gap from the moment we asked for the second chunk to the
     // timeout should be ~1000ms (1s body_chunk_ms budget). We allow
@@ -433,7 +421,7 @@ async fn phase_timeout_body_chunk_gap() {
          was likely applied as an absolute deadline (bug 2a not fixed)"
     );
     assert!(
-        gap_elapsed < Duration::from_millis(4_000),
+        gap_elapsed < Duration::from_secs(4),
         "gap_elapsed = {gap_elapsed:?} is too long — the gap timer is \
          not enforcing body_chunk_ms at all"
     );
@@ -473,7 +461,6 @@ async fn spawn_stub_then_silent_server() -> std::net::SocketAddr {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         if let Ok((mut tcp, _peer)) = listener.accept().await {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut buf = vec![0u8; 4096];
             let _ = tcp.read(&mut buf).await;
 
@@ -556,16 +543,10 @@ async fn stub_event_does_not_start_chunk_gap_timer() {
     let elapsed = t.elapsed();
 
     assert!(res.is_err(), "expected error on 2nd chunk, got {res:?}");
-    match res.unwrap_err() {
-        // Since `note_content_chunk()` was never called, `last_chunk_at`
-        // is None, so the body stream returns `Timeout(Total)` (the
-        // total_deadline fired), NOT `Timeout(Body)` (the chunk-gap
-        // timer). This distinction is critical for the pipeline's error
-        // labeling: `Timeout(Total)` → "total" phase, `Timeout(Body)`
-        // → "idle_chunk" phase.
-        UpstreamError::Timeout(UpstreamPhase::Total) => {}
-        other => panic!("expected Timeout(Total), got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Total)
+    ));
     // MUST be >= 1.5s — i.e. the chunk-gap timer (500ms) did NOT
     // fire. If this fails with elapsed ~500ms, the stub event
     // incorrectly started the chunk-gap timer (regression of the
@@ -653,13 +634,10 @@ async fn phase_timeout_write_accumulates() {
         .await;
     let elapsed = t0.elapsed();
     assert!(res.is_err(), "expected error, got {res:?}");
-    match res.unwrap_err() {
-        // The OUTER `write_ms` ceiling fires at ~200ms. The
-        // pre-fix version would have produced `Timeout(Headers)`
-        // (the soft-accumulation attribution).
-        UpstreamError::Timeout(UpstreamPhase::Write) => {}
-        other => panic!("expected Timeout(Write), got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Write)
+    ));
     // Lower bound: must wait at least ~write_ms.
     assert!(
         elapsed >= Duration::from_millis(150),
@@ -667,10 +645,10 @@ async fn phase_timeout_write_accumulates() {
     );
     // Upper bound: must fire well before headers_ms.
     assert!(
-        elapsed < Duration::from_millis(2_000),
+        elapsed < Duration::from_secs(2),
         "elapsed = {elapsed:?}: write_ms was NOT enforced as the \
-         OUTER per-phase ceiling; the race used the full \
-         headers_ms=5000ms budget (soft-accumulation regression)"
+          OUTER per-phase ceiling; the race used the full \
+          headers_ms=5000ms budget (soft-accumulation regression)"
     );
 }
 
@@ -686,7 +664,6 @@ async fn spawn_silent_server() -> std::net::SocketAddr {
         loop {
             if let Ok((mut tcp, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    use tokio::io::AsyncReadExt;
                     // Read the request (just drain it).
                     let mut buf = [0u8; 4096];
                     let _ = tcp.read(&mut buf).await;
@@ -741,14 +718,10 @@ async fn phase_timeout_dial_real() {
         .call(UpstreamRequest::get("http://192.0.2.1/"), profile, cancel)
         .await;
     let _elapsed = t0.elapsed();
-    assert!(res.is_err(), "expected error, got {res:?}");
-    match res.unwrap_err() {
-        // The connector reported `Dial` as the stalled phase. NOT
-        // `Headers` (the pre-fix soft-accumulation attribution).
-        UpstreamError::Timeout(UpstreamPhase::Dial)
-        | UpstreamError::Timeout(UpstreamPhase::Write) => {}
-        other => panic!("expected Timeout(Dial|Write), got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Dial | UpstreamPhase::Write)
+    ));
     // Sanity: the dial timeout fired at ~50ms, not the headers
     // budget (~5000ms) — proving the connector's internal
     // `tokio::time::timeout` is the dominant ceiling.
@@ -826,17 +799,10 @@ async fn adversarial_phase_timeout_dns_actually_fires_at_dns_ms_not_total() {
     // a >5s wait that would suggest the per-phase DNS budget
     // was NOT honored.
     if let Err(e) = &res {
-        match e {
-            UpstreamError::Timeout(UpstreamPhase::Dns) => {}
-            UpstreamError::Connection(msg)
-                if msg.contains("failed to lookup address information")
-                    || msg.contains("Name or service not known") => {}
-            other => panic!(
-                "expected Timeout(Dns) or quick DNS failure, got {other:?} — the DNS phase \
-                 budget (1ms) was not honored; either dns_ms was \
-                 ignored or the error was attributed to a later phase"
-            ),
-        }
+        assert!(
+            matches!(e, UpstreamError::Timeout(UpstreamPhase::Dns))
+                || matches!(e, UpstreamError::Connection(msg) if msg.contains("failed to lookup address information") || msg.contains("Name or service not known"))
+        );
     }
     // Upper bound: must fire well before the total_ms budget,
     // regardless of whether the resolver beat the dns_ms timer.
@@ -922,7 +888,6 @@ async fn spawn_four_chunk_slow_server() -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         if let Ok((mut tcp, _peer)) = listener.accept().await {
             let mut buf = vec![0u8; 4096];
             let _ = tcp.read(&mut buf).await;
@@ -1011,10 +976,10 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
     let res = resp.body.next_chunk().await;
     let elapsed = t_before_4th.elapsed();
     assert!(res.is_err(), "expected error on 4th chunk, got {res:?}");
-    match res.unwrap_err() {
-        UpstreamError::Timeout(UpstreamPhase::Body) => {}
-        other => panic!("expected Timeout(Body) on 4th chunk, got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Body)
+    ));
     // Post-fix: the gap timer is anchored at chunk3 (~600ms after
     // start), so the 4th-chunk read should fire at ~600+1000=1600ms.
     // Pre-fix: anchored at start, would fire at ~0+1000=1000ms.
@@ -1044,7 +1009,6 @@ async fn spawn_slow_body_server() -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         if let Ok((mut tcp, _peer)) = listener.accept().await {
             let mut buf = vec![0u8; 4096];
             let _ = tcp.read(&mut buf).await;
@@ -1114,18 +1078,10 @@ async fn adversarial_phase_timeout_body_chunk_not_attributed_to_write() {
     let res = resp.body.next_chunk().await;
     let elapsed = t.elapsed();
     assert!(res.is_err(), "expected error on 2nd chunk, got {res:?}");
-    match res.unwrap_err() {
-        // Post-fix: the body chunk gap timer fires with
-        // Timeout(Body). Pre-fix: the outer write_sleep race
-        // would have produced Timeout(Write) (the body gap
-        // wasn't checked because the outer ceiling dominated).
-        UpstreamError::Timeout(UpstreamPhase::Body) => {}
-        other => panic!(
-            "expected Timeout(Body), got {other:?} — the body chunk \
-             gap timer did not fire; the outer write_ms=5_000 race \
-             dominated (soft-accumulation regression)"
-        ),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Body)
+    ));
     // Sanity: fired within body_chunk_ms, not write_ms.
     assert!(
         elapsed < Duration::from_secs(2),
@@ -1161,7 +1117,6 @@ async fn spawn_silent_http_server() -> std::net::SocketAddr {
         if let Ok((mut tcp, _peer)) = listener.accept().await {
             // Read the request so the kernel doesn't send RST.
             let mut buf = vec![0u8; 4096];
-            use tokio::io::AsyncReadExt;
             let _ = tcp.read(&mut buf).await;
             // Hold the connection open without ever sending a
             // response. The client's `headers_ms` timeout must fire.
@@ -1199,10 +1154,10 @@ async fn headers_timeout_fires_on_silent_http_server() {
     let elapsed = t0.elapsed();
 
     assert!(res.is_err(), "expected error, got {res:?}");
-    match res.unwrap_err() {
-        UpstreamError::Timeout(UpstreamPhase::Headers) => {}
-        other => panic!("expected Timeout(Headers), got {other:?}"),
-    }
+    assert!(matches!(
+        res.unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Headers)
+    ));
     // The headers_ms=200 deadline must fire well before the 5s
     // write_ms / 30s total_ms ceilings.
     assert!(

@@ -177,7 +177,7 @@ pub trait ProviderAdapter: Send + Sync {
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config().auth_type {
             AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                Some(("Authorization".into(), format!("Bearer {}", api_key)))
+                Some(("Authorization".into(), format!("Bearer {api_key}")))
             }
             AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
             AdapterAuthType::XApiKey => Some(("x-api-key".into(), api_key.to_string())),
@@ -237,12 +237,11 @@ pub trait ProviderAdapter: Send + Sync {
                 .models_url()
                 .ok_or_else(|| CoreError::Internal(format!("{}: models_url is None", self.id())))?;
             let target_format = match self.format() {
-                AdapterFormat::Openai => TargetFormat::Openai,
                 AdapterFormat::Anthropic => TargetFormat::Anthropic,
                 AdapterFormat::Gemini => TargetFormat::Gemini,
                 AdapterFormat::Responses => TargetFormat::Responses,
                 AdapterFormat::Atomesus => TargetFormat::Atomesus,
-                AdapterFormat::Mixed => TargetFormat::Openai,
+                AdapterFormat::Openai | AdapterFormat::Mixed => TargetFormat::Openai,
             };
             fetch_openai_models(
                 &url,
@@ -310,7 +309,7 @@ pub trait ProviderAdapter: Send + Sync {
         serde_json::to_vec(&view)
             .map(bytes::Bytes::from)
             .map_err(|e| {
-                openproxy_types::error::CoreError::Parse(format!("serialize openai request: {}", e))
+                openproxy_types::error::CoreError::Parse(format!("serialize openai request: {e}"))
             })
     }
 
@@ -823,7 +822,7 @@ pub async fn upstream_get_bytes(
             } else {
                 req.headers.insert(
                     http::header::HeaderName::from_bytes(k.as_bytes())
-                        .map_err(|e| format!("invalid header name '{}': {}", k, e))?,
+                        .map_err(|e| format!("invalid header name '{k}': {e}"))?,
                     hv,
                 );
             }
@@ -833,14 +832,14 @@ pub async fn upstream_get_bytes(
     let response = upstream_client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
-        .map_err(|e| format!("{}: {}", url, e))?;
+        .map_err(|e| format!("{url}: {e}"))?;
 
     if !response.status.is_success() {
         let status = response.status.as_u16();
         let body = response
             .collect()
             .await
-            .map_err(|e| format!("{}: failed to read error body: {}", url, e))?;
+            .map_err(|e| format!("{url}: failed to read error body: {e}"))?;
         return Err(format!(
             "{}: status {}: {}",
             url,
@@ -852,7 +851,7 @@ pub async fn upstream_get_bytes(
     response
         .collect()
         .await
-        .map_err(|e| format!("{}: {}", url, e))
+        .map_err(|e| format!("{url}: {e}"))
 }
 
 pub(crate) async fn upstream_get_json(
@@ -861,7 +860,7 @@ pub(crate) async fn upstream_get_json(
     headers: &[(&str, &str)],
 ) -> std::result::Result<serde_json::Value, String> {
     let bytes = upstream_get_bytes(upstream_client, url, headers).await?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("{}: parse: {}", url, e))
+    serde_json::from_slice(&bytes).map_err(|e| format!("{url}: parse: {e}"))
 }
 
 /// Map a header name to its typed `http::header::HeaderName` constant
@@ -1238,10 +1237,8 @@ mod tests {
         let res = a
             .fetch_models_for_account(&upstream, "cf-test-key", "")
             .await;
-        assert!(res.is_err(), "expected Validation error for empty label");
-        let msg = match res.unwrap_err() {
-            CoreError::Validation(s) => s,
-            other => panic!("expected CoreError::Validation, got {other:?}"),
+        let CoreError::Validation(msg) = res.unwrap_err() else {
+            panic!("expected CoreError::Validation");
         };
         assert!(
             msg.contains("account label is empty"),
@@ -1522,7 +1519,7 @@ mod tests {
     ) -> openproxy_types::Provider {
         openproxy_types::Provider {
             id: ProviderId::new(id),
-            name: format!("Test {}", id),
+            name: format!("Test {id}"),
             base_url: base_url.into(),
             auth_type,
             format,

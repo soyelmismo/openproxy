@@ -114,7 +114,7 @@ static LAST_KIRO_CLIENT: LazyLock<Mutex<Option<LastKiroClient>>> =
 /// 60s is conservative enough to cover the round-trip from the
 /// user completing the browser-side auth back to the device-poll
 /// landing on the same process.
-const LAST_KIRO_CLIENT_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+const LAST_KIRO_CLIENT_TTL: std::time::Duration = std::time::Duration::from_mins(10);
 
 /// Read-and-clear the most recently registered Kiro OIDC client,
 /// if it was registered within `LAST_KIRO_CLIENT_TTL`. Returns
@@ -147,7 +147,7 @@ async fn register_oidc_client(
     let register_body = serde_json::to_vec(&RegisterClientRequest {
         client_name: "openproxy-kiro".into(),
         client_type: "public".into(),
-        scopes: SCOPES.iter().map(|s| s.to_string()).collect(),
+        scopes: SCOPES.iter().map(std::string::ToString::to_string).collect(),
         grant_types: vec![
             "urn:ietf:params:oauth:grant-type:device_code".into(),
             "refresh_token".into(),
@@ -161,19 +161,21 @@ async fn register_oidc_client(
     let register_response = upstream_client
         .call(register_req, TimeoutProfile::OAuth, cancel)
         .await
-        .map_err(|e| match e {
-            UpstreamError::Cancel => {
+        .map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("kiro client register: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("kiro client register: {other}")),
         })?;
 
     let register_status = register_response.status;
-    let register_body = register_response.collect().await.map_err(|e| match e {
-        UpstreamError::Cancel => {
+    let register_body = register_response.collect().await.map_err(|e| {
+        if matches!(e, UpstreamError::Cancel) {
             CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+        } else {
+            CoreError::UpstreamConnection(format!("kiro register body read: {e}"))
         }
-        other => CoreError::UpstreamConnection(format!("kiro register body read: {other}")),
     })?;
 
     if !register_status.is_success() {
@@ -209,7 +211,7 @@ impl Default for KiroOAuthProvider {
 }
 
 impl OAuthProvider for KiroOAuthProvider {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "kiro"
     }
 
@@ -246,7 +248,7 @@ impl OAuthProvider for KiroOAuthProvider {
         let register_body = serde_json::to_vec(&RegisterClientRequest {
             client_name: "openproxy-kiro".into(),
             client_type: "public".into(),
-            scopes: SCOPES.iter().map(|s| s.to_string()).collect(),
+            scopes: SCOPES.iter().map(std::string::ToString::to_string).collect(),
             grant_types: vec![
                 "urn:ietf:params:oauth:grant-type:device_code".into(),
                 "refresh_token".into(),
@@ -260,19 +262,21 @@ impl OAuthProvider for KiroOAuthProvider {
         let register_response = upstream_client
             .call(register_req, TimeoutProfile::OAuth, cancel)
             .await;
-        let register_response = register_response.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let register_response = register_response.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("kiro client register: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("kiro client register: {other}")),
         })?;
 
         let register_status = register_response.status;
-        let register_body = register_response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let register_body = register_response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("kiro register body read: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("kiro register body read: {other}")),
         })?;
         if !register_status.is_success() {
             let body_str = String::from_utf8_lossy(&register_body).to_string();
@@ -307,19 +311,21 @@ impl OAuthProvider for KiroOAuthProvider {
                 CancellationToken::new(),
             )
             .await;
-        let device_auth_response = device_auth_response.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let device_auth_response = device_auth_response.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("kiro device authorization: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("kiro device authorization: {other}")),
         })?;
 
         let device_auth_status = device_auth_response.status;
-        let device_auth_body = device_auth_response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let device_auth_body = device_auth_response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("kiro device auth body read: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("kiro device auth body read: {other}")),
         })?;
         if !device_auth_status.is_success() {
             let body_str = String::from_utf8_lossy(&device_auth_body).to_string();
@@ -378,19 +384,21 @@ impl OAuthProvider for KiroOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("kiro device poll: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("kiro device poll: {other}")),
             })?;
 
         let status = response.status;
-        let body = response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let body = response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("kiro device poll body read: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("kiro device poll body read: {other}")),
         })?;
 
         if status.as_u16() == 400 || status.as_u16() == 428 {
@@ -449,23 +457,23 @@ impl OAuthProvider for KiroOAuthProvider {
             let response = upstream_client
                 .call(req, TimeoutProfile::OAuth, cancel)
                 .await
-                .map_err(|e| match e {
-                    UpstreamError::Cancel => {
+                .map_err(|e| {
+                    if matches!(e, UpstreamError::Cancel) {
                         CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                    }
-                    other => {
-                        CoreError::UpstreamConnection(format!("kiro social token refresh: {other}"))
+                    } else {
+                        CoreError::UpstreamConnection(format!("kiro social token refresh: {e}"))
                     }
                 })?;
 
             let status = response.status;
-            let body_bytes = response.collect().await.map_err(|e| match e {
-                UpstreamError::Cancel => {
+            let body_bytes = response.collect().await.map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!(
+                        "kiro social token refresh body read: {e}"
+                    ))
                 }
-                other => CoreError::UpstreamConnection(format!(
-                    "kiro social token refresh body read: {other}"
-                )),
             })?;
 
             if !status.is_success() {
@@ -528,20 +536,20 @@ impl OAuthProvider for KiroOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("kiro token refresh: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("kiro token refresh: {other}")),
             })?;
 
         let status = response.status;
-        let body_bytes = response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let body_bytes = response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            }
-            other => {
-                CoreError::UpstreamConnection(format!("kiro token refresh body read: {other}"))
+            } else {
+                CoreError::UpstreamConnection(format!("kiro token refresh body read: {e}"))
             }
         })?;
 
@@ -843,7 +851,7 @@ async fn list_available_profiles(
                 .or_else(|| p.get("profileArn"))
                 .and_then(|v| v.as_str())
         })
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     Ok(arn)
 }

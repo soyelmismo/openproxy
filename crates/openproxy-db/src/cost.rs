@@ -13,7 +13,7 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64
     let tps = match (input.completion_tokens, input.ttft_ms) {
         (Some(c), Some(ttft)) if c > 0 && input.total_ms > ttft => {
             let denom = (input.total_ms - ttft) as f64;
-            Some(c as f64 * 1000.0 / denom)
+            Some(f64::from(c) * 1000.0 / denom)
         }
         _ => None,
     };
@@ -69,8 +69,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     let (cost_usd, tps) = compute(price, input);
     let (error_msg_for_db, error_msg_redacted_for_db) = match &input.error_msg {
         Some(msg) => {
-            let (sanitized, _redacted) = redact_error_msg(msg);
-            (Some(sanitized), Some(_redacted))
+            let (sanitized, redacted) = redact_error_msg(msg);
+            (Some(sanitized), Some(redacted))
         }
         None => (None, None),
     };
@@ -98,26 +98,26 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         params![
             request_id,
             input.trace_id.as_str(),
-            input.attempt as i64,
+            i64::from(input.attempt),
             input.provider_id.as_str(),
             input.account_id.map(|a| a.0),
             input.combo_id.map(|c| c.0),
             input.model_row_id.map(|m| m.0),
             input.upstream_model_id,
             input.combo_target_id.map(|c| c.0),
-            input.prompt_tokens.map(|p| p as i64),
-            input.completion_tokens.map(|c| c as i64),
+            input.prompt_tokens.map(i64::from),
+            input.completion_tokens.map(i64::from),
             cost_usd,
             input.connect_ms.map(|c| c as i64),
             input.ttft_ms.map(|t| t as i64),
             input.total_ms as i64,
             tps,
-            input.status_code as i64,
+            i64::from(input.status_code),
             error_msg_for_db,
             error_msg_redacted_for_db,
-            input.race_total as i64,
-            input.race_attempts as i64,
-            input.race_lost as i64,
+            i64::from(input.race_total),
+            i64::from(input.race_attempts),
+            i64::from(input.race_lost),
             input.api_key_id.map(|k| k.0),
             input
                 .request_body_json
@@ -136,19 +136,19 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
                 .as_ref()
                 .and_then(|h| { serde_json::to_string(h).ok() }),
             input.error_message,
-            input.is_streaming as i64,
-            input.stream_complete as i64,
+            i64::from(input.is_streaming),
+            i64::from(input.stream_complete),
             input.stop_reason,
             input.compression_savings_pct,
             input.compression_techniques,
-            input.client_response as i64,
-            input.prompt_tokens_estimated as i64,
-            input.completion_tokens_estimated as i64,
+            i64::from(input.client_response),
+            i64::from(input.prompt_tokens_estimated),
+            i64::from(input.completion_tokens_estimated),
             input.endpoint_kind.as_str(),
             input.proxy_url,
             input.proxy_status,
-            input.is_proxy_rotated as i64,
-            input.cached_tokens.map(|c| c as i64),
+            i64::from(input.is_proxy_rotated),
+            input.cached_tokens.map(i64::from),
         ],
     )
     .map_err(crate::error::map_db_error)?;
@@ -208,7 +208,7 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
     let pairs: Vec<(String, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(crate::error::map_db_error)?
-        .filter_map(|r| r.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
 
     let mut total_updated = 0;
@@ -260,9 +260,8 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("openproxy-cost-test-{}-{}-{}", pid, nanos, n));
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("openproxy-cost-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         dir
     }

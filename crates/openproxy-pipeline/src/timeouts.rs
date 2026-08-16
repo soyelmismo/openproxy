@@ -56,7 +56,7 @@ impl ModelTimeoutOverrides {
         match s {
             None | Some("") => Ok(Self::default()),
             Some(s) => Ok(serde_json::from_str(s)
-                .map_err(|e| CoreError::Parse(format!("model timeout_overrides_json: {}", e)))?),
+                .map_err(|e| CoreError::Parse(format!("model timeout_overrides_json: {e}")))?),
         }
     }
 
@@ -104,7 +104,7 @@ mod tests {
             idle_chunk_ms: None,
         };
         let resolved2 = resolve(&defaults, Some(&overrides));
-        assert_eq!(resolved2.ttft, Duration::from_millis(1000));
+        assert_eq!(resolved2.ttft, Duration::from_secs(1));
         assert_eq!(resolved2.idle_chunk, Duration::from_millis(400));
     }
 

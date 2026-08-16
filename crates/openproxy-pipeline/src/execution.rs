@@ -181,7 +181,7 @@ impl Pipeline {
 
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
-            trace_id: ctx.trace_id.to_string(),
+            trace_id: ctx.trace_id.clone(),
             provider_id: Some(resolved_target.target.provider_id.to_string()),
             upstream_model_id: Some(resolved_target.model.model_id.as_str().to_string()),
             stage: "started".into(),
@@ -254,7 +254,7 @@ impl Pipeline {
     ) -> Result<Vec<ComboTarget>> {
         let repo = self.repo();
         let combo_clone = combo.clone();
-        let overrides = targets_override.map(|o| o.to_vec());
+        let overrides = targets_override.map(<[openproxy_types::ComboTarget]>::to_vec);
         let rr_counters = Arc::clone(&self.rr_counters);
         let selection_registry = Arc::clone(&self.selection_registry);
         tokio::task::spawn_blocking(move || {

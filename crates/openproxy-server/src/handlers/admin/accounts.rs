@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, AppState, ApiError, ProviderId, ProviderRefreshQuery, AccountId, CoreError};
 use crate::extractors::DbReader;
 use axum::{
     Json,
@@ -177,7 +177,7 @@ pub async fn refresh_account_quota(
     result
 }
 
-pub(crate) async fn resolve_refresh_account(
+pub(crate) fn resolve_refresh_account(
     s: &AppState,
     provider: &ProviderId,
     q: &ProviderRefreshQuery,
@@ -269,7 +269,7 @@ pub async fn apply_account_local_cli(
         .join("antigravity-cli");
 
     std::fs::create_dir_all(&cli_dir).map_err(|e| {
-        CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e))
+        CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {e}"))
     })?;
 
     let token_file = cli_dir.join("antigravity-oauth-token");
@@ -288,7 +288,7 @@ pub async fn apply_account_local_cli(
     })?;
 
     let payload_str = serde_json::to_string(&payload)
-        .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {}", e)))?;
+        .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
     file.write_all(payload_str.as_bytes()).map_err(|e| {
         CoreError::Validation(format!(
             "Failed to write to {}: {}",

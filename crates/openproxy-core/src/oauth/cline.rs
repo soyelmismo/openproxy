@@ -23,7 +23,7 @@ impl Default for ClineOAuthProvider {
 }
 
 impl OAuthProvider for ClineOAuthProvider {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "cline"
     }
 
@@ -82,19 +82,21 @@ impl OAuthProvider for ClineOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("cline exchange: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("cline exchange: {other}")),
             })?;
 
         let status = response.status;
-        let resp_body = response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let resp_body = response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("cline exchange body: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("cline exchange body: {other}")),
         })?;
 
         if !status.is_success() {
@@ -105,12 +107,6 @@ impl OAuthProvider for ClineOAuthProvider {
                 body: String::from_utf8_lossy(&resp_body).into(),
                 is_proxy_rotated: false,
             });
-        }
-
-        #[derive(serde::Deserialize)]
-        struct ClineResponse {
-            success: bool,
-            data: ClineAuthResponseData,
         }
 
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
@@ -124,7 +120,7 @@ impl OAuthProvider for ClineOAuthProvider {
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
-            token_type: "Bearer".into(),
+            token_type: "Bearer".to_string(),
             expires_in,
             scope: None,
             id_token: None,
@@ -157,21 +153,22 @@ impl OAuthProvider for ClineOAuthProvider {
         _account_id: crate::ids::AccountId,
         _db: DbRef<'_>,
     ) -> Result<TokenResponse> {
+        let refresh_url = "https://api.cline.bot/api/v1/auth/refresh";
+
         let body = serde_json::json!({
             "refreshToken": refresh_token,
-            "refresh_token": refresh_token,
-            "grantType": "refresh_token",
-            "grant_type": "refresh_token"
         });
 
-        let body_bytes =
-            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
-        let mut req = UpstreamRequest::post_json(
-            "https://api.cline.bot/api/v1/auth/refresh",
-            bytes::Bytes::from(body_bytes),
-        );
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| CoreError::Parse(format!("serialize cline refresh body: {e}")))?;
+
+        let mut req = UpstreamRequest::post_json(refresh_url, bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        req.headers.insert(
+            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
         openproxy_adapters::adapters::cline::apply_cline_spoofing_headers(&mut req);
@@ -180,19 +177,21 @@ impl OAuthProvider for ClineOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
+            .map_err(|e| {
+                if matches!(e, UpstreamError::Cancel) {
                     CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                } else {
+                    CoreError::UpstreamConnection(format!("cline refresh: {e}"))
                 }
-                other => CoreError::UpstreamConnection(format!("cline refresh: {other}")),
             })?;
 
         let status = response.status;
-        let resp_body = response.collect().await.map_err(|e| match e {
-            UpstreamError::Cancel => {
+        let resp_body = response.collect().await.map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("cline refresh body: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("cline refresh body: {other}")),
         })?;
 
         if !status.is_success() {
@@ -203,12 +202,6 @@ impl OAuthProvider for ClineOAuthProvider {
                 body: String::from_utf8_lossy(&resp_body).into(),
                 is_proxy_rotated: false,
             });
-        }
-
-        #[derive(serde::Deserialize)]
-        struct ClineResponse {
-            success: bool,
-            data: ClineAuthResponseData,
         }
 
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
@@ -262,6 +255,12 @@ impl OAuthProvider for ClineOAuthProvider {
         let claims = super::decode_jwt_payload(jwt)?;
         extract(&claims)
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ClineResponse {
+    success: bool,
+    data: ClineAuthResponseData,
 }
 
 #[derive(serde::Deserialize)]

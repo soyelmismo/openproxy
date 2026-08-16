@@ -20,6 +20,8 @@
 //! UUID generated once per process launch.
 
 use http::HeaderValue;
+use sha2::{Digest, Sha256};
+use std::fmt::Write;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
@@ -35,7 +37,6 @@ fn platform_info() -> &'static str {
     match std::env::consts::OS {
         "macos" => "Macintosh; Intel Mac OS X 10_15_7",
         "windows" => "Windows NT 10.0; Win64; x64",
-        "linux" => "X11; Linux x86_64",
         _ => "X11; Linux x86_64",
     }
 }
@@ -58,11 +59,8 @@ fn version() -> &'static str {
 static MACHINE_ID: LazyLock<String> = LazyLock::new(|| {
     // Try to read a stable machine identifier from the OS.
     // Fallback: hostname + OS arch.
-    let raw = hostname()
-        .map(String::from)
-        .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
+    let raw = hostname().map_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH), String::from);
     // Hash to a fixed-length hex string for a clean header value.
-    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
     hasher.update(std::env::consts::OS.as_bytes());
@@ -70,10 +68,11 @@ static MACHINE_ID: LazyLock<String> = LazyLock::new(|| {
     let hash = hasher.finalize();
     // Take the first 32 hex chars (128 bits) — enough entropy
     // for a machine fingerprint without being too long.
-    hash.iter()
-        .take(16)
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>()
+    let mut out = String::with_capacity(32);
+    for b in hash.iter().take(16) {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 });
 
 fn machine_id() -> &'static str {

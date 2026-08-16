@@ -77,11 +77,11 @@ pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types:
 }
 
 fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
-    if !row.trace_id.is_empty() {
-        INFLIGHT_REGISTRY.remove(&row.trace_id);
-    } else {
+    if row.trace_id.is_empty() {
         let key = format!("{}:unknown", row.request_id);
         INFLIGHT_REGISTRY.remove(&key);
+    } else {
+        INFLIGHT_REGISTRY.remove(&row.trace_id);
     }
 
     if let Some(tx) = USAGE_SENDER.get() {
@@ -90,10 +90,10 @@ fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
 }
 
 fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
-    let attempt_key = if !event.trace_id.is_empty() {
-        event.trace_id.to_owned()
-    } else {
+    let attempt_key = if event.trace_id.is_empty() {
         format!("{}:unknown", event.request_id)
+    } else {
+        event.trace_id.clone()
     };
 
     let now_ms = std::time::SystemTime::now()
@@ -115,9 +115,9 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
         let status_opt = event.status_code;
 
         INFLIGHT_REGISTRY
-            .entry(attempt_key.to_owned())
+            .entry(attempt_key.clone())
             .and_modify(|item| {
-                item.stage = event.stage.to_owned();
+                item.stage = event.stage.clone();
                 item.stage_rank = rank;
                 item.updated_at_ms = now_ms;
                 item.elapsed_ms_at_event = event.elapsed_ms;
@@ -131,7 +131,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                     item.status_code = status_opt;
                 }
                 if event.error.is_some() {
-                    item.error = event.error.to_owned();
+                    item.error = event.error.clone();
                 }
                 if let Some(p) = &event.provider_id
                     && !p.is_empty()
@@ -145,9 +145,9 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 }
             })
             .or_insert_with(|| openproxy_types::usage::InflightAttempt {
-                attempt_key: attempt_key.to_owned(),
-                request_id: event.request_id.to_owned(),
-                trace_id: event.trace_id.to_owned(),
+                attempt_key: attempt_key.clone(),
+                request_id: event.request_id.clone(),
+                trace_id: event.trace_id.clone(),
                 provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
                 upstream_model_id: event
                     .upstream_model_id
@@ -156,7 +156,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                     .to_string(),
                 started_at_ms: started_at,
                 updated_at_ms: now_ms,
-                stage: event.stage.to_owned(),
+                stage: event.stage.clone(),
                 stage_seq: event.elapsed_ms as u32,
                 stage_rank: rank,
                 elapsed_ms_at_event: event.elapsed_ms,
@@ -165,7 +165,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 status_code: status_opt,
                 terminal: false,
                 terminal_kind: None,
-                error: event.error.to_owned(),
+                error: event.error.clone(),
                 row_id: None,
                 source: "live".into(),
             });
@@ -189,8 +189,7 @@ mod tests {
         let base = std::env::temp_dir();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir = base.join(format!(
             "openproxy-usage-test-{}-{}",
             std::process::id(),
@@ -251,9 +250,9 @@ mod tests {
                 p.cost,
                 p.ttft,
                 p.total,
-                status as i64,
+                i64::from(status),
                 p.err,
-                p.race_lost as i64,
+                i64::from(p.race_lost),
             ],
         )
         .expect("insert");
@@ -789,8 +788,8 @@ mod tests {
     fn errors_respects_limit() {
         let (conn, _p) = fresh_conn();
         for i in 0..5 {
-            let req = format!("req-{}", i);
-            let trace = format!("trace-{}", i);
+            let req = format!("req-{i}");
+            let trace = format!("trace-{i}");
             insert(
                 &conn,
                 TestUsageParams {
@@ -1180,7 +1179,7 @@ mod tests {
         assert_eq!(rows[2].prompt_tokens, Some(100));
         assert_eq!(rows[2].completion_tokens, Some(50));
         let cost3 = rows[2].cost_usd.expect("cost_usd present");
-        assert!((cost3 - 0.03).abs() < 1e-9, "cost_usd was {}", cost3);
+        assert!((cost3 - 0.03).abs() < 1e-9, "cost_usd was {cost3}");
     }
 
     /// H1 mirror: `recent_desc` (the head-of-table fetch the

@@ -163,10 +163,10 @@ impl OAuthProvider for GenericOAuthProvider {
             code_challenge_s256(&code_verifier)
         };
         let client_id = self.spec.client_id()?;
-        let scopes = if !self.spec.scopes.is_empty() {
-            self.spec.scopes.join(" ")
-        } else {
+        let scopes = if self.spec.scopes.is_empty() {
             String::new()
+        } else {
+            self.spec.scopes.join(" ")
         };
 
         let mut params = vec![
@@ -240,10 +240,10 @@ impl OAuthProvider for GenericOAuthProvider {
         }
 
         let client_id = self.spec.client_id()?;
-        let scopes = if !self.spec.scopes.is_empty() {
-            self.spec.scopes.join(" ")
-        } else {
+        let scopes = if self.spec.scopes.is_empty() {
             String::new()
+        } else {
+            self.spec.scopes.join(" ")
         };
         let mut params = vec![("client_id", client_id.as_str())];
         if !self.spec.scopes.is_empty() {
@@ -409,18 +409,20 @@ async fn call_oauth_endpoint(
     let response = upstream_client
         .call(req, TimeoutProfile::OAuth, cancel)
         .await
-        .map_err(|e| match e {
-            UpstreamError::Cancel => {
+        .map_err(|e| {
+            if matches!(e, UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("{} {purpose}: {e}", spec.id))
             }
-            other => CoreError::UpstreamConnection(format!("{} {purpose}: {other}", spec.id)),
         })?;
     let status = response.status;
-    let body = response.collect().await.map_err(|e| match e {
-        UpstreamError::Cancel => {
+    let body = response.collect().await.map_err(|e| {
+        if matches!(e, UpstreamError::Cancel) {
             CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+        } else {
+            CoreError::UpstreamConnection(format!("{} {purpose} body read: {e}", spec.id))
         }
-        other => CoreError::UpstreamConnection(format!("{} {purpose} body read: {other}", spec.id)),
     })?;
 
     if !status.is_success() {

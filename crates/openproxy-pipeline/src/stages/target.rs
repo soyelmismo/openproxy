@@ -188,7 +188,7 @@ impl PipelineStage for FormattingStage {
                 &ctx.req.openai_request.messages,
                 ctx.pipeline.config.compression_mode,
             ) {
-                let mut msgs = ctx.req.openai_request.messages.to_vec();
+                let mut msgs = ctx.req.openai_request.messages.clone();
                 let stats = openproxy_compression::apply_compression(
                     &mut msgs,
                     ctx.pipeline.config.compression_mode,
@@ -357,8 +357,7 @@ impl PipelineStage for DispatchStage {
         let api_key = current
             .custom_meta
             .as_ref()
-            .map(|m| m.access_token.as_str())
-            .unwrap_or(current.api_key.as_str());
+            .map_or(current.api_key.as_str(), |m| m.access_token.as_str());
         let account_label_str = current.api_key_label.as_deref().unwrap_or("");
 
         let target_format = ctx.target_format.ok_or_else(|| {
@@ -370,7 +369,7 @@ impl PipelineStage for DispatchStage {
 
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
-            trace_id: trace_id.to_string(),
+            trace_id: trace_id.clone(),
             provider_id: None,
             upstream_model_id: None,
             stage: "connecting".into(),

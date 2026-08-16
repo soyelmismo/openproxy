@@ -11,6 +11,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_compression::{CompressionMode, apply_compression};
 use serde_json::{Value, json};
+use std::fmt::Write;
 use std::hint::black_box;
 
 /// Build a realistic chat request with N messages: system prompt, user
@@ -66,7 +67,7 @@ fn build_fixture() -> Vec<openproxy_types::OpenAIMessage> {
     git_status.push_str("?? src/untracked.rs\n");
     // Pad with more lines to make it realistic (~2 KB).
     for i in 0..40 {
-        git_status.push_str(&format!("\x1b[33mM  src/file_{}.rs\x1b[0m\n", i));
+        let _ = writeln!(git_status, "\x1b[33mM  src/file_{i}.rs\x1b[0m");
     }
     messages.push(openproxy_types::OpenAIMessage {
         role: "tool".to_string(),
@@ -110,7 +111,7 @@ fn build_fixture() -> Vec<openproxy_types::OpenAIMessage> {
     cargo_test.push('\n');
     cargo_test.push_str("running 25 tests\n");
     for i in 0..25 {
-        cargo_test.push_str(&format!("test tests::test_{} ... ok\n", i));
+        let _ = writeln!(cargo_test, "test tests::test_{i} ... ok");
     }
     cargo_test.push('\n');
     cargo_test.push_str(
@@ -118,10 +119,10 @@ fn build_fixture() -> Vec<openproxy_types::OpenAIMessage> {
     );
     // Add some trailing whitespace (what normalize_message_whitespace should trim).
     for i in 0..30 {
-        cargo_test.push_str(&format!(
-            "warning: unused variable `x` in src/file_{}.rs:42:13   \n",
-            i
-        ));
+        let _ = writeln!(
+            cargo_test,
+            "warning: unused variable `x` in src/file_{i}.rs:42:13   "
+        );
     }
     // Pad with error-stacktrace-like content.
     cargo_test.push_str("\nthread 'tests::test_panic' panicked at 'index out of bounds':\n");

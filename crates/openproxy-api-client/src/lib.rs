@@ -236,7 +236,7 @@ impl Client {
         let mut url = self.url("/admin/accounts").to_string();
         if let Some(p) = provider {
             let qs = build_query(&[("provider_id", Some(p.as_str()))]);
-            write!(&mut url, "?{}", qs).expect("writing to String never fails");
+            write!(&mut url, "?{qs}").expect("writing to String never fails");
         }
         let resp = self
             .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
@@ -357,7 +357,7 @@ impl Client {
             .and_then(|v| v.as_u64())
             .ok_or_else(|| missing_field_err("missing \"touched\" in refresh_models response"))?;
         usize::try_from(touched).map_err(|_| {
-            missing_field_err(format!("\"touched\" does not fit in usize: {}", touched))
+            missing_field_err(format!("\"touched\" does not fit in usize: {touched}"))
         })
     }
 
@@ -408,9 +408,9 @@ impl Client {
     ) -> Result<Vec<ErrorRow>, ClientError> {
         let mut qs = usage_filter_query(f);
         if !qs.is_empty() {
-            write!(&mut qs, "&limit={}", limit).expect("writing to String never fails");
+            write!(&mut qs, "&limit={limit}").expect("writing to String never fails");
         } else {
-            write!(&mut qs, "limit={}", limit).expect("writing to String never fails");
+            write!(&mut qs, "limit={limit}").expect("writing to String never fails");
         }
         let url = format!("{}?{}", self.url("/admin/usage/errors"), qs);
         let resp = self
@@ -752,7 +752,7 @@ mod tests {
         let err = map_error_body(400, bytes);
         match err {
             ClientError::Api(CoreError::Validation(msg)) => assert_eq!(msg, "bad input"),
-            other => panic!("expected Validation, got {:?}", other),
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 
@@ -765,7 +765,7 @@ mod tests {
         let err = map_error_body(500, body.as_bytes());
         match err {
             ClientError::Status(500, msg) => assert!(msg.contains("made_up_code")),
-            other => panic!("expected Status, got {:?}", other),
+            other => panic!("expected Status, got {other:?}"),
         }
     }
 
@@ -774,7 +774,7 @@ mod tests {
         let err = map_error_body(502, b"<html>oops</html>");
         match err {
             ClientError::Status(502, msg) => assert!(msg.contains("oops")),
-            other => panic!("expected Status, got {:?}", other),
+            other => panic!("expected Status, got {other:?}"),
         }
     }
 

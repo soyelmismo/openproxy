@@ -121,8 +121,7 @@ fn truncate_header_value(v: &str) -> std::borrow::Cow<'_, str> {
             .char_indices()
             .take_while(|(i, _)| *i < REDACTED_HEADER_VALUE_MAX)
             .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0);
+            .map_or(0, |(i, c)| i + c.len_utf8());
         let mut s = String::with_capacity(cut + "...[truncated]".len());
         s.push_str(&v[..cut]);
         s.push_str("...[truncated]");
@@ -132,7 +131,7 @@ fn truncate_header_value(v: &str) -> std::borrow::Cow<'_, str> {
 
 pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    for (k, v) in headers.iter() {
+    for (k, v) in headers {
         let value = if is_sensitive(k.as_str()) {
             REDACTED_PLACEHOLDER.to_string()
         } else {
@@ -166,7 +165,7 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
 pub fn redact_btreemap_sensitive(
     mut headers: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
-    for (k, v) in headers.iter_mut() {
+    for (k, v) in &mut headers {
         if is_sensitive(k) {
             *v = REDACTED_PLACEHOLDER.to_string();
         } else if v.len() > REDACTED_HEADER_VALUE_MAX {

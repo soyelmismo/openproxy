@@ -61,7 +61,7 @@ impl PipelineStage for UpstreamExecutorStage {
 
         let mut overall_attempt: u8 = 1;
 
-        for target in to_run.iter() {
+        for target in &to_run {
             let client_disconnected = {
                 let mut rx = tokio::sync::watch::Receiver::clone(&ctx.req.client_disconnected);
                 ctx.pipeline.is_client_disconnected(&mut rx)

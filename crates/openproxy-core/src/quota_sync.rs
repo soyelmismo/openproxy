@@ -19,9 +19,9 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 
-const QUOTA_LOW_ABSOLUTE_FLOOR: i64 = 1000;
+const QUOTA_LOW_ABSOLUTE_FLOOR: i64 = 1_000;
 
-pub async fn start_quota_sync_scheduler(
+pub fn start_quota_sync_scheduler(
     db_pool: Arc<DbPool>,
     config: AppConfig,
     upstream_client: Arc<UpstreamClient>,
@@ -90,7 +90,7 @@ async fn run_quota_sync_cycle(
     let accounts_to_sync: Vec<AccountId> = {
         let db_pool = Arc::clone(db_pool);
         let master_key = Arc::clone(master_key);
-        let supported_providers_list = supported_providers.to_vec();
+        let supported_providers_list = supported_providers.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db_pool.reader();
             let mut target_accounts = Vec::new();
@@ -113,9 +113,9 @@ async fn run_quota_sync_cycle(
     let delay_ms = config.quota_sync.delay_between_accounts_ms;
 
     // 3. Process each account with a delay
-    let supported_refs: Vec<&str> = supported_providers.iter().map(|s| s.as_str()).collect();
+    let supported_refs: Vec<&str> = supported_providers.iter().map(std::string::String::as_str).collect();
     for account_id in accounts_to_sync {
-        match refresh_single_account_quota(
+        if let Err(e) = refresh_single_account_quota(
             account_id,
             db_pool,
             master_key,
@@ -125,15 +125,10 @@ async fn run_quota_sync_cycle(
         )
         .await
         {
-            Ok(Some(_)) => {}
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(
-                    "[QuotaSync] Failed to refresh quota for account {}: {}",
-                    account_id.0,
-                    e
-                );
-            }
+            tracing::warn!(
+                "[QuotaSync] Failed to refresh quota for account {}: {e}",
+                account_id.0
+            );
         }
 
         if delay_ms > 0 {
@@ -159,7 +154,7 @@ pub async fn refresh_single_account_quota(
         let master_key = Arc::clone(master_key);
         // Extract the strings to avoid cloning the whole slice into the move closure
         let supported_providers: Vec<String> =
-            supported_providers.iter().map(|s| s.to_string()).collect();
+            supported_providers.iter().map(std::string::ToString::to_string).collect();
         let res = tokio::task::spawn_blocking(move || {
             let r = db_pool.reader();
             let acc = admin::account_for_quota_refresh(&r, account_id, master_key.as_ref())?;
@@ -239,11 +234,11 @@ pub async fn refresh_single_account_quota(
                     {
                         let db_pool = Arc::clone(db_pool);
                         let master_key = Arc::clone(master_key);
-                        let access_token = new_tokens.access_token.to_owned();
-                        let refresh_token = new_tokens.refresh_token.to_owned();
-                        let token_type = new_tokens.token_type.to_owned();
-                        let expires_at = expires_at.to_owned();
-                        let scope = new_tokens.scope.to_owned();
+                        let access_token = new_tokens.access_token.clone();
+                        let refresh_token = new_tokens.refresh_token.clone();
+                        let token_type = new_tokens.token_type.clone();
+                        let expires_at = expires_at.clone();
+                        let scope = new_tokens.scope.clone();
                         let _ = tokio::task::spawn_blocking(move || {
                             let w = db_pool.writer();
                             let _ = accounts::store_oauth_tokens(
@@ -294,7 +289,7 @@ pub async fn refresh_single_account_quota(
 
     {
         let db_pool = Arc::clone(db_pool);
-        let q = q.to_owned();
+        let q = q.clone();
         let res = tokio::task::spawn_blocking(move || {
             let w = db_pool.writer();
             admin::persist_account_quota(&w, account_id, &q)
@@ -330,7 +325,7 @@ pub async fn refresh_single_account_quota(
                 },
             });
             let db_pool = Arc::clone(db_pool);
-            let provider_id_str = provider_id_str.to_owned();
+            let provider_id_str = provider_id_str.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let w = db_pool.writer();
                 let _ = notifications::insert_and_broadcast(

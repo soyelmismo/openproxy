@@ -73,8 +73,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
                 Err(CoreError::Validation("provider id already exists".into()))
             } else {
                 Err(openproxy_db::error::map_db_error_ctx(format!(
-                    "insert provider {}",
-                    id
+                    "insert provider {id}"
                 ))(e))
             }
         }
@@ -95,7 +94,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
             row_to_provider,
         )
         .optional()
-        .map_err(openproxy_db::error::map_db_error_ctx(format!("get provider {}", id)))?;
+        .map_err(openproxy_db::error::map_db_error_ctx(format!("get provider {id}")))?;
     Ok(row)
 }
 
@@ -169,11 +168,10 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
 pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()> {
     conn.execute(
         "UPDATE providers SET active = ?1 WHERE id = ?2",
-        params![active as i64, id.as_str()],
+        params![i64::from(active), id.as_str()],
     )
     .map_err(openproxy_db::error::map_db_error_ctx(format!(
-        "set active for provider {}",
-        id
+        "set active for provider {id}"
     )))?;
     Ok(())
 }
@@ -185,8 +183,7 @@ pub fn set_favicon(conn: &Connection, id: &ProviderId, favicon: &str) -> Result<
         params![favicon, id.as_str()],
     )
     .map_err(openproxy_db::error::map_db_error_ctx(format!(
-        "set favicon for provider {}",
-        id
+        "set favicon for provider {id}"
     )))?;
     Ok(())
 }
@@ -253,7 +250,7 @@ pub async fn fetch_favicon_data_uri(
         if bytes.len() > 100 {
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            Some(format!("data:{};base64,{}", mime, b64))
+            Some(format!("data:{mime};base64,{b64}"))
         } else {
             None
         }
@@ -262,7 +259,7 @@ pub async fn fetch_favicon_data_uri(
     for domain in domains {
         if let Some(data) = try_fetch_b64(
             upstream_client,
-            &format!("https://www.google.com/s2/favicons?domain={}&sz=64", domain),
+            &format!("https://www.google.com/s2/favicons?domain={domain}&sz=64"),
             "image/png",
         )
         .await
@@ -272,7 +269,7 @@ pub async fn fetch_favicon_data_uri(
 
         if let Some(data) = try_fetch_b64(
             upstream_client,
-            &format!("https://icons.duckduckgo.com/ip3/{}.ico", domain),
+            &format!("https://icons.duckduckgo.com/ip3/{domain}.ico"),
             "image/x-icon",
         )
         .await
@@ -282,7 +279,7 @@ pub async fn fetch_favicon_data_uri(
 
         if let Some(data) = try_fetch_b64(
             upstream_client,
-            &format!("https://{}/favicon.ico", domain),
+            &format!("https://{domain}/favicon.ico"),
             "image/x-icon",
         )
         .await
@@ -314,8 +311,7 @@ pub async fn fetch_and_cache_favicon(
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
     conn.execute("DELETE FROM providers WHERE id = ?1", params![id.as_str()])
         .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "delete provider {}",
-            id
+            "delete provider {id}"
         )))?;
     Ok(())
 }
@@ -370,15 +366,15 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
     }
     if let Some(v) = extra_headers_json {
         sets.push("extra_headers_json = ?");
-        bound_values.push(Box::new(v.map(|s| s.to_string())));
+        bound_values.push(Box::new(v.map(std::string::ToString::to_string)));
     }
     if let Some(v) = auto_activate_keyword {
         sets.push("auto_activate_keyword = ?");
-        bound_values.push(Box::new(v.map(|s| s.to_string())));
+        bound_values.push(Box::new(v.map(std::string::ToString::to_string)));
     }
     if let Some(v) = use_proxies {
         sets.push("use_proxies = ?");
-        bound_values.push(Box::new(v as i64));
+        bound_values.push(Box::new(i64::from(v)));
     }
     if let Some(v) = proxy_rotation_errors {
         sets.push("proxy_rotation_errors = ?");
@@ -416,8 +412,7 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
         .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "update provider {}",
-            id
+            "update provider {id}"
         )))?;
 
     if affected == 0 {
@@ -437,8 +432,7 @@ pub fn update_current_proxy(
         params![proxy_id, id.as_str()],
     )
     .map_err(openproxy_db::error::map_db_error_ctx(format!(
-        "update current proxy for provider {}",
-        id
+        "update current proxy for provider {id}"
     )))?;
     Ok(())
 }
@@ -541,10 +535,9 @@ mod tests {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir =
-            std::env::temp_dir().join(format!("openproxy-providers-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-providers-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("providers.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -627,7 +620,7 @@ mod tests {
         .expect_err("duplicate must fail");
         match err {
             CoreError::Validation(msg) => assert_eq!(msg, "provider id already exists"),
-            other => panic!("expected Validation, got {:?}", other),
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 

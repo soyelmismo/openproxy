@@ -120,8 +120,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
             let mapped_ids: &[&str] = PROVIDER_MAP
                 .iter()
                 .find(|(ext, _)| *ext == ext_id_str)
-                .map(|(_, ids)| *ids)
-                .unwrap_or(&[]);
+                .map_or(&[], |(_, ids)| *ids);
 
             let mut all_ids: Vec<&str> = Vec::with_capacity(1 + mapped_ids.len());
             all_ids.push(ext_id_str);
@@ -191,10 +190,10 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
                         input_price,
                         output_price,
                         cached_price,
-                        model.tool_call.map(|b| b as i64),
-                        model.reasoning.map(|b| b as i64),
+                        model.tool_call.map(i64::from),
+                        model.reasoning.map(i64::from),
                         None::<i64>, // vision not present in API
-                        model.structured_output.map(|b| b as i64),
+                        model.structured_output.map(i64::from),
                         mod_in,
                         mod_out,
                         model.family.as_deref(),
@@ -284,19 +283,21 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
     let response = upstream
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
-        .map_err(|e| match e {
-            openproxy_adapters::upstream::UpstreamError::Cancel => {
+        .map_err(|e| {
+            if matches!(e, openproxy_adapters::upstream::UpstreamError::Cancel) {
                 CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            } else {
+                CoreError::UpstreamConnection(format!("models.dev fetch: {e}"))
             }
-            other => CoreError::UpstreamConnection(format!("models.dev fetch: {other}")),
         })?;
 
     let status = response.status;
-    let body = response.collect().await.map_err(|e| match e {
-        openproxy_adapters::upstream::UpstreamError::Cancel => {
+    let body = response.collect().await.map_err(|e| {
+        if matches!(e, openproxy_adapters::upstream::UpstreamError::Cancel) {
             CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+        } else {
+            CoreError::UpstreamConnection(format!("models.dev body read: {e}"))
         }
-        other => CoreError::UpstreamConnection(format!("models.dev body read: {other}")),
     })?;
 
     if !status.is_success() {
@@ -344,7 +345,7 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(openproxy_db::error::map_db_error)?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(std::result::Result::ok).collect()
     };
     if !model_rows.is_empty() {
         for chunk in model_rows.chunks(900 / 3) {
@@ -389,7 +390,7 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(openproxy_db::error::map_db_error)?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(std::result::Result::ok).collect()
     };
     if !sync_rows.is_empty() {
         for chunk in sync_rows.chunks(900 / 3) {
@@ -460,7 +461,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                 ))
             })
             .map_err(openproxy_db::error::map_db_error)?;
-        result.filter_map(|r| r.ok()).collect()
+        result.filter_map(std::result::Result::ok).collect()
     };
 
     let mut updated = 0usize;
@@ -488,8 +489,8 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                 other => other,
             };
             if let Some(p) = price {
-                let prompt = prompt_tokens.unwrap_or(0) as f64;
-                let completion = completion_tokens.unwrap_or(0) as f64;
+                let prompt = f64::from(prompt_tokens.unwrap_or(0));
+                let completion = f64::from(completion_tokens.unwrap_or(0));
                 let cost = p.input_per_1m * prompt / 1_000_000.0
                     + p.output_per_1m * completion / 1_000_000.0;
                 if cost > 0.0 {
@@ -710,7 +711,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     // Filter combos to just those related to our normalized_ids
     let combo_names: std::collections::HashSet<String> = normalized_ids
         .iter()
-        .map(|id| format!("auto:{}", id))
+        .map(|id| format!("auto:{id}"))
         .collect();
 
     let existing_combos: std::collections::HashMap<String, i64> = {
@@ -724,7 +725,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(openproxy_db::error::map_db_error)?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|(name, _)| combo_names.contains(name)) // O(1) set lookup
             .collect()
         }
@@ -794,7 +795,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         .map_err(openproxy_db::error::map_db_error)?;
 
     for norm_id in &normalized_ids {
-        let combo_name = format!("auto:{}", norm_id);
+        let combo_name = format!("auto:{norm_id}");
 
         let combo_id = existing_combos.get(&combo_name).copied();
 
@@ -985,8 +986,7 @@ pub async fn run_one_shot(
     }
 
     Ok(format!(
-        "Synced {} models, enriched {} model rows, created {} auto-combos, re-priced {} usage rows",
-        count, enriched, combos, repriced
+        "Synced {count} models, enriched {enriched} model rows, created {combos} auto-combos, re-priced {repriced} usage rows"
     ))
 }
 
@@ -1289,9 +1289,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            ctx, 200000,
-            "context_length should be refreshed to models.dev's 200000, got {}",
-            ctx
+            ctx, 200_000,
+            "context_length should be refreshed to models.dev's 200000, got {ctx}"
         );
     }
 

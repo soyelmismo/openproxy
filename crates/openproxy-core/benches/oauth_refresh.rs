@@ -15,7 +15,7 @@ fn bench_oauth_refresh(c: &mut Criterion) {
                 tokio::time::sleep(Duration::from_millis(5)).await; // simulated I/O latency
                 tokio::time::sleep(Duration::from_millis(2)).await; // scaled down SETTLE_GAP
             }
-        })
+        });
     });
 
     // Concurrent token bucket simulation (New behavior)
@@ -40,7 +40,7 @@ fn bench_oauth_refresh(c: &mut Criterion) {
                 });
             }
             while join_set.join_next().await.is_some() {}
-        })
+        });
     });
     group.finish();
 }

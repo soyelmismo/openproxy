@@ -72,7 +72,7 @@ pub fn count_content_chars(msgs: &[OpenAIMessage]) -> usize {
     msgs.iter()
         .filter_map(|m| m.content.as_ref())
         .filter_map(|c| c.as_str())
-        .map(|s| s.len())
+        .map(str::len)
         .sum()
 }
 
@@ -89,7 +89,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 

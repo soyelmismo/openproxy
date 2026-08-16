@@ -17,6 +17,6 @@ fn main() {
         .unwrap();
 
     for row in rows {
-        println!("{:?}", row);
+        println!("{row:?}");
     }
 }

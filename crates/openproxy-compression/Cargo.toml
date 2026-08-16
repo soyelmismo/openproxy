@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }
 serde = { workspace = true }

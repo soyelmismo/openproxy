@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 # Default-on: build the new `upstream/` hyper-based client alongside the
 # `default-features = false`) for openproxy-core disables the module.

@@ -395,17 +395,17 @@ index abc..def 100644\n\
             "========================= test session starts =========================".to_string(),
         );
         for i in 1..=5 {
-            lines.push(format!("test_module.py::test_{} PASSED [ 50%]", i));
+            lines.push(format!("test_module.py::test_{i} PASSED [ 50%]"));
         }
         for i in 6..=10 {
-            lines.push(format!("test_module.py::test_{} FAILED [ 50%]", i));
+            lines.push(format!("test_module.py::test_{i} FAILED [ 50%]"));
         }
         lines.push(
             "========================= short test summary info ========================="
                 .to_string(),
         );
         for i in 6..=10 {
-            lines.push(format!("FAILED test_module.py::test_{}", i));
+            lines.push(format!("FAILED test_module.py::test_{i}"));
         }
         let content = lines.join("\n");
         assert_eq!(detect(&content), ContentType::BuildOutput);
@@ -418,10 +418,10 @@ index abc..def 100644\n\
         let mut lines: Vec<String> = Vec::new();
         lines.push("running 10 tests".to_string());
         for i in 1..=5 {
-            lines.push(format!("test test_{} ... ok", i));
+            lines.push(format!("test test_{i} ... ok"));
         }
         for i in 6..=10 {
-            lines.push(format!("test test_{} ... FAILED", i));
+            lines.push(format!("test test_{i} ... FAILED"));
         }
         lines.push("test result: FAILED. 5 passed; 5 failed; 0 ignored; 0 measured".to_string());
         let content = lines.join("\n");
@@ -476,14 +476,12 @@ src/utils.rs:25:    let x = 5;\n";
         assert!(
             technique == smart_crusher::LOSSLESS_TECHNIQUE
                 || technique == smart_crusher::LOSSY_TECHNIQUE,
-            "unexpected technique: {}",
-            technique
+            "unexpected technique: {technique}"
         );
         assert!(compressed.len() < content.len());
         assert!(
             compressed.starts_with("#schema:") || compressed.starts_with("[#crushed:"),
-            "unexpected compressed output: {}",
-            compressed
+            "unexpected compressed output: {compressed}"
         );
     }
 
@@ -497,12 +495,12 @@ src/utils.rs:25:    let x = 5;\n";
         ];
         for h in 0..5u32 {
             let base = (h * 10 + 1) as usize;
-            lines.push(format!("@@ -{},8 +{},8 @@", base, base));
+            lines.push(format!("@@ -{base},8 +{base},8 @@"));
             for c in 0..3u32 {
-                lines.push(format!(" context_{}_{}", h, c));
+                lines.push(format!(" context_{h}_{c}"));
             }
-            lines.push(format!("-old_line_{}", h));
-            lines.push(format!("+new_line_{}", h));
+            lines.push(format!("-old_line_{h}"));
+            lines.push(format!("+new_line_{h}"));
             for c in 0..3u32 {
                 lines.push(format!(" context_{}_{}", h, c + 3));
             }
@@ -519,8 +517,7 @@ src/utils.rs:25:    let x = 5;\n";
         assert!(compressed.len() < content.len());
         assert!(
             compressed.starts_with("[#diff_compressed:"),
-            "unexpected compressed output: {}",
-            compressed
+            "unexpected compressed output: {compressed}"
         );
     }
 
@@ -533,10 +530,10 @@ src/utils.rs:25:    let x = 5;\n";
             "========================= test session starts =========================".to_string(),
         );
         for i in 0..25 {
-            lines.push(format!("test_module.py::test_{} PASSED [ 50%]", i));
+            lines.push(format!("test_module.py::test_{i} PASSED [ 50%]"));
         }
         for i in 0..5 {
-            lines.push(format!("test_module.py::test_{} FAILED [ 50%]", i));
+            lines.push(format!("test_module.py::test_{i} FAILED [ 50%]"));
         }
         lines.push(
             "========================= 5 failed, 25 passed in 5.0s ========================="
@@ -550,8 +547,7 @@ src/utils.rs:25:    let x = 5;\n";
         assert!(compressed.len() < content.len());
         assert!(
             compressed.contains("[#log_compressed:"),
-            "unexpected compressed output: {}",
-            compressed
+            "unexpected compressed output: {compressed}"
         );
     }
 

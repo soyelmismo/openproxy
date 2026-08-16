@@ -43,7 +43,7 @@ fn build_warmup_request(model: &str) -> OpenAIRequest {
     }
 }
 
-pub async fn start_smart_warmup_scheduler(
+pub fn start_smart_warmup_scheduler(
     db_pool: Arc<DbPool>,
     config: AppConfig,
     upstream: Arc<UpstreamClient>,
@@ -137,7 +137,7 @@ async fn run_warmup_cycle(
         // Persist the fresh quota so the UI / frontend sees it
         {
             let db_pool = Arc::clone(db_pool);
-            let quota = quota.to_owned();
+            let quota = quota.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
                 let _ = crate::accounts::set_quota(
@@ -171,17 +171,16 @@ async fn run_warmup_cycle(
                 .unwrap_or(None)
             };
 
-            let true_model_id = match true_model_id {
-                Some(id) => id,
-                None => continue,
+            let Some(true_model_id) = true_model_id else {
+                continue;
             };
 
-            let history_key = format!("{}:{}", account_id_str, true_model_id);
+            let history_key = format!("{account_id_str}:{true_model_id}");
 
             // Check cooldown
             let last_ts = {
                 let db_pool = Arc::clone(db_pool);
-                let history_key_check = history_key.to_owned();
+                let history_key_check = history_key.clone();
                 tokio::task::spawn_blocking(move || {
                     let conn = db_pool.reader();
                     conn.query_row(
@@ -219,7 +218,7 @@ async fn run_warmup_cycle(
 
             if success {
                 let db_pool = Arc::clone(db_pool);
-                let history_key = history_key.to_owned();
+                let history_key = history_key.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     let conn = db_pool.writer();
                     let _ = conn.execute(
@@ -232,7 +231,7 @@ async fn run_warmup_cycle(
             }
 
             // Pequeña pausa entre modelos para no acribillar la API
-            tokio::time::sleep(Duration::from_millis(6000)).await;
+            tokio::time::sleep(Duration::from_secs(6)).await;
         }
 
         // Pausa entre cuentas para ser sigilosos (anti-DDoS/bot detection)
@@ -301,7 +300,7 @@ async fn ping_antigravity_model(
     );
 
     let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(url, payload);
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", access_token)) {
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);

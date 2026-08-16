@@ -98,7 +98,7 @@ pub fn generate_plaintext() -> String {
     let suffix: String = (0..32)
         .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
         .collect();
-    format!("op_live_{}", suffix)
+    format!("op_live_{suffix}")
 }
 
 /// Hash a plaintext API key. Uses SHA-256 hex-encoded, matching the
@@ -141,7 +141,7 @@ pub fn is_expired(expires_at: Option<&str>, now: DateTime<Utc>) -> Result<bool> 
     };
     let dt = DateTime::parse_from_rfc3339(s)
         .map_err(|e| CoreError::Database {
-            message: format!("invalid expires_at {:?}: {}", s, e),
+            message: format!("invalid expires_at {s:?}: {e}"),
             source: None,
         })?
         .with_timezone(&Utc);
@@ -655,7 +655,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir =
-            std::env::temp_dir().join(format!("openproxy-apikeys-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-apikeys-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("apikeys.db");
         let mut conn = Connection::open(&path).expect("open");

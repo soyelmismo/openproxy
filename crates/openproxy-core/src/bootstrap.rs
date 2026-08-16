@@ -101,7 +101,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir =
-            std::env::temp_dir().join(format!("openproxy-bootstrap-test-{}-{}-{}", pid, nanos, n));
+            std::env::temp_dir().join(format!("openproxy-bootstrap-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("bootstrap.db");
         let mut conn = Connection::open(&path).expect("open");

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, AppState, types_combos, ApiError, ComboId, core_combos, CoreError, Arc, run_test_for_model, ModelRowId, TestOptions, ComboTargetId};
 use axum::{
     Json,
     extract::{Path, State},
@@ -20,7 +20,7 @@ pub async fn create_combo(
     Json(input): Json<core_admin::CreateComboInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let w = s.db_pool().writer();
-    let id = core_admin::create_combo(&w, input)?;
+    let id = core_admin::create_combo(&w, &input)?;
     Ok(Json(serde_json::json!({ "id": id.0 })))
 }
 
@@ -76,7 +76,7 @@ pub async fn test_combo_targets(
             }
         })
         .await
-        .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn_blocking failed: {}", e))))?;
+        .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn_blocking failed: {e}"))))?;
 
         // The fan-out is intentionally serial. The prompt explicitly
         // asked for no parallelization in the MVP ("NO paralelizar.
@@ -177,22 +177,19 @@ pub async fn test_combo_targets(
             results
         };
 
-        let results = match tokio::time::timeout(std::time::Duration::from_secs(180), fan_out).await
-        {
-            Ok(rs) => rs,
-            Err(_) => {
-                // Timed out before we finished. Return whatever we
-                // have so the dashboard can render the partial
-                // picture. The frontend treats the response shape
-                // uniformly; a 504 here would just wipe the
-                // button state with no data.
-                tracing::warn!(combo_id = id, "test-all fan-out exceeded 180s budget");
-                return Err(crate::error::ApiError(
-                    openproxy_types::CoreError::Internal(
-                        "test-all exceeded 180s budget; partial results dropped".into(),
-                    ),
-                ));
-            }
+        let Ok(results) = tokio::time::timeout(std::time::Duration::from_mins(3), fan_out).await
+        else {
+            // Timed out before we finished. Return whatever we
+            // have so the dashboard can render the partial
+            // picture. The frontend treats the response shape
+            // uniformly; a 504 here would just wipe the
+            // button state with no data.
+            tracing::warn!(combo_id = id, "test-all fan-out exceeded 180s budget");
+            return Err(crate::error::ApiError(
+                openproxy_types::CoreError::Internal(
+                    "test-all exceeded 180s budget; partial results dropped".into(),
+                ),
+            ));
         };
 
         Ok(Json(results))
@@ -251,7 +248,7 @@ pub async fn update_combo(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let w = s.db_pool().writer();
     // Optional race_size update.
-    if let Some(n) = body.get("race_size").and_then(|v| v.as_u64()) {
+    if let Some(n) = body.get("race_size").and_then(serde_json::Value::as_u64) {
         let rs = u8::try_from(n).unwrap_or(0);
         core_combos::update_combo(&w, ComboId(id), Some(rs))?;
     }
@@ -273,15 +270,14 @@ pub async fn update_combo(
     // Optional `priority_mode` update. `null` clears the column
     // back to `strict` (the legacy default).
     if let Some(v) = body.get("priority_mode") {
-        let mode = match v {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(s) => Some(s.as_str()),
-            other => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "priority_mode must be a string or null, got {}",
-                    other
-                ))));
-            }
+        let mode = if v.is_null() {
+            None
+        } else if let Some(s) = v.as_str() {
+            Some(s)
+        } else {
+            return Err(ApiError(CoreError::Validation(format!(
+                "priority_mode must be a string or null, got {v}"
+            ))));
         };
         core_combos::update_priority_mode(&w, ComboId(id), mode)?;
     }
@@ -295,15 +291,14 @@ pub async fn update_combo(
     // so we must NOT batch them into a single UPDATE that would
     // NULL out the absent fields.
     if let Some(v) = body.get("cooldown_mode") {
-        let mode = match v {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(s) => Some(s.as_str()),
-            other => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "cooldown_mode must be a string or null, got {}",
-                    other
-                ))));
-            }
+        let mode = if v.is_null() {
+            None
+        } else if let Some(s) = v.as_str() {
+            Some(s)
+        } else {
+            return Err(ApiError(CoreError::Validation(format!(
+                "cooldown_mode must be a string or null, got {v}"
+            ))));
         };
         core_combos::update_cooldown_mode(&w, ComboId(id), mode)?;
     }
@@ -392,10 +387,9 @@ pub async fn update_combo_target(
         // Cast: i32 is well under i64::MAX in practice; the SQL
         // column is INTEGER (i64 in rusqlite) so a non-negative
         // i32 is safe.
-        if priority_order < i32::MIN as i64 || priority_order > i32::MAX as i64 {
+        if priority_order < i64::from(i32::MIN) || priority_order > i64::from(i32::MAX) {
             return Err(ApiError(CoreError::Validation(format!(
-                "priority_order out of i32 range: {}",
-                priority_order
+                "priority_order out of i32 range: {priority_order}"
             ))));
         }
         let w = s.db_pool().writer();
@@ -410,7 +404,7 @@ pub async fn update_combo_target(
         })?;
         // Range-check before the i32 cast so an out-of-range
         // value surfaces as a 400 instead of a silent wrap.
-        if weight_i64 < 1 || weight_i64 > i32::MAX as i64 {
+        if weight_i64 < 1 || weight_i64 > i64::from(i32::MAX) {
             return Err(ApiError(CoreError::Validation(format!(
                 "weight must be a positive i32 (1..={}), got {}",
                 i32::MAX,
@@ -435,15 +429,14 @@ pub async fn update_combo_target(
     }
     // Optional per-target `cooldown_mode`
     if let Some(v) = body.get("cooldown_mode") {
-        let mode = match v {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(s) => Some(s.as_str()),
-            other => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "cooldown_mode must be a string or null, got {}",
-                    other
-                ))));
-            }
+        let mode = if v.is_null() {
+            None
+        } else if let Some(s) = v.as_str() {
+            Some(s)
+        } else {
+            return Err(ApiError(CoreError::Validation(format!(
+                "cooldown_mode must be a string or null, got {v}"
+            ))));
         };
         let w = s.db_pool().writer();
         core_combos::update_target_cooldown_mode(&w, ComboTargetId(target_id), mode)?;
@@ -507,7 +500,7 @@ pub async fn update_combo_target(
         "combo_id": combo_id,
         "id": target_id,
         "priority_order": priority_order,
-        "weight": body.get("weight").and_then(|v| v.as_i64()),
+        "weight": body.get("weight").and_then(serde_json::Value::as_i64),
         "active": active,
         "cooldown_mode": body.get("cooldown_mode"),
         "cooldown_base_secs": body.get("cooldown_base_secs"),

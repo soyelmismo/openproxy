@@ -219,7 +219,7 @@ impl std::fmt::Display for ErrorPhase {
             ErrorPhase::Route => "route",
             ErrorPhase::Retry => "retry",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

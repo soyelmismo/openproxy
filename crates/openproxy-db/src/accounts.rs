@@ -40,8 +40,7 @@ pub fn create(
                 Err(CoreError::Validation("unknown provider".into()))
             } else {
                 Err(crate::error::map_db_error_ctx(format!(
-                    "insert account for provider {}",
-                    provider_id
+                    "insert account for provider {provider_id}"
                 ))(e))
             }
         }

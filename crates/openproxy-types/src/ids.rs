@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn provider_id_display() {
         let p = ProviderId::new("openrouter");
-        assert_eq!(format!("{}", p), "openrouter");
+        assert_eq!(format!("{p}"), "openrouter");
     }
 
     #[test]

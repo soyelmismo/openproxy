@@ -168,18 +168,16 @@ impl PipelineRepository for SqlitePipelineRepository {
                         })?;
                     let priority_mode_str: Option<String> = row.get(6)?;
                     let priority_mode = priority_mode_str
-                        .map(|s| {
+                        .map_or(openproxy_types::combos::PriorityMode::Strict, |s| {
                             openproxy_types::combos::PriorityMode::parse(&s)
                                 .unwrap_or(openproxy_types::combos::PriorityMode::Strict)
-                        })
-                        .unwrap_or(openproxy_types::combos::PriorityMode::Strict);
+                        });
                     let cooldown_mode_str: Option<String> = row.get(7)?;
                     let cooldown_mode = cooldown_mode_str
-                        .map(|s| {
+                        .map_or(openproxy_types::config::CooldownMode::Flat, |s| {
                             openproxy_types::config::CooldownMode::parse(&s)
                                 .unwrap_or(openproxy_types::config::CooldownMode::Flat)
-                        })
-                        .unwrap_or(openproxy_types::config::CooldownMode::Flat);
+                        });
                     Ok(Combo {
                         id: ComboId(row.get(0)?),
                         name: row.get(1)?,
@@ -394,7 +392,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                             rusqlite::types::Type::Text,
                             Box::new(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
-                                format!("invalid target_format in db: {}", other),
+                                format!("invalid target_format in db: {other}"),
                             )),
                         ));
                     }
@@ -410,7 +408,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                             rusqlite::types::Type::Integer,
                             Box::new(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
-                                format!("invalid active bit in db: {}", other),
+                                format!("invalid active bit in db: {other}"),
                             )),
                         ));
                     }
@@ -426,7 +424,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                             rusqlite::types::Type::Integer,
                             Box::new(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
-                                format!("invalid custom bit in db: {}", other),
+                                format!("invalid custom bit in db: {other}"),
                             )),
                         ));
                     }
@@ -560,7 +558,7 @@ impl PipelineRepository for SqlitePipelineRepository {
             CooldownMode::Flat => base_secs,
             CooldownMode::Exponential => {
                 let mut exp_secs =
-                    base_secs.saturating_mul((factor as u64).saturating_pow(current_count));
+                    base_secs.saturating_mul(u64::from(factor).saturating_pow(current_count));
                 if exp_secs > max_secs {
                     exp_secs = max_secs;
                 }
@@ -660,12 +658,12 @@ impl PipelineRepository for SqlitePipelineRepository {
                         .get("region")
                         .or(val.get("aws_region"))
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::string::ToString::to_string);
                     let profile_arn = val
                         .get("profile_arn")
                         .or(val.get("aws_role_arn"))
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::string::ToString::to_string);
                     if region.is_some() || profile_arn.is_some() {
                         kiro_map.insert(
                             id.0,
@@ -880,7 +878,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                 )
                 .optional()
                 .map_err(|e| openproxy_types::error::CoreError::Database {
-                    message: format!("query current proxy: {}", e),
+                    message: format!("query current proxy: {e}"),
                     source: Some(Box::new(e)),
                 })?;
 
@@ -894,14 +892,13 @@ impl PipelineRepository for SqlitePipelineRepository {
                         host,
                         port
                     )));
-                } else {
-                    return Ok(Some(format!(
-                        "{}://{}:{}",
-                        proto.to_lowercase(),
-                        host,
-                        port
-                    )));
                 }
+                return Ok(Some(format!(
+                    "{}://{}:{}",
+                    proto.to_lowercase(),
+                    host,
+                    port
+                )));
             }
         }
 
@@ -914,7 +911,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                 .query_map(
                     rusqlite::params![
                         provider_id.as_str(),
-                        account_id.as_ref().map(|id| id.0).unwrap_or(0)
+                        account_id.as_ref().map_or(0, |id| id.0)
                     ],
                     |row| row.get::<_, String>(0),
                 )
@@ -930,7 +927,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         let mut stmt = conn
             .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
             .map_err(|e| openproxy_types::error::CoreError::Database {
-                message: format!("prepare query new proxy: {}", e),
+                message: format!("prepare query new proxy: {e}"),
                 source: Some(Box::new(e)),
             })?;
 
@@ -946,7 +943,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                 ))
             })
             .map_err(|e| openproxy_types::error::CoreError::Database {
-                message: format!("query new proxy candidates: {}", e),
+                message: format!("query new proxy candidates: {e}"),
                 source: Some(Box::new(e)),
             })?;
 
@@ -994,14 +991,13 @@ impl PipelineRepository for SqlitePipelineRepository {
                     host,
                     port
                 )));
-            } else {
-                return Ok(Some(format!(
-                    "{}://{}:{}",
-                    proto.to_lowercase(),
-                    host,
-                    port
-                )));
             }
+            return Ok(Some(format!(
+                "{}://{}:{}",
+                proto.to_lowercase(),
+                host,
+                port
+            )));
         }
 
         Ok(None)

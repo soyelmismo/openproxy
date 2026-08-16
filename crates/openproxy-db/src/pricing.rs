@@ -284,11 +284,11 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
             return Some(p);
         }
     }
-    let with_free = format!("{}-free", model);
+    let with_free = format!("{model}-free");
     if let Some(p) = lookup_exact_in_db(conn, provider, &with_free) {
         return Some(p);
     }
-    let with_colon = format!("{}:free", model);
+    let with_colon = format!("{model}:free");
     if let Some(p) = lookup_exact_in_db(conn, provider, &with_colon) {
         return Some(p);
     }
@@ -381,13 +381,13 @@ pub fn compute_cost_opt(
     let price = price?;
     match price.kind.as_str() {
         "audio" => {
-            let seconds = prompt_tokens as f64 / 1000.0;
+            let seconds = f64::from(prompt_tokens) / 1000.0;
             Some(price.input_per_1m * seconds / 1_000_000.0)
         }
-        "image" => Some(price.input_per_1m * prompt_tokens as f64 / 1_000_000.0),
+        "image" => Some(price.input_per_1m * f64::from(prompt_tokens) / 1_000_000.0),
         _ => {
-            let input_cost = price.input_per_1m * (prompt_tokens as f64) / 1_000_000.0;
-            let output_cost = price.output_per_1m * (completion_tokens as f64) / 1_000_000.0;
+            let input_cost = price.input_per_1m * f64::from(prompt_tokens) / 1_000_000.0;
+            let output_cost = price.output_per_1m * f64::from(completion_tokens) / 1_000_000.0;
             Some(input_cost + output_cost)
         }
     }
@@ -408,15 +408,15 @@ mod tests {
     #[test]
     fn known_openrouter_model() {
         let price = lookup("openrouter", "openai/gpt-4o").unwrap();
-        assert_eq!(price.input_per_1m, 2.5);
-        assert_eq!(price.output_per_1m, 10.0);
+        assert!((price.input_per_1m - 2.5).abs() < f64::EPSILON);
+        assert!((price.output_per_1m - 10.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn known_minimax_model() {
         let price = lookup("minimax", "minimax-m2.1").unwrap();
-        assert_eq!(price.input_per_1m, 0.2);
-        assert_eq!(price.output_per_1m, 0.2);
+        assert!((price.input_per_1m - 0.2).abs() < f64::EPSILON);
+        assert!((price.output_per_1m - 0.2).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -438,25 +438,25 @@ mod tests {
             output_per_1m: 10.0,
             ..Default::default()
         });
-        assert_eq!(compute_cost(price, 0, 0), 0.0);
+        assert!(compute_cost(price, 0, 0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn compute_cost_unknown_pricing() {
         // None means "unknown" — treat as free, no panic.
-        assert_eq!(compute_cost(None, 1_000_000, 1_000_000), 0.0);
+        assert!(compute_cost(None, 1_000_000, 1_000_000).abs() < f64::EPSILON);
     }
 
     #[test]
     fn pricing_lookup_is_deterministic() {
         let a = lookup("openrouter", "anthropic/claude-sonnet-4").unwrap();
         let b = lookup("openrouter", "anthropic/claude-sonnet-4").unwrap();
-        assert_eq!(a.input_per_1m, b.input_per_1m);
-        assert_eq!(a.output_per_1m, b.output_per_1m);
+        assert!((a.input_per_1m - b.input_per_1m).abs() < f64::EPSILON);
+        assert!((a.output_per_1m - b.output_per_1m).abs() < f64::EPSILON);
         // Cross-provider fallback: a model registered under "openrouter"
         // can be found via a different provider id.
         let cross = lookup("minimax", "anthropic/claude-sonnet-4").unwrap();
-        assert_eq!(cross.input_per_1m, a.input_per_1m);
+        assert!((cross.input_per_1m - a.input_per_1m).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -465,8 +465,8 @@ mod tests {
         // A request from "tokenrouter" with model "MiniMax-M3" should
         // still find the price via the cross-provider fallback.
         let price = lookup("tokenrouter", "MiniMax-M3").unwrap();
-        assert_eq!(price.input_per_1m, 1.0);
-        assert_eq!(price.output_per_1m, 1.0);
+        assert!((price.input_per_1m - 1.0).abs() < f64::EPSILON);
+        assert!((price.output_per_1m - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

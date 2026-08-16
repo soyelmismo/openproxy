@@ -1,4 +1,4 @@
-use super::*;
+use super::{ApiError, CoreError, Arc};
 use crate::extractors::{DbReader, DbWriter};
 use axum::{Json, extract::Path};
 use openproxy_core::free_proxies::{
@@ -22,7 +22,7 @@ pub async fn create_source(
             "name and url are required".into(),
         )));
     }
-    let src = create_proxy_source(&w, body)?;
+    let src = create_proxy_source(&w, &body)?;
 
     let pool = Arc::clone(state.db_pool());
     tokio::spawn(async move {

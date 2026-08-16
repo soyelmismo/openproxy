@@ -1,4 +1,4 @@
-use super::*;
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, ModelId, TargetFormat, Arc, UpstreamClient, Result, UpstreamRequest, CancellationToken, TimeoutProfile, CoreError};
 
 const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.0";
 
@@ -51,7 +51,7 @@ impl CodexAdapter {
         }
     }
 
-    fn hardcoded_models(&self) -> Vec<DiscoveredModel> {
+    fn hardcoded_models() -> Vec<DiscoveredModel> {
         // Models from codex-rs/models-manager/models.json (official Codex bundled catalog)
         // Updated from https://github.com/openai/codex
         [
@@ -143,7 +143,7 @@ impl ProviderAdapter for CodexAdapter {
         _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        Ok(self.hardcoded_models())
+        Ok(Self::hardcoded_models())
     }
 
     async fn fetch_quota(
@@ -186,7 +186,7 @@ impl CodexAdapter {
         let mut req = UpstreamRequest::get(url);
         req.headers.insert(
             http::header::AUTHORIZATION,
-            http::HeaderValue::from_str(&format!("Bearer {}", access_token))
+            http::HeaderValue::from_str(&format!("Bearer {access_token}"))
                 .unwrap_or_else(|_| http::HeaderValue::from_static("")),
         );
         req.headers.insert(
@@ -243,9 +243,9 @@ impl CodexAdapter {
                 plan_name: None,
                 last_fetched_at: openproxy_types::now_unix_secs_str(),
                 fetch_error: Some(if snippet.is_empty() {
-                    format!("Codex quota check failed: HTTP {}", status)
+                    format!("Codex quota check failed: HTTP {status}")
                 } else {
-                    format!("Codex quota check failed: HTTP {}: {}", status, snippet)
+                    format!("Codex quota check failed: HTTP {status}: {snippet}")
                 }),
                 model_details: None,
             });
@@ -334,8 +334,7 @@ fn parse_codex_usage_window(window: Option<&serde_json::Value>) -> (Option<i64>,
                 .map(|v| {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
+                        .map_or(0, |d| d.as_secs());
                     (now + v.ceil() as u64).to_string()
                 })
         });
@@ -359,7 +358,7 @@ mod tests {
             "rate_limit": {
                 "primary_window": {
                     "used_percent": 42.5,
-                    "reset_at": 1700000000.0
+                    "reset_at": 1_700_000_000.0
                 },
                 "secondary_window": {
                     "usedPercent": 85.1,

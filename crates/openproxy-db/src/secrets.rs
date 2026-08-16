@@ -56,8 +56,7 @@ impl MasterKey {
                     Err(v) => {
                         let v_len = v.len();
                         return Err(CoreError::Config(format!(
-                            "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
-                            v_len
+                            "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {v_len}"
                         )));
                     }
                 },

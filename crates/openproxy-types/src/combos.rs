@@ -25,7 +25,7 @@ impl Strategy {
             "priority" => Ok(Self::Priority),
             "round_robin" => Ok(Self::RoundRobin),
             "shuffle" => Ok(Self::Shuffle),
-            other => Err(format!("invalid strategy: {}", other)),
+            other => Err(format!("invalid strategy: {other}")),
         }
     }
 }
@@ -58,7 +58,7 @@ impl PriorityMode {
             "weighted" => Ok(Self::Weighted),
             "least_used" => Ok(Self::LeastUsed),
             "p2c" => Ok(Self::P2c),
-            other => Err(format!("invalid priority_mode: {}", other)),
+            other => Err(format!("invalid priority_mode: {other}")),
         }
     }
     pub fn from_db(s: Option<&str>) -> Self {

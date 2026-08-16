@@ -13,10 +13,10 @@ pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<&'static str> {
     for msg in msgs.iter_mut() {
         if mutate_message_text(msg, |text| {
             let normalized = normalize_message_whitespace(text);
-            if normalized != text {
-                Some(normalized)
-            } else {
+            if normalized == text {
                 None
+            } else {
+                Some(normalized)
             }
         }) {
             applied.push("lite::collapse_whitespace");
@@ -158,8 +158,7 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
                 let cut = text
                     .char_indices()
                     .nth(MAX_TOOL_CHARS)
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len());
+                    .map_or(text.len(), |(i, _)| i);
                 Some(format!(
                     "{}…[truncated {} chars]",
                     &text[..cut],
@@ -227,8 +226,7 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                 let fmt = part
                     .get("image_url")
                     .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str())
-                    .map(|url| {
+                    .and_then(|v| v.as_str()).map_or_else(|| "unknown".to_string(), |url| {
                         let semi = url.find(';').unwrap_or(url.len());
                         let fmt = &url["data:image/".len()..semi];
                         if fmt.is_empty() {
@@ -236,8 +234,7 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                         } else {
                             fmt.to_string()
                         }
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
+                    });
                 if let Some(obj) = part.as_object_mut() {
                     *obj = serde_json::json!({
                         "type": "text",
@@ -360,10 +357,10 @@ pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
     for msg in msgs.iter_mut() {
         if mutate_message_text(msg, |text| {
             let collapsed = collapse_separator_runs(text);
-            if collapsed != text {
-                Some(collapsed)
-            } else {
+            if collapsed == text {
                 None
+            } else {
+                Some(collapsed)
             }
         }) {
             applied.push("lite::collapse_separators");
@@ -465,7 +462,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -501,7 +498,7 @@ mod tests {
             name: None,
             tool_call_id: Some("call_1".into()),
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let applied = compress_tool_results(&mut msgs);
         assert!(!applied.is_empty());
@@ -538,7 +535,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let applied = compress_tool_results(&mut msgs);
         assert!(
@@ -549,8 +546,7 @@ mod tests {
         if let Some(Value::String(s)) = &msgs[0].content {
             assert!(
                 s.contains("…[truncated"),
-                "expected truncation marker, got: {}",
-                s
+                "expected truncation marker, got: {s}"
             );
         } else {
             panic!("content should still be a string after truncation");
@@ -579,7 +575,7 @@ mod tests {
             name: None,
             tool_call_id: None,
             tool_calls: None,
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }];
         let applied = replace_image_urls(&mut msgs);
         assert!(!applied.is_empty());
@@ -599,7 +595,7 @@ mod tests {
                 name: None,
                 tool_call_id: Some("c1".into()),
                 tool_calls: None,
-                extra: Default::default(),
+                extra: serde_json::Map::default(),
             },
         ];
         let techniques = apply_lite(&mut msgs);

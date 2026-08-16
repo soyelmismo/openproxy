@@ -249,7 +249,7 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
     // The chat path strips this prefix before talking to the upstream
     // (see `handlers::chat::run_pipeline`), so the id round-trips
     // safely: the client sends back what it sees in the catalog.
-    let full_id = format!("{}/{}", provider_id, model_id);
+    let full_id = format!("{provider_id}/{model_id}");
 
     // Capabilities: prefer the stored JSON blob; fall back to the
     // heuristic. The fallback runs through the same `from_json`
@@ -287,7 +287,7 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
         Some(v) => v,
         None => capabilities::infer_input_modalities(&caps)
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect(),
     };
     let output_modalities: Vec<String> = match m
@@ -298,7 +298,7 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
         Some(v) => v,
         None => capabilities::infer_output_modalities()
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect(),
     };
 
@@ -366,8 +366,7 @@ fn unix_now_secs() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 #[cfg(test)]
@@ -445,7 +444,7 @@ mod tests {
             "temperature",
             "attachment",
         ] {
-            assert!(caps.contains_key(key), "missing key {}", key);
+            assert!(caps.contains_key(key), "missing key {key}");
         }
         assert!(
             !caps.contains_key("reasoning"),
