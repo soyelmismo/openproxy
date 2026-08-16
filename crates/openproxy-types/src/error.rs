@@ -346,4 +346,49 @@ mod tests {
         }
         assert_eq!(codes.len(), 5);
     }
+
+    #[test]
+    fn test_is_proxy_rotated() {
+        assert!(
+            CoreError::UpstreamError {
+                status: 500,
+                provider: "test".into(),
+                model: "model".into(),
+                body: "err".into(),
+                is_proxy_rotated: true,
+            }
+            .is_proxy_rotated()
+        );
+
+        assert!(
+            !CoreError::UpstreamError {
+                status: 500,
+                provider: "test".into(),
+                model: "model".into(),
+                body: "err".into(),
+                is_proxy_rotated: false,
+            }
+            .is_proxy_rotated()
+        );
+
+        assert!(
+            CoreError::RateLimited {
+                provider: "test".into(),
+                retry_after_ms: 0,
+                is_proxy_rotated: true,
+            }
+            .is_proxy_rotated()
+        );
+
+        assert!(
+            !CoreError::RateLimited {
+                provider: "test".into(),
+                retry_after_ms: 0,
+                is_proxy_rotated: false,
+            }
+            .is_proxy_rotated()
+        );
+
+        assert!(!CoreError::Auth("x".into()).is_proxy_rotated());
+    }
 }
