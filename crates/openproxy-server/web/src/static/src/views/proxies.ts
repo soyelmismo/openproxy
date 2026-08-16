@@ -42,15 +42,25 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let proxyTestUrl = "https://cloudflare.com/cdn-cgi/trace";
 let isSavingTestUrl = false;
 
+interface ProxyQueryParams {
+  limit: number;
+  offset: number;
+  search?: string;
+  source?: string;
+  status?: string;
+  protocol?: string;
+  [key: string]: string | number | undefined;
+}
+
 function fetchFilteredProxies(): void {
-  const queryParams: Record<string, string | number> = {
+  const queryParams: ProxyQueryParams = {
     limit: 50,
     offset: (currentPage - 1) * 50,
   };
-  if (filterSearch) queryParams["search"] = filterSearch;
-  if (filterSource) queryParams["source"] = filterSource;
-  if (filterStatus) queryParams["status"] = filterStatus;
-  if (filterProtocol) queryParams["protocol"] = filterProtocol;
+  if (filterSearch) queryParams.search = filterSearch;
+  if (filterSource) queryParams.source = filterSource;
+  if (filterStatus) queryParams.status = filterStatus;
+  if (filterProtocol) queryParams.protocol = filterProtocol;
 
   void reloadProxies(queryParams);
 }

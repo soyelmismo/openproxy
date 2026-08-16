@@ -28,16 +28,10 @@ export interface ApiOptions {
 
 export async function api(path: string, opts: ApiOptions = {}): Promise<unknown> {
   const t0: number = performance.now();
-  // Build the headers as a mutable record so we can conditionally
-  // attach the Authorization header. The cast through
-  // `Record<string, string>` is necessary because `RequestInit.headers`
-  // is typed as `HeadersInit` (which includes `Headers` and
-  // `[string, string][]`), and TS won't let us index into the union.
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token: string | null = getToken();
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  const headers: HeadersInit = token
+    ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+    : { "Content-Type": "application/json" };
   const init: RequestInit = { method: opts.method || "GET", headers };
   if (opts.body) init.body = opts.body;
   const r: Response = await fetch("/admin/api" + path, init);

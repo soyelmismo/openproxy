@@ -96,7 +96,7 @@ import { showAddProxySource, showEditProxySource, deleteProxySource, testProxySo
 // the per-action contract at runtime.
 export type ActionHandler = (...args: any[]) => any;
 
-export const HANDLERS: Record<string, ActionHandler> = {
+export const HANDLERS = {
   // Accounts
   showCreateAccount,
   createAccount,        // signature: (providerId, e)  — submit handler
@@ -325,7 +325,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   showEditProxySource,
   deleteProxySource,
   testProxySource,
-};
+} satisfies Record<string, ActionHandler>;
 
 // Collect positional data-arg-N attrs from an element. Skips the
 // "action" key. Returns an array aligned to arg1..argN order. Numbers

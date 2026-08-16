@@ -94,7 +94,7 @@ const PRESETS: readonly UsagePreset[] = [
 // `custom` is labelled "All time" because the dashboard has no custom
 // date-picker — selecting it sends no `?preset=`, so the server
 // returns the full history.
-const PRESET_LABEL_KEYS: Record<UsagePreset, string> = {
+const PRESET_LABEL_KEYS = {
   today: "analytics.preset.today",
   "7d": "analytics.preset.7d",
   "30d": "analytics.preset.30d",
@@ -103,7 +103,7 @@ const PRESET_LABEL_KEYS: Record<UsagePreset, string> = {
   last_6_months: "analytics.preset.last_6_months",
   ytd: "analytics.preset.ytd",
   custom: "analytics.preset.custom",
-};
+} satisfies Record<UsagePreset, string>;
 
 function fmtCost(v: number): string {
   if (!Number.isFinite(v)) return "$0.00";

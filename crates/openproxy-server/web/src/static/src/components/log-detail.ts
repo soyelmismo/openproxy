@@ -85,7 +85,7 @@ function statusPillClass(s: string | null | undefined): string {
   return "warn";
 }
 
-function pruneValueForDisplay(val: unknown, depth = 0): unknown {
+function pruneValueForDisplay(val: any, depth = 0): any {
   if (depth > 10 || val == null) return val;
 
   if (typeof val === "string") {
@@ -637,9 +637,9 @@ function renderResponseTab(
   // String: try to parse as JSON; on success, recurse with parsed
   // value; on failure, show the raw string in a collapsible.
   if (typeof response === "string") {
-    let parsed: unknown = null;
+    let parsed: Record<string, unknown> | null = null;
     let parsedOk = false;
-    try { parsed = JSON.parse(response); parsedOk = true; }
+    try { parsed = JSON.parse(response) as Record<string, unknown>; parsedOk = true; }
     catch (_e: unknown) { parsedOk = false; }
     if (parsedOk && parsed != null && typeof parsed === "object") {
       return renderResponseTab(parsed, streamingHint, createdAt, isPartial);
@@ -1073,7 +1073,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   // from the table — which only has the live-update shape — looks
   // the same in the modal as a row from /usage/detail.
   const detail: Record<string, unknown> = (log.detail as Record<string, unknown>) || {};
-  const meta: Record<string, unknown> = (log.meta as Record<string, unknown>) || detail["meta"] as Record<string, unknown> || (log as unknown as Record<string, unknown>);
+  const meta: Record<string, unknown> = (log.meta as Record<string, unknown>) || (detail["meta"] as Record<string, unknown>) || (log as Record<string, unknown>);
   const response: unknown = log.response ?? detail["response"] ?? log.response_body_json ?? null;
   const isStreaming: boolean = !!((log as Record<string, unknown>)["is_streaming"]);
   // A streaming request that didn't complete is "partial" — the
@@ -1394,7 +1394,7 @@ function renderModal() {
     response_body_json: detailObj?.['response_body_json'],
     stages: [safeAttempt]
   };
-  render(renderLogDetailModal(logObj as unknown as LogDetailLog), wrapper as HTMLElement);
+  render(renderLogDetailModal(logObj as LogDetailLog), wrapper as HTMLElement);
 }
 
 // Re-render modal on clock tick so live latency updates
@@ -1637,7 +1637,7 @@ export function buildDebugBundle(log: LogDetailLog): string {
   }
 
   // Raw log row (everything we have, cleaned of nested duplicates).
-  const cleanLog: Record<string, unknown> = { ...(log as unknown as Record<string, unknown>) };
+  const cleanLog: Record<string, unknown> = Object.assign({}, log as Record<string, unknown>);
   delete cleanLog["detail"];
   if (Array.isArray(cleanLog["stages"])) {
     cleanLog["stages"] = (cleanLog["stages"] as Record<string, unknown>[]).map((s: Record<string, unknown>) => {
@@ -1817,7 +1817,7 @@ export async function copyDebugBundle(): Promise<void> {
   if (attempt) {
     const safeAttempt = { ...attempt, detail: undefined, row: undefined };
     if (attempt.row) {
-      row = { ...attempt.row, stages: [safeAttempt] } as unknown as LogDetailLog;
+      row = { ...attempt.row, stages: [safeAttempt] } as LogDetailLog;
     } else {
       row = {
         id: attempt.rowId,
@@ -1828,7 +1828,7 @@ export async function copyDebugBundle(): Promise<void> {
         provider_id: attempt.providerId,
         upstream_model_id: attempt.upstreamModelId,
         stages: [safeAttempt]
-      } as unknown as LogDetailLog;
+      } as LogDetailLog;
     }
   }
 

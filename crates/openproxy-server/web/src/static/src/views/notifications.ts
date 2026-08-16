@@ -91,12 +91,12 @@ const FILTER_OPTIONS: ReadonlyArray<{
 /** Per-kind icon glyph. Kept as a unicode string so it inherits the
  *  text color of its container (vs. an SVG that would need its own
  *  stroke color management). */
-const KIND_ICON: Record<NotificationKind, string> = {
+const KIND_ICON = {
   model_new: "⊕",
   model_gone: "⊖",
   model_auto_activated: "⚡",
   system: "ℹ",
-};
+} satisfies Record<NotificationKind, string>;
 
 /**
  * Per-kind CSS color variable for the card's left border accent and
@@ -108,12 +108,12 @@ const KIND_ICON: Record<NotificationKind, string> = {
  *  - `model_auto_activated`   blue    — model auto-enabled
  *  - `system`                 gray    — system info (overridden per-code below)
  */
-const KIND_COLOR_VAR: Record<NotificationKind, string> = {
+const KIND_COLOR_VAR = {
   model_new: "var(--color-success, #22c55e)",
   model_gone: "var(--color-error, #ef4444)",
   model_auto_activated: "var(--color-info, #3b82f6)",
   system: "var(--color-text-muted, #6b7280)",
-};
+} satisfies Record<NotificationKind, string>;
 
 /**
  * Per-code CSS color variable for system notification cards.
@@ -127,14 +127,14 @@ const KIND_COLOR_VAR: Record<NotificationKind, string> = {
  *  - `account_invalid`             error  (red)    — upstream rejected creds
  *  - `quota_low`                   warn   (orange) — approaching limit
  */
-const SYSTEM_CODE_CARD_COLOR: Record<string, string> = {
+const SYSTEM_CODE_CARD_COLOR = {
   discovery_failed: "var(--color-warn, #f59e0b)",
   account_key_decrypt_failed: "var(--color-error, #ef4444)",
   circuit_open: "var(--color-error, #ef4444)",
   oauth_expired: "var(--color-warn, #f59e0b)",
   account_invalid: "var(--color-error, #ef4444)",
   quota_low: "var(--color-warn, #f59e0b)",
-};
+} satisfies Record<string, string>;
 
 /** Resolve the card accent color for a notification row.
  *  For system rows, dispatches on `payload.code`; for everything
@@ -142,8 +142,8 @@ const SYSTEM_CODE_CARD_COLOR: Record<string, string> = {
 function notificationCardColor(r: NotificationRow): string {
   if (r.kind === "system") {
     const code: string = payloadString(r.payload, "code");
-    if (code && SYSTEM_CODE_CARD_COLOR[code]) {
-      return SYSTEM_CODE_CARD_COLOR[code];
+    if (code && (code in SYSTEM_CODE_CARD_COLOR)) {
+      return SYSTEM_CODE_CARD_COLOR[code as keyof typeof SYSTEM_CODE_CARD_COLOR];
     }
   }
   return KIND_COLOR_VAR[r.kind] ?? "var(--color-text-muted, #6b7280)";
@@ -169,14 +169,14 @@ function notificationCardColor(r: NotificationRow): string {
  * server starts emitting before this map is updated renders with the
  * generic `ℹ` glyph (still visible, just not semantically colored).
  */
-const SYSTEM_CODE_ICON: Record<string, string> = {
+const SYSTEM_CODE_ICON = {
   discovery_failed: "⚠",
   account_key_decrypt_failed: "⚿", // U+26BF SQUARED KEY
   circuit_open: "⏻", // U+23FB POWER SYMBOL
   oauth_expired: "⊘", // U+2298 CIRCLED DIVISION SLASH
   account_invalid: "⊗", // U+2297 CIRCLED TIMES
   quota_low: "▼", // U+25BC BLACK DOWN-POINTING TRIANGLE
-};
+} satisfies Record<string, string>;
 
 /**
  * Per-code CSS color variable for `system` notifications. The icon
@@ -193,22 +193,22 @@ const SYSTEM_CODE_ICON: Record<string, string> = {
  *  - `account_invalid`             error  (red)    — upstream rejected creds
  *  - `quota_low`                   warn   (orange) — approaching limit
  */
-const SYSTEM_CODE_COLOR_VAR: Record<string, string> = {
+const SYSTEM_CODE_COLOR_VAR = {
   discovery_failed: "var(--color-warn)",
   account_key_decrypt_failed: "var(--color-error)",
   circuit_open: "var(--color-error)",
   oauth_expired: "var(--color-warn)",
   account_invalid: "var(--color-error)",
   quota_low: "var(--color-warn)",
-};
+} satisfies Record<string, string>;
 
 /** Resolve the icon glyph for a row. For `system` rows, dispatches on
  *  `payload.code`; for everything else, uses the per-kind table. */
 function notificationIcon(r: NotificationRow): string {
   if (r.kind === "system") {
     const code: string = payloadString(r.payload, "code");
-    if (code) {
-      return SYSTEM_CODE_ICON[code] ?? KIND_ICON.system;
+    if (code && (code in SYSTEM_CODE_ICON)) {
+      return SYSTEM_CODE_ICON[code as keyof typeof SYSTEM_CODE_ICON];
     }
     return KIND_ICON.system;
   }
@@ -224,7 +224,10 @@ function notificationIconColorVar(r: NotificationRow): string | null {
   if (r.kind !== "system") return null;
   const code: string = payloadString(r.payload, "code");
   if (!code) return null;
-  return SYSTEM_CODE_COLOR_VAR[code] ?? null;
+  if (code in SYSTEM_CODE_COLOR_VAR) {
+    return SYSTEM_CODE_COLOR_VAR[code as keyof typeof SYSTEM_CODE_COLOR_VAR];
+  }
+  return null;
 }
 
 /** Resolve the kind label for the card's meta row. For `system`

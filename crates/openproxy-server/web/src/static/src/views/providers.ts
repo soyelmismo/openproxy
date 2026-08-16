@@ -46,6 +46,7 @@ interface ProviderDetailUiState {
   sort: ModelSort | null;
   page: number;
   pageSize: number;
+  [key: string]: unknown;
 }
 
 // ---- Module-local state ----
@@ -67,7 +68,7 @@ function getProviderUi(providerId: string): ProviderDetailUiState {
 }
 
 function setProviderUi(providerId: string, ui: ProviderDetailUiState): void {
-  state.providerDetail[providerId] = ui as unknown as Record<string, unknown>;
+  state.providerDetail[providerId] = ui;
 }
 
 function extractDomain(urlStr: string): string | null {
@@ -348,7 +349,7 @@ async function onRefreshAccountQuota(accountId: number, e: Event | null): Promis
     if (result && "model_details" in result && result.model_details != null) {
       const match = state.accounts.find((a: { id: number }) => a.id === accountId);
       if (match) {
-        (match as unknown as Record<string, unknown>)["quota_model_details"] = result.model_details;
+        match.quota_model_details = result.model_details as import("../lib/types/api.js").ModelQuotaDetail[];
       }
     }
     requestUpdate();

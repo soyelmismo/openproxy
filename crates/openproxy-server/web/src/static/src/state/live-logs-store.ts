@@ -69,7 +69,7 @@ export interface AttemptEventPayload {
 // Helpers
 // ----------------------------------------------------------------------------
 
-const STAGE_RANK: Record<string, number> = {
+const STAGE_RANK = {
   started: 0,
   connecting: 1,
   waiting_ttft: 2,
@@ -77,10 +77,10 @@ const STAGE_RANK: Record<string, number> = {
   completed: 4,
   failed: 4,
   cancelled: 4,
-};
+} satisfies Record<string, number>;
 
 function rankStage(stage: string): number {
-  return STAGE_RANK[stage] ?? -1;
+  return (stage in STAGE_RANK) ? STAGE_RANK[stage as keyof typeof STAGE_RANK] : -1;
 }
 
 function isTerminalStage(stage: string): boolean {
@@ -467,7 +467,7 @@ class LiveLogsStore {
 
     // Already V2
     if (e["type"] === "snapshot" || e["type"] === "inflight_sync" || e["type"] === "attempt_event" || e["type"] === "usage_row" || e["type"] === "gap") {
-      return e as unknown as LiveLogEnvelopeV2;
+      return env as LiveLogEnvelopeV2;
     }
 
     const now = Date.now() - this.clockOffsetMs;
@@ -478,26 +478,28 @@ class LiveLogsStore {
       const key = d.trace_id || `${d.request_id}:unknown`;
       const rank = rankStage(d.stage);
       const terminal = deriveTerminal(d.stage, d.status_code, d.error);
+      const event: AttemptEventPayload = {
+        attempt_key: key,
+        request_id: d.request_id,
+        stage_seq: rank, // use rank as seq for monotonic ordering
+        stage_rank: rank,
+        event_time: now,
+        started_at: now - d.elapsed_ms,
+        terminal,
+        stage: d.stage,
+      };
+      if (d.trace_id) event.trace_id = d.trace_id;
+      if (d.connect_ms != null) event.connect_ms = d.connect_ms;
+      if (d.ttft_ms != null) event.ttft_ms = d.ttft_ms;
+      if (d.error) event.error = d.error;
+      if (d.status_code != null) event.status_code = d.status_code;
+      if (d.provider_id) event.provider_id = d.provider_id;
+      if (d.upstream_model_id) event.upstream_model_id = d.upstream_model_id;
+
       return {
         type: "attempt_event",
         cursor: 0,
-        event: {
-          attempt_key: key,
-          request_id: d.request_id,
-          ...(d.trace_id ? { trace_id: d.trace_id } : {}),
-          stage_seq: rank, // use rank as seq for monotonic ordering
-          stage_rank: rank,
-          event_time: now,
-          started_at: now - d.elapsed_ms,
-          terminal,
-          stage: d.stage,
-          ...(d.connect_ms != null ? { connect_ms: d.connect_ms } : {}),
-          ...(d.ttft_ms != null ? { ttft_ms: d.ttft_ms } : {}),
-          ...(d.error ? { error: d.error } : {}),
-          ...(d.status_code != null ? { status_code: d.status_code } : {}),
-          ...(d.provider_id ? { provider_id: d.provider_id } : {}),
-          ...(d.upstream_model_id ? { upstream_model_id: d.upstream_model_id } : {}),
-        },
+        event,
       };
     }
 
@@ -520,11 +522,11 @@ class LiveLogsStore {
     if (e["type"] === "pong") {
       const st = e["server_time"];
       const t = typeof st === "string" ? Date.parse(st) : (Number(st) || Date.now());
-      return { type: "pong", server_time: t } as unknown as LiveLogEnvelopeV2;
+      return { type: "pong", server_time: t };
     }
 
     if (e["type"] === "error" && e["message"]) {
-      return { type: "error", message: String(e["message"]) } as unknown as LiveLogEnvelopeV2;
+      return { type: "error", message: String(e["message"]) };
     }
 
     // Legacy lag/resync — log but don't crash

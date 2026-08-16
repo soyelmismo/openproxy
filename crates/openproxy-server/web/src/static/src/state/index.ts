@@ -92,11 +92,15 @@ export interface ComboTestResult {
  *  test. */
 export type ComboTestResults = Record<number, ComboTestResult[]>;
 
-/** Per-provider UI state for the detail view: search box, filter
- *  tab (all/active/inactive). Keyed by provider id so navigating
- *  away and back preserves the user's filter. The shape is open
- *  (views/* set whatever they need); we keep it loose on purpose. */
-export type ProviderDetailUi = Record<string, Record<string, unknown>>;
+export interface ProviderDetailUiState {
+  filter?: string;
+  search?: string;
+  sort?: unknown | null;
+  page?: number;
+  pageSize?: number;
+  [key: string]: unknown;
+}
+export type ProviderDetailUi = Record<string, ProviderDetailUiState>;
 
 /** Shape of the live-logs sub-state. Mirrors the `state.logs`
  *  literal in the original `state/index.js`.
@@ -207,6 +211,9 @@ export interface DashboardState {
   // pill in the sidebar).
   lastApiLatencyMs: number;
 
+  // UI preferences (e.g. sidebar collapse state).
+  ui?: { sidebarCollapsed?: boolean };
+
   // Internal bg-poll state. Mutated in place by bg-poll.ts; the
   // `__` prefix marks it as out-of-band. `__healthPollHandle` is
   // a `setTimeout` handle, so we type it as `ReturnType<typeof
@@ -217,6 +224,7 @@ export interface DashboardState {
 }
 
 export const state: DashboardState = {
+  ui: { sidebarCollapsed: false },
   // Cached server data, refreshed on navigate() and on bgPoll.
   providers: [],
   accounts: [],

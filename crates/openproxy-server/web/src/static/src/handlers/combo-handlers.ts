@@ -30,11 +30,11 @@ export const PARAM_TOOLTIPS = {
   weight: "Relative weight for weighted random selection. Higher = more likely to be selected. Default 1.",
 } as const;
 
-const COOLDOWN_MODE_LABELS: Record<CooldownMode, string> = {
+const COOLDOWN_MODE_LABELS = {
   flat: "Flat",
   exponential: "Exponential",
   none: "Disabled (None)",
-};
+} satisfies Record<CooldownMode, string>;
 
 /** Render the priority-mode `<option>`s with the given value preselected. */
 export function priorityModeOptions(selected: PriorityMode): TemplateResult {
@@ -285,7 +285,7 @@ async function patchComboField(
     // will pick up the new value.
     const combo = (state.combos || []).find((c) => c.id === id);
     if (combo) {
-      (combo as unknown as Record<string, unknown>)[field] = value;
+      Object.assign(combo, { [field]: value });
     }
     // For select elements, the DOM already reflects the user's
     // choice. For number inputs, the value is already in the

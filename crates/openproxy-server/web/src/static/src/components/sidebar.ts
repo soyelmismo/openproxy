@@ -29,9 +29,7 @@ import {
 // is now false.
 import { clearToken, isLoggedIn } from "../state/auth.js";
 
-interface UiState { sidebarCollapsed?: boolean; }
-type MutableDashboard = { ui?: UiState };
-function mutableState(): MutableDashboard { return state as unknown as MutableDashboard; }
+function mutableState() { return state; }
 
 type NavIconName = "home" | "providers" | "combos" | "keys" | "analytics" | "logs" | "debug-logs" | "config" | "notifications" | "proxies" | "proxy-sources";
 
@@ -68,7 +66,7 @@ const GROUPS: readonly SidebarGroup[] = [
 ];
 
 function navIconSvg(name: NavIconName): TemplateResult {
-  const svgs: Record<NavIconName, string> = {
+  const svgs = {
     home: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 7 L8 2 L14 7 V14 H2 Z"/><path d="M6 14 V10 H10 V14"/></svg>`,
     providers: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="3" width="12" height="3" rx="0.5"/><rect x="2" y="7" width="12" height="3" rx="0.5"/><rect x="2" y="11" width="12" height="3" rx="0.5"/><circle cx="4" cy="4.5" r="0.4" fill="currentColor" stroke="none"/><circle cx="4" cy="8.5" r="0.4" fill="currentColor" stroke="none"/><circle cx="4" cy="12.5" r="0.4" fill="currentColor" stroke="none"/></svg>`,
     combos: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="9" height="9" rx="1"/><rect x="5" y="5" width="9" height="9" rx="1"/></svg>`,
@@ -82,7 +80,7 @@ function navIconSvg(name: NavIconName): TemplateResult {
     // Bell-ish glyph. The dot is filled via stroke="currentColor" so
     // it inherits the active link colour.
     notifications: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 12 H13 L11.5 10 V7 a3.5 3.5 0 0 0 -7 0 V10 Z"/><path d="M6.5 12 V12.5 a1.5 1.5 0 0 0 3 0 V12"/></svg>`,
-  };
+  } satisfies Record<NavIconName, string>;
   return html`${unsafeHTML(svgs[name] || "")}`;
 }
 

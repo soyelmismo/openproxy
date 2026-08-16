@@ -798,7 +798,7 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
     if (result && "model_details" in result && result.model_details != null) {
       const match = state.accounts.find((a: { id: number }) => a.id === accountId);
       if (match) {
-        (match as unknown as Record<string, unknown>)["quota_model_details"] = result.model_details;
+        match.quota_model_details = result.model_details as import("../lib/types/api.js").ModelQuotaDetail[];
       }
     }
     requestUpdate();

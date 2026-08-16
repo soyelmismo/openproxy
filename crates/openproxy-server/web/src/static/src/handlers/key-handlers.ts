@@ -240,7 +240,7 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
   try {
     const result = await api("/keys", { method: "POST", body: JSON.stringify(body) }) as KeyPlaintextResponse;
     if (wrapper) wrapper.remove();
-    else closeKeyForm("self", { target } as unknown as Event);
+    else closeKeyForm("self", e);
     showPlaintextKey(result.plaintext, result.key);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -256,7 +256,7 @@ export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Pr
   try {
     await api("/keys/" + id, { method: "PATCH", body: JSON.stringify(body) });
     if (wrapper) wrapper.remove();
-    else closeKeyForm("self", { target } as unknown as Event);
+    else closeKeyForm("self", e);
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
     requestUpdate();
   } catch (err: unknown) {

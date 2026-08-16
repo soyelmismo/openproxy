@@ -57,12 +57,12 @@ export function setLogsStatus(status: LogsStatus): void {
   for (const subscriber of statusSubscribers) subscriber(status);
   const badge: HTMLElement | null = document.getElementById("logs-connection-status");
   if (!badge) return;
-  const labels: Record<LogsStatus, string> = {
+  const labels = {
     connected: "🟢 connected",
     connecting: "🟡 connecting",
     reconnecting: "🟡 reconnecting",
     disconnected: "🔴 disconnected",
-  };
+  } satisfies Record<LogsStatus, string>;
   badge.className = `logs-connection-badge ${status}`;
   badge.textContent = labels[status] || "🔴 disconnected";
 }

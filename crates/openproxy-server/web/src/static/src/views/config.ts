@@ -82,16 +82,31 @@ interface ConfigPayload {
   } | null;
 }
 
-type TimeoutKey = "connect_ms" | "request_send_ms" | "ttft_ms" | "idle_chunk_ms" | "total_ms";
+export interface TimeoutsState {
+  connect_ms: number;
+  request_send_ms: number;
+  ttft_ms: number;
+  idle_chunk_ms: number;
+  total_ms: number;
+}
+
+export interface VacuumStatus {
+  last_run: string | null;
+  last_result: string | null;
+  in_progress: boolean;
+  next_scheduled: string | null;
+}
+
+type TimeoutKey = keyof TimeoutsState;
 const TIMEOUT_FIELDS: readonly TimeoutKey[] = ["connect_ms", "request_send_ms", "ttft_ms", "idle_chunk_ms", "total_ms"] as const;
 
-const DEFAULT_TIMEOUTS: Record<TimeoutKey, number> = {
+const DEFAULT_TIMEOUTS = {
   connect_ms: 0,
   request_send_ms: 0,
   ttft_ms: 0,
   idle_chunk_ms: 0,
   total_ms: 0,
-};
+} satisfies TimeoutsState;
 
 // ---- View state ----
 
@@ -103,7 +118,7 @@ let cfg: ConfigPayload | null = null;
 // `patch*` helpers update these optimistically and revert on
 // failure. The render function binds the inputs to these values
 // via `.value=${...}` so a revert is reflected immediately.
-let liveTimeouts: Record<TimeoutKey, number> = { ...DEFAULT_TIMEOUTS };
+let liveTimeouts: TimeoutsState = { ...DEFAULT_TIMEOUTS };
 let liveRecordingTtl = 300;
 let liveCompression = "off";
 let liveIdleChunkRetryable = false;
@@ -113,7 +128,7 @@ let liveQuotaProtectionThreshold = 10;
 let liveAutoVacuum = true;
 let liveVacuumIntervalHours = 6;
 let liveUsageRetentionDays = 7;
-let vacuumStatus: { last_run: string | null; last_result: string | null; in_progress: boolean; next_scheduled: string | null } = {
+let vacuumStatus: VacuumStatus = {
   last_run: null, last_result: null, in_progress: false, next_scheduled: null,
 };
 let vacuumPollHandle: ReturnType<typeof setInterval> | null = null;
@@ -392,8 +407,8 @@ async function onQuotaThresholdChange(e: Event): Promise<void> {
 // still resolve and so a future caller can re-use them.
 // ---------------------------------------------------------------------------
 
-function readTimeoutsFromInputs(): Record<TimeoutKey, number> | null {
-  const out: Partial<Record<TimeoutKey, number>> = {};
+function readTimeoutsFromInputs(): TimeoutsState | null {
+  const out: TimeoutsState = { ...DEFAULT_TIMEOUTS };
   for (const f of TIMEOUT_FIELDS) {
     const el = document.querySelector(`input[name="timeouts.${f}"]`) as HTMLInputElement | null;
     if (!el) { showToast(`timeouts.${f} input is missing from the DOM`, "error"); return null; }
@@ -402,7 +417,7 @@ function readTimeoutsFromInputs(): Record<TimeoutKey, number> | null {
     if (n == null) return null;
     out[f] = n;
   }
-  return out as Record<TimeoutKey, number>;
+  return out;
 }
 
 async function configSaveTimeouts(): Promise<void> {

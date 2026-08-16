@@ -8,7 +8,7 @@ import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { t } from "../i18n/index.js";
 
-export async function reloadProxies(queryParams?: Record<string, string | number>): Promise<void> {
+export async function reloadProxies(queryParams?: Record<string, string | number | undefined>): Promise<void> {
   try {
     const params = new URLSearchParams();
     if (queryParams) {

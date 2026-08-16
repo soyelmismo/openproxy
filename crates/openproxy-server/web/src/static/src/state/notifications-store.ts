@@ -303,7 +303,7 @@ function systemBody(p: Record<string, unknown>, message: string): string {
   // SystemPayload? no — `account_id` lives inside `details`) or
   // `{{provider_id}}` (top-level on SystemPayload). Both shapes are
   // available to the template.
-  const params: Record<string, string | number> = { message };
+  const params: Record<string, string | number> = Object.assign({}, { message });
   for (const [k, v] of Object.entries(p)) {
     if (typeof v === "string") params[k] = v;
     else if (typeof v === "number") params[k] = v;

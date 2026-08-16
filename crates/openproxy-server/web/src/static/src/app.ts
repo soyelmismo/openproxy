@@ -45,7 +45,7 @@ window.__liveLogsStore = liveLogsStore;
 function dispatchFromElement(el: HTMLElement, event: Event, isSubmit = false): void {
   const action = el.dataset["action"];
   if (!action) return;
-  const fn = HANDLERS[action];
+  const fn = (HANDLERS as Record<string, unknown>)[action];
   if (typeof fn !== "function") {
     console.warn("[data-action] no handler for", action);
     return;

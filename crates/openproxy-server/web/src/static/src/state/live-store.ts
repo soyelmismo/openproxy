@@ -397,11 +397,19 @@ export interface Snapshot {
  *  use. */
 export type SnapshotWindow = 60 | 300 | 1800;
 
-function getWindowBuckets(windowSecs: SnapshotWindow): {
+interface WindowBuckets {
   buckets: Bucket[];
   bucketSecs: number;
   count: number;
-} {
+}
+
+interface CollectedWindow {
+  buckets: Bucket[];
+  bucketSecs: number;
+  startMs: number;
+}
+
+function getWindowBuckets(windowSecs: SnapshotWindow): WindowBuckets {
   if (windowSecs === 1800) {
     return { buckets: buckets5s, bucketSecs: 5, count: WINDOW_5S };
   }
@@ -414,11 +422,7 @@ function getWindowBuckets(windowSecs: SnapshotWindow): {
  *  indexed ring buffer. The "current" bucket is derived from
  *  Date.now(); older buckets are `count - 1` indices behind it (with
  *  modulo wraparound). */
-function collectWindow(windowSecs: SnapshotWindow): {
-  buckets: Bucket[];
-  bucketSecs: number;
-  startMs: number;
-} {
+function collectWindow(windowSecs: SnapshotWindow): CollectedWindow {
   const { buckets, bucketSecs, count } = getWindowBuckets(windowSecs);
   const totalBuckets = buckets.length;
   const nowSec = Math.floor(Date.now() / 1000);
