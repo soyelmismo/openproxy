@@ -447,7 +447,7 @@ pub(crate) async fn run_test_for_model(
         }],
         stream: false,
         temperature: None,
-        max_tokens: Some(5),
+        max_tokens: Some(16),
         top_p: None,
         stop: None,
         tools: None,
@@ -557,6 +557,7 @@ pub(crate) async fn run_test_for_model(
             race_cancelled: false,
             endpoint_kind: openproxy_types::EndpointKind::Chat,
             compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+            proxy_override: None,
         };
         let formatter = openproxy_pipeline::formatting::get_formatter(
             openproxy_core::models::TargetFormat::Responses,

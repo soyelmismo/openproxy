@@ -21,6 +21,8 @@ pub mod load_balancing;
 pub mod oauth;
 pub mod quotas;
 pub mod racing;
+pub mod proxy_race;
+pub use proxy_race::run_proxy_race;
 pub mod repository;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;

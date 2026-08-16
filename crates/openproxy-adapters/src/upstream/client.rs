@@ -64,6 +64,19 @@ impl UpstreamRequest {
         }
     }
 
+    /// Build a simple DELETE with no headers / body.
+    pub fn delete(url: impl Into<String>) -> Self {
+        Self {
+            method: Method::DELETE,
+            url: url.into(),
+            headers: HeaderMap::new(),
+            body: None,
+            is_streaming: true,
+            proxy: None,
+            proxy_status: None,
+        }
+    }
+
     /// Build a POST with a JSON body and a `Content-Type: application/json` header.
     pub fn post_json(url: impl Into<String>, body: Bytes) -> Self {
         let mut headers = HeaderMap::new();

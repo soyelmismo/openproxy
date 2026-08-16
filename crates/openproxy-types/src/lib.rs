@@ -21,6 +21,13 @@ pub mod usage;
 pub use usage::{RecentUsageRow, UsageInput, publish_usage_row};
 pub mod endpoint;
 pub use endpoint::EndpointKind;
+pub mod images;
+pub use images::{ImageData, ImageEditRequest, ImageGenerationRequest, ImageGenerationResponse};
+pub mod embeddings;
+pub use embeddings::{
+    EmbeddingInput, EmbeddingObject, EmbeddingRequest, EmbeddingResponse, EmbeddingUsage,
+    EmbeddingVector,
+};
 
 pub use error::{CancelReason, CoreError, ErrorContext, Result};
 pub use ids::{

@@ -119,12 +119,14 @@ impl UpstreamDispatcher {
         &self,
         provider_id: &openproxy_types::ids::ProviderId,
         account_id: Option<openproxy_types::ids::AccountId>,
+        override_proxy_id: Option<&str>,
         trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
         cooldown_ms: Option<u64>,
     ) -> bool {
         let conn_clone = Arc::clone(&self.conn);
         let provider_id = provider_id.to_owned();
         let repo = Arc::clone(&self.tracker.repo);
+        let override_proxy_id = override_proxy_id.map(str::to_string);
         tokio::task::spawn_blocking(move || {
             let (provider, bad_proxy_id, is_per_account) = {
                 let conn = conn_clone.lock();
@@ -133,7 +135,9 @@ impl UpstreamDispatcher {
                     && provider.use_proxies
                 {
                     let is_per_account = provider.proxy_rotation_mode == "account";
-                    let bad_proxy_id = if is_per_account {
+                    let bad_proxy_id = if let Some(ref pid) = override_proxy_id {
+                        Some(pid.clone())
+                    } else if is_per_account {
                         if let Some(ref acc_id) = account_id {
                             openproxy_db::accounts::get_current_proxy_id(&conn, *acc_id).unwrap_or(None)
                         } else {
@@ -199,7 +203,11 @@ impl UpstreamDispatcher {
                         None,
                     );
                 }
-                return true;
+
+                let has_candidates = openproxy_db::free_proxies::get_candidate_proxies_for_provider(&conn, &provider_id, 1)
+                    .is_ok_and(|c| !c.is_empty());
+
+                return has_candidates;
             }
             false
         })
@@ -325,7 +333,9 @@ impl UpstreamDispatcher {
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
         // If the provider has proxy routing enabled, fetch/assign a proxy
-        let proxy_result = {
+        let proxy_result = if let Some((_, ref purl)) = req.proxy_override {
+            Ok(Some(purl.clone()))
+        } else {
             let repo = Arc::clone(&self.tracker.repo);
             let provider_id = target.provider_id.clone();
             let account_id = target.account_id;
@@ -493,6 +503,7 @@ impl UpstreamDispatcher {
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -540,6 +551,7 @@ UpstreamError::Invalid(msg)) => {
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -563,6 +575,7 @@ UpstreamError::Invalid(msg)) => {
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -729,6 +742,7 @@ UpstreamError::Invalid(msg)) => {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                     None,
                 )
@@ -750,6 +764,7 @@ UpstreamError::Invalid(msg)) => {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                     None,
                 )
@@ -794,6 +809,7 @@ UpstreamError::Invalid(msg)) => {
                 .check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
                     None,
                 )
@@ -815,6 +831,7 @@ UpstreamError::Invalid(msg)) => {
                         .check_and_trigger_proxy_rotation(
                             &target.provider_id,
                             target.account_id,
+                            req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                             crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
                             Some(retry_ms),
                         )
@@ -1561,6 +1578,7 @@ UpstreamError::Invalid(msg)) => {
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -1605,6 +1623,7 @@ UpstreamError::Invalid(msg)) => {
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -1628,6 +1647,7 @@ UpstreamError::Invalid(msg)) => {
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                         None,
                     )
@@ -1667,6 +1687,7 @@ UpstreamError::Invalid(msg)) => {
                 .check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     target.account_id,
+                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
                     None,
                 )
@@ -1745,6 +1766,7 @@ UpstreamError::Invalid(msg)) => {
                         .check_and_trigger_proxy_rotation(
                             &target.provider_id,
                             target.account_id,
+                            req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
                             crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
                             Some(retry_ms),
                         )

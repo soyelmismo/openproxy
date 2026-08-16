@@ -158,6 +158,7 @@ impl PipelineRunner {
             race_cancel: None,
             endpoint_kind,
             compressed_messages: Arc::new(std::sync::OnceLock::new()),
+            proxy_override: None,
         };
 
         PreparedPipelineRequest {

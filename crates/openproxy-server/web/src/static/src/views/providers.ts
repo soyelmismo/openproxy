@@ -136,24 +136,28 @@ function formatContext(tokens: number | null | undefined): TemplateResult {
 
 // Render the per-model capability badges. The server serialises
 // capabilities as a JSON string; bad input renders as an em-dash
-// rather than throwing.
-function renderCapabilityBadges(json: string | null | undefined): TemplateResult {
-  if (json == null) return html`<span class="muted">—</span>`;
-  let caps: unknown;
-  if (typeof json === "string") {
-    try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { return html`<span class="muted">—</span>`; }
-  } else {
-    caps = json;
-  }
-  if (!caps || typeof caps !== "object") return html`<span class="muted">—</span>`;
-  const c: Record<string, unknown> = caps as Record<string, unknown>;
+function renderCapabilityBadges(json: string | null | undefined, modelType?: string | null): TemplateResult {
   const badges: TemplateResult[] = [];
-  if (c["vision"]) badges.push(html`<span class="cap-badge">vision</span>`);
-  if (c["tool_calling"]) badges.push(html`<span class="cap-badge">tools</span>`);
-  if (c["reasoning"]) badges.push(html`<span class="cap-badge">reasoning</span>`);
-  if (c["thinking"]) badges.push(html`<span class="cap-badge">thinking</span>`);
-  if (c["structured_output"]) badges.push(html`<span class="cap-badge">json</span>`);
-  if (c["attachment"]) badges.push(html`<span class="cap-badge">attach</span>`);
+  if (modelType && modelType !== "chat") {
+    badges.push(html`<span class="cap-badge">${modelType}</span>`);
+  }
+  if (json != null) {
+    let caps: unknown;
+    if (typeof json === "string") {
+      try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { caps = null; }
+    } else {
+      caps = json;
+    }
+    if (caps && typeof caps === "object") {
+      const c: Record<string, unknown> = caps as Record<string, unknown>;
+      if (c["vision"]) badges.push(html`<span class="cap-badge">vision</span>`);
+      if (c["tool_calling"]) badges.push(html`<span class="cap-badge">tools</span>`);
+      if (c["reasoning"]) badges.push(html`<span class="cap-badge">reasoning</span>`);
+      if (c["thinking"]) badges.push(html`<span class="cap-badge">thinking</span>`);
+      if (c["structured_output"]) badges.push(html`<span class="cap-badge">json</span>`);
+      if (c["attachment"]) badges.push(html`<span class="cap-badge">attach</span>`);
+    }
+  }
   return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;
 }
 
@@ -509,6 +513,22 @@ async function onUpdateProxyRotationMode(providerId: string, e: Event): Promise<
     await api(`/providers/${encodeURIComponent(providerId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),
+    });
+    state.providers = await api("/providers") as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, "Error");
+  }
+}
+
+async function onToggleIncrementalRace(providerId: string, e: Event): Promise<void> {
+  const target = e.target instanceof HTMLInputElement ? e.target : null;
+  if (!target) return;
+  const newMode = target.checked ? "incremental_race" : "global";
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ proxy_rotation_mode: newMode }),
     });
     state.providers = await api("/providers") as typeof state.providers;
     requestUpdate();
@@ -1040,12 +1060,19 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
                    @change=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}
                    @input=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}>
           </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
+            <input type="checkbox"
+                   .checked=${provider.proxy_rotation_mode === "incremental_race"}
+                   @change=${(e: Event) => onToggleIncrementalRace(provider.id, e)}>
+            Incremental race (2 &rarr; 4 &rarr; 8 &rarr; 16)
+          </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal;">
             Rotation mode:
             <select style="padding: 0.25rem 0.5rem; font-size: var(--fs-sm); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
                     @change=${(e: Event) => onUpdateProxyRotationMode(provider.id, e)}>
               <option value="global" ?selected=${provider.proxy_rotation_mode === "global"}>Global (shared)</option>
               <option value="account" ?selected=${provider.proxy_rotation_mode === "account"}>Per Account (unique)</option>
+              <option value="incremental_race" ?selected=${provider.proxy_rotation_mode === "incremental_race"}>Incremental Race</option>
               <option value="none" ?selected=${provider.proxy_rotation_mode === "none"}>None (disabled)</option>
             </select>
           </label>
@@ -1134,7 +1161,7 @@ function renderModelRow(m: Model): TemplateResult {
     <td>${m.target_format || "—"}</td>
     <td>${formatContext(m.context_length)}</td>
     <td>${formatContext(m.max_output_tokens)}</td>
-    <td>${renderCapabilityBadges(m.capabilities_json)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
+    <td>${renderCapabilityBadges(m.capabilities_json, m.model_type)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
     <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
     <td class="last-test-cell">${lastTest}</td>
     <td>

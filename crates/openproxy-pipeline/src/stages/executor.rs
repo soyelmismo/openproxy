@@ -79,6 +79,26 @@ impl PipelineStage for UpstreamExecutorStage {
             let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
             let mut target_local_retry_count: u8 = 1;
             let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();
+
+            let (is_use_proxies, is_incremental_mode, proxy_rotation_errors) = {
+                let conn = ctx.pipeline.conn.lock();
+                if let Ok(Some(prov)) = openproxy_db::providers::get(&conn, &target.target.provider_id) {
+                    (
+                        prov.use_proxies,
+                        prov.proxy_rotation_mode == "incremental_race"
+                            || prov.proxy_rotation_mode == "incremental",
+                        prov.proxy_rotation_errors,
+                    )
+                } else {
+                    (false, false, String::new())
+                }
+            };
+            let can_incremental_race =
+                is_use_proxies && is_incremental_mode && target.target.account_id.is_none();
+
+            let mut consecutive_failures: u8 = 0;
+            let mut incremental_batch_size: usize = 2;
+
             let mut result = ctx
                 .pipeline
                 .execute_single(crate::SingleExecutionParams {
@@ -95,6 +115,11 @@ impl PipelineStage for UpstreamExecutorStage {
             while let Some(e) = &result.error {
                 if !RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) {
                     break;
+                }
+                if matches_proxy_rotation_errors(e, &proxy_rotation_errors) {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                } else {
+                    consecutive_failures = 0;
                 }
                 let max_attempts = if e.is_proxy_rotated() {
                     policy.max_attempts.max(150)
@@ -118,6 +143,49 @@ impl PipelineStage for UpstreamExecutorStage {
                     );
                     return Ok(ctx.pipeline.client_disconnected_result(ctx.attempt, reason));
                 }
+
+                if can_incremental_race && consecutive_failures >= 3 {
+                    let candidate_proxies = {
+                        let conn = ctx.pipeline.conn.lock();
+                        openproxy_db::free_proxies::get_candidate_proxies_for_provider(
+                            &conn,
+                            &target.target.provider_id,
+                            incremental_batch_size,
+                        )
+                        .unwrap_or_default()
+                    };
+
+                    if candidate_proxies.len() >= 2 {
+                        tracing::info!(
+                            provider = %target.target.provider_id,
+                            batch_size = candidate_proxies.len(),
+                            consecutive_failures,
+                            "triggering incremental proxy race"
+                        );
+                        overall_attempt = overall_attempt.saturating_add(1);
+                        target_local_retry_count = target_local_retry_count
+                            .saturating_add(candidate_proxies.len() as u8);
+
+                        result = crate::proxy_race::run_proxy_race(
+                            &ctx.pipeline,
+                            ctx.req.clone(),
+                            combo,
+                            target,
+                            candidate_proxies,
+                            overall_attempt,
+                        )
+                        .await;
+
+                        if result.error.is_none() {
+                            break;
+                        }
+
+                        // Wait until all failed before attempting new proxies, then double batch size
+                        incremental_batch_size = (incremental_batch_size * 2).min(16);
+                        continue;
+                    }
+                }
+
                 let delay = match policy.delay_after_attempt(target_local_retry_count) {
                     Some(d) => d,
                     None => {
@@ -261,5 +329,26 @@ impl PipelineStage for UpstreamExecutorStage {
         }
 
         Err(CoreError::NoHealthyTargets(combo.id.0))
+    }
+}
+
+pub(crate) fn matches_proxy_rotation_errors(err: &CoreError, rotation_errors_csv: &str) -> bool {
+    if err.is_proxy_rotated() {
+        return true;
+    }
+    let parts: Vec<&str> = rotation_errors_csv.split(',').map(str::trim).collect();
+    match err {
+        CoreError::RateLimited { .. } => parts.iter().any(|&e| e == "429" || e == "rate_limited"),
+        CoreError::UpstreamError { status, .. } => {
+            let sc_str = status.to_string();
+            parts.iter().any(|&e| e == sc_str)
+        }
+        CoreError::UpstreamConnection(_) => {
+            parts.iter().any(|&e| e == "connect_error" || e == "timeout")
+        }
+        CoreError::UpstreamTimeout { .. } => {
+            parts.iter().any(|&e| e == "timeout" || e == "connect_error")
+        }
+        _ => false,
     }
 }

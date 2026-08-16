@@ -265,6 +265,10 @@ pub async fn auth_middleware(
         }
     }
 
+    if parsed.model.is_empty() && parts.uri.path().starts_with("/v1/images") {
+        parsed.model = "dall-e-2".to_string();
+    }
+
     let requested_model = &parsed.model;
 
     let auth_result = authenticate(&state, &parts.headers, requested_model)?;

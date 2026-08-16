@@ -15,6 +15,10 @@
 //! | `GET  /v1/health`             | `health` (unauthenticated)                |
 //! | `GET  /v1/models`             | `handlers::models::list_models`           |
 //! | `POST /v1/chat/completions`   | `handlers::chat::chat_completions`        |
+//! | `POST /v1/embeddings`         | `handlers::embeddings::create_embeddings` |
+//! | `POST /v1/images/generations`  | `handlers::images::generate_images`       |
+//! | `POST /v1/images/edits`        | `handlers::images::edit_images`           |
+//! | `POST /v1/images/variations`   | `handlers::images::create_image_variation`|
 //! | `POST /v1/audio/transcriptions` | `handlers::audio::transcribe` (Whisper) |
 //! | `GET  /admin`                 | SPA shell (`admin_ui::index_html`)        |
 //! | `GET  /admin/`                | SPA shell (`admin_ui::index_html`)        |
@@ -125,6 +129,22 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/audio/transcriptions",
             post(handlers::audio::transcribe),
+        )
+        .route(
+            "/v1/embeddings",
+            post(handlers::embeddings::create_embeddings),
+        )
+        .route(
+            "/v1/images/generations",
+            post(handlers::images::generate_images),
+        )
+        .route(
+            "/v1/images/edits",
+            post(handlers::images::edit_images),
+        )
+        .route(
+            "/v1/images/variations",
+            post(handlers::images::create_image_variation),
         );
 
     // Admin REST API. Every route here is mounted under `/admin/api/*`
@@ -791,5 +811,205 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("zstd")
         );
+    }
+
+    #[tokio::test]
+    async fn test_image_generations_not_found_returns_404() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/generations")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"prompt":"a painting of a sunset","model":"nonexistent-image-model"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_image_generations_empty_prompt_validation() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/generations")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"prompt":"","model":"dall-e-3"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_embeddings_not_found_returns_404() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"input":"hello world","model":"nonexistent-embedding-model"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_embeddings_empty_input_validation() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"input":"","model":"text-embedding-3-small"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_image_edits_missing_image_returns_400() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let boundary = "------------------------boundary123";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nedit test\r\n--{boundary}--\r\n"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/edits")
+                    .header(
+                        "Content-Type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_image_edits_missing_prompt_returns_400() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let boundary = "------------------------boundary123";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"image.png\"\r\nContent-Type: image/png\r\n\r\nfakeimagebytes\r\n--{boundary}--\r\n"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/edits")
+                    .header(
+                        "Content-Type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_image_variations_missing_image_returns_400() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let boundary = "------------------------boundary123";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"n\"\r\n\r\n1\r\n--{boundary}--\r\n"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/variations")
+                    .header(
+                        "Content-Type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_image_edits_not_found_returns_404() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let boundary = "------------------------boundary123";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nnonexistent-image-model\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nedit test\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"image.png\"\r\nContent-Type: image/png\r\n\r\nfakeimagebytes\r\n--{boundary}--\r\n"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/edits")
+                    .header(
+                        "Content-Type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -413,6 +413,14 @@ pub fn get_or_assign_provider_proxy(
     openproxy_db::free_proxies::get_or_assign_provider_proxy(conn, provider_id, account_id)
 }
 
+pub fn get_candidate_proxies_for_provider(
+    conn: &Connection,
+    provider_id: &crate::ids::ProviderId,
+    limit: usize,
+) -> crate::error::Result<Vec<(String, String)>> {
+    openproxy_db::free_proxies::get_candidate_proxies_for_provider(conn, provider_id, limit)
+}
+
 pub fn upsert_scraped_proxies(
     conn: &mut Connection,
     proxies: &[ScrapedProxy],
@@ -1892,14 +1900,21 @@ mod tests {
         )
         .unwrap();
 
-        // When in cooldown, get_or_assign_provider_proxy should not assign it if other alive proxy exists or returns err if no other exists
+        // When in cooldown and no alternative alive proxy exists, should return Err (not spam cooldown proxy)
+        assert!(get_or_assign_provider_proxy(&conn, &provider_id, None).is_err());
+
+        // Add a second alive proxy
+        let p2 = add_custom_proxy(&conn, "5.6.7.8", 9090, "http", None, None, None).unwrap();
+        update_proxy_status(&conn, &p2.id, "alive", Some(120)).unwrap();
+
+        // Now it should assign and return p2
         let proxy_after_cooldown = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
         assert_eq!(
             proxy_after_cooldown,
-            Some("socks5://1.2.3.4:8080".to_string())
-        ); // fallback when only 1 alive
+            Some("http://5.6.7.8:9090".to_string())
+        );
 
-        // The provider's current_proxy_id should now be bound to p.id
+        // The provider's current_proxy_id should now be bound to p2.id
         let bound_id: Option<String> = conn
             .query_row(
                 "SELECT current_proxy_id FROM providers WHERE id = ?1",
@@ -1907,18 +1922,72 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(bound_id.as_deref(), Some(p.id.as_str()));
+        assert_eq!(bound_id.as_deref(), Some(p2.id.as_str()));
 
         // Calling it again should return the same cached proxy
         let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
-        assert_eq!(proxy2, Some("socks5://1.2.3.4:8080".to_string()));
+        assert_eq!(proxy2, Some("http://5.6.7.8:9090".to_string()));
 
-        // 4. Mark the proxy as dead / inactive
-        update_proxy_status(&conn, &p.id, "dead", Some(9999)).unwrap();
+        // 4. Mark p2 as dead / inactive
+        update_proxy_status(&conn, &p2.id, "dead", Some(9999)).unwrap();
 
-        // Since it's dead, get_or_assign_provider_proxy should detect it as dead,
-        // search for a new one, find none, and return Err because use_proxies = 1.
+        // Since p2 is dead and p1 is still in cooldown, should return Err
         assert!(get_or_assign_provider_proxy(&conn, &provider_id, None).is_err());
+    }
+
+    #[test]
+    fn test_get_candidate_proxies_for_provider() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        openproxy_db::migrations::run(&mut conn).unwrap();
+
+        let provider_id = openproxy_types::ids::ProviderId::new("zen-provider");
+        crate::providers::create(
+            &conn,
+            crate::providers::NewProvider {
+                id: &provider_id,
+                name: "Zen Provider",
+                base_url: "https://api.example.com",
+                auth_type: openproxy_types::providers::AuthType::None,
+                format: openproxy_types::providers::ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            },
+        )
+        .unwrap();
+        conn.execute("UPDATE providers SET use_proxies = 1 WHERE id = 'zen-provider'", []).unwrap();
+
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p1', 'test', '1.1.1.1', 8080, 'socks5', 'alive', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, username, password, status, latency_ms) VALUES ('p2', 'test', '2.2.2.2', 8080, 'http', 'u', 'p', 'alive', 20)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p3', 'test', '3.3.3.3', 8080, 'http', 'alive', 30)",
+            [],
+        )
+        .unwrap();
+
+        let candidates = get_candidate_proxies_for_provider(&conn, &provider_id, 2).unwrap();
+        assert_eq!(candidates.len(), 2);
+
+        // Put p1 on cooldown
+        openproxy_db::cooldowns::add_provider_proxy_cooldown(
+            &conn,
+            provider_id.as_str(),
+            "p1",
+            std::time::Duration::from_secs(3600),
+        )
+        .unwrap();
+
+        let candidates_after_cd = get_candidate_proxies_for_provider(&conn, &provider_id, 3).unwrap();
+        assert_eq!(candidates_after_cd.len(), 2);
+        assert!(!candidates_after_cd.iter().any(|(id, _)| id == "p1"));
     }
 
     #[test]

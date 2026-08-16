@@ -15,6 +15,14 @@ pub mod accounts;
 pub mod admin;
 pub mod analytics;
 pub mod audio;
+pub mod images;
+pub use images::{
+    MultipartFile, ParsedImageMultipartBody, execute_image_edit, execute_image_generation,
+    execute_image_variation,
+};
+pub mod embeddings;
+pub use embeddings::execute_embeddings;
+pub mod unary;
 
 pub mod api_keys;
 pub mod bootstrap;

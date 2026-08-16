@@ -180,8 +180,9 @@ impl AppState {
         let quota_protection_cell = Arc::new(RwLock::new(config.quota_protection.clone()));
 
         let master_key = Arc::new(MasterKey::from_env()?);
+        let initial_adapters = Self::load_adapters(&db_pool)?;
         let adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>> =
-            Arc::new(RwLock::new(Arc::new(Vec::new())));
+            Arc::new(RwLock::new(Arc::new(initial_adapters)));
 
         let maintenance_cell = Arc::new(RwLock::new(config.storage.maintenance.clone()));
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
@@ -269,7 +270,6 @@ impl AppState {
             background_tx,
         };
 
-        state.rebuild_adapters()?;
         Ok(state)
     }
 
@@ -437,11 +437,15 @@ impl AppState {
     /// (the DB write has already committed; a future admin action
     /// will retry the reload) rather than failing the request.
     pub fn rebuild_adapters(&self) -> Result<(), openproxy_types::CoreError> {
-        // 1. Start with the static built-in adapter set.
+        let new_adapters = Self::load_adapters(&self.db_pool)?;
+        *self.adapters.write() = Arc::new(new_adapters);
+        Ok(())
+    }
+
+    fn load_adapters(db_pool: &Arc<db::DbPool>) -> Result<Vec<adapters::ProviderAdapterEnum>, openproxy_types::CoreError> {
         let mut new_adapters: Vec<adapters::ProviderAdapterEnum> = adapters::builtin_adapters();
-        // 2. Layer in any custom providers the DB has.
         let all_providers = {
-            let w = self.db_pool().writer();
+            let w = db_pool.writer();
             openproxy_core::providers::list(&w).map_err(|e| {
                 openproxy_types::CoreError::Internal(format!(
                     "rebuild_adapters: list providers: {e}"
@@ -455,9 +459,7 @@ impl AppState {
                 ));
             }
         }
-        // 3. Atomic swap into the shared slot.
-        *self.adapters.write() = Arc::new(new_adapters);
-        Ok(())
+        Ok(new_adapters)
     }
 
     /// Borrow the shared hyper-based upstream client used by the

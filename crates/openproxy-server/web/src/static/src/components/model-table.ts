@@ -65,24 +65,28 @@ export function formatContext(tokens: number | null | undefined): TemplateResult
 // Accepts either a JSON string (the wire shape from /admin/models)
 // or a plain object (in case a caller pre-parsed it). Bad input
 // renders as an em-dash rather than throwing — the admin list should
-// never blow up because of a single bad row.
-export function renderCapabilityBadges(json: string | null | undefined): TemplateResult {
-  if (json == null) return html`<span class="muted">—</span>`;
-  let caps: unknown;
-  if (typeof json === "string") {
-    try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { return html`<span class="muted">—</span>`; }
-  } else {
-    caps = json;
-  }
-  if (!caps || typeof caps !== "object") return html`<span class="muted">—</span>`;
-  const c: Record<string, unknown> = caps as Record<string, unknown>;
+export function renderCapabilityBadges(json: string | null | undefined, modelType?: string | null): TemplateResult {
   const badges: TemplateResult[] = [];
-  if (c["vision"]) badges.push(html`<span class="cap-badge">vision</span>`);
-  if (c["tool_calling"]) badges.push(html`<span class="cap-badge">tools</span>`);
-  if (c["reasoning"]) badges.push(html`<span class="cap-badge">reasoning</span>`);
-  if (c["thinking"]) badges.push(html`<span class="cap-badge">thinking</span>`);
-  if (c["structured_output"]) badges.push(html`<span class="cap-badge">json</span>`);
-  if (c["attachment"]) badges.push(html`<span class="cap-badge">attach</span>`);
+  if (modelType && modelType !== "chat") {
+    badges.push(html`<span class="cap-badge">${modelType}</span>`);
+  }
+  if (json != null) {
+    let caps: unknown;
+    if (typeof json === "string") {
+      try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { caps = null; }
+    } else {
+      caps = json;
+    }
+    if (caps && typeof caps === "object") {
+      const c: Record<string, unknown> = caps as Record<string, unknown>;
+      if (c["vision"]) badges.push(html`<span class="cap-badge">vision</span>`);
+      if (c["tool_calling"]) badges.push(html`<span class="cap-badge">tools</span>`);
+      if (c["reasoning"]) badges.push(html`<span class="cap-badge">reasoning</span>`);
+      if (c["thinking"]) badges.push(html`<span class="cap-badge">thinking</span>`);
+      if (c["structured_output"]) badges.push(html`<span class="cap-badge">json</span>`);
+      if (c["attachment"]) badges.push(html`<span class="cap-badge">attach</span>`);
+    }
+  }
   return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;
 }
 
@@ -103,7 +107,7 @@ export function renderModelRow(m: Model): TemplateResult {
       <td>${m.target_format || "—"}</td>
       <td>${formatContext(m.context_length)}</td>
       <td>${formatContext(m.max_output_tokens)}</td>
-      <td>${renderCapabilityBadges(m.capabilities_json)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
+      <td>${renderCapabilityBadges(m.capabilities_json, m.model_type)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
       <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
       <td class="last-test-cell">${lastTest}</td>
       <td>

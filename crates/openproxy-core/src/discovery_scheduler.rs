@@ -193,6 +193,9 @@ pub fn start(
         if let Ok(db_list) = providers::list(&r) {
             for p in db_list {
                 if !seen_providers.contains(&p.id) {
+                    if seed::is_builtin(p.id.as_str()) {
+                        continue;
+                    }
                     let adapter = if let Some(a) = adapters.iter().find(|a| a.id() == &p.id) {
                         ProviderAdapterEnum::clone(a)
                     } else {
@@ -275,6 +278,8 @@ pub fn start(
                 let adapter = if let Some(a) = supervisor_adapters.iter().find(|a| a.id() == &p.id)
                 {
                     ProviderAdapterEnum::clone(a)
+                } else if seed::is_builtin(p.id.as_str()) {
+                    continue;
                 } else {
                     ProviderAdapterEnum::Custom(
                         openproxy_adapters::adapters::CustomAdapter::from_provider_row(&p),

@@ -54,6 +54,7 @@ pub struct PipelineRequest {
     pub race_cancelled: bool,
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
     pub compressed_messages: Arc<std::sync::OnceLock<Option<Vec<openproxy_types::OpenAIMessage>>>>,
+    pub proxy_override: Option<(String, String)>,
 }
 
 #[derive(Debug)]

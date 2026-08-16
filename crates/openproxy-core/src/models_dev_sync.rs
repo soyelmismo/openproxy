@@ -178,6 +178,11 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
                     .as_ref()
                     .and_then(|m| m.output.as_ref())
                     .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
+                let is_vision = model
+                    .modalities
+                    .as_ref()
+                    .and_then(|m| m.input.as_ref())
+                    .map(|inputs| inputs.iter().any(|s| s == "image"));
 
                 let normalized = crate::model_normalize::normalize_model_id(&model.id);
 
@@ -192,7 +197,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
                         cached_price,
                         model.tool_call.map(i64::from),
                         model.reasoning.map(i64::from),
-                        None::<i64>, // vision not present in API
+                        is_vision.map(i64::from),
                         model.structured_output.map(i64::from),
                         mod_in,
                         mod_out,
@@ -624,8 +629,69 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
             [],
         )
         .map_err(openproxy_db::error::map_db_error)?;
+    // ── model_type, modalities, and family: refresh from sync ─────────
+    let meta = conn
+        .execute(
+            "UPDATE models SET
+                family = COALESCE(
+                    (SELECT s.family FROM model_capabilities_sync s
+                     WHERE s.model_id_normalized = models.model_id_normalized
+                       AND s.family IS NOT NULL LIMIT 1),
+                    models.family
+                ),
+                input_modalities_json = COALESCE(
+                    (SELECT s.modalities_input FROM model_capabilities_sync s
+                     WHERE s.model_id_normalized = models.model_id_normalized
+                       AND s.modalities_input IS NOT NULL LIMIT 1),
+                    models.input_modalities_json
+                ),
+                output_modalities_json = CASE
+                    WHEN models.model_id_normalized LIKE '%embed%' OR models.model_id_normalized LIKE '%bge-%'
+                        THEN '[\"embedding\"]'
+                    ELSE COALESCE(
+                        (SELECT s.modalities_output FROM model_capabilities_sync s
+                         WHERE s.model_id_normalized = models.model_id_normalized
+                           AND s.modalities_output IS NOT NULL LIMIT 1),
+                        models.output_modalities_json
+                    )
+                END,
+                model_type = CASE
+                    WHEN models.model_id_normalized LIKE '%embed%'
+                      OR models.model_id_normalized LIKE '%bge-%'
+                      OR EXISTS (
+                        SELECT 1 FROM model_capabilities_sync s
+                        WHERE s.model_id_normalized = models.model_id_normalized
+                          AND s.modalities_output LIKE '%\"embedding%'
+                      ) THEN 'embedding'
+                    WHEN models.model_id_normalized LIKE '%dall-e%'
+                      OR models.model_id_normalized LIKE '%flux%'
+                      OR models.model_id_normalized LIKE '%sdxl%'
+                      OR models.model_id_normalized LIKE '%stable-diffusion%'
+                      OR EXISTS (
+                        SELECT 1 FROM model_capabilities_sync s
+                        WHERE s.model_id_normalized = models.model_id_normalized
+                          AND s.modalities_output LIKE '%\"image\"%'
+                      ) THEN 'image'
+                    WHEN models.model_id_normalized LIKE '%whisper%'
+                      OR models.model_id_normalized LIKE '%tts%'
+                      OR EXISTS (
+                        SELECT 1 FROM model_capabilities_sync s
+                        WHERE s.model_id_normalized = models.model_id_normalized
+                          AND (s.modalities_output LIKE '%\"audio\"%' OR s.modalities_input LIKE '%\"audio\"%')
+                      ) THEN 'audio'
+                    ELSE models.model_type
+                END
+             WHERE models.custom = 0
+               AND models.model_id_normalized IS NOT NULL
+               AND EXISTS (
+                 SELECT 1 FROM model_capabilities_sync s
+                 WHERE s.model_id_normalized = models.model_id_normalized
+               )",
+            [],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
 
-    Ok(ctx + tok + cap)
+    Ok(ctx + tok + cap + meta)
 }
 
 /// Auto-create combos for models that are active in ≥2 providers.
@@ -1232,6 +1298,10 @@ mod tests {
                  context_length      INTEGER,
                  max_output_tokens   INTEGER,
                  capabilities_json   TEXT,
+                 family              TEXT,
+                 input_modalities_json TEXT,
+                 output_modalities_json TEXT,
+                 model_type          TEXT NOT NULL DEFAULT 'chat',
                  custom              INTEGER NOT NULL DEFAULT 0,
                  model_id_normalized TEXT,
                  UNIQUE(provider_id, model_id)

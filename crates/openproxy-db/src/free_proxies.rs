@@ -130,12 +130,8 @@ pub fn get_or_assign_provider_proxy(
         .map_err(crate::error::map_db_error)?;
 
     let mut selected_proxy = None;
-    let mut fallback_proxy = None;
 
     for item in candidate_rows.flatten() {
-        if fallback_proxy.is_none() {
-            fallback_proxy = Some(item.clone());
-        }
         if !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0)
             && !in_use_by_others.contains(&item.0)
         {
@@ -144,9 +140,7 @@ pub fn get_or_assign_provider_proxy(
         }
     }
 
-    let new_proxy = selected_proxy.or(fallback_proxy);
-
-    if let Some((new_id, host, port, proto, username, password)) = new_proxy {
+    if let Some((new_id, host, port, proto, username, password)) = selected_proxy {
         if is_per_account {
             if let Some(acc_id) = account_id {
                 conn.execute(
@@ -180,6 +174,57 @@ pub fn get_or_assign_provider_proxy(
     Err(openproxy_types::error::CoreError::Validation(format!(
         "use_proxies is enabled for provider '{provider_id}', but no alive proxies are available in pool"
     )))
+}
+
+/// Retrieve up to `limit` alive candidate proxies not in cooldown for provider.
+pub fn get_candidate_proxies_for_provider(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    limit: usize,
+) -> Result<Vec<(String, String)>> {
+    use crate::cooldowns::is_provider_proxy_in_cooldown;
+
+    let mut stmt = conn
+        .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
+        .map_err(crate::error::map_db_error)?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })
+        .map_err(crate::error::map_db_error)?;
+
+    let mut candidates = Vec::with_capacity(limit);
+    for item in rows.flatten() {
+        if !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0) {
+            let proxy_id = item.0;
+            let host = item.1;
+            let port = item.2;
+            let proto = item.3;
+            let username = item.4;
+            let password = item.5;
+
+            let url = if let (Some(u), Some(p)) = (username, password) {
+                format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)
+            } else {
+                format!("{}://{}:{}", proto.to_lowercase(), host, port)
+            };
+
+            candidates.push((proxy_id, url));
+            if candidates.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    Ok(candidates)
 }
 
 /// Lookup proxy status by url string.

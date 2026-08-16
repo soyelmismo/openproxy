@@ -250,6 +250,7 @@ fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
         race_cancel: None,
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
+        proxy_override: None,
     };
     (req, _dis_tx)
 }
@@ -5900,6 +5901,10 @@ async fn test_account_scoped_proxy_rotation() {
             "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-acc-1', 'src', '2.2.2.2', 8080, 'http', 'alive', 20)",
             []
         ).unwrap();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-acc-2', 'src', '3.3.3.3', 8080, 'http', 'alive', 25)",
+            []
+        ).unwrap();
     }
 
     let provider_id = openproxy_types::ids::ProviderId::new("prov-acc");
@@ -5910,6 +5915,7 @@ async fn test_account_scoped_proxy_rotation() {
         .check_and_trigger_proxy_rotation(
             &provider_id,
             account_id,
+            None,
             crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
             None,
         )
@@ -5940,4 +5946,186 @@ async fn test_account_scoped_proxy_rotation() {
             .unwrap();
         assert!(in_cooldown);
     }
+}
+
+#[tokio::test]
+async fn test_proxy_rotation_returns_false_when_no_candidates_left() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    openproxy_db::migrations::run(&mut conn).unwrap();
+    let conn_arc = Arc::new(parking_lot::Mutex::new(conn));
+    let repo = Arc::new(SqlitePipelineRepository::new(Arc::clone(&conn_arc)));
+    let tracker = crate::usage_tracker::UsageTracker::new(Arc::clone(&repo));
+    let dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
+        Arc::clone(&conn_arc),
+        crate::PipelineConfig::default(),
+        tracker,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+
+    {
+        let conn = conn_arc.lock();
+        conn.execute(
+            "INSERT INTO providers (id, name, base_url, auth_type, format, use_proxies, proxy_rotation_mode, current_proxy_id) VALUES ('prov-single', 'Single Proxy Provider', 'http://localhost', 'bearer', 'mixed', 1, 'global', 'p-only')",
+            []
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-only', 'src', '1.1.1.1', 8080, 'http', 'alive', 10)",
+            []
+        ).unwrap();
+    }
+
+    let provider_id = openproxy_types::ids::ProviderId::new("prov-single");
+
+    // Trigger rotation on 429 when only 1 proxy exists
+    let rotated = dispatcher
+        .check_and_trigger_proxy_rotation(
+            &provider_id,
+            None,
+            None,
+            crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+            None,
+        )
+        .await;
+
+    // Should return false because no alternative candidate proxy is available without cooldown
+    assert!(!rotated);
+
+    // Verify current_proxy_id was cleared on the provider
+    {
+        let conn = conn_arc.lock();
+        let cur: Option<String> = conn
+            .query_row(
+                "SELECT current_proxy_id FROM providers WHERE id = 'prov-single'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cur, None);
+    }
+}
+
+#[tokio::test]
+async fn test_incremental_proxy_race() {
+    let (conn_arc, mut config) = test_pipeline_config();
+    let conn = conn_arc.lock();
+
+    // Provider configured with incremental_race rotation mode and no accounts
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format, use_proxies, proxy_rotation_mode) VALUES ('prov-zen', 'Zen Provider', 'http://localhost:9999', 'none', 'openai', 1, 'incremental_race')",
+        []
+    ).unwrap();
+
+    conn.execute(
+        "INSERT INTO models (id, provider_id, raw_model_id, target_format, active) VALUES (1, 'prov-zen', 'zen-model', 'openai', 1)",
+        []
+    ).unwrap();
+
+    conn.execute(
+        "INSERT INTO combos (id, name, active) VALUES (1, 'zen-combo', 1)",
+        []
+    ).unwrap();
+
+    conn.execute(
+        "INSERT INTO combo_targets (id, combo_id, provider_id, model_row_id, priority) VALUES (1, 1, 'prov-zen', 1, 10)",
+        []
+    ).unwrap();
+
+    // Insert 3 alive proxies with different latencies
+    conn.execute(
+        "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-fast', 'src', '1.1.1.1', 8080, 'http', 'alive', 5)",
+        []
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-med', 'src', '2.2.2.2', 8080, 'http', 'alive', 25)",
+        []
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-slow', 'src', '3.3.3.3', 8080, 'http', 'alive', 50)",
+        []
+    ).unwrap();
+    drop(conn);
+
+    let candidates = openproxy_db::free_proxies::get_candidate_proxies_for_provider(
+        &conn_arc.lock(),
+        &openproxy_types::ids::ProviderId::new("prov-zen"),
+        2,
+    ).unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].0, "p-fast");
+    assert_eq!(candidates[1].0, "p-med");
+
+    // Add p-fast to cooldown for prov-zen
+    openproxy_db::cooldowns::add_provider_proxy_cooldown(
+        &conn_arc.lock(),
+        "prov-zen",
+        "p-fast",
+        std::time::Duration::from_secs(300),
+    ).unwrap();
+
+    // Now candidates batch of 2 should return p-med and p-slow
+    let candidates_after_cd = openproxy_db::free_proxies::get_candidate_proxies_for_provider(
+        &conn_arc.lock(),
+        &openproxy_types::ids::ProviderId::new("prov-zen"),
+        2,
+    ).unwrap();
+    assert_eq!(candidates_after_cd.len(), 2);
+    assert_eq!(candidates_after_cd[0].0, "p-med");
+    assert_eq!(candidates_after_cd[1].0, "p-slow");
+
+    // Simulate winning proxy assignment
+    openproxy_db::providers::update_current_proxy(
+        &conn_arc.lock(),
+        &openproxy_types::ids::ProviderId::new("prov-zen"),
+        Some("p-med"),
+    ).unwrap();
+
+    let prov = openproxy_db::providers::get(
+        &conn_arc.lock(),
+        &openproxy_types::ids::ProviderId::new("prov-zen"),
+    ).unwrap().unwrap();
+    assert_eq!(prov.current_proxy_id.as_deref(), Some("p-med"));
+}
+
+#[test]
+fn test_matches_proxy_rotation_errors_filtering() {
+    let rotation_errors = "429,connect_error,timeout,502";
+
+    // 429 matches
+    let err_429 = CoreError::RateLimited {
+        provider: "p".into(),
+        retry_after_ms: 1000,
+        is_proxy_rotated: false,
+    };
+    assert!(crate::stages::executor::matches_proxy_rotation_errors(&err_429, rotation_errors));
+
+    // 502 UpstreamError matches
+    let err_502 = CoreError::UpstreamError {
+        status: 502,
+        provider: "p".into(),
+        model: "m".into(),
+        body: "bad gateway".into(),
+        is_proxy_rotated: false,
+    };
+    assert!(crate::stages::executor::matches_proxy_rotation_errors(&err_502, rotation_errors));
+
+    // 400 Bad Request does not match rotation errors
+    let err_400 = CoreError::UpstreamError {
+        status: 400,
+        provider: "p".into(),
+        model: "m".into(),
+        body: "invalid request".into(),
+        is_proxy_rotated: false,
+    };
+    assert!(!crate::stages::executor::matches_proxy_rotation_errors(&err_400, rotation_errors));
+
+    // Connect error matches
+    let err_conn = CoreError::UpstreamConnection("conn reset".into());
+    assert!(crate::stages::executor::matches_proxy_rotation_errors(&err_conn, rotation_errors));
+
+    // Timeout matches
+    let err_timeout = CoreError::UpstreamTimeout {
+        phase: "total".into(),
+        ms: 5000,
+    };
+    assert!(crate::stages::executor::matches_proxy_rotation_errors(&err_timeout, rotation_errors));
 }

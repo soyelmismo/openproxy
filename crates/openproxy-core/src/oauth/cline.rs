@@ -156,6 +156,7 @@ impl OAuthProvider for ClineOAuthProvider {
         let refresh_url = "https://api.cline.bot/api/v1/auth/refresh";
 
         let body = serde_json::json!({
+            "granttype": "refresh_token",
             "refreshToken": refresh_token,
         });
 

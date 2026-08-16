@@ -154,7 +154,9 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OpenAIRequest {
+    #[serde(default)]
     pub model: String,
+    #[serde(default)]
     pub messages: Vec<OpenAIMessage>,
     #[serde(default)]
     pub stream: bool,

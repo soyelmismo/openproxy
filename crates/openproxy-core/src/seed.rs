@@ -251,9 +251,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 15, "first call inserts all fifteen");
+        assert_eq!(n, 16, "first call inserts all sixteen");
 
-        // All fifteen are present and reachable by id.
+        // All sixteen are present and reachable by id.
         for id in [
             "atomesus",
             "openrouter",
@@ -265,6 +265,7 @@ mod tests {
             "nvidia-nim",
             "kilocode",
             "gemini",
+            "horde",
             "antigravity",
             "codex",
             "kiro",
@@ -283,14 +284,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 15);
+        assert_eq!(first, 16);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 15, "still exactly fifteen rows");
+        assert_eq!(count, 16, "still exactly sixteen rows");
     }
 
     #[test]
@@ -314,7 +315,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 14, "only the fourteen missing ones");
+        assert_eq!(n, 15, "only the fifteen missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -386,7 +387,7 @@ mod tests {
     #[test]
     fn builtin_provider_ids_lists_twelve() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 15);
+        assert_eq!(ids.len(), 16);
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
@@ -396,6 +397,7 @@ mod tests {
         assert!(ids.iter().any(|s| s == "nvidia-nim"));
         assert!(ids.iter().any(|s| s == "kilocode"));
         assert!(ids.iter().any(|s| s == "gemini"));
+        assert!(ids.iter().any(|s| s == "horde"));
         assert!(ids.iter().any(|s| s == "antigravity"));
         assert!(ids.iter().any(|s| s == "codex"));
         assert!(ids.iter().any(|s| s == "kiro"));

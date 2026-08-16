@@ -245,6 +245,7 @@ pub fn make_request(
         race_cancel: None,
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
+        proxy_override: None,
     };
     (req, _dis_tx)
 }

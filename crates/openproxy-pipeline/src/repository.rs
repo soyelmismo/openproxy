@@ -78,6 +78,11 @@ pub trait PipelineRepository: Send + Sync {
         provider_id: &ProviderId,
         account_id: Option<AccountId>,
     ) -> Result<Option<String>>;
+    fn get_candidate_proxies(
+        &self,
+        provider_id: &ProviderId,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>>;
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String>;
 
     // Batch Loading
@@ -366,6 +371,15 @@ impl PipelineRepository for SqlitePipelineRepository {
             provider_id,
             account_id.as_ref(),
         )
+    }
+
+    fn get_candidate_proxies(
+        &self,
+        provider_id: &ProviderId,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let conn = self.conn.lock();
+        openproxy_db::free_proxies::get_candidate_proxies_for_provider(&conn, provider_id, limit)
     }
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {

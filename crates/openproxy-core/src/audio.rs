@@ -1,6 +1,5 @@
 //! Audio transcription service: resolution, dispatch, and usage recording.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -13,14 +12,11 @@ use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
 use openproxy_types::{
-    CoreError, Result, UsageInput,
-    ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
+    CoreError, Result,
+    ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId},
 };
 
-use crate::{
-    accounts, cost, models, providers,
-    routing::{self, RoutingPlan},
-};
+use crate::routing::{self, RoutingPlan};
 
 #[derive(Clone, Debug)]
 pub struct ParsedAudioBody {
@@ -37,13 +33,10 @@ pub struct AudioTranscriptionResponse {
     pub body_bytes: Bytes,
 }
 
-pub struct AudioTargets {
-    pub provider: ProviderId,
-    pub account_id: Option<AccountId>,
-    pub model_row_id: Option<ModelRowId>,
-    pub upstream_model: String,
-    pub combo_id: Option<ComboId>,
-}
+pub use crate::unary::{
+    UnaryTarget as AudioTargets, is_target_available, record_unary_usage, resolve_api_key,
+    resolve_unary_targets,
+};
 
 pub fn resolve_audio_targets(
     db_pool: &DbPool,
@@ -51,88 +44,14 @@ pub fn resolve_audio_targets(
     api_key_id: Option<ApiKeyId>,
     started: Instant,
 ) -> Result<Vec<AudioTargets>> {
-    match routing_plan {
-        RoutingPlan::Combo {
-            combo_id, targets, ..
-        } => {
-            let r = db_pool.reader();
-            let targets = routing::flatten_targets(&r, targets)
-                .map_err(|e| CoreError::Validation(format!("flatten_targets failed: {e}")))?;
-            let targets = routing::expand_account_rotation(&r, targets)
-                .map_err(|e| CoreError::Validation(format!("expand_account_rotation failed: {e}")))?;
-
-            let mut audio_targets = Vec::with_capacity(targets.len());
-            for target in targets {
-                if let Some(model_row_id) = target.model_row_id {
-                    let (provider, upstream_model) = {
-                        let Ok(Some(model)) = models::get_by_row_id(&r, model_row_id) else {
-                            continue;
-                        };
-                        (model.provider_id, model.model_id.as_str().to_string())
-                    };
-                    audio_targets.push(AudioTargets {
-                        provider,
-                        account_id: target.account_id,
-                        model_row_id: Some(model_row_id),
-                        upstream_model,
-                        combo_id: Some(combo_id),
-                    });
-                }
-            }
-            if audio_targets.is_empty() {
-                return Err(CoreError::Validation(
-                    "combo has no model target suitable for transcription".into(),
-                ));
-            }
-            Ok(audio_targets)
-        }
-        RoutingPlan::NotFound { model, hint } => {
-            record_audio_usage_row(AudioUsageArgs {
-                db_pool,
-                request_id: RequestId::new(),
-                api_key_id,
-                provider_id: &ProviderId::new(""),
-                account_id: None,
-                combo_id: None,
-                model_row_id: None,
-                upstream_model_id: &model,
-                status_code: 404,
-                error_msg: Some("model_not_found".to_string()),
-                total_ms: started.elapsed().as_millis() as u64,
-            });
-            let mut msg = format!("model not found: {model}");
-            if let Some(h) = hint {
-                let _ = write!(msg, " (hint: {h})");
-            }
-            Err(CoreError::ModelNotFound {
-                provider: "<unknown>".into(),
-                model: msg,
-            })
-        }
-    }
-}
-
-pub fn resolve_api_key(
-    db_pool: &DbPool,
-    master_key: &MasterKey,
-    account_id: Option<AccountId>,
-    provider_id: &ProviderId,
-) -> Result<String> {
-    match account_id {
-        Some(id) => {
-            let r = db_pool.reader();
-            accounts::decrypt_api_key(&r, id, master_key)
-        }
-        None => {
-            let r = db_pool.reader();
-            match providers::get(&r, provider_id)? {
-                Some(p) if matches!(p.auth_type, providers::AuthType::None) => Ok(String::new()),
-                _ => Err(CoreError::Auth(format!(
-                    "no api key available for provider '{provider_id}'"
-                ))),
-            }
-        }
-    }
+    resolve_unary_targets(
+        db_pool,
+        routing_plan,
+        "audio",
+        openproxy_types::EndpointKind::Audio,
+        api_key_id,
+        started,
+    )
 }
 
 pub async fn dispatch_audio_request(
@@ -234,64 +153,25 @@ pub struct AudioUsageArgs<'a> {
 }
 
 pub fn record_audio_usage_row(args: AudioUsageArgs<'_>) {
-    let AudioUsageArgs {
-        db_pool,
-        request_id,
-        api_key_id,
-        provider_id,
-        account_id,
-        combo_id,
-        model_row_id,
-        upstream_model_id,
-        status_code,
-        error_msg,
-        total_ms,
-    } = args;
-    let input = UsageInput {
-        proxy_url: None,
-        proxy_status: None,
-        is_proxy_rotated: false,
-        request_id,
-        trace_id: TraceId::new().to_string(),
-        attempt: 1,
-        provider_id: provider_id.clone(),
-        account_id,
-        combo_id,
-        combo_target_id: None,
-        model_row_id,
-        upstream_model_id: upstream_model_id.to_string(),
-        prompt_tokens: None,
-        completion_tokens: None,
-        cached_tokens: None,
-        connect_ms: None,
-        ttft_ms: None,
-        total_ms,
-        status_code,
-        error_msg: error_msg.clone(),
-        race_total: 1,
-        race_lost: false,
-        api_key_id,
-        request_body_json: None,
-        response_body_json: None,
-        request_headers: None,
-        response_headers: None,
-        error_message: error_msg,
-        race_attempts: 1,
-        is_streaming: false,
-        stream_complete: false,
-        stop_reason: None,
-        compression_savings_pct: None,
-        compression_techniques: None,
-        client_response: true,
-        prompt_tokens_estimated: false,
-        completion_tokens_estimated: false,
-        endpoint_kind: openproxy_types::EndpointKind::Audio,
-    };
-    let Some(w) = db_pool.try_writer_for(std::time::Duration::from_millis(100)) else {
-        tracing::warn!("hot-path writer lock timeout on audio usage row; dropping");
-        return;
-    };
-    let _ = cost::record(&w, &input);
+    record_unary_usage(
+        args.db_pool,
+        &crate::unary::UnaryUsageArgs {
+            request_id: args.request_id,
+            api_key_id: args.api_key_id,
+            provider_id: args.provider_id,
+            account_id: args.account_id,
+            combo_id: args.combo_id,
+            combo_target_id: None,
+            model_row_id: args.model_row_id,
+            upstream_model_id: args.upstream_model_id,
+            prompt_tokens: None,
+            completion_tokens: None,
+            status_code: args.status_code,
+            error_msg: args.error_msg,
+            total_ms: args.total_ms,
+            endpoint_kind: openproxy_types::EndpointKind::Audio,
+        },
+    );
 }
 
 pub async fn execute_transcribe(

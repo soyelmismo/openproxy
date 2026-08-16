@@ -148,6 +148,25 @@ pub trait ProviderAdapter: Send + Sync {
         format!("{}/embeddings", self.config().base_url)
     }
 
+    /// Format an embedding request for upstream OpenAI-compatible embeddings endpoints.
+    fn format_embedding_request(
+        &self,
+        req: &openproxy_types::embeddings::EmbeddingRequest,
+        upstream_model: &str,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let mut val = serde_json::to_value(req)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.insert(
+                "model".to_string(),
+                serde_json::Value::String(upstream_model.to_string()),
+            );
+        }
+        serde_json::to_vec(&val)
+            .map(bytes::Bytes::from)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))
+    }
+
     /// Build the URL for image generation. Default:
     /// `{base_url}/images/generations`.
     ///
@@ -158,6 +177,37 @@ pub trait ProviderAdapter: Send + Sync {
     /// error will surface to the client.
     fn build_image_url(&self) -> String {
         format!("{}/images/generations", self.config().base_url)
+    }
+
+    /// Build the URL for image edits. Default:
+    /// `{base_url}/images/edits`.
+    fn build_image_edits_url(&self) -> String {
+        format!("{}/images/edits", self.config().base_url)
+    }
+
+    /// Build the URL for image variations. Default:
+    /// `{base_url}/images/variations`.
+    fn build_image_variations_url(&self) -> String {
+        format!("{}/images/variations", self.config().base_url)
+    }
+
+    /// Format an image generation request for upstream OpenAI-compatible image endpoints.
+    fn format_image_request(
+        &self,
+        req: &openproxy_types::images::ImageGenerationRequest,
+        upstream_model: &str,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let mut val = serde_json::to_value(req)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.insert(
+                "model".to_string(),
+                serde_json::Value::String(upstream_model.to_string()),
+            );
+        }
+        serde_json::to_vec(&val)
+            .map(bytes::Bytes::from)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))
     }
 
     /// Build the URL for video generation. Default:
@@ -419,6 +469,50 @@ macro_rules! define_provider_adapter {
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_transcription_url(), )+
                 }
             }
+            pub fn build_embeddings_url(&self) -> String {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_embeddings_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_embeddings_url(), )+
+                }
+            }
+            pub fn format_embedding_request(
+                &self,
+                req: &openproxy_types::embeddings::EmbeddingRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_embedding_request(req, upstream_model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_embedding_request(req, upstream_model), )+
+                }
+            }
+            pub fn build_image_url(&self) -> String {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_image_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_url(), )+
+                }
+            }
+            pub fn build_image_edits_url(&self) -> String {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_image_edits_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_edits_url(), )+
+                }
+            }
+            pub fn build_image_variations_url(&self) -> String {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_image_variations_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_variations_url(), )+
+                }
+            }
+            pub fn format_image_request(
+                &self,
+                req: &openproxy_types::images::ImageGenerationRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_image_request(req, upstream_model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_image_request(req, upstream_model), )+
+                }
+            }
             pub fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
                 match self {
                     $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_auth_header(api_key), )+
@@ -530,6 +624,32 @@ macro_rules! define_provider_adapter {
             fn build_transcription_url(&self) -> String {
                 self.build_transcription_url()
             }
+            fn build_embeddings_url(&self) -> String {
+                self.build_embeddings_url()
+            }
+            fn format_embedding_request(
+                &self,
+                req: &openproxy_types::embeddings::EmbeddingRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.format_embedding_request(req, upstream_model)
+            }
+            fn build_image_url(&self) -> String {
+                self.build_image_url()
+            }
+            fn build_image_edits_url(&self) -> String {
+                self.build_image_edits_url()
+            }
+            fn build_image_variations_url(&self) -> String {
+                self.build_image_variations_url()
+            }
+            fn format_image_request(
+                &self,
+                req: &openproxy_types::images::ImageGenerationRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.format_image_request(req, upstream_model)
+            }
             fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
                 self.build_auth_header(api_key)
             }
@@ -619,6 +739,7 @@ define_provider_adapter! {
             CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
             Codex(crate::adapters::codex::CodexAdapter),
             Gemini(crate::adapters::gemini::GeminiAdapter),
+            Horde(crate::adapters::horde::HordeAdapter),
             Kilocode(crate::adapters::kilocode::KilocodeAdapter),
             Kiro(crate::adapters::kiro_ai::KiroAdapter),
             MiniMax(crate::adapters::minimax::MiniMaxAdapter),
@@ -755,6 +876,7 @@ pub mod codex;
 pub mod custom_adapter;
 pub mod factory;
 pub mod gemini;
+pub mod horde;
 pub mod kilocode;
 pub mod kiro_ai;
 pub mod minimax;
@@ -779,6 +901,7 @@ pub use codex::CodexAdapter;
 pub use custom_adapter::CustomAdapter;
 pub use factory::AdapterFactory;
 pub use gemini::GeminiAdapter;
+pub use horde::HordeAdapter;
 pub use kilocode::KilocodeAdapter;
 pub use kiro_ai::KiroAdapter;
 pub use minimax::MiniMaxAdapter;
@@ -1198,9 +1321,9 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_fifteen() {
+    fn builtin_adapters_returns_sixteen() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 15);
+        assert_eq!(v.len(), 16);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"atomesus"));
         assert!(ids.contains(&"cline"));
@@ -1214,6 +1337,7 @@ mod tests {
         assert!(ids.contains(&"kilocode"));
         assert!(ids.contains(&"cloudflare-workers-ai"));
         assert!(ids.contains(&"gemini"));
+        assert!(ids.contains(&"horde"));
         assert!(ids.contains(&"antigravity"));
         assert!(ids.contains(&"codex"));
         assert!(ids.contains(&"kiro"));
@@ -1676,5 +1800,63 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "X-Custom" && v == "value1")
         );
+    }
+
+    #[test]
+    fn custom_adapter_embedding_url_and_format() {
+        let p = make_custom_provider(
+            "zenmux",
+            "https://zenmux.example.com/v1",
+            openproxy_types::AuthType::Bearer,
+            openproxy_types::ProviderFormat::Openai,
+        );
+        let a = CustomAdapter::from_provider_row(&p);
+        assert_eq!(a.build_embeddings_url(), "https://zenmux.example.com/v1/embeddings");
+
+        let req = openproxy_types::embeddings::EmbeddingRequest {
+            model: "text-embedding-3-small".into(),
+            input: openproxy_types::embeddings::EmbeddingInput::Single("hello".into()),
+            encoding_format: None,
+            dimensions: None,
+            user: None,
+        };
+        let formatted = a.format_embedding_request(&req, "text-embedding-3-small").unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&formatted).unwrap();
+        assert_eq!(val["model"], "text-embedding-3-small");
+        assert_eq!(val["input"], "hello");
+    }
+
+    #[test]
+    fn custom_adapter_image_urls_and_format() {
+        let p = make_custom_provider(
+            "zenmux",
+            "https://zenmux.example.com/v1",
+            openproxy_types::AuthType::Bearer,
+            openproxy_types::ProviderFormat::Openai,
+        );
+        let a = CustomAdapter::from_provider_row(&p);
+        assert_eq!(a.build_image_url(), "https://zenmux.example.com/v1/images/generations");
+        assert_eq!(a.build_image_edits_url(), "https://zenmux.example.com/v1/images/edits");
+        assert_eq!(a.build_image_variations_url(), "https://zenmux.example.com/v1/images/variations");
+
+        let req = openproxy_types::images::ImageGenerationRequest {
+            prompt: "a landscape".into(),
+            model: "flux-pro".into(),
+            n: Some(1),
+            size: Some("1024x1024".into()),
+            quality: None,
+            response_format: None,
+            style: None,
+            user: None,
+            aspect_ratio: Some("16:9".into()),
+            seed: Some(12345),
+            negative_prompt: Some("blurry".into()),
+        };
+        let formatted = a.format_image_request(&req, "flux-pro-v1").unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&formatted).unwrap();
+        assert_eq!(val["model"], "flux-pro-v1");
+        assert_eq!(val["aspect_ratio"], "16:9");
+        assert_eq!(val["seed"], 12345);
+        assert_eq!(val["negative_prompt"], "blurry");
     }
 }

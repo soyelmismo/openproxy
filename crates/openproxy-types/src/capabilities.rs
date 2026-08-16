@@ -172,11 +172,27 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
 
 pub fn infer_model_type(model_id: &str) -> &'static str {
     let lower = model_id.to_lowercase();
-    if lower.contains("embed") {
+    if lower.contains("embed") || lower.contains("bge-") || lower.contains("text-embedding") {
         "embedding"
-    } else if lower.contains("dall-e") || lower.contains("flux") {
+    } else if lower.contains("dall-e")
+        || lower.contains("flux")
+        || lower.contains("sdxl")
+        || lower.contains("stable-diffusion")
+        || lower.contains("stable_diffusion")
+        || lower.contains("imagen")
+        || lower.contains("ideogram")
+        || lower.contains("midjourney")
+        || lower.contains("dreamshaper")
+        || lower.contains("pony")
+        || lower.contains("recraft")
+    {
         "image"
-    } else if lower.contains("whisper") || lower.contains("tts") {
+    } else if lower.contains("whisper")
+        || lower.contains("tts")
+        || lower.contains("eleven")
+        || lower.contains("speech")
+        || lower.contains("audio")
+    {
         "audio"
     } else if lower.contains("rerank") {
         "rerank"
