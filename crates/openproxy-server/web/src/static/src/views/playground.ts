@@ -64,6 +64,7 @@ let chatMaxTokens: number | null = null;
 let chatStream = true;
 
 // Image parameters
+let imageMode: 'generation' | 'edit' | 'variation' = 'generation';
 let imagePrompt = 'A serene futuristic digital city with neon reflections and lush trees, cinematic lighting';
 let imageNegativePrompt = 'blurry, low quality, distorted, artifacts';
 let imageSize = '1024x1024';
@@ -71,10 +72,17 @@ let imageQuality = 'standard';
 let imageN = 1;
 let imageSeed: number | null = null;
 let imageResponseFormat: 'url' | 'b64_json' = 'b64_json';
+let imageSourceFile: File | null = null;
+let imageMaskFile: File | null = null;
 
 // Embedding parameters
 let embeddingInput = 'The quick brown fox jumps over the lazy dog.';
 let embeddingIsArray = false;
+let embeddingDimensions: number | null = null;
+let embeddingEncodingFormat: 'float' | 'base64' = 'float';
+
+// Chat parameters
+let chatResponseFormat: 'text' | 'json_object' = 'text';
 
 // Audio parameters
 let audioFile: File | null = null;
@@ -107,6 +115,24 @@ let loadError: string | null = null;
 // Helpers
 function generateId(): string {
   return 'msg-' + Math.random().toString(36).substring(2, 9);
+}
+
+function addChatMessage(): void {
+  chatMessages.push({ id: generateId(), role: 'user', content: '' });
+  requestUpdate();
+}
+
+function clearChatMessages(): void {
+  chatMessages = [{ id: generateId(), role: 'user', content: '' }];
+  requestUpdate();
+}
+
+function removeChatMessage(id: string): void {
+  chatMessages = chatMessages.filter((m) => m.id !== id);
+  if (chatMessages.length === 0) {
+    chatMessages.push({ id: generateId(), role: 'user', content: '' });
+  }
+  requestUpdate();
 }
 
 function getEffectiveApiKey(): string {
@@ -271,7 +297,6 @@ async function executeChatRequest(key: string, startTime: number): Promise<void>
   if (messages.length === 0) {
     throw new Error('Please add at least one message with content.');
   }
-
   const payload: Record<string, unknown> = {
     model: selectedModelId,
     messages,
@@ -280,6 +305,9 @@ async function executeChatRequest(key: string, startTime: number): Promise<void>
   };
   if (chatMaxTokens !== null && chatMaxTokens > 0) {
     payload['max_tokens'] = chatMaxTokens;
+  }
+  if (chatResponseFormat === 'json_object') {
+    payload['response_format'] = { type: 'json_object' };
   }
 
   const headers: Record<string, string> = {
@@ -371,22 +399,24 @@ async function executeChatRequest(key: string, startTime: number): Promise<void>
             });
             requestUpdate();
           } catch {
-            // Unparseable frame
+            // ignore parse error on partial chunks
           }
         }
       }
     }
-
     rawResponseText = streamedChatContent;
   } else {
     // Non-streaming response
     const text = await response.text();
     rawResponseText = text;
     currentMetrics.payloadSizeBytes = new Blob([text]).size;
+
     try {
       const json = JSON.parse(text);
       parsedResponseJson = json;
-      streamedChatContent = json?.choices?.[0]?.message?.content || '';
+      const content = json?.choices?.[0]?.message?.content || '';
+      streamedChatContent = content;
+
       if (json?.usage) {
         currentMetrics.promptTokens = json.usage.prompt_tokens ?? null;
         currentMetrics.completionTokens = json.usage.completion_tokens ?? null;
@@ -399,40 +429,83 @@ async function executeChatRequest(key: string, startTime: number): Promise<void>
 }
 
 async function executeImageRequest(key: string): Promise<void> {
-  if (!imagePrompt.trim()) {
-    throw new Error('Please enter a prompt for image generation.');
-  }
+  let endpoint = '/v1/images/generations';
+  let reqInit: RequestInit;
 
-  const payload: Record<string, unknown> = {
-    model: selectedModelId || 'dall-e-3',
-    prompt: imagePrompt.trim(),
-    n: imageN,
-    size: imageSize,
-    quality: imageQuality,
-    response_format: imageResponseFormat,
-  };
-  if (imageNegativePrompt.trim()) {
-    payload['negative_prompt'] = imageNegativePrompt.trim();
-  }
-  if (imageSeed !== null && !isNaN(imageSeed)) {
-    payload['seed'] = imageSeed;
-  }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
   if (key) headers['Authorization'] = `Bearer ${key}`;
 
-  const reqInit: RequestInit = {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  };
+  if (imageMode === 'generation') {
+    if (!imagePrompt.trim()) {
+      throw new Error('Please enter a prompt for image generation.');
+    }
+    const payload: Record<string, unknown> = {
+      model: selectedModelId || 'dall-e-3',
+      prompt: imagePrompt.trim(),
+      n: imageN,
+      size: imageSize,
+      quality: imageQuality,
+      response_format: imageResponseFormat,
+    };
+    if (imageNegativePrompt.trim()) {
+      payload['negative_prompt'] = imageNegativePrompt.trim();
+    }
+    if (imageSeed !== null && !isNaN(imageSeed)) {
+      payload['seed'] = imageSeed;
+    }
+    headers['Content-Type'] = 'application/json';
+    reqInit = {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    };
+  } else if (imageMode === 'edit') {
+    if (!imageSourceFile) {
+      throw new Error('Please select an image file to edit.');
+    }
+    if (!imagePrompt.trim()) {
+      throw new Error('Please enter a prompt describing the edits.');
+    }
+    endpoint = '/v1/images/edits';
+    const formData = new FormData();
+    formData.append('image', imageSourceFile, imageSourceFile.name);
+    if (imageMaskFile) {
+      formData.append('mask', imageMaskFile, imageMaskFile.name);
+    }
+    formData.append('prompt', imagePrompt.trim());
+    formData.append('model', selectedModelId || 'dall-e-2');
+    formData.append('n', String(imageN));
+    formData.append('size', imageSize);
+    formData.append('response_format', imageResponseFormat);
+    reqInit = {
+      method: 'POST',
+      headers,
+      body: formData,
+    };
+  } else {
+    // variation
+    if (!imageSourceFile) {
+      throw new Error('Please select an image file to create variations.');
+    }
+    endpoint = '/v1/images/variations';
+    const formData = new FormData();
+    formData.append('image', imageSourceFile, imageSourceFile.name);
+    formData.append('model', selectedModelId || 'dall-e-2');
+    formData.append('n', String(imageN));
+    formData.append('size', imageSize);
+    formData.append('response_format', imageResponseFormat);
+    reqInit = {
+      method: 'POST',
+      headers,
+      body: formData,
+    };
+  }
+
   if (abortController) {
     reqInit.signal = abortController.signal;
   }
 
-  const response = await fetch('/v1/images/generations', reqInit);
+  const response = await fetch(endpoint, reqInit);
 
   currentMetrics.statusCode = response.status;
   currentMetrics.statusText = response.statusText;
@@ -468,10 +541,14 @@ async function executeEmbeddingRequest(key: string): Promise<void> {
       .filter((s) => s.length > 0);
   }
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     model: selectedModelId || 'text-embedding-3-small',
     input: inputData,
+    encoding_format: embeddingEncodingFormat,
   };
+  if (embeddingDimensions !== null && embeddingDimensions > 0) {
+    payload['dimensions'] = embeddingDimensions;
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -562,7 +639,6 @@ async function executeAudioRequest(key: string): Promise<void> {
     throw new Error(`HTTP ${response.status}: ${text}`);
   }
 }
-
 function cancelRequest(): void {
   if (abortController) {
     abortController.abort();
@@ -575,43 +651,54 @@ function generateCurlCommand(): string {
 
   if (modality === 'chat') {
     const messages = chatMessages.map((m) => ({ role: m.role, content: m.content }));
-    const body = JSON.stringify(
-      {
-        model: selectedModelId || 'gpt-4o',
-        messages,
-        temperature: chatTemperature,
-        stream: chatStream,
-      },
-      null,
-      2,
-    );
+    const payload: Record<string, unknown> = {
+      model: selectedModelId || 'gpt-4o',
+      messages,
+      temperature: chatTemperature,
+      stream: chatStream,
+    };
+    if (chatMaxTokens !== null && chatMaxTokens > 0) {
+      payload['max_tokens'] = chatMaxTokens;
+    }
+    if (chatResponseFormat === 'json_object') {
+      payload['response_format'] = { type: 'json_object' };
+    }
+    const body = JSON.stringify(payload, null, 2);
     return `curl -X POST "${host}/v1/chat/completions" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
   } else if (modality === 'image') {
-    const body = JSON.stringify(
-      {
+    if (imageMode === 'generation') {
+      const payload: Record<string, unknown> = {
         model: selectedModelId || 'dall-e-3',
         prompt: imagePrompt,
         size: imageSize,
         quality: imageQuality,
         n: imageN,
         response_format: imageResponseFormat,
-      },
-      null,
-      2,
-    );
-    return `curl -X POST "${host}/v1/images/generations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+      };
+      if (imageNegativePrompt.trim()) payload['negative_prompt'] = imageNegativePrompt.trim();
+      if (imageSeed !== null && !isNaN(imageSeed)) payload['seed'] = imageSeed;
+      const body = JSON.stringify(payload, null, 2);
+      return `curl -X POST "${host}/v1/images/generations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+    } else if (imageMode === 'edit') {
+      let cmd = `curl -X POST "${host}/v1/images/edits" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "image=@${imageSourceFile ? imageSourceFile.name : 'image.png'}" \\\n  -F "prompt=${imagePrompt}" \\\n  -F "model=${selectedModelId || 'dall-e-2'}" \\\n  -F "size=${imageSize}" \\\n  -F "n=${imageN}"`;
+      if (imageMaskFile) cmd += ` \\\n  -F "mask=@${imageMaskFile.name}"`;
+      return cmd;
+    } else {
+      return `curl -X POST "${host}/v1/images/variations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "image=@${imageSourceFile ? imageSourceFile.name : 'image.png'}" \\\n  -F "model=${selectedModelId || 'dall-e-2'}" \\\n  -F "size=${imageSize}" \\\n  -F "n=${imageN}"`;
+    }
   } else if (modality === 'embedding') {
-    const body = JSON.stringify(
-      {
-        model: selectedModelId || 'text-embedding-3-small',
-        input: embeddingInput,
-      },
-      null,
-      2,
-    );
+    const payload: Record<string, unknown> = {
+      model: selectedModelId || 'text-embedding-3-small',
+      input: embeddingInput,
+      encoding_format: embeddingEncodingFormat,
+    };
+    if (embeddingDimensions !== null && embeddingDimensions > 0) {
+      payload['dimensions'] = embeddingDimensions;
+    }
+    const body = JSON.stringify(payload, null, 2);
     return `curl -X POST "${host}/v1/embeddings" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
   } else {
-    return `curl -X POST "${host}/v1/audio/transcriptions" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "file=@audio.mp3" \\\n  -F "model=${selectedModelId || 'whisper-1'}"`;
+    return `curl -X POST "${host}/v1/audio/transcriptions" \\\n  -H "Authorization: Bearer ${key}" \\\n  -F "file=@${audioFile ? audioFile.name : 'audio.mp3'}" \\\n  -F "model=${selectedModelId || 'whisper-1'}"`;
   }
 }
 
@@ -653,119 +740,86 @@ function renderTargetControls(): TemplateResult {
               requestUpdate();
             }}
           >
-            <option value="session">Active Admin Session Token</option>
-            ${apiKeys.length > 0 ? html`<option value="key">Registered API Key</option>` : html``}
-            <option value="custom">Custom Bearer Token</option>
+            <option value="session">Admin Session Token</option>
+            ${apiKeys.map(
+              (k) => html`<option value="key:${k.key_prefix}">${k.label || 'API Key'} (${k.key_prefix}…)</option>`,
+            )}
+            <option value="custom">Custom Bearer Key</option>
           </select>
         </div>
 
-        ${keySource === 'key'
-          ? html`
-              <div class="field">
-                <label class="field-label">Select Registered Key</label>
-                <select
-                  .value=${selectedApiKeyPrefix}
-                  @change=${(e: Event) => {
-                    selectedApiKeyPrefix = (e.target as HTMLSelectElement).value;
-                    requestUpdate();
-                  }}
-                >
-                  <option value="">— Choose Key —</option>
-                  ${apiKeys.map(
-                    (k) => html`<option value=${k.key_prefix || ''}>${k.label || 'Unnamed'} (${k.key_prefix || '—'})</option>`,
-                  )}
-                </select>
-              </div>
-            `
-          : keySource === 'custom'
-          ? html`
-              <div class="field">
-                <label class="field-label">Custom Bearer Key</label>
-                <input
-                  type="password"
-                  placeholder="sk-..."
-                  .value=${customApiKey}
-                  @input=${(e: Event) => {
-                    customApiKey = (e.target as HTMLInputElement).value;
-                  }}
-                />
-              </div>
-            `
-          : html`
-              <div class="field">
-                <label class="field-label">Active Session</label>
-                <div class="playground-pill-text">Using current session auth</div>
-              </div>
-            `}
-
-        <!-- Provider Filter -->
+        <!-- Provider Selection -->
         <div class="field">
-          <label class="field-label">Filter by Provider</label>
+          <label class="field-label">Provider (Optional)</label>
           <select
             .value=${selectedProviderId}
             @change=${(e: Event) => {
               selectedProviderId = (e.target as HTMLSelectElement).value;
-              selectedModelId = '';
-              ensureDefaultModel();
+              const models = getFilteredModels();
+              if (models.length > 0 && models[0]) {
+                selectedModelId = models[0].id;
+              }
               requestUpdate();
             }}
           >
-            <option value="">All Providers (${providers.length})</option>
-            ${providers.map(
-              (p) => html`<option value=${p.id}>${p.name || p.id} ${p.active ? '' : '(inactive)'}</option>`,
-            )}
+            <option value="">(Auto / Any Provider)</option>
+            ${providers.map((p) => html`<option value=${p.id}>${p.id}</option>`)}
+          </select>
+        </div>
+
+        <!-- Model Selection -->
+        <div class="field">
+          <label class="field-label">Model Target</label>
+          <select
+            .value=${selectedModelId}
+            @change=${(e: Event) => {
+              selectedModelId = (e.target as HTMLSelectElement).value;
+              requestUpdate();
+            }}
+          >
+            ${filteredModels.length === 0
+              ? html`<option value="">No models available</option>`
+              : filteredModels.map(
+                  (m) =>
+                    html`<option value=${m.id}>
+                      ${m.provider ? `${m.provider} / ` : ''}${m.name}
+                    </option>`,
+                )}
           </select>
         </div>
       </div>
 
-      <div class="playground-grid-2">
-        <!-- Model Selection -->
-        <div class="field">
-          <label class="field-label">Target Model / Combo</label>
-          <div class="playground-input-group">
-            <select
-              .value=${selectedModelId}
-              @change=${(e: Event) => {
-                selectedModelId = (e.target as HTMLSelectElement).value;
-                requestUpdate();
-              }}
-            >
-              ${filteredModels.length === 0
-                ? html`<option value="">No models available for ${modality}</option>`
-                : filteredModels.map(
-                    (m) => html`<option value=${m.id}>${m.name} [${m.provider}]</option>`,
-                  )}
-            </select>
-            <input
-              type="text"
-              placeholder="Or custom model ID..."
-              .value=${selectedModelId}
-              @input=${(e: Event) => {
-                selectedModelId = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </div>
-          <small class="text-muted">Select from discovered models/combos or type custom model string</small>
-        </div>
+      ${keySource === 'custom'
+        ? html`
+            <div class="field" style="margin-top: var(--space-2);">
+              <label class="field-label">Custom Bearer Key</label>
+              <input
+                type="password"
+                placeholder="sk-..."
+                .value=${customApiKey}
+                @input=${(e: Event) => {
+                  customApiKey = (e.target as HTMLInputElement).value;
+                }}
+              />
+            </div>
+          `
+        : html``}
 
-        <!-- Account Info (Optional) -->
-        <div class="field">
-          <label class="field-label">Provider Accounts</label>
-          ${matchingAccounts.length > 0
-            ? html`
-                <div class="playground-account-pills">
-                  ${matchingAccounts.map(
-                    (a) => html`
-                      <span class="status-pill ${a.health_status === 'healthy' ? 'on' : 'off'}" title="Priority: ${a.priority}">
-                        ${a.label || '#' + a.id} (${a.health_status})
-                      </span>
-                    `,
-                  )}
-                </div>
-              `
-            : html`<span class="text-muted" style="font-size: var(--fs-xs); margin-top: 6px;">${selectedProviderId ? 'No accounts configured for this provider' : 'Select a provider to inspect active accounts'}</span>`}
-        </div>
-      </div>
+      ${matchingAccounts.length > 0
+        ? html`
+            <div class="playground-account-hint">
+              <small class="text-muted">
+                Available accounts for <code>${selectedProviderId}</code>:
+                ${matchingAccounts.map(
+                  (a) =>
+                    html`<span class="account-pill ${a.health_status === 'healthy' ? 'healthy' : 'degraded'}">
+                      #${a.id} ${a.label ? `(${a.label})` : ''}
+                    </span>`,
+                )}
+              </small>
+            </div>
+          `
+        : html``}
     </div>
   `;
 }
@@ -774,51 +828,22 @@ function renderChatConfig(): TemplateResult {
   return html`
     <div class="playground-card">
       <div class="playground-card-header">
-        <h3>Chat Messages & Parameters</h3>
+        <h3>Chat Messages</h3>
         <div class="playground-actions-row">
-          <button
-            class="small"
-            @click=${() => {
-              chatMessages.push({ id: generateId(), role: 'user', content: '' });
-              requestUpdate();
-            }}
-          >
-            + Add Message
-          </button>
-          <button
-            class="small"
-            @click=${() => {
-              chatMessages = [
-                { id: generateId(), role: 'system', content: 'You are a helpful coding assistant.' },
-                { id: generateId(), role: 'user', content: 'Write a fast rust function to calculate fibonacci.' },
-              ];
-              requestUpdate();
-            }}
-          >
-            Preset: Code
-          </button>
-          <button
-            class="small danger"
-            @click=${() => {
-              chatMessages = [{ id: generateId(), role: 'user', content: '' }];
-              requestUpdate();
-            }}
-          >
-            Clear
-          </button>
+          <button class="small" @click=${addChatMessage}>+ Add Message</button>
+          <button class="small" @click=${clearChatMessages}>Clear</button>
         </div>
       </div>
 
-      <!-- Messages list -->
       <div class="playground-messages-list">
-        ${chatMessages.map((msg) => html`
-          <div class="playground-message-row role-${msg.role}">
-            <div class="playground-msg-header">
+        ${chatMessages.map(
+          (msg) => html`
+            <div class="playground-msg-row">
               <select
                 class="playground-role-select"
                 .value=${msg.role}
                 @change=${(e: Event) => {
-                  msg.role = (e.target as HTMLSelectElement).value as typeof msg.role;
+                  msg.role = (e.target as HTMLSelectElement).value as ChatMessage['role'];
                   requestUpdate();
                 }}
               >
@@ -826,37 +851,29 @@ function renderChatConfig(): TemplateResult {
                 <option value="user">User</option>
                 <option value="assistant">Assistant</option>
               </select>
-              <button
-                class="close-btn"
-                title="Remove message"
-                @click=${() => {
-                  chatMessages = chatMessages.filter((m) => m.id !== msg.id);
-                  if (chatMessages.length === 0) {
-                    chatMessages.push({ id: generateId(), role: 'user', content: '' });
-                  }
-                  requestUpdate();
+              <textarea
+                rows="2"
+                placeholder="Message content..."
+                .value=${msg.content}
+                @input=${(e: Event) => {
+                  msg.content = (e.target as HTMLTextAreaElement).value;
                 }}
+              ></textarea>
+              <button
+                class="small danger"
+                title="Remove message"
+                @click=${() => removeChatMessage(msg.id)}
               >
                 ×
               </button>
             </div>
-            <textarea
-              class="playground-msg-textarea"
-              placeholder="Enter ${msg.role} prompt..."
-              rows=${msg.role === 'system' ? 2 : 4}
-              .value=${msg.content}
-              @input=${(e: Event) => {
-                msg.content = (e.target as HTMLTextAreaElement).value;
-              }}
-            ></textarea>
-          </div>
-        `)}
+          `,
+        )}
       </div>
 
-      <!-- Parameters Row -->
-      <div class="playground-grid-3" style="margin-top: var(--space-4); border-top: var(--border-w) solid var(--color-border-soft); padding-top: var(--space-3);">
+      <div class="playground-grid-4" style="margin-top: var(--space-3);">
         <div class="field">
-          <label class="field-label">Temperature: <code>${chatTemperature}</code></label>
+          <label class="field-label">Temperature (${chatTemperature})</label>
           <input
             type="range"
             min="0"
@@ -871,16 +888,30 @@ function renderChatConfig(): TemplateResult {
         </div>
 
         <div class="field">
-          <label class="field-label">Max Tokens</label>
+          <label class="field-label">Max Tokens (Optional)</label>
           <input
             type="number"
-            placeholder="Unlimited / Model default"
+            placeholder="e.g. 4096"
             .value=${chatMaxTokens !== null ? String(chatMaxTokens) : ''}
             @input=${(e: Event) => {
               const val = (e.target as HTMLInputElement).value;
               chatMaxTokens = val ? parseInt(val, 10) : null;
             }}
           />
+        </div>
+
+        <div class="field">
+          <label class="field-label">Response Format</label>
+          <select
+            .value=${chatResponseFormat}
+            @change=${(e: Event) => {
+              chatResponseFormat = (e.target as HTMLSelectElement).value as typeof chatResponseFormat;
+              requestUpdate();
+            }}
+          >
+            <option value="text">Text (Default)</option>
+            <option value="json_object">JSON Object</option>
+          </select>
         </div>
 
         <div class="field">
@@ -906,52 +937,108 @@ function renderImageConfig(): TemplateResult {
   return html`
     <div class="playground-card">
       <div class="playground-card-header">
-        <h3>Image Generation Parameters</h3>
+        <h3>Image Operation & Parameters</h3>
         <div class="playground-actions-row">
-          <button
-            class="small"
-            @click=${() => {
-              imagePrompt = 'A cozy cyberpunk coffee shop in Tokyo with neon rain reflections, anime style';
-              requestUpdate();
-            }}
-          >
-            Preset: Cyberpunk
-          </button>
-          <button
-            class="small"
-            @click=${() => {
-              imagePrompt = 'A hyper-realistic studio portrait of a majestic owl wearing a gold monocle, 8k octane render';
-              requestUpdate();
-            }}
-          >
-            Preset: Realistic
-          </button>
+          <div class="detail-tabs" role="tablist" style="margin-bottom: 0;">
+            <button
+              class="detail-tab ${imageMode === 'generation' ? 'active' : ''}"
+              @click=${() => { imageMode = 'generation'; requestUpdate(); }}
+            >
+              Generate (/generations)
+            </button>
+            <button
+              class="detail-tab ${imageMode === 'edit' ? 'active' : ''}"
+              @click=${() => { imageMode = 'edit'; requestUpdate(); }}
+            >
+              Edit (/edits)
+            </button>
+            <button
+              class="detail-tab ${imageMode === 'variation' ? 'active' : ''}"
+              @click=${() => { imageMode = 'variation'; requestUpdate(); }}
+            >
+              Variation (/variations)
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="field">
-        <label class="field-label">Prompt (Required)</label>
-        <textarea
-          rows="3"
-          placeholder="Describe the image you want to generate..."
-          .value=${imagePrompt}
-          @input=${(e: Event) => {
-            imagePrompt = (e.target as HTMLInputElement).value;
-          }}
-        ></textarea>
-      </div>
+      ${imageMode === 'edit' || imageMode === 'variation'
+        ? html`
+            <div class="playground-grid-2" style="margin-bottom: var(--space-3);">
+              <div class="field">
+                <label class="field-label">Source Image (Required PNG/JPEG)</label>
+                <input
+                  type="file"
+                  accept="image/png, image/jpeg, image/webp"
+                  @change=${(e: Event) => {
+                    const input = e.target as HTMLInputElement;
+                    if (input.files && input.files[0]) {
+                      imageSourceFile = input.files[0];
+                      requestUpdate();
+                    }
+                  }}
+                />
+                ${imageSourceFile
+                  ? html`<small class="text-muted">${imageSourceFile.name} (${Math.round(imageSourceFile.size / 1024)} KB)</small>`
+                  : html``}
+              </div>
 
-      <div class="field">
-        <label class="field-label">Negative Prompt (Optional)</label>
-        <input
-          type="text"
-          placeholder="low resolution, blurry, bad anatomy..."
-          .value=${imageNegativePrompt}
-          @input=${(e: Event) => {
-            imageNegativePrompt = (e.target as HTMLInputElement).value;
-          }}
-        />
-      </div>
+              ${imageMode === 'edit'
+                ? html`
+                    <div class="field">
+                      <label class="field-label">Mask Image (Optional PNG with transparency)</label>
+                      <input
+                        type="file"
+                        accept="image/png"
+                        @change=${(e: Event) => {
+                          const input = e.target as HTMLInputElement;
+                          if (input.files && input.files[0]) {
+                            imageMaskFile = input.files[0];
+                            requestUpdate();
+                          }
+                        }}
+                      />
+                      ${imageMaskFile
+                        ? html`<small class="text-muted">${imageMaskFile.name} (${Math.round(imageMaskFile.size / 1024)} KB)</small>`
+                        : html``}
+                    </div>
+                  `
+                : html``}
+            </div>
+          `
+        : html``}
+
+      ${imageMode !== 'variation'
+        ? html`
+            <div class="field">
+              <label class="field-label">Prompt (Required)</label>
+              <textarea
+                rows="3"
+                placeholder="Describe the image you want to generate or how to edit it..."
+                .value=${imagePrompt}
+                @input=${(e: Event) => {
+                  imagePrompt = (e.target as HTMLInputElement).value;
+                }}
+              ></textarea>
+            </div>
+          `
+        : html``}
+
+      ${imageMode === 'generation'
+        ? html`
+            <div class="field">
+              <label class="field-label">Negative Prompt (Optional)</label>
+              <input
+                type="text"
+                placeholder="low resolution, blurry, bad anatomy..."
+                .value=${imageNegativePrompt}
+                @input=${(e: Event) => {
+                  imageNegativePrompt = (e.target as HTMLInputElement).value;
+                }}
+              />
+            </div>
+          `
+        : html``}
 
       <div class="playground-grid-4">
         <div class="field">
@@ -1047,7 +1134,7 @@ function renderEmbeddingConfig(): TemplateResult {
           </label>
         </div>
         <textarea
-          rows="6"
+          rows="5"
           placeholder="Enter text string to embed..."
           .value=${embeddingInput}
           @input=${(e: Event) => {
@@ -1055,6 +1142,34 @@ function renderEmbeddingConfig(): TemplateResult {
           }}
         ></textarea>
         <small class="text-muted">Calculates high-dimensional vector representations via <code>/v1/embeddings</code></small>
+      </div>
+
+      <div class="playground-grid-2" style="margin-top: var(--space-2);">
+        <div class="field">
+          <label class="field-label">Dimensions (Optional)</label>
+          <input
+            type="number"
+            placeholder="e.g. 512, 1536"
+            .value=${embeddingDimensions !== null ? String(embeddingDimensions) : ''}
+            @input=${(e: Event) => {
+              const val = (e.target as HTMLInputElement).value;
+              embeddingDimensions = val ? parseInt(val, 10) : null;
+            }}
+          />
+        </div>
+
+        <div class="field">
+          <label class="field-label">Encoding Format</label>
+          <select
+            .value=${embeddingEncodingFormat}
+            @change=${(e: Event) => {
+              embeddingEncodingFormat = (e.target as HTMLSelectElement).value as typeof embeddingEncodingFormat;
+            }}
+          >
+            <option value="float">Float Array (Default)</option>
+            <option value="base64">Base64 Encoded</option>
+          </select>
+        </div>
       </div>
     </div>
   `;
