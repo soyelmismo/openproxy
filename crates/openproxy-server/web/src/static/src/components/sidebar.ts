@@ -28,6 +28,7 @@ import {
 // which the router's auth gate lets through because `isLoggedIn()`
 // is now false.
 import { clearToken, isLoggedIn } from "../state/auth.js";
+import { disconnectLogsWebSocket } from "../state/ws.js";
 
 function mutableState() { return state; }
 
@@ -254,6 +255,7 @@ export function toggleSidebar(): void {
  *  won't be re-invoked until the user logs in again and a
  *  live-store-viewing route is mounted. */
 export function logout(): void {
+  disconnectLogsWebSocket();
   clearToken();
   location.hash = "#/login";
 }

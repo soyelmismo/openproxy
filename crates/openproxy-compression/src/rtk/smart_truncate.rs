@@ -44,7 +44,7 @@ pub fn smart_truncate(text: &str, config: &CompiledTruncateConfig) -> (String, b
     let middle_start = head_end.min(tail_start);
     let middle = &lines[middle_start..tail_start];
 
-    let dropped = lines.len() - head.len() - tail.len();
+    let dropped = lines.len().saturating_sub(head.len() + tail.len());
 
     // Build the result directly into one String. Pre-allocate roughly the
     // size of the kept sections (head + tail) plus the marker and the

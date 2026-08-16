@@ -109,6 +109,10 @@ export function setMessageHandler(fn: ((event: MessageEvent) => void) | null): v
 
 export function connectLogsWebSocket(): void {
   clearLogsReconnectTimer();
+  if (!getToken()) {
+    setLogsStatus("disconnected");
+    return;
+  }
   if (state.logs.ws) {
     const ready: number = state.logs.ws.readyState;
     if (ready === WebSocket.OPEN) { setLogsStatus("connected"); return; }

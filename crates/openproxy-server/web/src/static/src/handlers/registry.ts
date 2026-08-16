@@ -94,7 +94,7 @@ import { showAddProxySource, showEditProxySource, deleteProxySource, testProxySo
 // contravariantly incompatible). We document the convention in
 // the comment block above and rely on the *caller* to validate
 // the per-action contract at runtime.
-export type ActionHandler = (...args: any[]) => any;
+export type ActionHandler = (...args: unknown[]) => unknown;
 
 export const HANDLERS = {
   // Accounts
@@ -325,7 +325,7 @@ export const HANDLERS = {
   showEditProxySource,
   deleteProxySource,
   testProxySource,
-} satisfies Record<string, ActionHandler>;
+};
 
 // Collect positional data-arg-N attrs from an element. Skips the
 // "action" key. Returns an array aligned to arg1..argN order. Numbers

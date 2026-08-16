@@ -112,6 +112,8 @@ function getInsertionOrder(a: AttemptState): number {
   return insertionOrder.get(a) ?? 0;
 }
 
+export const MAX_STORED_ROWS = 2000;
+
 // ----------------------------------------------------------------------------
 // Store
 // ----------------------------------------------------------------------------
@@ -127,6 +129,47 @@ class LiveLogsStore {
   public connectionStatus: "connecting" | "connected" | "recovering" | "recovering_failed" | "disconnected" = "disconnected";
   public lastServerNow = 0;
   public clockOffsetMs = 0;
+
+  private evictAttempt(a: AttemptState) {
+    this.attemptsByKey.delete(a.attemptKey);
+    if (a.rowId != null) {
+      this.rowsById.delete(a.rowId);
+      this.attemptKeyByRowId.delete(a.rowId);
+    }
+    if (a.row && a.row.id != null) {
+      this.rowsById.delete(a.row.id);
+      this.attemptKeyByRowId.delete(a.row.id);
+    }
+    const group = this.requestGroups.get(a.requestId);
+    if (group) {
+      group.delete(a.attemptKey);
+      if (group.size === 0) {
+        this.requestGroups.delete(a.requestId);
+      }
+    }
+    this.attemptKeyRedirects.delete(a.attemptKey);
+  }
+
+  public enforceCapacity(maxRows = MAX_STORED_ROWS) {
+    const finished: AttemptState[] = [];
+    for (const a of this.attemptsByKey.values()) {
+      if (a.terminal) {
+        finished.push(a);
+      }
+    }
+
+    if (finished.length <= maxRows) return;
+
+    finished.sort((a, b) => this.stableSort(b, a));
+
+    const toEvict = finished.length - maxRows;
+    for (let i = 0; i < toEvict; i++) {
+      const a = finished[i];
+      if (a) {
+        this.evictAttempt(a);
+      }
+    }
+  }
 
   // --------------------------------------------------------------------------
   // Actions
@@ -220,6 +263,7 @@ class LiveLogsStore {
     for (const row of snapshot.rows) {
       this.applyUsageRow(row);
     }
+    this.enforceCapacity();
   }
 
   /** Merge authoritative inflight state from server (sent on broadcast lag).
@@ -278,6 +322,7 @@ class LiveLogsStore {
         }
       }
     }
+    this.enforceCapacity();
   }
 
   private applyAttemptEvent(event: AttemptEventPayload) {
@@ -366,6 +411,9 @@ class LiveLogsStore {
 
     this.attemptsByKey.set(event.attempt_key, a);
     this.trackRequestGroup(a.requestId, a.attemptKey);
+    if (terminal) {
+      this.enforceCapacity();
+    }
   }
 
   private applyUsageRow(row: RecentUsageRow) {
@@ -448,6 +496,7 @@ class LiveLogsStore {
 
     this.attemptsByKey.set(attemptKey, a);
     this.trackRequestGroup(row.request_id, attemptKey);
+    this.enforceCapacity();
   }
 
   private trackRequestGroup(requestId: string, attemptKey: string) {

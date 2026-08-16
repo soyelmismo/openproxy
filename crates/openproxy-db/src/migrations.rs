@@ -336,54 +336,62 @@ pub fn run(conn: &mut Connection) -> Result<()> {
             })?;
     }
 
-    let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| CoreError::Migration {
-            version: 0,
-            message: format!("begin tx: {e}"),
-        })?;
-
-    let mut insert_sql = String::with_capacity(1024);
-    insert_sql.push_str("INSERT INTO schema_migrations(version) VALUES ");
-    let mut first = true;
-
-    for m in &pending {
-        tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
-            version: m.version,
-            message: format!("{}: {}", m.name, e),
-        })?;
-
-        if !first {
-            insert_sql.push(',');
-        }
-        write!(&mut insert_sql, "({})", m.version).expect("write to string failed");
-        first = false;
-    }
-
-    // Since pending is checked to be non-empty above `if pending.is_empty() { return Ok(()); }`
-    // there's no need to check here. But let's just make it completely infallible statically on `first`.
-    if !first {
-        tx.execute_batch(&insert_sql)
+    let res = (|| -> Result<()> {
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| CoreError::Migration {
                 version: 0,
-                message: format!("insert into schema_migrations: {e}"),
+                message: format!("begin tx: {e}"),
             })?;
-    }
 
-    tx.commit().map_err(|e| CoreError::Migration {
-        version: 0,
-        message: format!("commit: {e}"),
-    })?;
+        let mut insert_sql = String::with_capacity(1024);
+        insert_sql.push_str("INSERT INTO schema_migrations(version) VALUES ");
+        let mut first = true;
 
-    let _ = crate::cost::backfill_usage_pricing(conn);
+        for m in &pending {
+            tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
+                version: m.version,
+                message: format!("{}: {}", m.name, e),
+            })?;
+
+            if !first {
+                insert_sql.push(',');
+            }
+            write!(&mut insert_sql, "({})", m.version).expect("write to string failed");
+            first = false;
+        }
+
+        // Since pending is checked to be non-empty above `if pending.is_empty() { return Ok(()); }`
+        // there's no need to check here. But let's just make it completely infallible statically on `first`.
+        if !first {
+            tx.execute_batch(&insert_sql)
+                .map_err(|e| CoreError::Migration {
+                    version: 0,
+                    message: format!("insert into schema_migrations: {e}"),
+                })?;
+        }
+
+        tx.commit().map_err(|e| CoreError::Migration {
+            version: 0,
+            message: format!("commit: {e}"),
+        })?;
+
+        Ok(())
+    })();
 
     if needs_fk_off {
-        conn.execute_batch("PRAGMA foreign_keys = ON")
+        let fk_res = conn
+            .execute_batch("PRAGMA foreign_keys = ON")
             .map_err(|e| CoreError::Migration {
                 version: 0,
                 message: format!("PRAGMA foreign_keys = ON: {e}"),
-            })?;
+            });
+        res.and(fk_res)?;
+    } else {
+        res?;
     }
+
+    let _ = crate::cost::backfill_usage_pricing(conn);
 
     Ok(())
 }

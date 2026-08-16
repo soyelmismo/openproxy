@@ -44,6 +44,7 @@ import { api } from "./api.js";
 import { subscribeWs } from "./ws-bus.js";
 import { connectLogsWebSocket } from "./ws.js";
 import { state } from "./index.js";
+import { isLoggedIn } from "./auth.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
 import type {
@@ -375,6 +376,7 @@ export function initNotificationsStore(): void {
   // has elapsed. The handle is intentionally not stored — the store
   // is process-global, so we never cancel the interval.
   void setInterval(() => {
+    if (!isLoggedIn()) return;
     const ws: WebSocket | null = state.logs.ws;
     if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
       try { connectLogsWebSocket(); } catch (_e: unknown) { /* swallow — next tick */ }

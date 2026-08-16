@@ -154,7 +154,8 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
             continue;
         }
         if mutate_message_text(msg, |text| {
-            if text.len() > MAX_TOOL_CHARS {
+            let total_chars = text.chars().count();
+            if total_chars > MAX_TOOL_CHARS {
                 let cut = text
                     .char_indices()
                     .nth(MAX_TOOL_CHARS)
@@ -162,7 +163,7 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
                 Some(format!(
                     "{}…[truncated {} chars]",
                     &text[..cut],
-                    text.len() - cut
+                    total_chars - MAX_TOOL_CHARS
                 ))
             } else {
                 None
@@ -509,25 +510,14 @@ mod tests {
 
     #[test]
     fn compress_tool_results_handles_multibyte_utf8_at_boundary() {
-        // Regression test for a UTF-8 panic in compress_tool_results.
-        //
-        // Pre-fix the code did `&text[..MAX_TOOL_CHARS]` (i.e. `&text[..2000]`),
-        // which panics with "byte index 2000 is not a char boundary" when byte
-        // 2000 lands in the middle of a multi-byte UTF-8 sequence.
-        //
-        // Construction: 1 ASCII byte + 500 emojis (4 bytes each) = 2001 bytes.
-        // Emoji #500 occupies bytes 1997..=2000, so byte index 2000 is the LAST
-        // byte of that emoji — mid-char, NOT a boundary. Slicing at 2000 would
-        // panic. (Naively using 501 emojis does NOT trigger the bug because byte
-        // 2000 then lands on the start of emoji #501, which is a boundary.)
         let emoji = "😀"; // U+1F600, 4 bytes in UTF-8
         let mut content = String::new();
         content.push('a');
-        for _ in 0..500 {
+        for _ in 0..2000 {
             content.push_str(emoji);
         }
         content.push_str(" trailing text");
-        assert!(content.len() > MAX_TOOL_CHARS);
+        assert!(content.chars().count() > MAX_TOOL_CHARS);
 
         let mut msgs = vec![OpenAIMessage {
             role: "tool".into(),
@@ -540,17 +530,37 @@ mod tests {
         let applied = compress_tool_results(&mut msgs);
         assert!(
             applied.contains(&"lite::compress_tool_results"),
-            "expected compress_tool_results to fire on >2000 byte content"
+            "expected compress_tool_results to fire on >2000 char content"
         );
         // Verify the content was truncated and contains the marker.
         if let Some(Value::String(s)) = &msgs[0].content {
             assert!(
-                s.contains("…[truncated"),
-                "expected truncation marker, got: {s}"
+                s.contains("…[truncated 15 chars]"),
+                "expected truncation marker with exact char count, got: {s}"
             );
         } else {
             panic!("content should still be a string after truncation");
         }
+    }
+
+    #[test]
+    fn compress_tool_results_does_not_truncate_multibyte_under_max_chars() {
+        let emoji = "😀"; // 4 bytes each
+        let mut content = String::new();
+        for _ in 0..600 {
+            content.push_str(emoji); // 2400 bytes, 600 chars
+        }
+        let mut msgs = vec![OpenAIMessage {
+            role: "tool".into(),
+            content: Some(Value::String(content.clone())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::default(),
+        }];
+        let applied = compress_tool_results(&mut msgs);
+        assert!(applied.is_empty());
+        assert_eq!(msgs[0].content.as_ref().unwrap().as_str().unwrap(), content);
     }
 
     #[test]

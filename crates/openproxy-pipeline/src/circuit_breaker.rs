@@ -148,8 +148,13 @@ impl CircuitBreakerRegistry {
     pub fn prune_idle(&self, max_idle: Duration) -> usize {
         let mut g = self.inner.lock();
         let cutoff = now_ms().saturating_sub(max_idle.as_millis() as u64);
+        let now = Instant::now();
         let before = g.len();
-        g.retain(|_, e| e.state == Health::Unhealthy || e.last_activity_ms >= cutoff);
+        g.retain(|_, e| {
+            let is_actively_unhealthy =
+                e.state == Health::Unhealthy && e.unhealthy_until.is_some_and(|until| now < until);
+            is_actively_unhealthy || e.last_activity_ms >= cutoff
+        });
         before - g.len()
     }
 
@@ -190,5 +195,29 @@ mod tests {
         // Sleep to let it recover
         std::thread::sleep(Duration::from_millis(150));
         assert_eq!(cb.is_healthy(key), Health::Healthy);
+    }
+
+    #[test]
+    fn test_prune_idle_unhealthy_expired() {
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            unhealthy_duration_ms: 20,
+        };
+        let cb = CircuitBreakerRegistry::new(&config);
+        let key = CircuitBreakerKey::Account(AccountId(10));
+
+        assert_eq!(cb.record_failure(key), Health::Unhealthy);
+        assert_eq!(cb.len(), 1);
+
+        // Immediately, it's actively unhealthy, so prune_idle should not prune it
+        assert_eq!(cb.prune_idle(Duration::from_millis(0)), 0);
+        assert_eq!(cb.len(), 1);
+
+        // Wait for unhealthy duration to expire
+        std::thread::sleep(Duration::from_millis(30));
+
+        // Now that unhealthy_until has expired and activity is older than max_idle (0ms), it gets pruned
+        assert_eq!(cb.prune_idle(Duration::from_millis(0)), 1);
+        assert_eq!(cb.len(), 0);
     }
 }

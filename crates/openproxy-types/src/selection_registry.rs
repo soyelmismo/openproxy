@@ -10,6 +10,7 @@ pub struct SelectionRegistry {
 #[derive(Debug, Clone, Copy, Default)]
 struct SelectionRegistryEntry {
     last_success_ms: u64,
+    last_activity_ms: u64,
     request_count: u64,
 }
 
@@ -23,12 +24,15 @@ impl SelectionRegistry {
         let mut g = self.inner.lock();
         let e = g.entry(target_id.0).or_default();
         e.last_success_ms = now;
+        e.last_activity_ms = now;
         e.request_count = e.request_count.saturating_add(1);
     }
 
     pub fn record_request(&self, target_id: ComboTargetId) {
+        let now = now_ms();
         let mut g = self.inner.lock();
         let e = g.entry(target_id.0).or_default();
+        e.last_activity_ms = now;
         e.request_count = e.request_count.saturating_add(1);
     }
 
@@ -52,12 +56,17 @@ impl SelectionRegistry {
         let g = self.inner.lock();
         match g.get(&target_id.0) {
             Some(e) if e.request_count > 0 => {
-                if e.last_success_ms == 0 {
+                let reference_ms = if e.last_success_ms > 0 {
+                    e.last_success_ms
+                } else {
+                    e.last_activity_ms
+                };
+                if reference_ms == 0 {
                     return e.request_count;
                 }
                 let now = now_ms();
                 let window_ms = window_secs.saturating_mul(1000);
-                if now.saturating_sub(e.last_success_ms) <= window_ms {
+                if now.saturating_sub(reference_ms) <= window_ms {
                     e.request_count
                 } else {
                     0
@@ -73,13 +82,8 @@ impl SelectionRegistry {
         let cutoff = now.saturating_sub(max_age.as_millis() as u64);
         let before = g.len();
         g.retain(|_, e| {
-            if e.last_success_ms > 0 && e.last_success_ms >= cutoff {
-                return true;
-            }
-            if e.last_success_ms == 0 && e.request_count > 0 {
-                return true;
-            }
-            false
+            let last_active = e.last_success_ms.max(e.last_activity_ms);
+            last_active > 0 && last_active >= cutoff
         });
         before - g.len()
     }
@@ -183,9 +187,9 @@ mod tests {
         assert_eq!(registry.prune_stale(Duration::from_secs(10)), 0);
         assert_eq!(registry.len(), 2);
 
-        // Pruning with 0 max_age should remove target_1 (since its success is now > 0ms old)
+        // Pruning with 0 max_age should remove both targets (since activity is now > 0ms old)
         let removed = registry.prune_stale(Duration::from_millis(0));
-        assert_eq!(removed, 1);
-        assert_eq!(registry.len(), 1);
+        assert_eq!(removed, 2);
+        assert_eq!(registry.len(), 0);
     }
 }

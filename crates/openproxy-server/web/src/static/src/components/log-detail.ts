@@ -85,7 +85,7 @@ function statusPillClass(s: string | null | undefined): string {
   return "warn";
 }
 
-function pruneValueForDisplay(val: any, depth = 0): any {
+function pruneValueForDisplay(val: unknown, depth = 0): unknown {
   if (depth > 10 || val == null) return val;
 
   if (typeof val === "string") {
@@ -107,7 +107,7 @@ function pruneValueForDisplay(val: any, depth = 0): any {
 
   if (typeof val === "object") {
     const obj = val as Record<string, unknown>;
-    const res: Record<string, unknown> = {};
+    let res: Record<string, unknown> = {};
 
     const keys = Object.keys(obj);
     const normalKeys = keys.filter((k) => k !== "messages" && k !== "request_body_json");

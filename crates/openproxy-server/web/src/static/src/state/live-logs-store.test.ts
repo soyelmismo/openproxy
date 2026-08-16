@@ -186,4 +186,45 @@ describe("liveLogsStore detail management", () => {
     expect(finished[0]?.terminal).toBe(true);
     expect(finished[0]?.terminalKind).toBe("failed");
   });
+
+  it("enforces capacity by evicting oldest terminal entries", () => {
+    liveLogsStore.clearForTest();
+
+    for (let i = 1; i <= 5; i++) {
+      liveLogsStore.dispatch({
+        type: "usage_row",
+        cursor: i,
+        row: {
+          id: i,
+          request_id: `req-${i}`,
+          trace_id: `tr-${i}`,
+          provider_id: "prov-1",
+          upstream_model_id: "mod-1",
+          status_code: 200,
+          total_ms: 100,
+          connect_ms: 10,
+          ttft_ms: 20,
+          cost: 0,
+          tokens_in: 10,
+          tokens_out: 20,
+          created_at: new Date(1000000 + i * 1000).toISOString(),
+        },
+      });
+    }
+
+    expect(liveLogsStore.selectFinishedRows().length).toBe(5);
+
+    // Enforce max 3 items
+    liveLogsStore.enforceCapacity(3);
+
+    const remaining = liveLogsStore.selectFinishedRows();
+    expect(remaining.length).toBe(3);
+    // Oldest items (id 1 and 2) should be evicted
+    expect(liveLogsStore.attemptsByKey.has("tr-1")).toBe(false);
+    expect(liveLogsStore.rowsById.has(1)).toBe(false);
+    expect(liveLogsStore.attemptsByKey.has("tr-2")).toBe(false);
+    expect(liveLogsStore.rowsById.has(2)).toBe(false);
+    expect(liveLogsStore.attemptsByKey.has("tr-3")).toBe(true);
+    expect(liveLogsStore.rowsById.has(3)).toBe(true);
+  });
 });
