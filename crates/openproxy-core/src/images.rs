@@ -166,7 +166,7 @@ pub async fn execute_image_generation(
     let mut attempt = 0;
 
     // 3. Multi-target dispatch loop.
-    for target in targets {
+    for target in &targets {
         attempt += 1;
         let trace_id = format!("{request_id}:{attempt}");
         let has_alternatives = attempt < total_targets;
@@ -222,12 +222,27 @@ pub async fn execute_image_generation(
             };
 
         // Dispatch upstream.
+        let effective_upstream_model = if target.provider.as_str() == "horde" {
+            let horde_models: Vec<&str> = targets
+                .iter()
+                .filter(|t| t.provider.as_str() == "horde" && t.account_id == target.account_id)
+                .map(|t| t.upstream_model.as_str())
+                .collect();
+            if horde_models.len() > 1 {
+                horde_models.join(",")
+            } else {
+                target.upstream_model.clone()
+            }
+        } else {
+            target.upstream_model.clone()
+        };
+
         let response = match dispatch_image_request(
             upstream_client,
             &adapter,
             &upstream_url,
             &api_key,
-            &target.upstream_model,
+            &effective_upstream_model,
             &req,
         )
         .await
@@ -908,7 +923,7 @@ async fn execute_image_multipart(
     let mut attempt = 0;
 
     // 3. Multi-target dispatch loop.
-    for target in targets {
+    for target in &targets {
         attempt += 1;
         let trace_id = format!("{request_id}:{attempt}");
         let has_alternatives = attempt < total_targets;
@@ -965,12 +980,27 @@ async fn execute_image_multipart(
 
         // --- Horde special path: convert multipart to JSON img2img ---
         let is_horde = target.provider.as_str() == "horde";
+        let effective_upstream_model = if is_horde {
+            let horde_models: Vec<&str> = targets
+                .iter()
+                .filter(|t| t.provider.as_str() == "horde" && t.account_id == target.account_id)
+                .map(|t| t.upstream_model.as_str())
+                .collect();
+            if horde_models.len() > 1 {
+                horde_models.join(",")
+            } else {
+                target.upstream_model.clone()
+            }
+        } else {
+            target.upstream_model.clone()
+        };
+
         let (response, upstream_url) = if is_horde {
             let horde_result = dispatch_horde_img2img(
                 ctx.upstream_client,
                 &adapter,
                 &api_key,
-                &target.upstream_model,
+                &effective_upstream_model,
                 &body,
                 kind,
             )
@@ -1369,9 +1399,9 @@ async fn poll_horde_image_generation(
         &openproxy_types::ModelId::new(""),
     );
 
-    // If there are fallback targets available, failover early (10s); otherwise wait up to 120s
+    // If there are fallback targets available, failover early (35s); otherwise wait up to 120s
     let timeout = if ctx.has_alternatives {
-        std::time::Duration::from_secs(10)
+        std::time::Duration::from_secs(35)
     } else {
         std::time::Duration::from_secs(120)
     };
@@ -1433,11 +1463,11 @@ async fn poll_horde_image_generation(
             break;
         }
 
-        // Early queue circuit: if wait time or queue position is high and we have alternative targets, failover immediately
+        // Early queue circuit: if wait time or queue position is extremely high and we have alternative targets, failover
         if ctx.has_alternatives
-            && (check.wait_time.is_some_and(|w| w > 10)
-                || check.queue_position.is_some_and(|q| q > 3)
-                || start.elapsed() >= std::time::Duration::from_secs(8))
+            && (check.wait_time.is_some_and(|w| w > 45)
+                || check.queue_position.is_some_and(|q| q > 15)
+                || start.elapsed() >= std::time::Duration::from_secs(25))
         {
             cancel_horde_job(upstream_client, base_url, &job_id, &auth_headers).await;
             return Err(CoreError::UpstreamTimeout {
