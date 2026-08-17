@@ -1,8 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    fetch_models_with_auth,
-};
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, fetch_models_with_auth};
 
 // =====================================================================
 // Gemini (Google AI Studio)
@@ -95,9 +91,7 @@ impl ProviderAdapter for GeminiAdapter {
                 let out_mods = openproxy_types::capabilities::infer_output_modalities(id);
                 let family = openproxy_types::capabilities::infer_family(id);
                 let ctx = m.get("inputTokenLimit").and_then(serde_json::Value::as_i64);
-                let out = m
-                    .get("outputTokenLimit")
-                    .and_then(serde_json::Value::as_i64);
+                let out = m.get("outputTokenLimit").and_then(serde_json::Value::as_i64);
                 Some(DiscoveredModel {
                     model_id: ModelId::new(id.to_string()),
                     display_name: Some(display_name),

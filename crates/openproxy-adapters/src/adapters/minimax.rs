@@ -1,8 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, DiscoveredModel, ModelId,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile, UpstreamClient,
-    UpstreamRequest, fetch_openai_models,
-};
+use super::{ProviderAdapterConfig, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, fetch_openai_models, UpstreamRequest, CancellationToken, TimeoutProfile};
 use crate::upstream::UpstreamError;
 // =====================================================================
 // MiniMax (Coding)
@@ -177,8 +173,8 @@ impl MiniMaxAdapter {
             .await
             .map_err(|e| CoreError::UpstreamConnection(format!("{url}: {e}")))?;
 
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
         parse_minimax_quota(&json, url)
     }
 }
@@ -259,21 +255,15 @@ fn extract_used_limit(
     limit_count_key: &str,
     remaining_pct_key: &str,
 ) -> (Option<i64>, Option<i64>) {
-    let used = entry
-        .get(used_count_key)
-        .and_then(serde_json::Value::as_i64);
-    let limit = entry
-        .get(limit_count_key)
-        .and_then(serde_json::Value::as_i64);
+    let used = entry.get(used_count_key).and_then(serde_json::Value::as_i64);
+    let limit = entry.get(limit_count_key).and_then(serde_json::Value::as_i64);
     if let (Some(u), Some(l)) = (used, limit)
         && l > 0
     {
         return (Some(u), Some(l));
     }
 
-    let remaining = entry
-        .get(remaining_pct_key)
-        .and_then(serde_json::Value::as_i64);
+    let remaining = entry.get(remaining_pct_key).and_then(serde_json::Value::as_i64);
     if let Some(rp) = remaining
         && (0..=100).contains(&rp)
     {

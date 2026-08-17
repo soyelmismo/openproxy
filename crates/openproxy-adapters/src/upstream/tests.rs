@@ -135,7 +135,9 @@ async fn phase_timeout_tls() {
     assert!(res.is_err(), "expected error, got {res:?}");
     assert!(matches!(
         res.unwrap_err(),
-        UpstreamError::Timeout(UpstreamPhase::Dns | UpstreamPhase::Dial | UpstreamPhase::Write)
+        UpstreamError::Timeout(
+            UpstreamPhase::Dns | UpstreamPhase::Dial | UpstreamPhase::Write
+        )
     ));
     // Sanity: the error fired within the per-phase window, not
     // after a 5s default. The dial timeout of 10ms is the

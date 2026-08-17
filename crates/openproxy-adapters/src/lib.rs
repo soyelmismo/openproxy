@@ -13,11 +13,12 @@ pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,
     builtin_adapters, cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter,
-    codex::CodexAdapter, custom_adapter::CustomAdapter, gemini::GeminiAdapter, horde::HordeAdapter,
-    kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, minimax::MiniMaxAdapter,
-    nous_research::NousResearchAdapter, nvidia_nim::NvidiaNimAdapter,
-    ollama_cloud::OllamaCloudAdapter, opencode_go::OpenCodeGoAdapter,
-    opencode_zen::OpenCodeZenAdapter, openrouter::OpenRouterAdapter,
+    codex::CodexAdapter, custom_adapter::CustomAdapter, gemini::GeminiAdapter,
+    horde::HordeAdapter, kilocode::KilocodeAdapter, kiro_ai::KiroAdapter,
+    minimax::MiniMaxAdapter, nous_research::NousResearchAdapter,
+    nvidia_nim::NvidiaNimAdapter, ollama_cloud::OllamaCloudAdapter,
+    opencode_go::OpenCodeGoAdapter, opencode_zen::OpenCodeZenAdapter,
+    openrouter::OpenRouterAdapter,
 };
 
 pub use upstream::{

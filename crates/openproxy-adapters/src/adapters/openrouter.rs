@@ -1,8 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, CancellationToken, Deserialize, DiscoveredModel, ModelId,
-    ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
-    UpstreamClient, UpstreamRequest, upstream_get_json,
-};
+use super::{Deserialize, ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, Arc, UpstreamClient, Result, DiscoveredModel, upstream_get_json, ModelId, TargetFormat, UpstreamRequest, CancellationToken, TimeoutProfile};
 
 // =====================================================================
 // OpenRouter
@@ -259,12 +255,8 @@ fn parse_openrouter_quota(
 ) -> openproxy_types::AccountQuota {
     let data = body.get("data");
 
-    let raw_usage = data
-        .and_then(|d| d.get("usage"))
-        .and_then(serde_json::Value::as_f64);
-    let raw_limit = data
-        .and_then(|d| d.get("limit"))
-        .and_then(serde_json::Value::as_f64);
+    let raw_usage = data.and_then(|d| d.get("usage")).and_then(serde_json::Value::as_f64);
+    let raw_limit = data.and_then(|d| d.get("limit")).and_then(serde_json::Value::as_f64);
     let is_free = data
         .and_then(|d| d.get("is_free_tier"))
         .and_then(serde_json::Value::as_bool)

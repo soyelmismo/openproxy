@@ -1,7 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-};
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel};
 pub use crate::adapters::opencode_common::classify_opencode_target_format as classify_zen_target_format;
 use crate::adapters::opencode_common::{build_opencode_headers, fetch_opencode_models};
 

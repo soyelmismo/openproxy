@@ -1,8 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    fetch_models_with_auth,
-};
+use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, fetch_models_with_auth};
 
 // =====================================================================
 // Cloudflare Workers AI
@@ -155,12 +151,8 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
                     model_id: ModelId::new(name),
                     display_name: Some(name.to_string()),
                     target_format: TargetFormat::Openai,
-                    context_length: raw
-                        .get("max_total_tokens")
-                        .and_then(serde_json::Value::as_i64),
-                    max_output_tokens: raw
-                        .get("max_total_tokens")
-                        .and_then(serde_json::Value::as_i64),
+                    context_length: raw.get("max_total_tokens").and_then(serde_json::Value::as_i64),
+                    max_output_tokens: raw.get("max_total_tokens").and_then(serde_json::Value::as_i64),
                     input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
                     output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
                     model_type: Some(m_type.to_string()),

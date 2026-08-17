@@ -489,9 +489,7 @@ async fn run_phased_connect(
     };
 
     // ---- Resolve Proxy Config --------------------------------------------
-    let proxy_opt = CALL_PROXY
-        .try_with(std::clone::Clone::clone)
-        .unwrap_or(None);
+    let proxy_opt = CALL_PROXY.try_with(std::clone::Clone::clone).unwrap_or(None);
     let mut proxy_config_opt = None;
     if let Some(ref proxy_url) = proxy_opt {
         match parse_proxy_url(proxy_url) {

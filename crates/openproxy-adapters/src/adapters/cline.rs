@@ -1,8 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient, UpstreamRequest,
-    upstream_get_json,
-};
+use super::{UpstreamRequest, ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, Arc, UpstreamClient, Result, DiscoveredModel, upstream_get_json, ModelId, TargetFormat};
 pub use crate::spoofer::CLINE_SPOOFING_HEADERS;
 use crate::spoofer::{ClientSpoofer, ClineSpoofer};
 

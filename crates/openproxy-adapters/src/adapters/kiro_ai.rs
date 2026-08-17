@@ -1,8 +1,4 @@
-use super::{
-    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, Deserialize,
-    DiscoveredModel, HeaderValue, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId,
-    Result, Serialize, TargetFormat, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use super::{Serialize, Deserialize, ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, ModelId, TargetFormat, Arc, UpstreamClient, Result, UpstreamRequest, HeaderValue, CancellationToken, TimeoutProfile, CoreError};
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -494,20 +490,12 @@ impl KiroAdapter {
                     let current = breakdown
                         .get("currentUsageWithPrecision")
                         .and_then(serde_json::Value::as_f64)
-                        .or_else(|| {
-                            breakdown
-                                .get("currentUsage")
-                                .and_then(serde_json::Value::as_f64)
-                        })
+                        .or_else(|| breakdown.get("currentUsage").and_then(serde_json::Value::as_f64))
                         .map(|v| v.round() as i64);
                     let limit = breakdown
                         .get("usageLimitWithPrecision")
                         .and_then(serde_json::Value::as_f64)
-                        .or_else(|| {
-                            breakdown
-                                .get("usageLimit")
-                                .and_then(serde_json::Value::as_f64)
-                        })
+                        .or_else(|| breakdown.get("usageLimit").and_then(serde_json::Value::as_f64))
                         .map(|v| v.round() as i64);
 
                     session_used = current;
