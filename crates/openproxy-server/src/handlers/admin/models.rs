@@ -482,9 +482,67 @@ pub(crate) async fn run_test_for_model(
         adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
         adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
     };
-    let (url, body_value): (String, serde_json::Value) = if effective_target_format
-        == openproxy_core::models::TargetFormat::Anthropic
-    {
+    let inferred_type = openproxy_types::capabilities::infer_model_type(model.model_id.as_str());
+    let is_audio = model.model_type == "audio" || inferred_type == "audio";
+    let is_stt = is_audio && (openproxy_types::capabilities::is_stt_model(model.model_id.as_str()) || model.model_type == "audio");
+    let is_tts = is_audio && !is_stt;
+    let is_embedding = model.model_type == "embedding" || inferred_type == "embedding";
+    let is_image = model.model_type == "image" || inferred_type == "image";
+
+    let (url, body_value, multipart_opt): (String, serde_json::Value, Option<(String, bytes::Bytes)>) = if is_stt {
+        let audio_wav = openproxy_core::audio::generate_test_speech_wav();
+        let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
+        let mut payload = Vec::new();
+
+        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+        payload.extend_from_slice(model.model_id.as_str().as_bytes());
+        payload.extend_from_slice(b"\r\n");
+
+        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n");
+
+        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"file\"; filename=\"hello.wav\"\r\n");
+        payload.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+        payload.extend_from_slice(&audio_wav);
+        payload.extend_from_slice(b"\r\n");
+        payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let url = adapter.build_transcription_url();
+        let debug_val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "file": "hello.wav (16kHz 16-bit mono PCM speech)",
+            "response_format": "json"
+        });
+        (url, debug_val, Some((content_type, bytes::Bytes::from(payload))))
+    } else if is_embedding {
+        let url = adapter.build_embeddings_url();
+        let val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "input": "hello"
+        });
+        (url, val, None)
+    } else if is_image {
+        let url = adapter.build_image_url();
+        let val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "prompt": "hello",
+            "n": 1,
+            "size": "256x256"
+        });
+        (url, val, None)
+    } else if is_tts {
+        let base_url = adapter.config().base_url.as_str();
+        let url = format!("{base_url}/audio/speech");
+        let val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "input": "hello",
+            "voice": "alloy"
+        });
+        (url, val, None)
+    } else if effective_target_format == openproxy_core::models::TargetFormat::Anthropic {
         let anthropic_req = openai_to_anthropic(
             &openai_req,
             model.model_id.as_str(),
@@ -497,7 +555,7 @@ pub(crate) async fn run_test_for_model(
             &account_label,
         );
         match serde_json::to_value(&anthropic_req) {
-            Ok(v) => (url, v),
+            Ok(v) => (url, v, None),
             Err(e) => {
                 let err = CoreError::Internal(format!("serialize anthropic req: {e}"));
                 return (
@@ -523,7 +581,7 @@ pub(crate) async fn run_test_for_model(
             &account_label,
         );
         match serde_json::to_value(&gemini_req) {
-            Ok(v) => (url, v),
+            Ok(v) => (url, v, None),
             Err(e) => {
                 let err = CoreError::Internal(format!("serialize gemini req: {e}"));
                 return (
@@ -580,7 +638,7 @@ pub(crate) async fn run_test_for_model(
             &adapter,
         ) {
             Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
-                Ok(v) => (url, v),
+                Ok(v) => (url, v, None),
                 Err(e) => {
                     let err = CoreError::Internal(format!("serialize responses req: {e}"));
                     return (
@@ -623,7 +681,7 @@ pub(crate) async fn run_test_for_model(
             &account_label,
         );
         match serde_json::to_value(&openai_req) {
-            Ok(v) => (url, v),
+            Ok(v) => (url, v, None),
             Err(e) => {
                 let err = CoreError::Internal(format!("serialize openai req: {e}"));
                 return (
@@ -723,69 +781,76 @@ pub(crate) async fn run_test_for_model(
         custom_meta,
     };
 
-    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
-        &url,
-        match serde_json::to_vec(&body_value) {
-            Ok(b) => {
-                match adapter.wrap_request_body(
-                    bytes::Bytes::from(b),
-                    effective_target_format,
-                    &dummy_target.model.model_id,
-                    &dummy_target,
-                ) {
-                    Ok(wrapped) => wrapped,
-                    Err(e) => {
-                        return (
-                            TestResult {
-                                row_id: model_row_id,
-                                status: 500,
-                                elapsed_ms: 0,
-                                error_msg: Some(
-                                    openproxy_core::cost::redact_error_msg(&format!(
-                                        "failed to wrap request: {e}"
-                                    ))
-                                    .0,
-                                ),
-                                skipped: true,
-                                skip_reason: Some(
-                                    openproxy_core::cost::redact_error_msg(&format!(
-                                        "failed to wrap request: {e}"
-                                    ))
-                                    .0,
-                                ),
-                            },
-                            None,
-                        );
+    let mut req = if let Some((content_type, body_bytes)) = multipart_opt {
+        openproxy_adapters::upstream::UpstreamRequest::post_multipart(&url, &content_type, body_bytes)
+    } else {
+        openproxy_adapters::upstream::UpstreamRequest::post_json(
+            &url,
+            match serde_json::to_vec(&body_value) {
+                Ok(b) => {
+                    match adapter.wrap_request_body(
+                        bytes::Bytes::from(b),
+                        effective_target_format,
+                        &dummy_target.model.model_id,
+                        &dummy_target,
+                    ) {
+                        Ok(wrapped) => wrapped,
+                        Err(e) => {
+                            return (
+                                TestResult {
+                                    row_id: model_row_id,
+                                    status: 500,
+                                    elapsed_ms: 0,
+                                    error_msg: Some(
+                                        openproxy_core::cost::redact_error_msg(&format!(
+                                            "failed to wrap request: {e}"
+                                        ))
+                                        .0,
+                                    ),
+                                    skipped: true,
+                                    skip_reason: Some(
+                                        openproxy_core::cost::redact_error_msg(&format!(
+                                            "failed to wrap request: {e}"
+                                        ))
+                                        .0,
+                                    ),
+                                },
+                                None,
+                            );
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                return (
-                    TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(
-                            openproxy_core::cost::redact_error_msg(&format!(
-                                "failed to serialize request: {e}"
-                            ))
-                            .0,
-                        ),
-                        skipped: true,
-                        skip_reason: Some(
-                            openproxy_core::cost::redact_error_msg(&format!(
-                                "failed to serialize request: {e}"
-                            ))
-                            .0,
-                        ),
-                    },
-                    None,
-                );
-            }
-        },
-    );
+                Err(e) => {
+                    return (
+                        TestResult {
+                            row_id: model_row_id,
+                            status: 500,
+                            elapsed_ms: 0,
+                            error_msg: Some(
+                                openproxy_core::cost::redact_error_msg(&format!(
+                                    "failed to serialize request: {e}"
+                                ))
+                                .0,
+                            ),
+                            skipped: true,
+                            skip_reason: Some(
+                                openproxy_core::cost::redact_error_msg(&format!(
+                                    "failed to serialize request: {e}"
+                                ))
+                                .0,
+                            ),
+                        },
+                        None,
+                    );
+                }
+            },
+        )
+    };
     req.proxy = proxy_url;
     for (k, v) in &headers {
+        if is_stt && k.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
         if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
             && let Ok(hv) = axum::http::HeaderValue::from_str(v)
         {

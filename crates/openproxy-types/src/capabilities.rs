@@ -461,6 +461,18 @@ pub fn infer_output_modalities_json(model_id: &str) -> String {
     serde_json::to_string(&mods).unwrap_or_else(|_| r#"["text"]"#.to_string())
 }
 
+pub fn is_stt_model(model_id: &str) -> bool {
+    let lower = model_id.to_lowercase();
+    lower.contains("whisper")
+        || lower.contains("asr")
+        || lower.contains("conformer")
+        || lower.contains("sensevoice")
+        || lower.contains("speechmatics")
+        || lower.contains("transcription")
+        || lower.contains("stt")
+        || lower.contains("audio-transcription")
+}
+
 pub fn infer_family(model_id: &str) -> Option<String> {
     const FAMILIES: &[&str] = &[
         "gpt-4o",
