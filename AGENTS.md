@@ -98,8 +98,10 @@ openproxy/
 - **Prevención Estricta de Deadlocks con Mutex:**
   - `parking_lot::Mutex` y `std::sync::Mutex` **NO son reentrantes**.
   - **REGLA DE ORO:** Jamás invocar métodos del repositorio (`repo.*`) ni funciones que soliciten `self.conn.lock()` mientras se mantiene un guard activo (`let conn = conn_clone.lock()`) en el mismo hilo.
-  - Liberar siempre los guards de mutex antes de llamar a funciones externas o delegar tareas.
-- **Async No Bloqueante:** Toda operación pesada o síncrona de SQLite debe aislarse con `tokio::task::spawn_blocking`.
+  - **Prohibido retener locks a través de `.await`**: Liberar siempre los guards de mutex antes de llamar a funciones externas o invocar métodos async de red/disco.
+- **Async No Bloqueante & Cero Starvation:** Toda operación pesada, criptografía o I/O síncrono de SQLite debe aislarse con `tokio::task::spawn_blocking`.
+- **Canales con Backpressure Defensivo:** Prohibido el uso de `tokio::sync::mpsc::unbounded_channel` para colas de proxies upstream, bufferings SSE o ingestiones masivas. Usar `channel(N)` con límite explícito.
+- **Ciclo de Vida de Tareas en Fondo (Zombie Tasks):** Todo `tokio::spawn` de larga duración o bucle `loop {}` debe responder a una señal de cancelación o canal de shutdown (`broadcast::Receiver<()>` / `CancellationToken`). Prohibido descartar el `Sender` inmediatamente tras crear el canal (`let (_tx, rx)`).
 
 ---
 
@@ -109,6 +111,7 @@ openproxy/
 | :--- | :--- |
 | **`.unwrap()` / `.expect()` en producción** | Propagar con `?`, usar `.ok_or_else()`, `.unwrap_or()` o fallbacks defensivos. |
 | **`for i in 0..len` / `arr[i]`** | Iteración directa (`.iter()`, `.into_iter()`, `.enumerate()`, `.windows()`, `.zip()`). |
+| **Indexación de `&str[..n]` sin char boundary** | Validar siempre con `s.is_char_boundary(n)` retrocediendo hasta el límite válido antes de cortar (evita DoS con emojis/multibyte). |
 | **`static mut`** | Prohibido. Usar `Atomic*`, `OnceLock` o structs de estado sincronizados. |
 | **Supresión de advertencias (`#[allow(clippy::...)]`)** | Prohibido silenciar linters. Corregir siempre la causa raíz. |
 | **Placeholders SQL dinámicos manuales** | Usar helpers de batch (`batch_insert!`, `query_in_chunks`). |
