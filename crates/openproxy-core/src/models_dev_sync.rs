@@ -661,24 +661,37 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
                       OR EXISTS (
                         SELECT 1 FROM model_capabilities_sync s
                         WHERE s.model_id_normalized = models.model_id_normalized
-                          AND s.modalities_output LIKE '%\"embedding%'
+                          AND s.modalities_output = '[\"embedding\"]'
                       ) THEN 'embedding'
-                    WHEN models.model_id_normalized LIKE '%dall-e%'
-                      OR models.model_id_normalized LIKE '%flux%'
+                    WHEN (models.model_id_normalized LIKE '%dall-e%'
                       OR models.model_id_normalized LIKE '%sdxl%'
                       OR models.model_id_normalized LIKE '%stable-diffusion%'
+                      OR models.model_id_normalized LIKE '%midjourney%'
                       OR EXISTS (
                         SELECT 1 FROM model_capabilities_sync s
                         WHERE s.model_id_normalized = models.model_id_normalized
-                          AND s.modalities_output LIKE '%\"image\"%'
-                      ) THEN 'image'
-                    WHEN models.model_id_normalized LIKE '%whisper%'
+                          AND s.modalities_output = '[\"image\"]'
+                      ))
+                      AND NOT (models.model_id_normalized LIKE '%gemini%'
+                               OR models.model_id_normalized LIKE '%gpt-%'
+                               OR models.model_id_normalized LIKE '%claude%'
+                               OR models.model_id_normalized LIKE '%diffusiongemma%')
+                      THEN 'image'
+                    WHEN (models.model_id_normalized LIKE '%whisper%'
                       OR models.model_id_normalized LIKE '%tts%'
+                      OR models.model_id_normalized LIKE '%elevenlabs%'
+                      OR models.model_id_normalized LIKE '%melotts%'
                       OR EXISTS (
                         SELECT 1 FROM model_capabilities_sync s
                         WHERE s.model_id_normalized = models.model_id_normalized
-                          AND (s.modalities_output LIKE '%\"audio\"%' OR s.modalities_input LIKE '%\"audio\"%')
-                      ) THEN 'audio'
+                          AND s.modalities_output = '[\"audio\"]'
+                          AND s.modalities_input NOT LIKE '%\"text\"%'
+                      ))
+                      AND NOT (models.model_id_normalized LIKE '%gemini%'
+                               OR models.model_id_normalized LIKE '%gpt-%'
+                               OR models.model_id_normalized LIKE '%claude%'
+                               OR models.model_id_normalized LIKE '%qwen%')
+                      THEN 'audio'
                     ELSE models.model_type
                 END
              WHERE models.custom = 0

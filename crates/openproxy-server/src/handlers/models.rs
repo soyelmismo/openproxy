@@ -338,8 +338,15 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
     };
 
     let inferred_type = capabilities::infer_model_type(model_id);
-    let effective_type = if m.model_type.is_empty()
+    let effective_type = if m.custom {
+        if m.model_type.is_empty() {
+            inferred_type
+        } else {
+            m.model_type.as_str()
+        }
+    } else if m.model_type.is_empty()
         || (m.model_type == "chat" && inferred_type != "chat")
+        || (inferred_type == "chat" && (m.model_type == "audio" || m.model_type == "image"))
     {
         inferred_type
     } else {
@@ -586,5 +593,21 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_id.as_str(), "openai");
         assert_eq!(filtered[0].model_id.as_str(), "gpt-4o");
+    }
+
+    #[test]
+    fn gemini_flash_lite_model_type_is_chat() {
+        let mut m = empty_model();
+        m.provider_id = ProviderId::new("gemini");
+        m.model_id = ModelId::new("gemini-2.0-flash-lite");
+        m.model_type = "audio".to_string(); // Simulate stale/corrupt DB entry
+        m.custom = false;
+
+        let v = build_model_entry(&m);
+        assert_eq!(
+            v.get("type").and_then(|t| t.as_str()),
+            Some("chat"),
+            "Gemini flash-lite must be categorized as chat even if DB had stale audio"
+        );
     }
 }

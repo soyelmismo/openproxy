@@ -425,14 +425,19 @@ fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchite
         return inferred.to_string();
     }
 
-    // Output modalities: if a model emits image/audio, classify by that
-    // even if the name doesn't carry a giveaway keyword.
+    // Output modalities: only classify as image/audio if output is dedicated (does not include text)
     if let Some(arch) = architecture {
-        if arch.output_modalities.iter().any(|m| m == "image") {
-            return "image".to_string();
-        }
-        if arch.output_modalities.iter().any(|m| m == "audio") {
-            return "audio".to_string();
+        let has_text = arch.output_modalities.iter().any(|m| m == "text");
+        let has_image = arch.output_modalities.iter().any(|m| m == "image");
+        let has_audio = arch.output_modalities.iter().any(|m| m == "audio");
+
+        if !has_text {
+            if has_image && !has_audio {
+                return "image".to_string();
+            }
+            if has_audio && !has_image {
+                return "audio".to_string();
+            }
         }
     }
 

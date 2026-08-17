@@ -279,22 +279,69 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
 pub fn infer_model_type(model_id: &str) -> &'static str {
     let lower = model_id.to_lowercase();
 
-    // 1. Audio special handling & multimodal conversational exceptions
-    if lower.contains("deepgram") {
-        return "audio";
+    // 1. Rerank models (highest priority unambiguous keyword)
+    if lower.contains("rerank") {
+        return "rerank";
     }
-    if lower.contains("gpt-4o-audio")
-        || lower.contains("gpt-4-audio")
-        || lower.contains("qwen-audio-chat")
-        || lower.contains("qwen2-audio-instruct")
-        || lower.contains("stepaudio-2.5-chat")
-        || lower.contains("stepaudio-2.5-realtime")
+
+    // 2. Embedding models
+    if lower.contains("text-embedding")
+        || lower.contains("embedding")
+        || lower.contains("embeddings")
+        || lower.contains("embedder")
+        || lower.contains("model2vec")
+        || lower.contains("bge-")
+        || lower.contains("/bge-")
+        || lower.contains("bge_")
+        || lower.contains("bge.")
+        || lower.contains("embed-qa")
+        || lower.contains("embedcode")
+        || lower.contains("pplx-embed")
+        || lower.contains("mistral-embed")
+        || lower.contains("codestral-embed")
+        || lower.contains("arctic-embed")
+        || lower.contains("nomic-embed")
+        || lower.contains("voyage-embed")
+        || lower.contains("nv-embed")
+        || lower.contains("gte-")
+        || lower.contains("e5-")
+        || lower.contains("embed-v")
+        || (lower.contains("embed")
+            && !lower.contains("embedded-")
+            && !lower.contains("embed_chat")
+            && !lower.contains("embeddable"))
     {
+        return "embedding";
+    }
+
+    // 3. Multimodal Conversational LLMs Guard (prevents Gemini Flash, GPT-4o, Claude, etc. from matching audio/image)
+    if lower.contains("gemini")
+        || lower.contains("gpt-4")
+        || lower.contains("gpt-3")
+        || lower.contains("o1")
+        || lower.contains("o3")
+        || lower.contains("o4")
+        || lower.contains("claude")
+        || lower.contains("deepseek")
+        || lower.contains("qwen")
+        || lower.contains("llama")
+        || lower.contains("mistral")
+        || lower.contains("mixtral")
+        || lower.contains("gemma")
+        || lower.contains("phi-")
+        || lower.contains("kimi")
+        || lower.contains("glm-")
+        || lower.contains("stepaudio")
+    {
+        if lower.contains("imagen-") || lower.contains("imagen/") || lower == "imagen" {
+            return "image";
+        }
         return "chat";
     }
 
-    // 2. Audio models (TTS, STT, Music, Speech)
-    if lower.contains("whisper")
+    // 4. Dedicated Audio models (TTS, STT, Music, Speech)
+    if lower.contains("deepgram")
+        || lower.contains("whisper")
         || lower.contains("speechify")
         || lower.contains("melotts")
         || lower.contains("melo-tts")
@@ -334,42 +381,7 @@ pub fn infer_model_type(model_id: &str) -> &'static str {
         return "audio";
     }
 
-    // 3. Rerank models
-    if lower.contains("rerank") {
-        return "rerank";
-    }
-
-    // 4. Embedding models
-    if lower.contains("text-embedding")
-        || lower.contains("embedding")
-        || lower.contains("embeddings")
-        || lower.contains("embedder")
-        || lower.contains("model2vec")
-        || lower.contains("bge-")
-        || lower.contains("/bge-")
-        || lower.contains("bge_")
-        || lower.contains("bge.")
-        || lower.contains("embed-qa")
-        || lower.contains("embedcode")
-        || lower.contains("pplx-embed")
-        || lower.contains("mistral-embed")
-        || lower.contains("codestral-embed")
-        || lower.contains("arctic-embed")
-        || lower.contains("nomic-embed")
-        || lower.contains("voyage-embed")
-        || lower.contains("nv-embed")
-        || lower.contains("gte-")
-        || lower.contains("e5-")
-        || lower.contains("embed-v")
-        || (lower.contains("embed")
-            && !lower.contains("embedded-")
-            && !lower.contains("embed_chat")
-            && !lower.contains("embeddable"))
-    {
-        return "embedding";
-    }
-
-    // 5. Image models (with anti-false-positive guards for text models)
+    // 5. Dedicated Image models
     if lower.contains("diffusiongemma") || lower.contains("sdft") {
         return "chat";
     }
@@ -576,6 +588,34 @@ mod tests {
         assert_eq!(
             infer_model_type("gpt-4o-audio-preview"),
             "chat"
+        );
+        assert_eq!(
+            infer_model_type("gemini-2.0-flash-lite"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("gemini-2.0-flash-lite-preview-02-05"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("gemini-1.5-flash-8b"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("gemini-2.5-flash"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("gemini-2.0-flash-thinking-exp-01-21"),
+            "chat"
+        );
+        assert_eq!(
+            infer_model_type("imagen-3.0-generate-002"),
+            "image"
+        );
+        assert_eq!(
+            infer_model_type("google/imagen-3"),
+            "image"
         );
         // Audio models named flux (Deepgram Flux)
         assert_eq!(
