@@ -129,7 +129,8 @@ impl ProviderAdapter for GeminiAdapter {
         response_body: serde_json::Value,
     ) -> std::result::Result<openproxy_types::OpenAIResponse, CoreError> {
         let gemini_resp: GeminiResponse =
-            <GeminiResponse as serde::Deserialize>::deserialize(&response_body)
+                    // ⚡ Bolt: Use from_value to take ownership of the AST and prevent string allocations during deserialization
+serde_json::from_value(response_body)
                 .map_err(|e| CoreError::Parse(format!("parse gemini response: {e}")))?;
         Ok(gemini_to_openai(&gemini_resp))
     }

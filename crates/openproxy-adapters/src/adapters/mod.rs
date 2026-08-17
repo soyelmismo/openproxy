@@ -369,7 +369,8 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError>
     {
         let _ = target_format;
-        <openproxy_types::OpenAIResponse as serde::Deserialize>::deserialize(&response_body)
+                // ⚡ Bolt: Use from_value to take ownership of the AST and prevent string allocations during deserialization
+serde_json::from_value(response_body)
             .map_err(|e| {
                 openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
             })
