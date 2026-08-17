@@ -47,8 +47,7 @@ pub fn inject_model_and_serialize<T: Serialize>(
     req: &T,
     upstream_model: &str,
 ) -> std::result::Result<Bytes, CoreError> {
-    let mut val = serde_json::to_value(req)
-        .map_err(|e| CoreError::Validation(e.to_string()))?;
+    let mut val = serde_json::to_value(req).map_err(|e| CoreError::Validation(e.to_string()))?;
     if let serde_json::Value::Object(ref mut map) = val {
         map.insert(
             "model".to_string(),
@@ -369,11 +368,10 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError>
     {
         let _ = target_format;
-                // ⚡ Bolt: Use from_value to take ownership of the AST and prevent string allocations during deserialization
-serde_json::from_value(response_body)
-            .map_err(|e| {
-                openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
-            })
+        // ⚡ Bolt: Use from_value to take ownership of the AST and prevent string allocations during deserialization
+        serde_json::from_value(response_body).map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
+        })
     }
 }
 
@@ -970,10 +968,7 @@ pub async fn upstream_get_bytes(
         ));
     }
 
-    response
-        .collect()
-        .await
-        .map_err(|e| format!("{url}: {e}"))
+    response.collect().await.map_err(|e| format!("{url}: {e}"))
 }
 
 pub(crate) async fn upstream_get_json(
@@ -1816,7 +1811,10 @@ mod tests {
             openproxy_types::ProviderFormat::Openai,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        assert_eq!(a.build_embeddings_url(), "https://zenmux.example.com/v1/embeddings");
+        assert_eq!(
+            a.build_embeddings_url(),
+            "https://zenmux.example.com/v1/embeddings"
+        );
 
         let req = openproxy_types::embeddings::EmbeddingRequest {
             model: "text-embedding-3-small".into(),
@@ -1825,7 +1823,9 @@ mod tests {
             dimensions: None,
             user: None,
         };
-        let formatted = a.format_embedding_request(&req, "text-embedding-3-small").unwrap();
+        let formatted = a
+            .format_embedding_request(&req, "text-embedding-3-small")
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&formatted).unwrap();
         assert_eq!(val["model"], "text-embedding-3-small");
         assert_eq!(val["input"], "hello");
@@ -1840,9 +1840,18 @@ mod tests {
             openproxy_types::ProviderFormat::Openai,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        assert_eq!(a.build_image_url(), "https://zenmux.example.com/v1/images/generations");
-        assert_eq!(a.build_image_edits_url(), "https://zenmux.example.com/v1/images/edits");
-        assert_eq!(a.build_image_variations_url(), "https://zenmux.example.com/v1/images/variations");
+        assert_eq!(
+            a.build_image_url(),
+            "https://zenmux.example.com/v1/images/generations"
+        );
+        assert_eq!(
+            a.build_image_edits_url(),
+            "https://zenmux.example.com/v1/images/edits"
+        );
+        assert_eq!(
+            a.build_image_variations_url(),
+            "https://zenmux.example.com/v1/images/variations"
+        );
 
         let req = openproxy_types::images::ImageGenerationRequest {
             prompt: "a landscape".into(),

@@ -47,7 +47,9 @@ impl CustomAdapter {
         let extra_headers: Vec<(String, String)> = provider
             .extra_headers_json
             .as_deref()
-            .and_then(|raw| serde_json::from_str::<std::collections::HashMap<String, String>>(raw).ok())
+            .and_then(|raw| {
+                serde_json::from_str::<std::collections::HashMap<String, String>>(raw).ok()
+            })
             .map(|map| map.into_iter().collect())
             .unwrap_or_default();
 
@@ -167,7 +169,8 @@ impl ProviderAdapter for CustomAdapter {
                     let id = full_name.strip_prefix("models/").unwrap_or(full_name);
                     let display_name = m
                         .get("displayName")
-                        .and_then(|v| v.as_str()).map_or_else(|| id.to_string(), std::string::ToString::to_string);
+                        .and_then(|v| v.as_str())
+                        .map_or_else(|| id.to_string(), std::string::ToString::to_string);
                     let m_type = openproxy_types::capabilities::infer_model_type(id);
                     let caps = openproxy_types::capabilities::infer_capabilities(id);
                     let in_mods =

@@ -1,4 +1,8 @@
-use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, ModelId, TargetFormat, Arc, UpstreamClient, Result, UpstreamRequest, CancellationToken, TimeoutProfile, CoreError};
+use super::{
+    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, DiscoveredModel, ModelId,
+    ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
+    UpstreamClient, UpstreamRequest,
+};
 
 const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.0";
 
