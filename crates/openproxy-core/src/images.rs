@@ -161,7 +161,6 @@ pub async fn execute_image_generation(
     let targets = resolve_image_targets(db_pool, routing_plan, &req.model, api_key_id, started)?;
 
     let request_id = RequestId::new();
-    let total_targets = targets.len();
     let mut last_error = None;
     let mut attempt = 0;
 
@@ -169,7 +168,7 @@ pub async fn execute_image_generation(
     for target in &targets {
         attempt += 1;
         let trace_id = format!("{request_id}:{attempt}");
-        let has_alternatives = attempt < total_targets;
+        let has_alternatives = targets.iter().skip(attempt).any(|t| t.provider.as_str() != "horde");
 
         if !is_target_available(
             db_pool,
@@ -918,7 +917,6 @@ async fn execute_image_multipart(
     let targets = resolve_image_targets(ctx.db_pool, routing_plan, &body.model_name, api_key_id, started)?;
 
     let request_id = RequestId::new();
-    let total_targets = targets.len();
     let mut last_error = None;
     let mut attempt = 0;
 
@@ -926,7 +924,7 @@ async fn execute_image_multipart(
     for target in &targets {
         attempt += 1;
         let trace_id = format!("{request_id}:{attempt}");
-        let has_alternatives = attempt < total_targets;
+        let has_alternatives = targets.iter().skip(attempt).any(|t| t.provider.as_str() != "horde");
 
         if !is_target_available(
             ctx.db_pool,
@@ -1399,9 +1397,9 @@ async fn poll_horde_image_generation(
         &openproxy_types::ModelId::new(""),
     );
 
-    // If there are fallback targets available, failover early (35s); otherwise wait up to 120s
+    // If there are non-Horde fallback targets available, failover after 45s; otherwise wait up to 120s
     let timeout = if ctx.has_alternatives {
-        std::time::Duration::from_secs(35)
+        std::time::Duration::from_secs(45)
     } else {
         std::time::Duration::from_secs(120)
     };
@@ -1461,19 +1459,6 @@ async fn poll_horde_image_generation(
 
         if check.done == Some(true) || check.finished.unwrap_or(0) > 0 {
             break;
-        }
-
-        // Early queue circuit: if wait time or queue position is extremely high and we have alternative targets, failover
-        if ctx.has_alternatives
-            && (check.wait_time.is_some_and(|w| w > 45)
-                || check.queue_position.is_some_and(|q| q > 15)
-                || start.elapsed() >= std::time::Duration::from_secs(25))
-        {
-            cancel_horde_job(upstream_client, base_url, &job_id, &auth_headers).await;
-            return Err(CoreError::UpstreamTimeout {
-                phase: "horde_queue_circuit".into(),
-                ms: start.elapsed().as_millis() as u64,
-            });
         }
     }
 
