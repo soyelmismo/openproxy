@@ -64,8 +64,7 @@ fn leak_string(s: String) -> &'static str {
 /// filter-construction time; all patterns are static literals, so a
 /// compile error is a programmer bug that should fail startup loudly.
 fn compile_re(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern)
-        .unwrap_or_else(|e| panic!("invalid filter pattern {pattern:?}: {e}"))
+    regex::Regex::new(pattern).unwrap_or_else(|e| panic!("invalid filter pattern {pattern:?}: {e}"))
 }
 
 /// Pre-compute a rule name like `"git-status::strip_ansi"`.

@@ -1,4 +1,7 @@
-use super::{Deserialize, AppState, ApiError, ProviderId, CoreError, seed, resolve_adapter, refresh_oauth_if_needed};
+use super::{
+    ApiError, AppState, CoreError, Deserialize, ProviderId, refresh_oauth_if_needed,
+    resolve_adapter, seed,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -382,16 +385,17 @@ fn enrich_provider_with_oauth(
         None
     };
 
-    let metadata = adapters
-        .iter()
-        .find(|a| a.id() == &p.id).map_or_else(|| {
+    let metadata = adapters.iter().find(|a| a.id() == &p.id).map_or_else(
+        || {
             // Fallback for custom providers that aren't loaded in the adapter registry yet
             let built_in = openproxy_core::providers::is_builtin(p.id.as_str());
             let mut meta = openproxy_core::providers::ProviderMetadata::custom_default();
             meta.built_in = built_in;
             meta.deletable = !built_in;
             meta
-        }, openproxy_adapters::ProviderAdapterEnum::metadata);
+        },
+        openproxy_adapters::ProviderAdapterEnum::metadata,
+    );
 
     let model_counts = openproxy_db::models::count_by_provider(r, &p.id).unwrap_or_default();
 

@@ -172,9 +172,8 @@ where
             };
 
             // 4. Filter out accounts that the circuit breaker marks unhealthy.
-            let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) = flat_targets
-                .into_iter()
-                .partition(|t| match t.account_id {
+            let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) =
+                flat_targets.into_iter().partition(|t| match t.account_id {
                     Some(aid) => {
                         let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
                             aid,
@@ -194,7 +193,6 @@ where
                 );
                 eligible = parked;
             }
-
 
             if eligible.is_empty() {
                 if attempt == 1 {
@@ -450,8 +448,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 .await;
 
                 if race_result.error.is_none() {
-                    if let Some((request_id, attempt, target_id)) =
-                        race_result.usage_tuple.clone()
+                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.clone()
                     {
                         let job = crate::worker::BackgroundJob::MarkClientResponse {
                             request_id,
@@ -640,9 +637,10 @@ impl tower::Service<PipelineState> for RoutingService {
                             {
                                 // Cooldown is disabled for this target / combo
                             } else {
-                                let reason = result
-                                    .error
-                                    .as_ref().map_or_else(|| "retryable failure".to_string(), std::string::ToString::to_string);
+                                let reason = result.error.as_ref().map_or_else(
+                                    || "retryable failure".to_string(),
+                                    std::string::ToString::to_string,
+                                );
                                 let max_secs = target
                                     .target
                                     .cooldown_max_secs

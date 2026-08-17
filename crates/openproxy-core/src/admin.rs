@@ -207,15 +207,16 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::BaseUrl => out.base_url = Some(map.next_value()?),
                         Field::ExtraHeadersJson => {
                             let raw: serde_json::Value = map.next_value()?;
-                            out.extra_headers_json = Some(if let serde_json::Value::String(s) = raw {
-                                Some(s)
-                            } else if raw.is_null() {
-                                None
-                            } else {
-                                return Err(serde::de::Error::custom(format!(
-                                    "extra_headers_json must be string or null, got {raw}"
-                                )));
-                            });
+                            out.extra_headers_json =
+                                Some(if let serde_json::Value::String(s) = raw {
+                                    Some(s)
+                                } else if raw.is_null() {
+                                    None
+                                } else {
+                                    return Err(serde::de::Error::custom(format!(
+                                        "extra_headers_json must be string or null, got {raw}"
+                                    )));
+                                });
                         }
                         Field::UseProxies => out.use_proxies = Some(map.next_value()?),
                         Field::ProxyRotationErrors => {
@@ -232,15 +233,16 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                             // `Option<Option<String>>` would collapse
                             // these two into the same variant.
                             let raw: serde_json::Value = map.next_value()?;
-                            out.auto_activate_keyword = Some(if let serde_json::Value::String(s) = raw {
-                                Some(s)
-                            } else if raw.is_null() {
-                                None
-                            } else {
-                                return Err(serde::de::Error::custom(format!(
-                                    "auto_activate_keyword must be string or null, got {raw}"
-                                )));
-                            });
+                            out.auto_activate_keyword =
+                                Some(if let serde_json::Value::String(s) = raw {
+                                    Some(s)
+                                } else if raw.is_null() {
+                                    None
+                                } else {
+                                    return Err(serde::de::Error::custom(format!(
+                                        "auto_activate_keyword must be string or null, got {raw}"
+                                    )));
+                                });
                         }
                     }
                 }
@@ -1011,8 +1013,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-admin-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-admin-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("admin.db");
         let pool = DbPool::open(&path).expect("open pool");

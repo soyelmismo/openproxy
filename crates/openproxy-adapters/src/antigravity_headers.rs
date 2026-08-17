@@ -59,7 +59,10 @@ fn version() -> &'static str {
 static MACHINE_ID: LazyLock<String> = LazyLock::new(|| {
     // Try to read a stable machine identifier from the OS.
     // Fallback: hostname + OS arch.
-    let raw = hostname().map_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH), String::from);
+    let raw = hostname().map_or_else(
+        || format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        String::from,
+    );
     // Hash to a fixed-length hex string for a clean header value.
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());

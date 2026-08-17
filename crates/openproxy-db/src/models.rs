@@ -197,9 +197,7 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
             "UPDATE models SET active = ?1 WHERE provider_id = ?2 AND custom = 0",
             params![bit, provider.as_str()],
         )
-        .map_err(map_db_error_ctx(format!(
-            "set_active_bulk for {provider}"
-        )))?;
+        .map_err(map_db_error_ctx(format!("set_active_bulk for {provider}")))?;
     Ok(n as u64)
 }
 
@@ -572,7 +570,10 @@ pub fn upsert_many(
             .map_err(map_db_error)?;
 
         for d in discovered {
-            let caps_json = d.capabilities.as_ref().and_then(openproxy_types::ModelCapabilities::to_json);
+            let caps_json = d
+                .capabilities
+                .as_ref()
+                .and_then(openproxy_types::ModelCapabilities::to_json);
             let input_mods_json = d
                 .input_modalities
                 .as_ref()

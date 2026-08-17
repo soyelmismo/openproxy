@@ -345,7 +345,9 @@ pub async fn execute_image_generation(
         }
 
         // Parse upstream response into standard ImageGenerationResponse.
-        let parsed_response: ImageGenerationResponse = if target.provider.as_str() == "horde" || status_code == 202 {
+        let parsed_response: ImageGenerationResponse = if target.provider.as_str() == "horde"
+            || status_code == 202
+        {
             let poll_ctx = HordePollContext {
                 request_id: &request_id.to_string(),
                 trace_id: &trace_id,
@@ -368,21 +370,23 @@ pub async fn execute_image_generation(
                     if let Some(account_id) = target.account_id {
                         circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
                     }
-                    openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                        request_id: request_id.to_string(),
-                        trace_id: trace_id.clone(),
-                        provider_id: Some(target.provider.as_str().to_string()),
-                        upstream_model_id: Some(target.upstream_model.clone()),
-                        stage: "failed".to_string(),
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: Some(504),
-                        error: Some(format!("{err:?}")),
-                        stop_reason: None,
-                        timestamp: None,
-                        endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                    });
+                    openproxy_types::usage::publish_stage_event(
+                        openproxy_types::usage::StageEvent {
+                            request_id: request_id.to_string(),
+                            trace_id: trace_id.clone(),
+                            provider_id: Some(target.provider.as_str().to_string()),
+                            upstream_model_id: Some(target.upstream_model.clone()),
+                            stage: "failed".to_string(),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: Some(504),
+                            error: Some(format!("{err:?}")),
+                            stop_reason: None,
+                            timestamp: None,
+                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
+                        },
+                    );
                     tracing::warn!("Horde generation polling failed: {err:?}");
                     last_error = Some(err);
                     continue;
@@ -484,9 +488,8 @@ pub async fn dispatch_image_multipart_request(
             )
             .as_bytes(),
         );
-        payload.extend_from_slice(
-            format!("Content-Type: {}\r\n\r\n", file.content_type).as_bytes(),
-        );
+        payload
+            .extend_from_slice(format!("Content-Type: {}\r\n\r\n", file.content_type).as_bytes());
         payload.extend_from_slice(&file.bytes);
         payload.extend_from_slice(b"\r\n");
     }
@@ -495,11 +498,8 @@ pub async fn dispatch_image_multipart_request(
     payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
     let content_type = format!("multipart/form-data; boundary={boundary}");
-    let mut upstream_req = UpstreamRequest::post_multipart(
-        upstream_url,
-        &content_type,
-        bytes::Bytes::from(payload),
-    );
+    let mut upstream_req =
+        UpstreamRequest::post_multipart(upstream_url, &content_type, bytes::Bytes::from(payload));
 
     for (k, v) in adapter.build_headers(
         api_key,
@@ -900,7 +900,13 @@ async fn execute_image_multipart(
     };
 
     // 2. Resolve image targets.
-    let targets = resolve_image_targets(ctx.db_pool, routing_plan, &body.model_name, api_key_id, started)?;
+    let targets = resolve_image_targets(
+        ctx.db_pool,
+        routing_plan,
+        &body.model_name,
+        api_key_id,
+        started,
+    )?;
 
     let request_id = RequestId::new();
     let total_targets = targets.len();
@@ -954,14 +960,18 @@ async fn execute_image_multipart(
         };
 
         // Credentials decryption via master key.
-        let api_key =
-            match resolve_api_key(ctx.db_pool, ctx.master_key, target.account_id, &target.provider) {
-                Ok(k) => k,
-                Err(e) => {
-                    last_error = Some(e);
-                    continue;
-                }
-            };
+        let api_key = match resolve_api_key(
+            ctx.db_pool,
+            ctx.master_key,
+            target.account_id,
+            &target.provider,
+        ) {
+            Ok(k) => k,
+            Err(e) => {
+                last_error = Some(e);
+                continue;
+            }
+        };
 
         // --- Horde special path: convert multipart to JSON img2img ---
         let is_horde = target.provider.as_str() == "horde";
@@ -979,23 +989,26 @@ async fn execute_image_multipart(
                 Ok((resp, url)) => (resp, url),
                 Err(e) => {
                     if let Some(account_id) = target.account_id {
-                        ctx.circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
+                        ctx.circuit_breaker
+                            .record_failure(CircuitBreakerKey::Account(account_id));
                     }
-                    openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                        request_id: request_id.to_string(),
-                        trace_id: trace_id.clone(),
-                        provider_id: Some(target.provider.as_str().to_string()),
-                        upstream_model_id: Some(target.upstream_model.clone()),
-                        stage: "failed".to_string(),
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: Some(503),
-                        error: Some(format!("{e:?}")),
-                        stop_reason: None,
-                        timestamp: None,
-                        endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                    });
+                    openproxy_types::usage::publish_stage_event(
+                        openproxy_types::usage::StageEvent {
+                            request_id: request_id.to_string(),
+                            trace_id: trace_id.clone(),
+                            provider_id: Some(target.provider.as_str().to_string()),
+                            upstream_model_id: Some(target.upstream_model.clone()),
+                            stage: "failed".to_string(),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: Some(503),
+                            error: Some(format!("{e:?}")),
+                            stop_reason: None,
+                            timestamp: None,
+                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
+                        },
+                    );
                     tracing::warn!(
                         "Horde img2img dispatch failed: provider={}, error={:?}",
                         target.provider,
@@ -1023,23 +1036,26 @@ async fn execute_image_multipart(
                 Ok(r) => (r, target_url),
                 Err(e) => {
                     if let Some(account_id) = target.account_id {
-                        ctx.circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
+                        ctx.circuit_breaker
+                            .record_failure(CircuitBreakerKey::Account(account_id));
                     }
-                    openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                        request_id: request_id.to_string(),
-                        trace_id: trace_id.clone(),
-                        provider_id: Some(target.provider.as_str().to_string()),
-                        upstream_model_id: Some(target.upstream_model.clone()),
-                        stage: "failed".to_string(),
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: Some(503),
-                        error: Some(format!("{e:?}")),
-                        stop_reason: None,
-                        timestamp: None,
-                        endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                    });
+                    openproxy_types::usage::publish_stage_event(
+                        openproxy_types::usage::StageEvent {
+                            request_id: request_id.to_string(),
+                            trace_id: trace_id.clone(),
+                            provider_id: Some(target.provider.as_str().to_string()),
+                            upstream_model_id: Some(target.upstream_model.clone()),
+                            stage: "failed".to_string(),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: Some(503),
+                            error: Some(format!("{e:?}")),
+                            stop_reason: None,
+                            timestamp: None,
+                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
+                        },
+                    );
                     tracing::warn!(
                         "Image multipart target failed (connection error): provider={}, url={}, error={:?}",
                         target.provider,
@@ -1058,7 +1074,8 @@ async fn execute_image_multipart(
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
                 if let Some(account_id) = target.account_id {
-                    ctx.circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
+                    ctx.circuit_breaker
+                        .record_failure(CircuitBreakerKey::Account(account_id));
                 }
                 openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                     request_id: request_id.to_string(),
@@ -1087,7 +1104,8 @@ async fn execute_image_multipart(
 
         if status_code >= 400 {
             if let Some(account_id) = target.account_id {
-                ctx.circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
+                ctx.circuit_breaker
+                    .record_failure(CircuitBreakerKey::Account(account_id));
             }
             let err_text = String::from_utf8_lossy(&body_bytes);
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
@@ -1161,23 +1179,26 @@ async fn execute_image_multipart(
                 Err(e) => {
                     let err = CoreError::UpstreamConnection(format!("horde img2img error: {e}"));
                     if let Some(account_id) = target.account_id {
-                        ctx.circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
+                        ctx.circuit_breaker
+                            .record_failure(CircuitBreakerKey::Account(account_id));
                     }
-                    openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                        request_id: request_id.to_string(),
-                        trace_id: trace_id.clone(),
-                        provider_id: Some(target.provider.as_str().to_string()),
-                        upstream_model_id: Some(target.upstream_model.clone()),
-                        stage: "failed".to_string(),
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: Some(504),
-                        error: Some(format!("{err:?}")),
-                        stop_reason: None,
-                        timestamp: None,
-                        endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                    });
+                    openproxy_types::usage::publish_stage_event(
+                        openproxy_types::usage::StageEvent {
+                            request_id: request_id.to_string(),
+                            trace_id: trace_id.clone(),
+                            provider_id: Some(target.provider.as_str().to_string()),
+                            upstream_model_id: Some(target.upstream_model.clone()),
+                            stage: "failed".to_string(),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: Some(504),
+                            error: Some(format!("{err:?}")),
+                            stop_reason: None,
+                            timestamp: None,
+                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
+                        },
+                    );
                     tracing::warn!("Horde img2img polling failed: {err:?}");
                     last_error = Some(err);
                     continue;
@@ -1195,7 +1216,8 @@ async fn execute_image_multipart(
         };
 
         if let Some(account_id) = target.account_id {
-            ctx.circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));
+            ctx.circuit_breaker
+                .record_success(CircuitBreakerKey::Account(account_id));
         }
 
         // Publish live log completed event
@@ -1232,7 +1254,9 @@ async fn execute_image_multipart(
             total_ms,
         });
 
-        tracing::info!("Image multipart request succeeded after {attempt} attempts, url={upstream_url}");
+        tracing::info!(
+            "Image multipart request succeeded after {attempt} attempts, url={upstream_url}"
+        );
         return Ok(parsed_response);
     }
 
@@ -1356,7 +1380,9 @@ async fn poll_horde_image_generation(
             .message
             .or(submit_resp.error)
             .unwrap_or_else(|| "unknown horde submission error".to_string());
-        return Err(CoreError::Validation(format!("horde submission failed: {msg}")));
+        return Err(CoreError::Validation(format!(
+            "horde submission failed: {msg}"
+        )));
     };
 
     let base_url = adapter.config().base_url.as_str();
@@ -1426,7 +1452,9 @@ async fn poll_horde_image_generation(
 
         if check.faulted == Some(true) {
             cancel_horde_job(upstream_client, base_url, &job_id, &auth_headers).await;
-            return Err(CoreError::UpstreamConnection("horde job faulted or worker unavailable".into()));
+            return Err(CoreError::UpstreamConnection(
+                "horde job faulted or worker unavailable".into(),
+            ));
         }
 
         if check.done == Some(true) || check.finished.unwrap_or(0) > 0 {
@@ -1575,8 +1603,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-image-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-image-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");
@@ -1619,9 +1646,11 @@ mod tests {
 
         let r = pool.reader();
         let count: i64 = r
-            .query_row("SELECT COUNT(*) FROM usage WHERE endpoint_kind = 'image'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM usage WHERE endpoint_kind = 'image'",
+                [],
+                |row| row.get(0),
+            )
             .expect("query usage");
         assert_eq!(count, 1);
     }

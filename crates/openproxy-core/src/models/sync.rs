@@ -124,16 +124,23 @@ pub fn execute_sync_transaction(
                 .input_modalities
                 .as_ref()
                 .and_then(|v| serde_json::to_string(v).ok())
-                .or_else(|| Some(openproxy_types::capabilities::infer_input_modalities_json(model_id_str)));
+                .or_else(|| {
+                    Some(openproxy_types::capabilities::infer_input_modalities_json(
+                        model_id_str,
+                    ))
+                });
             let output_mods_json = d
                 .output_modalities
                 .as_ref()
                 .and_then(|v| serde_json::to_string(v).ok())
-                .or_else(|| Some(openproxy_types::capabilities::infer_output_modalities_json(model_id_str)));
-            let inferred_type = d
-                .model_type
-                .clone()
-                .unwrap_or_else(|| openproxy_types::capabilities::infer_model_type(model_id_str).to_string());
+                .or_else(|| {
+                    Some(openproxy_types::capabilities::infer_output_modalities_json(
+                        model_id_str,
+                    ))
+                });
+            let inferred_type = d.model_type.clone().unwrap_or_else(|| {
+                openproxy_types::capabilities::infer_model_type(model_id_str).to_string()
+            });
             let inferred_family = d
                 .family
                 .clone()

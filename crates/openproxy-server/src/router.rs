@@ -131,10 +131,7 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/images/generations",
             post(handlers::images::generate_images),
         )
-        .route(
-            "/v1/images/edits",
-            post(handlers::images::edit_images),
-        )
+        .route("/v1/images/edits", post(handlers::images::edit_images))
         .route(
             "/v1/images/variations",
             post(handlers::images::create_image_variation),
@@ -675,8 +672,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-router-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-router-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");

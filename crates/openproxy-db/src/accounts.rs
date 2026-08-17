@@ -596,10 +596,7 @@ pub type AccountsMetaMaps = (
     std::collections::HashMap<i64, String>,
 );
 
-pub fn get_accounts_meta(
-    conn: &Connection,
-    account_ids: &[AccountId],
-) -> Result<AccountsMetaMaps> {
+pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
     let mut raw_map = std::collections::HashMap::new();
     let mut kiro_map = std::collections::HashMap::new();
     let mut ag_map = std::collections::HashMap::new();
@@ -620,16 +617,8 @@ pub fn get_accounts_meta(
                 ))
             }
         ).optional().map_err(crate::error::map_db_error_ctx("query accounts"))?;
-        if let Some((
-            api_key,
-            label,
-            access,
-            refresh,
-            expires,
-            oauth_prov,
-            _email,
-            extra_json,
-        )) = row
+        if let Some((api_key, label, access, refresh, expires, oauth_prov, _email, extra_json)) =
+            row
         {
             if let Some(ref oauth_json) = oauth_prov
                 && let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json)
@@ -681,10 +670,7 @@ pub fn get_accounts_meta(
                 }
             }
         } else {
-            return Err(CoreError::Validation(format!(
-                "account {} not found",
-                id.0
-            )));
+            return Err(CoreError::Validation(format!("account {} not found", id.0)));
         }
     }
     Ok((raw_map, kiro_map, ag_map))

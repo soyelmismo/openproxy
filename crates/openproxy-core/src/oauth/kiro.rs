@@ -147,7 +147,10 @@ async fn register_oidc_client(
     let register_body = serde_json::to_vec(&RegisterClientRequest {
         client_name: "openproxy-kiro".into(),
         client_type: "public".into(),
-        scopes: SCOPES.iter().map(std::string::ToString::to_string).collect(),
+        scopes: SCOPES
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         grant_types: vec![
             "urn:ietf:params:oauth:grant-type:device_code".into(),
             "refresh_token".into(),
@@ -248,7 +251,10 @@ impl OAuthProvider for KiroOAuthProvider {
         let register_body = serde_json::to_vec(&RegisterClientRequest {
             client_name: "openproxy-kiro".into(),
             client_type: "public".into(),
-            scopes: SCOPES.iter().map(std::string::ToString::to_string).collect(),
+            scopes: SCOPES
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             grant_types: vec![
                 "urn:ietf:params:oauth:grant-type:device_code".into(),
                 "refresh_token".into(),

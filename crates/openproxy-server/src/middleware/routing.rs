@@ -97,9 +97,7 @@ fn resolve_routing_plan(
 
     let mut has_restrictions = false;
     if let RoutingPlan::Combo {
-        combo_id,
-        targets,
-        ..
+        combo_id, targets, ..
     } = &mut plan
         && let Some(auth) = auth_result
     {

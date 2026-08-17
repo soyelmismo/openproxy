@@ -410,10 +410,7 @@ mod tests {
         // Coverage fails (each item has 1 of 2 fields), so we land on lossy.
         // Selection: first 3 = {a:x},{a:x},{a:x} (dedup → 1), last 2 =
         // {b:y},{b:y} (dedup → 1). Total kept = 2, dropped = 8.
-        assert!(
-            out.contains("[{\"a\":\"x\"},{\"b\":\"y\"}]"),
-            "got: {out}"
-        );
+        assert!(out.contains("[{\"a\":\"x\"},{\"b\":\"y\"}]"), "got: {out}");
         assert!(out.contains("\"_dropped\":8"), "got: {out}");
     }
 

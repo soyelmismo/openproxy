@@ -227,15 +227,19 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                 let fmt = part
                     .get("image_url")
                     .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str()).map_or_else(|| "unknown".to_string(), |url| {
-                        let semi = url.find(';').unwrap_or(url.len());
-                        let fmt = &url["data:image/".len()..semi];
-                        if fmt.is_empty() {
-                            "unknown".to_string()
-                        } else {
-                            fmt.to_string()
-                        }
-                    });
+                    .and_then(|v| v.as_str())
+                    .map_or_else(
+                        || "unknown".to_string(),
+                        |url| {
+                            let semi = url.find(';').unwrap_or(url.len());
+                            let fmt = &url["data:image/".len()..semi];
+                            if fmt.is_empty() {
+                                "unknown".to_string()
+                            } else {
+                                fmt.to_string()
+                            }
+                        },
+                    );
                 if let Some(obj) = part.as_object_mut() {
                     *obj = serde_json::json!({
                         "type": "text",

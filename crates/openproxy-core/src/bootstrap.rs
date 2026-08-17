@@ -97,8 +97,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-bootstrap-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-bootstrap-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("bootstrap.db");
         let mut conn = Connection::open(&path).expect("open");

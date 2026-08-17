@@ -71,15 +71,12 @@ pub fn measure_compression<C: TextCompressor>(
     compressor: &C,
 ) -> CompressionStats {
     let original_chars = count_content_chars(messages);
-    let original_tokens =
-        crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+    let original_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
 
     let techniques = compressor.compress(messages);
 
     let compressed_chars = count_content_chars(messages);
-    let compressed_tokens =
-        crate::token_estimate::estimate_prompt_tokens(messages) as usize;
-
+    let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
 
     CompressionStats::new(
         original_chars,
@@ -122,9 +119,9 @@ fn count_content_chars(msgs: &[OpenAIMessage]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Write;
     use openproxy_types::OpenAIMessage;
     use serde_json::Value;
+    use std::fmt::Write;
 
     fn msg(role: &str, content: &str) -> OpenAIMessage {
         OpenAIMessage {

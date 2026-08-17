@@ -269,11 +269,16 @@ async fn resolve_image_input(
         let resp = upstream_client
             .call(req, openproxy_adapters::TimeoutProfile::Chat, cancel)
             .await
-            .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("failed to fetch image URL: {e}"))))?;
-        let bytes = resp
-            .collect()
-            .await
-            .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("failed to read image URL body: {e}"))))?;
+            .map_err(|e| {
+                ApiError(CoreError::UpstreamConnection(format!(
+                    "failed to fetch image URL: {e}"
+                )))
+            })?;
+        let bytes = resp.collect().await.map_err(|e| {
+            ApiError(CoreError::UpstreamConnection(format!(
+                "failed to read image URL body: {e}"
+            )))
+        })?;
         return Ok(MultipartFile {
             name: field_name.to_string(),
             file_name: format!("{field_name}.png"),
@@ -284,7 +289,11 @@ async fn resolve_image_input(
 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(trimmed)
-        .map_err(|e| ApiError(CoreError::Validation(format!("invalid base64 image data: {e}"))))?;
+        .map_err(|e| {
+            ApiError(CoreError::Validation(format!(
+                "invalid base64 image data: {e}"
+            )))
+        })?;
     Ok(MultipartFile {
         name: field_name.to_string(),
         file_name: format!("{field_name}.png"),
@@ -309,10 +318,7 @@ async fn parse_image_multipart(
         let is_file = field.file_name().is_some() || name == "image" || name == "mask";
         if is_file && name != "model" {
             let file_name = field.file_name().unwrap_or("image.png").to_string();
-            let content_type = field
-                .content_type()
-                .unwrap_or("image/png")
-                .to_string();
+            let content_type = field.content_type().unwrap_or("image/png").to_string();
             let bytes = field.bytes().await.unwrap_or_default();
             files.push(MultipartFile {
                 name,

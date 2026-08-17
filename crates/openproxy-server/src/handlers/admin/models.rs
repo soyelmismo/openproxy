@@ -1,4 +1,8 @@
-use super::{Deserialize, AppState, ApiError, CoreError, core_models, ModelRowId, AccountId, Arc, core_providers, core_accounts, core_oauth, adapters, RequestId, TraceId, ComboId, refresh_oauth_if_needed, ProviderId};
+use super::{
+    AccountId, ApiError, AppState, Arc, ComboId, CoreError, Deserialize, ModelRowId, ProviderId,
+    RequestId, TraceId, adapters, core_accounts, core_models, core_oauth, core_providers,
+    refresh_oauth_if_needed,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -484,12 +488,18 @@ pub(crate) async fn run_test_for_model(
     };
     let inferred_type = openproxy_types::capabilities::infer_model_type(model.model_id.as_str());
     let is_audio = model.model_type == "audio" || inferred_type == "audio";
-    let is_stt = is_audio && (openproxy_types::capabilities::is_stt_model(model.model_id.as_str()) || model.model_type == "audio");
+    let is_stt = is_audio
+        && (openproxy_types::capabilities::is_stt_model(model.model_id.as_str())
+            || model.model_type == "audio");
     let is_tts = is_audio && !is_stt;
     let is_embedding = model.model_type == "embedding" || inferred_type == "embedding";
     let is_image = model.model_type == "image" || inferred_type == "image";
 
-    let (url, body_value, multipart_opt): (String, serde_json::Value, Option<(String, bytes::Bytes)>) = if is_stt {
+    let (url, body_value, multipart_opt): (
+        String,
+        serde_json::Value,
+        Option<(String, bytes::Bytes)>,
+    ) = if is_stt {
         let audio_wav = openproxy_core::audio::generate_test_speech_wav();
         let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
         let mut payload = Vec::new();
@@ -500,10 +510,14 @@ pub(crate) async fn run_test_for_model(
         payload.extend_from_slice(b"\r\n");
 
         payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n");
+        payload.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n",
+        );
 
         payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"file\"; filename=\"hello.wav\"\r\n");
+        payload.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"hello.wav\"\r\n",
+        );
         payload.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
         payload.extend_from_slice(&audio_wav);
         payload.extend_from_slice(b"\r\n");
@@ -516,7 +530,11 @@ pub(crate) async fn run_test_for_model(
             "file": "hello.wav (16kHz 16-bit mono PCM speech)",
             "response_format": "json"
         });
-        (url, debug_val, Some((content_type, bytes::Bytes::from(payload))))
+        (
+            url,
+            debug_val,
+            Some((content_type, bytes::Bytes::from(payload))),
+        )
     } else if is_embedding {
         let url = adapter.build_embeddings_url();
         let val = serde_json::json!({
@@ -782,7 +800,11 @@ pub(crate) async fn run_test_for_model(
     };
 
     let mut req = if let Some((content_type, body_bytes)) = multipart_opt {
-        openproxy_adapters::upstream::UpstreamRequest::post_multipart(&url, &content_type, body_bytes)
+        openproxy_adapters::upstream::UpstreamRequest::post_multipart(
+            &url,
+            &content_type,
+            body_bytes,
+        )
     } else {
         openproxy_adapters::upstream::UpstreamRequest::post_json(
             &url,

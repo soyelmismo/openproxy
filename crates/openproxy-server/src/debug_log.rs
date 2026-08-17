@@ -150,8 +150,7 @@ pub fn init() {
                 return; // Fail silently if cannot write
             };
 
-            let mut rotation_interval =
-                tokio::time::interval(std::time::Duration::from_hours(12));
+            let mut rotation_interval = tokio::time::interval(std::time::Duration::from_hours(12));
             rotation_interval.tick().await; // Consume immediate first tick
 
             loop {

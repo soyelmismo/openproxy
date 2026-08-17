@@ -358,9 +358,8 @@ impl Client {
             .get("touched")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| missing_field_err("missing \"touched\" in refresh_models response"))?;
-        usize::try_from(touched).map_err(|_| {
-            missing_field_err(format!("\"touched\" does not fit in usize: {touched}"))
-        })
+        usize::try_from(touched)
+            .map_err(|_| missing_field_err(format!("\"touched\" does not fit in usize: {touched}")))
     }
 
     // -----------------------------------------------------------------

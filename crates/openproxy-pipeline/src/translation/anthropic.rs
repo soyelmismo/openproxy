@@ -1,4 +1,7 @@
-use crate::translation::types::{AnthropicRequest, AnthropicMessage, DEFAULT_MAX_TOKENS, AnthropicResponse, OpenAIResponse, OpenAIChoice, OpenAIUsage, AnthropicUsage};
+use crate::translation::types::{
+    AnthropicMessage, AnthropicRequest, AnthropicResponse, AnthropicUsage, DEFAULT_MAX_TOKENS,
+    OpenAIChoice, OpenAIResponse, OpenAIUsage,
+};
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::{Value, json};
 
@@ -657,10 +660,14 @@ fn log_anthropic_translation_diagnostics(conversation: &[AnthropicMessage]) {
             }
         }
     }
-    let use_set: std::collections::HashSet<&str> =
-        tool_use_ids.iter().map(std::string::String::as_str).collect();
-    let result_set: std::collections::HashSet<&str> =
-        tool_result_ids.iter().map(std::string::String::as_str).collect();
+    let use_set: std::collections::HashSet<&str> = tool_use_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
+    let result_set: std::collections::HashSet<&str> = tool_result_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
     let missing_results: Vec<&str> = use_set.difference(&result_set).copied().collect();
     let orphan_results: Vec<&str> = result_set.difference(&use_set).copied().collect();
     tracing::debug!(

@@ -5,9 +5,9 @@
 //! numeric prefix of the filename. The runner is idempotent: a second
 //! invocation against an already-migrated DB applies zero new versions.
 
-use std::fmt::Write;
 use openproxy_types::{CoreError, Result};
 use rusqlite::Connection;
+use std::fmt::Write;
 
 /// One embedded migration. `version` is the integer PK stored in
 /// `schema_migrations`. `sql` is the raw file contents.
@@ -385,12 +385,12 @@ pub fn run(conn: &mut Connection) -> Result<()> {
     })();
 
     if needs_fk_off {
-        let fk_res = conn
-            .execute_batch("PRAGMA foreign_keys = ON")
-            .map_err(|e| CoreError::Migration {
-                version: 0,
-                message: format!("PRAGMA foreign_keys = ON: {e}"),
-            });
+        let fk_res =
+            conn.execute_batch("PRAGMA foreign_keys = ON")
+                .map_err(|e| CoreError::Migration {
+                    version: 0,
+                    message: format!("PRAGMA foreign_keys = ON: {e}"),
+                });
         res.and(fk_res)?;
     } else {
         res?;

@@ -242,7 +242,6 @@ mod tests {
     use rusqlite::params;
 
     fn fresh_db() -> Connection {
-
         let mut conn = Connection::open_in_memory().unwrap();
         openproxy_db::migrations::run(&mut conn).unwrap();
         conn

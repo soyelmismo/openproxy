@@ -242,10 +242,7 @@ mod tests {
             strip_compact_yyyymmdd("claude-3-5-sonnet-20241022"),
             Some("claude-3-5-sonnet")
         );
-        assert_eq!(
-            strip_compact_yyyymmdd("model-19991231"),
-            Some("model")
-        );
+        assert_eq!(strip_compact_yyyymmdd("model-19991231"), Some("model"));
 
         // Too short (len <= 9)
         assert_eq!(strip_compact_yyyymmdd("m-202410"), None);

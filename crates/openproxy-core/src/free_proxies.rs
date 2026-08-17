@@ -863,9 +863,7 @@ async fn sync_clearproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
     let res = client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
-        .map_err(|e| {
-            crate::error::CoreError::Internal(format!("ClearProxy HTTP error: {e:?}"))
-        })?;
+        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy HTTP error: {e:?}")))?;
 
     if res.status != 200 {
         return Err(crate::error::CoreError::Internal(format!(
@@ -874,9 +872,10 @@ async fn sync_clearproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
         )));
     }
 
-    let body_bytes = res.collect().await.map_err(|e| {
-        crate::error::CoreError::Internal(format!("ClearProxy body error: {e:?}"))
-    })?;
+    let body_bytes = res
+        .collect()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy body error: {e:?}")))?;
     let items: Vec<ClearProxyItem> = serde_json::from_slice(&body_bytes)
         .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy JSON error: {e}")))?;
 
@@ -1955,7 +1954,11 @@ mod tests {
             },
         )
         .unwrap();
-        conn.execute("UPDATE providers SET use_proxies = 1 WHERE id = 'zen-provider'", []).unwrap();
+        conn.execute(
+            "UPDATE providers SET use_proxies = 1 WHERE id = 'zen-provider'",
+            [],
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p1', 'test', '1.1.1.1', 8080, 'socks5', 'alive', 10)",
@@ -1985,7 +1988,8 @@ mod tests {
         )
         .unwrap();
 
-        let candidates_after_cd = get_candidate_proxies_for_provider(&conn, &provider_id, 3).unwrap();
+        let candidates_after_cd =
+            get_candidate_proxies_for_provider(&conn, &provider_id, 3).unwrap();
         assert_eq!(candidates_after_cd.len(), 2);
         assert!(!candidates_after_cd.iter().any(|(id, _)| id == "p1"));
     }
