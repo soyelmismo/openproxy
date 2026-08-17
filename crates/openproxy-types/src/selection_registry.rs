@@ -28,6 +28,15 @@ impl SelectionRegistry {
         e.request_count = e.request_count.saturating_add(1);
     }
 
+    pub fn record_failure(&self, target_id: ComboTargetId) {
+        let now = now_ms();
+        let mut g = self.inner.lock();
+        let e = g.entry(target_id.0).or_default();
+        e.last_activity_ms = now;
+        e.last_success_ms = 0;
+        e.request_count = e.request_count.saturating_add(1);
+    }
+
     pub fn record_request(&self, target_id: ComboTargetId) {
         let now = now_ms();
         let mut g = self.inner.lock();
@@ -150,6 +159,19 @@ mod tests {
         assert_eq!(registry.len(), 1);
         assert_eq!(registry.request_count_within(target, 10), 1);
         assert!(registry.last_success_within(target, 10) > 0);
+    }
+
+    #[test]
+    fn test_record_failure_clears_last_success() {
+        let registry = SelectionRegistry::new();
+        let target = ComboTargetId(42);
+
+        registry.record_success(target);
+        assert!(registry.last_success_within(target, 10) > 0);
+
+        registry.record_failure(target);
+        assert_eq!(registry.last_success_within(target, 10), 0);
+        assert_eq!(registry.request_count_within(target, 10), 2);
     }
 
     #[test]

@@ -576,13 +576,14 @@ impl<'a> UsageRecordBuilder<'a> {
             }
         }
 
-        self.tracker
-            .selection_registry
-            .record_request(self.target.id);
         if self.err.is_none() {
             self.tracker
                 .selection_registry
                 .record_success(self.target.id);
+        } else {
+            self.tracker
+                .selection_registry
+                .record_failure(self.target.id);
         }
 
         Ok(Some((

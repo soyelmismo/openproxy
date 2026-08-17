@@ -81,7 +81,7 @@ pub fn process_job(
             if error_msg.is_none() {
                 selection_registry.record_success(target_id);
             } else {
-                selection_registry.record_request(target_id);
+                selection_registry.record_failure(target_id);
             }
 
             let cooldown_op = match error_msg {

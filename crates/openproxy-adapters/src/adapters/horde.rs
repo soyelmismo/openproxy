@@ -545,7 +545,18 @@ impl HordeAdapter {
                 },
                 workers: workers.clone(),
             },
-            models: vec![upstream_model_id.to_string()],
+            models: {
+                let list: Vec<String> = upstream_model_id
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if list.is_empty() {
+                    vec!["AlbedoBase XL (SDXL)".to_string()]
+                } else {
+                    list
+                }
+            },
             nsfw: true,
             censor_nsfw: false,
             r2: true,

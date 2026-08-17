@@ -604,9 +604,10 @@ impl tower::Service<PipelineState> for RoutingService {
                 overall_attempt = overall_attempt.saturating_add(1);
 
                 {
-                    pipeline.selection_registry.record_request(target.target.id);
                     if result.error.is_none() {
                         pipeline.selection_registry.record_success(target.target.id);
+                    } else {
+                        pipeline.selection_registry.record_failure(target.target.id);
                     }
                 }
 

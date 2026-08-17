@@ -85,44 +85,40 @@ fn resolve_lkgp(
     let exploration_rate = combo
         .lkgp_exploration_rate
         .unwrap_or(DEFAULT_LKGP_EXPLORATION_RATE);
-    // Clamp to [0.0, 1.0] defensively; the admin handler validates
-    // on write, but a hand-edited row could still slip through.
     let exploration_rate = exploration_rate.clamp(0.0, 1.0);
 
-    // Exploration branch: with probability `exploration_rate`, pick
-    // a target weighted by its position (priority_order). Targets
-    // earlier in the list (lower priority_order) get higher weight.
+    let window_secs = combo
+        .selection_window_secs
+        .unwrap_or(DEFAULT_SELECTION_WINDOW_SECS);
+
+    // Exploration branch: with probability `exploration_rate`, sample
+    // a target to discover and refresh cold or untried providers.
     let mut rng = rand::rng();
     if exploration_rate > 0.0 && rng.random::<f64>() < exploration_rate && !targets.is_empty() {
-        // Sort by priority_order first so the position-based weights
-        // are assigned correctly regardless of the input order.
-        targets.sort_by_key(|t| t.priority_order);
-        let n = targets.len() as u64;
-        // Inverse-linear weights: position 0 → N, 1 → N-1, ..., N-1 → 1.
-        // Total weight = N + (N-1) + ... + 1 = N*(N+1)/2.
-        let total: u64 = n * (n + 1) / 2;
-        let mut pick = rng.random_range(0..total);
-        let mut idx = 0;
-        for (i, _) in targets.iter().enumerate() {
-            // Weight for position i (0-indexed) = N - i.
-            let w = n - i as u64;
-            if pick < w {
-                idx = i;
-                break;
-            }
-            pick -= w;
-        }
+        // Find indices of cold targets (no recent success in window).
+        let cold_indices: Vec<usize> = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| registry.last_success_within(t.id, window_secs) == 0)
+            .map(|(i, _)| i)
+            .collect();
+
+        let idx = if !cold_indices.is_empty() {
+            // Prioritize exploring untested / cold targets uniformly
+            let pick = rng.random_range(0..cold_indices.len());
+            cold_indices[pick]
+        } else {
+            // Otherwise explore any target uniformly
+            rng.random_range(0..targets.len())
+        };
+
         targets[..=idx].rotate_right(1);
         return targets;
     }
 
-    // Exploitation branch: sort by `last_success` DESC, with
-    // `priority_order` ASC as the tiebreaker. `last_success == 0`
-    // (never tried) sorts last so a fresh target doesn't displace
-    // a known-good one.
-    let window_secs = combo
-        .selection_window_secs
-        .unwrap_or(DEFAULT_SELECTION_WINDOW_SECS);
+    // Exploitation branch: sort by `last_success` DESC (most recent success first),
+    // with `priority_order` ASC as tiebreaker. Targets that failed have last_success = 0
+    // and sort behind active working targets.
     targets.sort_by(|a, b| {
         let la = registry.last_success_within(a.id, window_secs);
         let lb = registry.last_success_within(b.id, window_secs);
@@ -211,4 +207,83 @@ fn resolve_p2c(
     let winner = if ci <= cj { i } else { j };
     targets[..=winner].rotate_right(1);
     targets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_types::ids::{ComboId, ComboTargetId, ProviderId};
+
+    fn make_target(id: i64, priority: i32) -> ComboTarget {
+        ComboTarget {
+            id: ComboTargetId(id),
+            combo_id: ComboId(1),
+            provider_id: ProviderId::new(format!("p{id}")),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: priority,
+            weight: 1,
+            active: true,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+        }
+    }
+
+    fn make_combo(mode: PriorityMode) -> Combo {
+        Combo {
+            id: ComboId(1),
+            name: "test-combo".into(),
+            strategy: Strategy::Priority,
+            priority_mode: mode,
+            race_size: 1,
+            created_at: "2024-01-01".into(),
+            context_window: None,
+            cooldown_mode: openproxy_types::config::CooldownMode::None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: Some(0.0), // Disable exploration for deterministic exploitation tests
+            selection_window_secs: Some(3600),
+        }
+    }
+
+    #[test]
+    fn test_lkgp_anchoring_and_failure_penalty() {
+        let registry = SelectionRegistry::new();
+        let combo = make_combo(PriorityMode::Lkgp);
+
+        let t1 = make_target(1, 1);
+        let t2 = make_target(2, 2);
+        let t3 = make_target(3, 3);
+        let targets = vec![t1, t2, t3];
+
+        // 1. Initial state (no successes) -> strictly ordered by priority_order
+        let res = resolve_lkgp(targets.clone(), &combo, &registry);
+        assert_eq!(res[0].id.0, 1);
+        assert_eq!(res[1].id.0, 2);
+        assert_eq!(res[2].id.0, 3);
+
+        // 2. Target 2 succeeds -> Target 2 becomes #1
+        registry.record_success(ComboTargetId(2));
+        let res = resolve_lkgp(targets.clone(), &combo, &registry);
+        assert_eq!(res[0].id.0, 2, "Target 2 should be at head after success");
+
+        // 3. Target 3 succeeds later -> Target 3 becomes #1, Target 2 is #2
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        registry.record_success(ComboTargetId(3));
+        let res = resolve_lkgp(targets.clone(), &combo, &registry);
+        assert_eq!(res[0].id.0, 3, "Target 3 should be at head after latest success");
+        assert_eq!(res[1].id.0, 2);
+
+        // 4. Target 3 fails -> Target 3 drops its known-good state, Target 2 takes back #1
+        registry.record_failure(ComboTargetId(3));
+        let res = resolve_lkgp(targets, &combo, &registry);
+        assert_eq!(res[0].id.0, 2, "Target 2 should reclaim #1 after Target 3 fails");
+        assert_eq!(res[1].id.0, 1, "Target 1 (priority 1) beats failed Target 3 (priority 3)");
+        assert_eq!(res[2].id.0, 3);
+    }
 }
