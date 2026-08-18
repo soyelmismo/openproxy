@@ -29,18 +29,6 @@ impl_string_enum! {
     error: "priority_mode"
 }
 
-impl PriorityMode {
-    pub fn from_db(s: Option<&str>) -> Self {
-        match s {
-            Some("lkgp") => Self::Lkgp,
-            Some("weighted") => Self::Weighted,
-            Some("least_used") => Self::LeastUsed,
-            Some("p2c") => Self::P2c,
-            _ => Self::Strict,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Combo {
     pub id: ComboId,

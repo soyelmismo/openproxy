@@ -4,7 +4,7 @@ use openproxy_types::{
     DiscoveredModel, Model, ModelId, ModelRowId, ProviderId, Result, TargetFormat, UpsertResult,
     normalize_model_id,
 };
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, Row, params};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,58 +35,63 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
     })
 }
 
-macro_rules! model_select {
-    ($tail:expr) => {
-        concat!(
-            "SELECT id, provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, timeout_overrides_json, active, \
-                    last_test_status, last_test_at, custom, \
-                    context_length, max_output_tokens, capabilities_json, \
-                    family, model_type, input_modalities_json, \
-                    output_modalities_json \
-             FROM models ",
-            $tail
-        )
-    };
-    () => {
-        "SELECT id, provider_id, model_id, display_name, target_format, \
-                discovered_at, expires_at, timeout_overrides_json, active, \
-                last_test_status, last_test_at, custom, \
-                context_length, max_output_tokens, capabilities_json, \
-                family, model_type, input_modalities_json, \
-                output_modalities_json \
-         FROM models"
-    };
-}
+crate::def_table_select!(
+    model_select,
+    "models",
+    "id, provider_id, model_id, display_name, target_format, \
+     discovered_at, expires_at, timeout_overrides_json, active, \
+     last_test_status, last_test_at, custom, \
+     context_length, max_output_tokens, capabilities_json, \
+     family, model_type, input_modalities_json, \
+     output_modalities_json"
+);
+
+crate::def_table_select!(
+    model_auto_active_select,
+    "models",
+    "model_id, display_name"
+);
+
+crate::def_table_select!(
+    model_existing_select,
+    "models",
+    "model_id, id, display_name"
+);
+
+crate::def_table_select!(
+    model_inserted_select,
+    "models",
+    "id, model_id"
+);
 
 pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model>> {
-    let mut stmt = conn
-        .prepare(model_select!("WHERE provider_id = ? AND active = 1"))
-        .map_err(map_db_error)?;
-
-    let rows = stmt
-        .query_map([provider.as_str()], map_row)
-        .map_err(map_db_error)?;
-
-    rows.map(|r| r.map_err(map_db_error)).collect()
+    crate::db_query_all!(
+        conn,
+        model_select!("WHERE provider_id = ?1 AND active = 1"),
+        params![provider.as_str()],
+        map_row,
+        format!("list active models for {provider}")
+    )
 }
 
 pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
-    let mut stmt = conn
-        .prepare(model_select!("WHERE active = 1"))
-        .map_err(map_db_error)?;
-
-    let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
-
-    rows.map(|r| r.map_err(map_db_error)).collect()
+    crate::db_query_all!(
+        conn,
+        model_select!("WHERE active = 1"),
+        [],
+        map_row,
+        "list active models"
+    )
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
-    let mut stmt = conn.prepare(model_select!()).map_err(map_db_error)?;
-
-    let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
-
-    rows.map(|r| r.map_err(map_db_error)).collect()
+    crate::db_query_all!(
+        conn,
+        model_select!(),
+        [],
+        map_row,
+        "list all models"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -103,7 +108,7 @@ pub fn count_by_provider(conn: &Connection, provider: &ProviderId) -> Result<Pro
                 COUNT(*) \
              FROM models WHERE provider_id = ?1",
             [provider.as_str()],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| crate::map_row_tuple!(row => ((0, i64), (1, i64))),
         )
         .map_err(map_db_error)?;
     Ok(ProviderModelCounts {
@@ -126,14 +131,13 @@ pub fn mark_expired(conn: &Connection) -> Result<usize> {
 
 pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()> {
     let bit = i64::from(active);
-    conn.execute(
-        "UPDATE models SET active = ?1 WHERE id = ?2",
-        params![bit, id.0],
-    )
-    .map_err(map_db_error_ctx(format!(
-        "update active for model {}",
-        id.0
-    )))?;
+    crate::db_update_field!(
+        conn,
+        "models",
+        active = bit,
+        WHERE id = id.0,
+        format!("update active for model {}", id.0)
+    )?;
     Ok(())
 }
 
@@ -149,11 +153,13 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
 }
 
 pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Model>> {
-    let res = conn
-        .query_row(model_select!("WHERE id = ?"), [row_id.0], map_row)
-        .optional()
-        .map_err(map_db_error)?;
-    Ok(res)
+    crate::db_query_one!(
+        conn,
+        model_select!("WHERE id = ?1"),
+        params![row_id.0],
+        map_row,
+        format!("get model by row id {}", row_id.0)
+    )
 }
 
 pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<Model>> {
@@ -173,13 +179,13 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
 }
 
 pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<Model>> {
-    conn.query_row(
+    crate::db_query_one!(
+        conn,
         model_select!("WHERE model_id = ?1 AND active = 1 ORDER BY id ASC LIMIT 1"),
-        [model_id],
+        params![model_id],
         map_row,
+        format!("find active model by name {model_id}")
     )
-    .optional()
-    .map_err(map_db_error)
 }
 
 pub fn find_active_by_provider_and_name(
@@ -187,15 +193,15 @@ pub fn find_active_by_provider_and_name(
     provider_id: &ProviderId,
     model_id: &str,
 ) -> Result<Option<Model>> {
-    conn.query_row(
+    crate::db_query_one!(
+        conn,
         model_select!(
             "WHERE provider_id = ?1 AND model_id = ?2 AND active = 1 ORDER BY id ASC LIMIT 1"
         ),
         params![provider_id.as_str(), model_id],
         map_row,
+        format!("find active model for provider {provider_id} and name {model_id}")
     )
-    .optional()
-    .map_err(map_db_error)
 }
 
 pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result<()> {
@@ -277,10 +283,7 @@ pub fn create_custom(
                     "provider_id does not exist: {provider_id}"
                 ))
             } else {
-                openproxy_types::CoreError::Database {
-                    message: format!("create_custom model for {provider_id}: {e}"),
-                    source: Some(Box::new(e)),
-                }
+                map_db_error_ctx(format!("create_custom model for {provider_id}"))(e)
             }
         })?;
 
@@ -288,11 +291,13 @@ pub fn create_custom(
 }
 
 pub fn update_model_type(conn: &Connection, id: ModelRowId, model_type: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE models SET model_type = ?1 WHERE id = ?2",
-        params![model_type, id.0],
-    )
-    .map_err(crate::error::map_db_error)?;
+    crate::db_update_field!(
+        conn,
+        "models",
+        model_type = model_type,
+        WHERE id = id.0,
+        format!("update model_type for model {}", id.0)
+    )?;
     Ok(())
 }
 
@@ -335,41 +340,29 @@ pub fn apply_auto_activation(
     let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
     let newly_active: Vec<(String, Option<String>)> = match keyword {
-        Some(k) => {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT model_id, display_name FROM models \
-                     WHERE provider_id = ?1 AND custom = 0 \
-                       AND discovered_at >= datetime('now', '-60 seconds') \
-                       AND active = 0 \
-                       AND model_id LIKE '%' || ?2 || '%'",
-                )
-                .map_err(map_db_error)?;
-            let rows = stmt
-                .query_map(params![provider.as_str(), k], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-                })
-                .map_err(map_db_error)?;
-            rows.map(|r| r.map_err(map_db_error))
-                .collect::<Result<Vec<_>>>()?
-        }
-        None => {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT model_id, display_name FROM models \
-                     WHERE provider_id = ?1 AND custom = 0 \
-                       AND discovered_at >= datetime('now', '-60 seconds') \
-                       AND active = 0",
-                )
-                .map_err(map_db_error)?;
-            let rows = stmt
-                .query_map(params![provider.as_str()], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-                })
-                .map_err(map_db_error)?;
-            rows.map(|r| r.map_err(map_db_error))
-                .collect::<Result<Vec<_>>>()?
-        }
+        Some(k) => crate::db_query_all!(
+            &tx,
+            model_auto_active_select!(
+                "WHERE provider_id = ?1 AND custom = 0 \
+                 AND discovered_at >= datetime('now', '-60 seconds') \
+                 AND active = 0 \
+                 AND model_id LIKE '%' || ?2 || '%'"
+            ),
+            params![provider.as_str(), k],
+            |r| crate::map_row_tuple!(r => (0, 1)),
+            "query newly active models with keyword"
+        )?,
+        None => crate::db_query_all!(
+            &tx,
+            model_auto_active_select!(
+                "WHERE provider_id = ?1 AND custom = 0 \
+                 AND discovered_at >= datetime('now', '-60 seconds') \
+                 AND active = 0"
+            ),
+            params![provider.as_str()],
+            |r| crate::map_row_tuple!(r => (0, 1)),
+            "query newly active models"
+        )?,
     };
 
     let updated = match keyword {
@@ -467,22 +460,13 @@ pub fn upsert_many(
     let mut new_model_ids: Vec<ModelId> = Vec::new();
     let mut inserted_model_ids: Vec<&str> = Vec::new();
 
-    let existing_rows: Vec<(String, i64, Option<String>)> = {
-        let mut stmt = conn
-            .prepare("SELECT model_id, id, display_name FROM models WHERE provider_id = ?")
-            .map_err(map_db_error)?;
-        let rows = stmt
-            .query_map([provider.as_str()], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                ))
-            })
-            .map_err(map_db_error)?;
-        rows.map(|r| r.map_err(map_db_error))
-            .collect::<Result<Vec<_>>>()?
-    };
+    let existing_rows: Vec<(String, i64, Option<String>)> = crate::db_query_all!(
+        conn,
+        model_existing_select!("WHERE provider_id = ?1"),
+        params![provider.as_str()],
+        |r| crate::map_row_tuple!(r => (0, 1, 2)),
+        "query existing models"
+    )?;
 
     let existing: std::collections::HashSet<&str> =
         existing_rows.iter().map(|(m, _, _)| m.as_str()).collect();
@@ -578,18 +562,15 @@ pub fn upsert_many(
     if !inserted_model_ids.is_empty() {
         let inserted_json =
             serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
-        let sql = "SELECT id, model_id FROM models \
-             WHERE provider_id = ? AND model_id IN (SELECT value FROM json_each(?))";
-        let mut stmt = tx.prepare(sql).map_err(map_db_error)?;
-        let rows = stmt
-            .query_map(params![provider.as_str(), inserted_json], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-            })
-            .map_err(map_db_error)?;
-        let new_rows: Vec<(i64, String)> = rows
-            .map(|r| r.map_err(map_db_error))
-            .collect::<Result<Vec<_>>>()?;
-        drop(stmt);
+        let new_rows: Vec<(i64, String)> = crate::db_query_all!(
+            &tx,
+            model_inserted_select!(
+                "WHERE provider_id = ?1 AND model_id IN (SELECT value FROM json_each(?2))"
+            ),
+            params![provider.as_str(), inserted_json],
+            |r| crate::map_row_tuple!(r => (0, 1)),
+            "query inserted models"
+        )?;
 
         let combo_targets_present: bool = tx
             .query_row(

@@ -18,6 +18,7 @@ use openproxy_db::secrets::MasterKey;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
+use tokio_util::sync::CancellationToken;
 
 const QUOTA_LOW_ABSOLUTE_FLOOR: i64 = 1_000;
 
@@ -28,15 +29,35 @@ pub fn start_quota_sync_scheduler(
     master_key: Arc<MasterKey>,
     adapters: Arc<RwLock<Arc<Vec<ProviderAdapterEnum>>>>,
     oauth_provider_registry: Arc<OAuthProviderRegistry>,
-) {
+) -> Option<CancellationToken> {
+    start_quota_sync_scheduler_with_cancel(
+        db_pool,
+        config,
+        upstream_client,
+        master_key,
+        adapters,
+        oauth_provider_registry,
+        None,
+    )
+}
+
+pub fn start_quota_sync_scheduler_with_cancel(
+    db_pool: Arc<DbPool>,
+    config: AppConfig,
+    upstream_client: Arc<UpstreamClient>,
+    master_key: Arc<MasterKey>,
+    adapters: Arc<RwLock<Arc<Vec<ProviderAdapterEnum>>>>,
+    oauth_provider_registry: Arc<OAuthProviderRegistry>,
+    cancel_token: Option<CancellationToken>,
+) -> Option<CancellationToken> {
     if !config.quota_sync.enabled {
         tracing::debug!("Quota sync daemon is disabled in config; not starting scheduler");
-        return;
+        return None;
     }
 
     let interval = config.quota_sync.interval_secs;
     if interval == 0 {
-        return;
+        return None;
     }
 
     tracing::info!(
@@ -44,23 +65,47 @@ pub fn start_quota_sync_scheduler(
         interval
     );
 
+    let cancel = cancel_token.unwrap_or_default();
+    let token = cancel.clone();
+
     tokio::spawn(async move {
         // Initial delay to avoid hammering DB/network immediately on boot alongside other tasks
-        sleep(Duration::from_secs(30)).await;
+        tokio::select! {
+            () = token.cancelled() => {
+                tracing::info!("[QuotaSync] Scheduler cancelled during initial delay");
+                return;
+            }
+            () = sleep(Duration::from_secs(30)) => {}
+        }
 
         loop {
-            run_quota_sync_cycle(
-                &db_pool,
-                &config,
-                &upstream_client,
-                &master_key,
-                &adapters,
-                &oauth_provider_registry,
-            )
-            .await;
-            sleep(Duration::from_secs(interval)).await;
+            tokio::select! {
+                () = token.cancelled() => {
+                    tracing::info!("[QuotaSync] Scheduler shutting down");
+                    break;
+                }
+                () = run_quota_sync_cycle(
+                    &db_pool,
+                    &config,
+                    &upstream_client,
+                    &master_key,
+                    &adapters,
+                    &oauth_provider_registry,
+                    Some(&token),
+                ) => {}
+            }
+
+            tokio::select! {
+                () = token.cancelled() => {
+                    tracing::info!("[QuotaSync] Scheduler shutting down");
+                    break;
+                }
+                () = sleep(Duration::from_secs(interval)) => {}
+            }
         }
     });
+
+    Some(cancel)
 }
 
 async fn run_quota_sync_cycle(
@@ -70,6 +115,7 @@ async fn run_quota_sync_cycle(
     master_key: &Arc<MasterKey>,
     adapters: &Arc<RwLock<Arc<Vec<ProviderAdapterEnum>>>>,
     oauth_registry: &Arc<OAuthProviderRegistry>,
+    cancel_token: Option<&CancellationToken>,
 ) {
     tracing::debug!("[QuotaSync] Starting cycle");
 
@@ -118,6 +164,12 @@ async fn run_quota_sync_cycle(
         .map(std::string::String::as_str)
         .collect();
     for account_id in accounts_to_sync {
+        if let Some(token) = cancel_token
+            && token.is_cancelled()
+        {
+            break;
+        }
+
         if let Err(e) = refresh_single_account_quota(
             account_id,
             db_pool,
@@ -135,7 +187,14 @@ async fn run_quota_sync_cycle(
         }
 
         if delay_ms > 0 {
-            sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(token) = cancel_token {
+                tokio::select! {
+                    () = token.cancelled() => break,
+                    () = sleep(Duration::from_millis(delay_ms)) => {}
+                }
+            } else {
+                sleep(Duration::from_millis(delay_ms)).await;
+            }
         }
     }
 
@@ -169,7 +228,7 @@ pub async fn refresh_single_account_quota(
                 .any(|id| id.as_str() == acc.provider_id.as_str());
 
             if !supports_quota {
-                return Ok(None);
+                return Ok::<_, crate::error::CoreError>(None);
             }
 
             let provider_str = acc.provider_id.to_string();

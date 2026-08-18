@@ -205,10 +205,24 @@ fn try_lossless_csv(arr: &[Value]) -> Option<String> {
     Some(out)
 }
 
-/// True if `s` (case-folded) contains any error token.
+fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+/// True if `s` contains any error token (case-insensitive substring).
 fn string_has_error_token(s: &str) -> bool {
-    let lower = s.to_lowercase();
-    ERROR_TOKENS.iter().any(|t| lower.contains(t))
+    ERROR_TOKENS
+        .iter()
+        .any(|t| contains_case_insensitive_ascii(s, t))
 }
 
 /// Recursively check whether any string inside a JSON value contains an

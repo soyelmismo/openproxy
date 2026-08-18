@@ -20,57 +20,7 @@ impl AdapterFactory {
 
     /// Instantiate a built-in adapter by provider ID.
     pub fn create_builtin(&self, id: &ProviderId) -> Option<ProviderAdapterEnum> {
-        match id.as_str() {
-            "antigravity" => Some(ProviderAdapterEnum::Antigravity(
-                crate::adapters::antigravity::AntigravityAdapter::new(),
-            )),
-            "atomesus" => Some(ProviderAdapterEnum::Atomesus(
-                crate::adapters::atomesus::AtomesusAdapter::new(),
-            )),
-            "cline" => Some(ProviderAdapterEnum::Cline(
-                crate::adapters::cline::ClineAdapter::new(),
-            )),
-            "cloudflare-workers-ai" => Some(ProviderAdapterEnum::CloudflareWorkersAI(
-                crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter::new(),
-            )),
-            "codex" => Some(ProviderAdapterEnum::Codex(
-                crate::adapters::codex::CodexAdapter::new(),
-            )),
-            "gemini" => Some(ProviderAdapterEnum::Gemini(
-                crate::adapters::gemini::GeminiAdapter::new(),
-            )),
-            "horde" => Some(ProviderAdapterEnum::Horde(
-                crate::adapters::horde::HordeAdapter::new(),
-            )),
-            "kilocode" => Some(ProviderAdapterEnum::Kilocode(
-                crate::adapters::kilocode::KilocodeAdapter::new(),
-            )),
-            "kiro" => Some(ProviderAdapterEnum::Kiro(
-                crate::adapters::kiro_ai::KiroAdapter::new(),
-            )),
-            "minimax" => Some(ProviderAdapterEnum::MiniMax(
-                crate::adapters::minimax::MiniMaxAdapter::new(),
-            )),
-            "nous-research" => Some(ProviderAdapterEnum::NousResearch(
-                crate::adapters::nous_research::NousResearchAdapter::new(),
-            )),
-            "nvidia-nim" => Some(ProviderAdapterEnum::NvidiaNim(
-                crate::adapters::nvidia_nim::NvidiaNimAdapter::new(),
-            )),
-            "ollama-cloud" => Some(ProviderAdapterEnum::OllamaCloud(
-                crate::adapters::ollama_cloud::OllamaCloudAdapter::new(),
-            )),
-            "opencode-go" => Some(ProviderAdapterEnum::OpenCodeGo(
-                crate::adapters::opencode_go::OpenCodeGoAdapter::new(),
-            )),
-            "opencode-zen" => Some(ProviderAdapterEnum::OpenCodeZen(
-                crate::adapters::opencode_zen::OpenCodeZenAdapter::new(),
-            )),
-            "openrouter" => Some(ProviderAdapterEnum::OpenRouter(
-                crate::adapters::openrouter::OpenRouterAdapter::new(),
-            )),
-            _ => None,
-        }
+        ProviderAdapterEnum::from_provider_id(id.as_str())
     }
 
     /// Instantiate an adapter dynamically based on static configuration.

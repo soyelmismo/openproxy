@@ -5,6 +5,16 @@ use super::{
 };
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
+
+crate::define_jump_map! {
+    /// Jump map for Antigravity physical model translation.
+    pub fn map_antigravity_physical_model(model: &str) -> &str {
+        "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",
+        "gemini-3.5-flash-high" => "gemini-3-flash-agent",
+        other => other,
+    }
+}
+
 // =====================================================================
 // Antigravity (Cloud Code)
 // =====================================================================
@@ -238,11 +248,7 @@ impl ProviderAdapter for AntigravityAdapter {
                 .as_ref()
                 .and_then(|m| m.antigravity_project.as_deref())
                 .unwrap_or_default();
-            let physical_model = match model.as_str() {
-                "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",
-                "gemini-3.5-flash-high" => "gemini-3-flash-agent",
-                other => other,
-            };
+            let physical_model = map_antigravity_physical_model(model.as_str());
 
             let wrapped = serde_json::json!({
                 "project": project,
@@ -480,9 +486,7 @@ impl AntigravityAdapter {
                     ));
                 }
                 Err(e) => {
-                    last_err = Some(CoreError::UpstreamConnection(format!(
-                        "retrieveUserQuotaSummary: {e}"
-                    )));
+                    last_err = Some(e.to_core_error("retrieveUserQuotaSummary"));
                     continue;
                 }
             };
@@ -498,9 +502,7 @@ impl AntigravityAdapter {
             let body = match response.collect().await {
                 Ok(b) => b,
                 Err(e) => {
-                    last_err = Some(CoreError::UpstreamConnection(format!(
-                        "retrieveUserQuotaSummary body: {e}"
-                    )));
+                    last_err = Some(e.to_core_error("retrieveUserQuotaSummary body"));
                     continue;
                 }
             };
@@ -634,6 +636,7 @@ impl AntigravityAdapter {
         None
     }
 }
+
 
 fn parse_antigravity_models_response(
     body: &serde_json::Value,

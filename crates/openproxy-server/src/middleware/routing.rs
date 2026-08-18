@@ -120,15 +120,9 @@ fn resolve_routing_plan(
                     continue;
                 }
                 if let Some(row_id) = target.model_row_id {
-                    let model_id: Option<String> = r
-                        .query_row(
-                            "SELECT model_id FROM models WHERE id = ?1",
-                            rusqlite::params![row_id.0],
-                            |row| row.get(0),
-                        )
-                        .ok();
-                    if let Some(m_id) = model_id
-                        && !auth.is_model_allowed(&m_id, Some(target.provider_id.as_str()))
+                    let model = openproxy_core::models::get_by_row_id(&r, row_id).ok().flatten();
+                    if let Some(m) = model
+                        && !auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str()))
                     {
                         continue;
                     }

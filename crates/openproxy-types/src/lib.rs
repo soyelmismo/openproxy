@@ -2,6 +2,7 @@
 
 #[macro_use]
 pub mod macros;
+pub use macros::FromDb;
 pub mod time;
 pub use time::now_ms;
 
@@ -22,7 +23,7 @@ pub use models::{Model, UpsertResult};
 pub mod notifications;
 pub use notifications::{NotificationEvent, publish_notification};
 pub mod usage;
-pub use usage::{RecentUsageRow, UsageInput, publish_usage_row};
+pub use usage::{RecentUsageRow, StageEvent, UsageInput, publish_stage_event, publish_usage_row};
 pub mod endpoint;
 pub use endpoint::EndpointKind;
 pub mod images;

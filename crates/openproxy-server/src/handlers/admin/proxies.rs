@@ -100,12 +100,14 @@ pub async fn test_all_proxies(
     Ok(Json(serde_json::json!({ "status": "started" })))
 }
 
-pub async fn delete_proxy(
-    DbWriter(w): DbWriter,
-    Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    openproxy_core::free_proxies::delete_proxy(&w, &id)?;
-    Ok(Json(serde_json::json!({ "status": "deleted" })))
+crate::admin_entity_action_handler! {
+    pub async fn delete_proxy(
+        DbWriter(w): DbWriter,
+        Path(id): Path<String>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        openproxy_core::free_proxies::delete_proxy(&w, &id)?;
+        Ok(Json(serde_json::json!({ "status": "deleted" })))
+    }
 }
 
 pub async fn get_proxy_test_url(

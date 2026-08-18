@@ -96,14 +96,7 @@ pub async fn execute_embeddings(
     for target in targets {
         attempt += 1;
 
-        if !is_target_available(
-            db_pool,
-            circuit_breaker,
-            target.account_id,
-            target.combo_target_id,
-        ) {
-            continue;
-        }
+        crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
 
         // Adapter resolution.
         let Some(adapter) = adapters
@@ -142,9 +135,7 @@ pub async fn execute_embeddings(
         {
             Ok(r) => r,
             Err(e) => {
-                if let Some(account_id) = target.account_id {
-                    circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                }
+                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
                 tracing::warn!(
                     "Embedding target failed (connection error): provider={}, error={:?}",
                     target.provider,
@@ -160,9 +151,7 @@ pub async fn execute_embeddings(
             Ok(b) => b,
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-                if let Some(account_id) = target.account_id {
-                    circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                }
+                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
                 tracing::warn!(
                     "Embedding target body read failed: provider={}, error={:?}",
                     target.provider,
@@ -174,9 +163,7 @@ pub async fn execute_embeddings(
         };
 
         if status_code >= 400 {
-            if let Some(account_id) = target.account_id {
-                circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-            }
+            crate::guarded_unary_target!(record_failure: circuit_breaker, target);
             let err_text = String::from_utf8_lossy(&body_bytes);
             tracing::warn!(
                 "Embedding target returned error status: provider={}, status={}, body={}",

@@ -70,41 +70,67 @@ pub fn execute<P: Params>(
         .map_err(map_db_error_ctx(ctx.as_ref()))
 }
 
-/// Executes an `INSERT` statement and returns the `last_insert_rowid()`.
-pub fn insert_get_id<P: Params>(
+/// Helper function for checking existence via SQL query.
+pub fn exists<P: Params>(
     conn: &Connection,
     sql: &str,
     params: P,
     ctx: impl AsRef<str>,
-) -> Result<i64> {
-    execute(conn, sql, params, ctx)?;
-    Ok(conn.last_insert_rowid())
+) -> Result<bool> {
+    let exists = conn
+        .query_row(sql, params, |r| r.get::<_, i64>(0))
+        .map(|v| v != 0)
+        .map_err(map_db_error_ctx(ctx.as_ref()))?;
+    Ok(exists)
 }
 
 /// Declarative macros for macro-based CRUD operations.
 #[macro_export]
 macro_rules! db_execute {
-    ($conn:expr, $sql:expr, $params:expr, $ctx:expr) => {
+    ($conn:expr, $sql:expr, $params:expr, $ctx:expr $(,)?) => {
         $crate::crud::execute($conn, $sql, $params, $ctx)
     };
 }
 
 #[macro_export]
+macro_rules! db_exists {
+    ($conn:expr, $table:literal, WHERE $col:ident = $val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::exists(
+            $conn,
+            concat!("SELECT EXISTS(SELECT 1 FROM ", $table, " WHERE ", stringify!($col), " = ?1)"),
+            ::rusqlite::params![$val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, WHERE id = $val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::exists(
+            $conn,
+            concat!("SELECT EXISTS(SELECT 1 FROM ", $table, " WHERE id = ?1)"),
+            ::rusqlite::params![$val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $sql:expr, $params:expr, $ctx:expr $(,)?) => {
+        $crate::crud::exists($conn, $sql, $params, $ctx)
+    };
+}
+
+#[macro_export]
 macro_rules! db_query_one {
-    ($conn:expr, $sql:expr, $params:expr, $ctx:expr) => {
+    ($conn:expr, $sql:expr, $params:expr, $ctx:expr $(,)?) => {
         $crate::crud::query_one($conn, $sql, $params, $ctx)
     };
-    ($conn:expr, $sql:expr, $params:expr, $mapper:expr, $ctx:expr) => {
+    ($conn:expr, $sql:expr, $params:expr, $mapper:expr, $ctx:expr $(,)?) => {
         $crate::crud::query_one_with($conn, $sql, $params, $mapper, $ctx)
     };
 }
 
 #[macro_export]
 macro_rules! db_query_all {
-    ($conn:expr, $sql:expr, $params:expr, $ctx:expr) => {
+    ($conn:expr, $sql:expr, $params:expr, $ctx:expr $(,)?) => {
         $crate::crud::query_all($conn, $sql, $params, $ctx)
     };
-    ($conn:expr, $sql:expr, $params:expr, $mapper:expr, $ctx:expr) => {
+    ($conn:expr, $sql:expr, $params:expr, $mapper:expr, $ctx:expr $(,)?) => {
         $crate::crud::query_all_with($conn, $sql, $params, $mapper, $ctx)
     };
 }
@@ -124,11 +150,11 @@ macro_rules! db_query_all {
 /// - `@id(idx, Type)`: extracts numeric id as `Type(i64)`
 /// - `@opt_id(idx, Type)`: extracts optional numeric id as `Option<Type>`
 /// - `@id_str(idx, Type)`: extracts string id as `Type::new(String)`
-/// - `@enum_parse(idx, Type)`: extracts `String` and parses into `Type` via `FromStr`
-/// - `@opt_enum_parse(idx, Type)`: extracts `Option<String>` and parses into `Option<Type>`
+/// - `@enum_parse(idx, Type)`: extracts `&str` and parses into `Type` via `FromStr`
+/// - `@opt_enum_parse(idx, Type)`: extracts `Option<&str>` and parses into `Option<Type>`
 /// - `@enum(idx, Type)`: alias for `@enum_parse`
 /// - `@opt_enum(idx, Type)`: alias for `@opt_enum_parse`
-/// - `@from_db(idx, Type)`: extracts `Option<String>` and calls `Type::from_db(Option<&str>)`
+/// - `@from_db(idx, Type)`: extracts `Option<&str>` and calls `Type::from_db(Option<&str>)`
 /// - `@json(idx)`: extracts `Option<String>` and parses as JSON deserializable `T`
 /// - `@opt_default(idx, [Type,] default)`: extracts `Option<T>` or falls back to `default`
 /// - `(idx, Type)`: extracts typed value `row.get::<_, Type>(idx)?`
@@ -172,13 +198,29 @@ macro_rules! map_row_fields {
         $id_ty($row.get::<_, String>($idx)?)
     };
     (@get $row:expr, @enum_parse($idx:expr, $enum_ty:path)) => {
-        $row.get::<_, String>($idx)?
+        $row.get_ref($idx)?
+            .as_str()?
             .parse::<$enum_ty>()
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure($idx, rusqlite::types::Type::Text, Box::from(format!("{e}"))))?
+            .map_err(|e| ::rusqlite::Error::FromSqlConversionFailure($idx, ::rusqlite::types::Type::Text, Box::from(format!("{e}"))))?
+    };
+    (@get $row:expr, @enum_or_default($idx:expr, $enum_ty:path)) => {
+        match $row.get_ref($idx)? {
+            ::rusqlite::types::ValueRef::Null => <$enum_ty>::default(),
+            val => val
+                .as_str()
+                .ok()
+                .and_then(|s| s.parse::<$enum_ty>().ok())
+                .unwrap_or_default(),
+        }
     };
     (@get $row:expr, @opt_enum_parse($idx:expr, $enum_ty:path)) => {
-        $row.get::<_, Option<String>>($idx)?
-            .and_then(|s| s.parse::<$enum_ty>().ok())
+        match $row.get_ref($idx)? {
+            ::rusqlite::types::ValueRef::Null => None,
+            val => val
+                .as_str()
+                .ok()
+                .and_then(|s| s.parse::<$enum_ty>().ok()),
+        }
     };
     (@get $row:expr, @enum($idx:expr, $enum_ty:path)) => {
         $crate::map_row_fields!(@get $row, @enum_parse($idx, $enum_ty))
@@ -187,14 +229,34 @@ macro_rules! map_row_fields {
         $crate::map_row_fields!(@get $row, @opt_enum_parse($idx, $enum_ty))
     };
     (@get $row:expr, @from_db($idx:expr, $ty:path)) => {
-        <$ty>::from_db($row.get::<_, Option<String>>($idx)?.as_deref())
+        <$ty>::from_db(match $row.get_ref($idx)? {
+            ::rusqlite::types::ValueRef::Null => None,
+            val => val.as_str().ok(),
+        })
     };
     (@get $row:expr, @json($idx:expr)) => {
         $row.get::<_, Option<String>>($idx)?
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| ::serde_json::from_str(&s).ok())
+    };
+    (@get $row:expr, @opt_json($idx:expr, $ty:path)) => {
+        $row.get::<_, Option<String>>($idx)?
+            .and_then(|s| ::serde_json::from_str::<$ty>(&s).ok())
+    };
+    (@get $row:expr, @json_or_default($idx:expr, $ty:path)) => {
+        $row.get::<_, Option<String>>($idx)?
+            .and_then(|s| ::serde_json::from_str::<$ty>(&s).ok())
+            .unwrap_or_default()
+    };
+    (@get $row:expr, @json_or_default($idx:expr)) => {
+        $row.get::<_, Option<String>>($idx)?
+            .and_then(|s| ::serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    };
+    (@get $row:expr, @expr($val:expr)) => {
+        $val
     };
     (@get $row:expr, @opt_default($idx:expr, $ty:ty, $default:expr)) => {
-        $row.get::<_, Option<$ty>>($idx)?.unwrap_or_else(|| $default)
+        $row.get::<_, Option<$ty>>($idx)?.unwrap_or($default)
     };
     (@get $row:expr, @opt_default($idx:expr, $default:expr)) => {
         $row.get::<_, Option<_>>($idx)?.unwrap_or_else(|| $default)
@@ -208,6 +270,75 @@ macro_rules! map_row_fields {
 
     ($row:expr, $($tt:tt)+) => {
         $crate::map_row_fields!(@get $row, $($tt)+)
+    };
+}
+
+/// Declarative macro to define standard `SELECT` projections for a table.
+#[macro_export]
+macro_rules! def_table_select {
+    ($macro_name:ident, $table:literal, $cols:literal $(,)?) => {
+        #[allow(unused_macros)]
+        macro_rules! $macro_name {
+            ($tail:expr) => {
+                concat!("SELECT ", $cols, " FROM ", $table, " ", $tail)
+            };
+            () => {
+                concat!("SELECT ", $cols, " FROM ", $table)
+            };
+        }
+    };
+}
+
+/// Declarative macro for updating a single field in a table.
+#[macro_export]
+macro_rules! db_update_field {
+    ($conn:expr, $table:literal, $col:ident = $val:expr, WHERE $id_col:ident = $id_val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("UPDATE ", $table, " SET ", stringify!($col), " = ?1 WHERE ", stringify!($id_col), " = ?2"),
+            ::rusqlite::params![$val, $id_val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, $col:ident = $val:expr, WHERE id = $id_val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("UPDATE ", $table, " SET ", stringify!($col), " = ?1 WHERE id = ?2"),
+            ::rusqlite::params![$val, $id_val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, $col:literal = $val:expr, WHERE $id_col:literal = $id_val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE ", $id_col, " = ?2"),
+            ::rusqlite::params![$val, $id_val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, $col:literal = $val:expr, WHERE id = $id_val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE id = ?2"),
+            ::rusqlite::params![$val, $id_val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, $col:literal, $val:expr, $id_val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE id = ?2"),
+            ::rusqlite::params![$val, $id_val],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, $col:literal, $val:expr, $id_col:literal, $id_val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE ", $id_col, " = ?2"),
+            ::rusqlite::params![$val, $id_val],
+            $ctx,
+        )
     };
 }
 
@@ -300,6 +431,73 @@ macro_rules! map_row_struct {
     };
 }
 
+/// Declarative macro for mapping a `rusqlite::Row` into a typed tuple $O(1)$.
+///
+/// Supports qualifiers:
+/// - `@qualifier(...)` (e.g. `@id(0, AccountId)`, `@enum_parse(1, Status)`)
+/// - `(idx, Type)` (e.g. `(0, i64)`, `(1, String)`)
+/// - `idx` (e.g. `0`, `1`)
+///
+/// Syntax examples:
+/// - `map_row_tuple!(row => (0, 1))`
+/// - `map_row_tuple!(row, ((0, i64), (1, String)))`
+/// - `map_row_tuple!(row => (@id(0, AccountId), 1, @bool(2)))`
+#[macro_export]
+macro_rules! map_row_tuple {
+    ($row:ident, ( $($elem:tt)+ )) => {
+        $crate::map_row_tuple!($row => ( $($elem)+ ))
+    };
+    ($row:ident => ( $($elem:tt)+ )) => {
+        (|| -> std::result::Result<_, rusqlite::Error> {
+            $crate::map_row_tuple!(@tuple $row, (), $($elem)+)
+        })()
+    };
+    ($row:expr, ( $($elem:tt)+ )) => {
+        $crate::map_row_tuple!($row => ( $($elem)+ ))
+    };
+    ($row:expr => ( $($elem:tt)+ )) => {
+        {
+            let row = $row;
+            (|| -> std::result::Result<_, rusqlite::Error> {
+                $crate::map_row_tuple!(@tuple row, (), $($elem)+)
+            })()
+        }
+    };
+
+    (@tuple $row:ident, ( $($built:expr,)* ), @ $q:ident ( $($args:tt)* ) , $($rest:tt)+) => {
+        $crate::map_row_tuple!(
+            @tuple $row,
+            ( $($built,)* $crate::map_row_fields!(@get $row, @ $q ( $($args)* )), ),
+            $($rest)+
+        )
+    };
+    (@tuple $row:ident, ( $($built:expr,)* ), @ $q:ident ( $($args:tt)* ) $(,)?) => {
+        Ok(( $($built,)* $crate::map_row_fields!(@get $row, @ $q ( $($args)* )), ))
+    };
+
+    (@tuple $row:ident, ( $($built:expr,)* ), ( $idx:expr, $ty:ty ) , $($rest:tt)+) => {
+        $crate::map_row_tuple!(
+            @tuple $row,
+            ( $($built,)* $crate::map_row_fields!(@get $row, ($idx, $ty)), ),
+            $($rest)+
+        )
+    };
+    (@tuple $row:ident, ( $($built:expr,)* ), ( $idx:expr, $ty:ty ) $(,)?) => {
+        Ok(( $($built,)* $crate::map_row_fields!(@get $row, ($idx, $ty)), ))
+    };
+
+    (@tuple $row:ident, ( $($built:expr,)* ), $idx:expr , $($rest:tt)+) => {
+        $crate::map_row_tuple!(
+            @tuple $row,
+            ( $($built,)* $crate::map_row_fields!(@get $row, $idx), ),
+            $($rest)+
+        )
+    };
+    (@tuple $row:ident, ( $($built:expr,)* ), $idx:expr $(,)?) => {
+        Ok(( $($built,)* $crate::map_row_fields!(@get $row, $idx), ))
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +561,8 @@ mod tests {
         metadata: Option<serde_json::Value>,
         tag: String,
         description: String,
+        custom_computed: String,
+        default_payload: serde_json::Value,
     }
 
     #[test]
@@ -387,7 +587,8 @@ mod tests {
                 mode TEXT,
                 metadata TEXT,
                 tag TEXT,
-                description TEXT NOT NULL
+                description TEXT NOT NULL,
+                default_payload TEXT
             )",
             [],
         )
@@ -396,14 +597,16 @@ mod tests {
         conn.execute(
             "INSERT INTO items (
                 id, parent_id, name_id, is_active, opt_bool, u8_val, port, opt_u16_val,
-                u32_val, opt_u32_val, u64_val, opt_u64_val, role, opt_role, mode, metadata, tag, description
+                u32_val, opt_u32_val, u64_val, opt_u64_val, role, opt_role, mode, metadata, tag, description, default_payload
             ) VALUES (
                 1, 42, 'str-id-1', 1, 0, 8, 8080, 9090,
-                3000, 4000, 50000, 60000, 'admin', 'user', 'fast', '{\"k\":\"v\"}', NULL, 'a test item'
+                3000, 4000, 50000, 60000, 'admin', 'user', 'fast', '{\"k\":\"v\"}', NULL, 'a test item', NULL
             )",
             [],
         )
         .expect("insert item");
+
+        let computed_val = "computed-value".to_string();
 
         let item: TestItem = conn
             .query_row("SELECT * FROM items WHERE id = 1", [], |row| {
@@ -426,6 +629,8 @@ mod tests {
                     metadata: @json(15),
                     tag: @opt_default(16, "default_tag".to_string()),
                     description: 17,
+                    custom_computed: @expr(computed_val.clone()),
+                    default_payload: @json_or_default(18),
                 })
             })
             .expect("query row");
@@ -448,6 +653,8 @@ mod tests {
         assert_eq!(item.metadata.as_ref().unwrap()["k"], "v");
         assert_eq!(item.tag, "default_tag");
         assert_eq!(item.description, "a test item");
+        assert_eq!(item.custom_computed, "computed-value");
+        assert_eq!(item.default_payload, serde_json::Value::Null);
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -464,6 +671,8 @@ mod tests {
             })
         }
     }
+
+    def_table_select!(user_select, "users", "id, name");
 
     #[test]
     fn test_crud_macros() {
@@ -493,10 +702,10 @@ mod tests {
         )
         .expect("insert");
 
-        // db_query_one with FromRow
+        // db_query_one with FromRow & def_table_select!
         let alice: Option<SimpleUser> = db_query_one!(
             &conn,
-            "SELECT id, name FROM users WHERE id = ?",
+            user_select!("WHERE id = ?1"),
             rusqlite::params![1],
             "query alice"
         )
@@ -511,7 +720,7 @@ mod tests {
 
         let non_existent: Option<SimpleUser> = db_query_one!(
             &conn,
-            "SELECT id, name FROM users WHERE id = ?",
+            user_select!("WHERE id = ?1"),
             rusqlite::params![999],
             "query non existent"
         )
@@ -529,10 +738,10 @@ mod tests {
         .expect("query one mapper");
         assert_eq!(bob_name, Some("Bob".into()));
 
-        // db_query_all with FromRow
+        // db_query_all with FromRow & def_table_select!
         let all_users: Vec<SimpleUser> = db_query_all!(
             &conn,
-            "SELECT id, name FROM users ORDER BY id ASC",
+            user_select!("ORDER BY id ASC"),
             [],
             "query all users"
         )
@@ -561,5 +770,56 @@ mod tests {
         )
         .expect("query all mapper");
         assert_eq!(names, vec!["Bob", "Alice"]);
+
+        // db_update_field!
+        let affected = db_update_field!(
+            &conn,
+            "users",
+            name = "Alice Updated",
+            WHERE id = 1,
+            "update user name"
+        )
+        .expect("update field");
+        assert_eq!(affected, 1);
+
+        let updated_alice: Option<SimpleUser> = db_query_one!(
+            &conn,
+            user_select!("WHERE id = ?1"),
+            rusqlite::params![1],
+            "query updated alice"
+        )
+        .expect("query updated alice");
+        assert_eq!(
+            updated_alice,
+            Some(SimpleUser {
+                id: 1,
+                name: "Alice Updated".into()
+            })
+        );
+
+        // db_exists!
+        let exists_1 = db_exists!(&conn, "users", WHERE id = 1, "check user 1 exists").unwrap();
+        assert!(exists_1);
+        let exists_999 =
+            db_exists!(&conn, "users", WHERE id = 999, "check user 999 exists").unwrap();
+        assert!(!exists_999);
+        let exists_named =
+            db_exists!(&conn, "users", WHERE name = "Bob", "check Bob exists").unwrap();
+        assert!(exists_named);
+
+        // map_row_tuple!
+        let tuple_res: (i64, String) = conn
+            .query_row("SELECT id, name FROM users WHERE id = 2", [], |row| {
+                map_row_tuple!(row => (0, 1))
+            })
+            .unwrap();
+        assert_eq!(tuple_res, (2, "Bob".to_string()));
+
+        let typed_tuple: (i64, String) = conn
+            .query_row("SELECT id, name FROM users WHERE id = 2", [], |row| {
+                map_row_tuple!(row => ((0, i64), (1, String)))
+            })
+            .unwrap();
+        assert_eq!(typed_tuple, (2, "Bob".to_string()));
     }
 }

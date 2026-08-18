@@ -231,7 +231,7 @@ impl DbPool {
         let conn = Connection::open_with_flags(self.path.as_ref(), flags).map_err(|e| {
             CoreError::Database {
                 message: format!("open extra connection {}: {}", self.path.display(), e),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             }
         })?;
         configure_connection(&conn)?;

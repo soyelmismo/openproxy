@@ -34,18 +34,29 @@ pub fn format_proxy_url(
     }
 }
 
+crate::def_table_select!(
+    free_proxy_select,
+    "free_proxies",
+    "id, host, port, type, username, password"
+);
+
+crate::def_table_select!(
+    alive_proxy_select,
+    "free_proxies",
+    "host, port, type, username, password"
+);
+
+crate::def_table_select!(
+    proxy_status_select,
+    "free_proxies",
+    "status"
+);
+
 type ProxyRow = (String, String, i64, String, Option<String>, Option<String>);
 
 #[inline]
 fn map_proxy_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProxyRow> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-    ))
+    crate::map_row_tuple!(row => (0, 1, 2, 3, 4, 5))
 }
 
 /// Retrieve or assign an alive proxy for a provider or account.
@@ -87,15 +98,15 @@ pub fn get_or_assign_provider_proxy(
     {
         let exists_and_alive = conn
             .query_row(
-                "SELECT host, port, type, username, password FROM free_proxies WHERE id = ?1 AND status = 'alive'",
+                alive_proxy_select!("WHERE id = ?1 AND status = 'alive'"),
                 params![proxy_id],
                 |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
+                    crate::map_row_tuple!(row => (
+                        (0, String),
+                        (1, i64),
+                        (2, String),
+                        (3, Option<String>),
+                        (4, Option<String>),
                     ))
                 },
             )
@@ -130,7 +141,9 @@ pub fn get_or_assign_provider_proxy(
     }
 
     let mut stmt = conn
-        .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
+        .prepare(free_proxy_select!(
+            "WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000"
+        ))
         .map_err(crate::error::map_db_error)?;
 
     let candidate_rows = stmt
@@ -184,7 +197,9 @@ pub fn get_candidate_proxies_for_provider(
     use crate::cooldowns::is_provider_proxy_in_cooldown;
 
     let mut stmt = conn
-        .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
+        .prepare(free_proxy_select!(
+            "WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000"
+        ))
         .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
@@ -225,7 +240,7 @@ pub fn get_proxy_status_by_url(conn: &Connection, url: &str) -> Option<String> {
     let (host, port_str) = host_port.split_once(':')?;
     let port: i64 = port_str.parse().ok()?;
     conn.query_row(
-        "SELECT status FROM free_proxies WHERE host = ?1 AND port = ?2",
+        proxy_status_select!("WHERE host = ?1 AND port = ?2"),
         params![host, port],
         |row| row.get::<_, String>(0),
     )

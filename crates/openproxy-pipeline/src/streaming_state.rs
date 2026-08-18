@@ -358,21 +358,15 @@ impl crate::streaming::ChunkInterceptor for ChunkProcessor<'_> {
         // Record TTFT on the first data-bearing line.
         if state.ttft_ms.is_none() {
             state.ttft_ms = Some(state.first_chunk_time.elapsed().as_millis() as u64);
-            openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                request_id: ctx.req.request_id.to_string(),
-                trace_id: ctx.trace_id.to_string(),
-                provider_id: None,
-                upstream_model_id: None,
-                stage: "streaming".into(),
+            openproxy_types::emit_stage_event!(
+                request_id: ctx.req.request_id,
+                trace_id: ctx.trace_id,
+                stage: "streaming",
                 elapsed_ms: ctx.started.elapsed().as_millis() as u64,
-                connect_ms: Some(ctx.connect_and_send_ms),
+                connect_ms: ctx.connect_and_send_ms,
                 ttft_ms: state.ttft_ms,
-                status_code: Some(200),
-                error: None,
-                stop_reason: None,
-                timestamp: None,
-                endpoint_kind: None,
-            });
+                status_code: 200,
+            );
         }
 
         // Race cancellation guard: if another target already won the

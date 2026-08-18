@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum CompressionMode {
-    #[default]
-    Off,
-    Lite,
-    Rtk,
-    LiteRtk,
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CompressionMode {
+        #[default]
+        Off => "off",
+        Lite => "lite",
+        Rtk => "rtk",
+        LiteRtk => "lite_rtk",
+    }
+    error: "compression_mode"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,11 +53,15 @@ impl Default for StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EncryptionKeySource {
-    Env,
-    File,
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    pub enum EncryptionKeySource {
+        #[default]
+        Env => "env",
+        File => "file",
+    }
+    error: "encryption_key_source"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,19 +284,30 @@ impl_string_enum! {
     error: "cooldown_mode"
 }
 
-impl CooldownMode {
-    pub fn from_db(s: Option<&str>) -> Self {
-        match s {
-            Some("exponential") => Self::Exponential,
-            Some("none" | "disabled" | "off") => Self::None,
-            _ => Self::Flat,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FromDb;
+
+    #[test]
+    fn test_compression_mode_enum() {
+        assert_eq!(CompressionMode::Off.as_str(), "off");
+        assert_eq!(CompressionMode::Lite.as_str(), "lite");
+        assert_eq!(CompressionMode::Rtk.as_str(), "rtk");
+        assert_eq!(CompressionMode::LiteRtk.as_str(), "lite_rtk");
+        assert_eq!(CompressionMode::parse("lite"), Ok(CompressionMode::Lite));
+        assert_eq!(CompressionMode::parse("rtk"), Ok(CompressionMode::Rtk));
+        assert!(CompressionMode::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn test_encryption_key_source_enum() {
+        assert_eq!(EncryptionKeySource::Env.as_str(), "env");
+        assert_eq!(EncryptionKeySource::File.as_str(), "file");
+        assert_eq!(EncryptionKeySource::parse("env"), Ok(EncryptionKeySource::Env));
+        assert_eq!(EncryptionKeySource::parse("file"), Ok(EncryptionKeySource::File));
+        assert!(EncryptionKeySource::parse("invalid").is_err());
+    }
 
     #[test]
     fn test_cooldown_mode_as_str() {

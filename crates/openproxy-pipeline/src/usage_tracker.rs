@@ -512,22 +512,17 @@ impl<'a> UsageRecordBuilder<'a> {
             let error_str: Option<String> = self
                 .err
                 .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()).0);
-            openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                request_id: self.req.request_id.to_string(),
-                trace_id: self.trace_id.clone(),
-                provider_id: None,
-                upstream_model_id: None,
-                stage: stage_label.into(),
+            openproxy_types::emit_stage_event!(
+                request_id: self.req.request_id,
+                trace_id: self.trace_id,
+                stage: stage_label,
                 elapsed_ms: self.total_ms,
                 connect_ms: self.connect_ms,
                 ttft_ms: self.ttft_ms,
-                status_code: Some(self.status_code),
+                status_code: self.status_code,
                 error: error_str,
-
                 stop_reason: self.stop_reason.clone(),
-                timestamp: None,
-                endpoint_kind: None,
-            });
+            );
         }
 
         let err_msg = self.err.map(std::string::ToString::to_string);

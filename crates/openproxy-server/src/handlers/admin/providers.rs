@@ -50,40 +50,37 @@ pub async fn list_providers(
     Ok(Json(enriched))
 }
 
+macro_rules! with_adapter_reload {
+    ($state:expr, $pid:expr, $action:literal, |$w:ident| $body:expr) => {{
+        let res = {
+            let $w = $state.db_pool().writer();
+            $body?
+        };
+        if let Err(e) = $state.rebuild_adapters() {
+            tracing::warn!(
+                provider_id = %$pid,
+                error = %e,
+                concat!("failed to reload adapter registry after ", $action)
+            );
+        } else {
+            tracing::info!(
+                provider_id = %$pid,
+                concat!("reloaded adapter registry after ", $action)
+            );
+        }
+        res
+    }};
+}
+
 pub async fn create_provider(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateProviderInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let is_anonymous = input.auth_type.eq_ignore_ascii_case("none");
-    // Scope the writer guard so it is dropped BEFORE
-    // rebuild_adapters re-acquires the same non-reentrant
-    // parking_lot::Mutex. Holding the guard across
-    // rebuild_adapters deadlocks the Tokio worker thread.
-    let id = {
-        let w = s.db_pool().writer();
-        core_admin::create_provider(&w, input)?
-    };
-    // Hot-reload the in-memory adapter registry so the chat
-    // pipeline can dispatch to the new provider without a
-    // process restart. A failure here is logged but does NOT
-    // roll back the DB write — the operator's intent to add
-    // the provider has already been recorded; the next admin
-    // action (or the next chat request, which already has
-    // DB-fallback via `resolve_adapter`) will pick up the new
-    // adapter on the next `rebuild_adapters`.
-    if let Err(e) = s.rebuild_adapters() {
-        tracing::warn!(
-            provider_id = id.as_str(),
-            error = %e,
-            "failed to reload adapter registry after create_provider; \
-             chat pipeline may still fall through to DB lookup"
-        );
-    } else {
-        tracing::info!(
-            provider_id = id.as_str(),
-            "reloaded adapter registry after creating provider"
-        );
-    }
+    let provider_id = input.id.clone();
+    let id = with_adapter_reload!(s, &provider_id, "create_provider", |w| {
+        core_admin::create_provider(&w, input)
+    });
 
     if is_anonymous {
         spawn_background_provider_refresh(s, id.to_string(), None);
@@ -122,34 +119,10 @@ pub async fn delete_provider(
              deactivate it instead."
         ))));
     }
-    // Scope the writer guard so it is dropped BEFORE
-    // rebuild_adapters re-acquires the same non-reentrant
-    // parking_lot::Mutex. Holding the guard across
-    // rebuild_adapters deadlocks the Tokio worker thread.
     let pid = ProviderId::new(&id);
-    {
-        let w = s.db_pool().writer();
-        core_admin::delete_provider(&w, &pid)?;
-    }
-    // Hot-reload so the chat pipeline drops the
-    // `CustomAdapter` for this provider. For built-in ids we
-    // never get here (the fast-fail above rejects them), so
-    // this branch only fires for custom providers. A failure
-    // here is logged-and-continued: the DB delete has already
-    // committed, and the next admin action or DB-fallback
-    // lookup will pick up the new state.
-    if let Err(e) = s.rebuild_adapters() {
-        tracing::warn!(
-            provider_id = pid.as_str(),
-            error = %e,
-            "failed to reload adapter registry after delete_provider"
-        );
-    } else {
-        tracing::info!(
-            provider_id = pid.as_str(),
-            "reloaded adapter registry after deleting provider"
-        );
-    }
+    with_adapter_reload!(s, pid.as_str(), "delete_provider", |w| {
+        core_admin::delete_provider(&w, &pid)
+    });
     Ok(Json(serde_json::json!({ "deleted": pid.as_str() })))
 }
 
@@ -162,9 +135,10 @@ pub async fn set_provider_active(
         .get("active")
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
-    let w = s.db_pool().writer();
     let provider_id = ProviderId::new(&id);
-    core_admin::set_provider_active(&w, &provider_id, active)?;
+    with_adapter_reload!(s, id.as_str(), "set_provider_active", |w| {
+        core_admin::set_provider_active(&w, &provider_id, active)
+    });
     Ok(Json(serde_json::json!({ "id": id, "active": active })))
 }
 
@@ -173,32 +147,10 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(body): Json<core_admin::UpdateProviderInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Scope the writer guard so it is dropped BEFORE
-    // rebuild_adapters re-acquires the same non-reentrant
-    // parking_lot::Mutex. Holding the guard across
-    // rebuild_adapters deadlocks the Tokio worker thread.
     let provider_id = ProviderId::new(&id);
-    {
-        let w = s.db_pool().writer();
-        core_admin::update_provider(&w, &provider_id, &body)?;
-    }
-    // Hot-reload so the chat pipeline sees the updated
-    // `base_url`/`auth_type`/`extra_headers` on the
-    // `CustomAdapter` for this provider. See the comment on
-    // `create_provider` for why we log-and-continue rather
-    // than roll back.
-    if let Err(e) = s.rebuild_adapters() {
-        tracing::warn!(
-            provider_id = id,
-            error = %e,
-            "failed to reload adapter registry after update_provider"
-        );
-    } else {
-        tracing::info!(
-            provider_id = id,
-            "reloaded adapter registry after updating provider"
-        );
-    }
+    with_adapter_reload!(s, id.as_str(), "update_provider", |w| {
+        core_admin::update_provider(&w, &provider_id, &body)
+    });
     Ok(Json(serde_json::json!({ "id": id })))
 }
 

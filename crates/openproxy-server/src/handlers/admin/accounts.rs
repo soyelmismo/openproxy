@@ -44,13 +44,15 @@ pub async fn create_account(
     Ok(Json(serde_json::json!({ "id": id.0 })))
 }
 
-pub async fn delete_account(
-    State(s): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let id = AccountId::new(id);
-    s.services().accounts.delete(id)?;
-    Ok(Json(serde_json::json!({ "deleted": id.0 })))
+crate::admin_entity_action_handler! {
+    pub async fn delete_account(
+        State(s): State<AppState>,
+        Path(id): Path<i64>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        let id = AccountId::new(id);
+        s.services().accounts.delete(id)?;
+        Ok(Json(serde_json::json!({ "deleted": id.0 })))
+    }
 }
 
 pub async fn set_account_health(

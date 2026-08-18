@@ -308,6 +308,210 @@ impl UpstreamDispatcher {
             .record_and_fail_with_trace_id_and_partial(params)
     }
 
+    pub(crate) async fn handle_upstream_error(
+        &self,
+        err: UpstreamError,
+        req: PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        dctx: &DispatchContext<'_>,
+        connect_and_send_ms: u64,
+    ) -> PipelineResult {
+        macro_rules! fail_with_proxy_rotation {
+            ($status:expr, $body:expr $(,)?) => {{
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        target.account_id,
+                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                        None,
+                    )
+                    .await;
+                let core_err = CoreError::UpstreamError {
+                    status: $status,
+                    provider: target.provider_id.to_string(),
+                    model: dctx.model.model_id.as_str().to_string(),
+                    body: $body,
+                    is_proxy_rotated,
+                };
+                self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &core_err,
+                        Some(connect_and_send_ms),
+                        None,
+                        core_err.http_status(),
+                    ),
+                )
+            }};
+        }
+
+        match err {
+            UpstreamError::Cancel => {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    elapsed_ms = connect_and_send_ms,
+                    "client cancelled during upstream send; aborting attempt"
+                );
+                let core_err =
+                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
+                self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &core_err,
+                        Some(connect_and_send_ms),
+                        None,
+                        core_err.http_status(),
+                    ),
+                )
+            }
+            UpstreamError::Timeout(phase) => {
+                let phase_label = phase.as_str();
+                let config_hint = phase.config_hint();
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    phase = %phase,
+                    elapsed_ms = connect_and_send_ms,
+                    config_hint = config_hint,
+                    "upstream phase timed out; aborting attempt"
+                );
+                fail_with_proxy_rotation!(
+                    504,
+                    format!(
+                        "upstream phase `{phase_label}` timed out after {connect_and_send_ms}ms (config: {config_hint})"
+                    ),
+                )
+            }
+            UpstreamError::Connection(msg)
+            | UpstreamError::Tls(msg)
+            | UpstreamError::Http(msg)
+            | UpstreamError::Decode(msg)
+            | UpstreamError::Invalid(msg) => {
+                fail_with_proxy_rotation!(502, format!("upstream connection error: {msg}"))
+            }
+            _ => fail_with_proxy_rotation!(502, "unknown upstream error".to_string()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn handle_non_2xx_response(
+        &self,
+        status_code: u16,
+        retry_after_header: Option<&str>,
+        body_str: String,
+        req: PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        _model: &Model,
+        dctx: &DispatchContext<'_>,
+        connect_and_send_ms: u64,
+        ttft_ms: Option<u64>,
+    ) -> PipelineResult {
+        let retry_after_ms = retry_after_header.and_then(parse_retry_after_ms);
+        let is_rate_limited_status =
+            status_code == 429 || status_code == 408 || status_code == 503;
+        let retry_ms = retry_after_ms.unwrap_or(300_000);
+
+        let is_proxy_rotated = if is_rate_limited_status {
+            self.check_and_trigger_proxy_rotation(
+                &target.provider_id,
+                target.account_id,
+                req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                Some(retry_ms),
+            )
+            .await
+        } else {
+            self.check_and_trigger_proxy_rotation(
+                &target.provider_id,
+                target.account_id,
+                req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
+                None,
+            )
+            .await
+        };
+
+        if (status_code == 401 || status_code == 403)
+            && let Some(aid) = target.account_id
+        {
+            let provider_id_str = target.provider_id.to_string();
+            let model_id_str = dctx.model.model_id.as_str().to_string();
+            let dedup_key = format!("account_invalid:{}", aid.0);
+            let payload = serde_json::json!({
+                "code": "account_invalid",
+                "message": format!(
+                    "Account {} on {} rejected by upstream (HTTP {})",
+                    aid.0, provider_id_str, status_code,
+                ),
+                "provider_id": &provider_id_str,
+                "details": {
+                    "account_id": aid.0,
+                    "provider_id": &provider_id_str,
+                    "model_id": &model_id_str,
+                    "status_code": status_code,
+                },
+            });
+            let repo = Arc::clone(&self.tracker.repo);
+            let provider_id_str_clone = provider_id_str.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = repo.insert_and_broadcast_notification(
+                    "system",
+                    &payload,
+                    Some(&dedup_key),
+                    Some(&provider_id_str_clone),
+                );
+            })
+            .await
+            .ok();
+        }
+
+        let err = if is_rate_limited_status {
+            CoreError::RateLimited {
+                provider: target.provider_id.to_string(),
+                retry_after_ms: retry_ms,
+                is_proxy_rotated,
+            }
+        } else {
+            if status_code == 400 && body_str.contains("2013") {
+                tracing::warn!(
+                    status_code = status_code,
+                    provider = %target.provider_id,
+                    model = %dctx.model.model_id.as_str(),
+                    error_body = %body_str,
+                    openai_request_messages_count = req.openai_request.messages.len(),
+                    openai_request_tools_count = req.openai_request.tools.as_ref().map_or(0, std::vec::Vec::len),
+                    "MiniMax 2013 error: tool_call/tool_result mismatch. \
+                     Enable RUST_LOG=openproxy_core::translation=debug to see the \
+                     translated Anthropic message structure."
+                );
+            }
+            CoreError::UpstreamError {
+                status: status_code,
+                provider: target.provider_id.to_string(),
+                model: dctx.model.model_id.as_str().to_string(),
+                body: body_str,
+                is_proxy_rotated,
+            }
+        };
+
+        self.record_and_fail(
+            req,
+            combo,
+            target,
+            dctx.fail_ctx_code(&err, Some(connect_and_send_ms), ttft_ms, status_code),
+        )
+    }
+
     pub(crate) async fn dispatch_upstream(&self, params: DispatchParams<'_>) -> PipelineResult {
         let DispatchParams {
             target,
@@ -661,131 +865,19 @@ impl UpstreamDispatcher {
         // `e.to_string()` mapping 1-to-1, except we now have
         // per-phase `UpstreamPhase` attribution and the `Cancel`
         // variant.
-        let response_result: std::result::Result<
-            openproxy_adapters::upstream::UpstreamResponse,
-            UpstreamError,
-        > = match result {
-            Ok(r) => Ok(r),
-            Err(UpstreamError::Cancel) => {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    elapsed_ms = connect_and_send_ms,
-                    "client cancelled during upstream send; aborting attempt"
-                );
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(
-                        &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
-                        Some(connect_and_send_ms),
-                        None,
-                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                            .http_status(),
-                    ),
-                );
-            }
-            Err(UpstreamError::Timeout(phase)) => {
-                let is_proxy_rotated = self
-                    .check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        target.account_id,
-                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                        None,
+        let response = match result {
+            Ok(r) => r,
+            Err(err) => {
+                return self
+                    .handle_upstream_error(
+                        err,
+                        req,
+                        combo,
+                        target,
+                        &dctx,
+                        connect_and_send_ms,
                     )
                     .await;
-                let (phase_label, config_hint) = match phase {
-                    openproxy_adapters::upstream::UpstreamPhase::Dns => ("dns", "connect_ms"),
-                    openproxy_adapters::upstream::UpstreamPhase::Dial => ("dial", "connect_ms"),
-                    openproxy_adapters::upstream::UpstreamPhase::Tls => ("tls", "connect_ms"),
-                    openproxy_adapters::upstream::UpstreamPhase::Write => {
-                        ("write", "request_send_ms")
-                    }
-                    openproxy_adapters::upstream::UpstreamPhase::Headers => ("headers", "ttft_ms"),
-                    openproxy_adapters::upstream::UpstreamPhase::Body => ("body", "idle_chunk_ms"),
-                    openproxy_adapters::upstream::UpstreamPhase::Total => ("total", "total_ms"),
-                };
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    phase = %phase,
-                    elapsed_ms = connect_and_send_ms,
-                    config_hint = config_hint,
-                    "upstream phase timed out; aborting attempt"
-                );
-                let err = CoreError::UpstreamError {
-                    status: 504,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: format!(
-                        "upstream phase `{phase_label}` timed out after {connect_and_send_ms}ms (config: {config_hint})"
-                    ),
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
-                );
-            }
-            Err(
-                UpstreamError::Connection(msg)
-                | UpstreamError::Tls(msg)
-                | UpstreamError::Http(msg)
-                | UpstreamError::Decode(msg)
-                | UpstreamError::Invalid(msg),
-            ) => {
-                let is_proxy_rotated = self
-                    .check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        target.account_id,
-                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                        None,
-                    )
-                    .await;
-                let err = CoreError::UpstreamError {
-                    status: 502,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: format!("upstream connection error: {msg}"),
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
-                );
-            }
-            Err(_) => {
-                let is_proxy_rotated = self
-                    .check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        target.account_id,
-                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                        None,
-                    )
-                    .await;
-                let err = CoreError::UpstreamError {
-                    status: 502,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: "unknown upstream error".to_string(),
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
-                );
             }
         };
 
@@ -799,25 +891,15 @@ impl UpstreamDispatcher {
             // always populated here. Snapshot once per emission so
             // a concurrent retry on a different worker doesn't race
             // mid-publish.
-            openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                request_id: req.request_id.to_string(),
-                trace_id: trace_id.clone(),
-                provider_id: None,
-                upstream_model_id: None,
-                stage: stage.into(),
+            openproxy_types::emit_stage_event!(
+                request_id: req.request_id,
+                trace_id: trace_id,
+                stage: stage,
                 elapsed_ms: started.elapsed().as_millis() as u64,
-                connect_ms: Some(connect_and_send_ms),
-                ttft_ms: None,
-                status_code: Some(status),
+                connect_ms: connect_and_send_ms,
+                status_code: status,
                 error: err,
-                stop_reason: None,
-                timestamp: None,
-                endpoint_kind: None,
-            });
-        };
-
-        let Ok(response) = response_result else {
-            unreachable!("error variants are handled above with early return");
+            );
         };
 
         let status_code = response.status.as_u16();
@@ -998,112 +1080,25 @@ impl UpstreamDispatcher {
         // instead of using the fixed exponential backoff. The default
         // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
-            let retry_after_ms: Option<u64> = response_headers
+            let retry_after_header = response_headers
                 .as_ref()
                 .and_then(|h| h.get("retry-after").or_else(|| h.get("Retry-After")))
-                .and_then(|v| parse_retry_after_ms(v));
-            let is_rate_limited_status =
-                status_code == 429 || status_code == 408 || status_code == 503;
-            let retry_ms = retry_after_ms.unwrap_or(300_000);
-
-            let is_proxy_rotated = if is_rate_limited_status {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    target.account_id,
-                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                    Some(retry_ms),
-                )
-                .await
-            } else {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    target.account_id,
-                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-                    None,
-                )
-                .await
-            };
+                .map(String::as_str);
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-            if is_rate_limited_status {
-                let err = CoreError::RateLimited {
-                    provider: target.provider_id.to_string(),
-                    retry_after_ms: retry_ms,
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
+            return self
+                .handle_non_2xx_response(
+                    status_code,
+                    retry_after_header,
+                    body_str,
                     req,
                     combo,
                     target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                );
-            }
-            // G2.3: surface an `account_invalid` system notification
-            // when the upstream rejects the account's credentials
-            // (401 Unauthorized / 403 Forbidden). Other 4xx codes
-            // (400 validation, 404 model gone, 408 timeout handled
-            // above) are NOT account-level rejections and stay
-            // silent. We fire one notification PER 4xx response —
-            // the per-account dedup key collapses repeats within
-            // 24h so a stuck upstream doesn't flood the tray, but a
-            // different account hitting the same upstream 401 still
-            // gets surfaced.
-            //
-            // Only fire when the target carries an `account_id`
-            // (anonymous/account-rotation targets don't have a
-            // specific account to flag).
-            if (status_code == 401 || status_code == 403)
-                && let Some(aid) = target.account_id
-            {
-                let provider_id_str = target.provider_id.to_string();
-                let model_id_str = model.model_id.as_str().to_string();
-                let dedup_key = format!("account_invalid:{}", aid.0);
-                let payload = serde_json::json!({
-                    "code": "account_invalid",
-                    "message": format!(
-                        "Account {} on {} rejected by upstream (HTTP {})",
-                        aid.0, provider_id_str, status_code,
-                    ),
-                    "provider_id": &provider_id_str,
-                    "details": {
-                        "account_id": aid.0,
-                        "provider_id": &provider_id_str,
-                        "model_id": &model_id_str,
-                        "status_code": status_code,
-                    },
-                });
-                let repo = Arc::clone(&self.tracker.repo);
-                let provider_id_str_clone = provider_id_str.clone();
-                tokio::task::spawn_blocking(move || {
-                    let _ = repo.insert_and_broadcast_notification(
-                        "system",
-                        &payload,
-                        Some(&dedup_key),
-                        Some(&provider_id_str_clone),
-                    );
-                })
-                .await
-                .ok();
-            }
-            let err = CoreError::UpstreamError {
-                status: status_code,
-                provider: target.provider_id.to_string(),
-                model: model.model_id.as_str().to_string(),
-                body: body_str,
-                is_proxy_rotated,
-            };
-            return self.record_and_fail(
-                req,
-                combo,
-                target,
-                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), status_code),
-            );
+                    model,
+                    &dctx,
+                    connect_and_send_ms,
+                    Some(ttft_ms),
+                )
+                .await;
         }
 
         // R2 fix: 2xx non-streaming success. The non-streaming path
@@ -1119,36 +1114,23 @@ impl UpstreamDispatcher {
         // previously skipped this, but now that non-streaming clients
         // also go through the streaming path, we need it for the
         // stage sequence test to pass.
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: req.request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: None,
-            upstream_model_id: None,
-            stage: "waiting_ttft".into(),
+        openproxy_types::emit_stage_event!(
+            request_id: req.request_id,
+            trace_id: trace_id,
+            stage: "waiting_ttft",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: Some(connect_and_send_ms),
-            ttft_ms: None,
-            status_code: Some(status_code),
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: None,
-        });
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: req.request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: None,
-            upstream_model_id: None,
-            stage: "streaming".into(),
+            connect_ms: connect_and_send_ms,
+            status_code: status_code,
+        );
+        openproxy_types::emit_stage_event!(
+            request_id: req.request_id,
+            trace_id: trace_id,
+            stage: "streaming",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: Some(connect_and_send_ms),
-            ttft_ms: Some(ttft_ms),
-            status_code: Some(status_code),
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: None,
-        });
+            connect_ms: connect_and_send_ms,
+            ttft_ms: ttft_ms,
+            status_code: status_code,
+        );
 
         // Parse format-specific response
         let response_body_raw: serde_json::Value = match serde_json::from_slice(&body_bytes) {
@@ -1732,176 +1714,29 @@ impl UpstreamDispatcher {
         // doesn't have a "total" pre-migration mapping (it was
         // `phase: "total"` from legacy whole-request timeout),
         // so `Body` here maps to the same `"total"` label to keep
-        // the dashboards consistent.
-        let response_result: std::result::Result<
-            openproxy_adapters::upstream::UpstreamResponse,
-            UpstreamError,
-        > = match result {
-            Ok(r) => Ok(r),
-            Err(UpstreamError::Cancel) => {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    elapsed_ms = connect_and_send_ms,
-                    "client cancelled during upstream streaming send; aborting attempt"
-                );
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(
-                        &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
-                        Some(connect_and_send_ms),
-                        None,
-                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                            .http_status(),
-                    ),
-                );
-            }
-            Err(UpstreamError::Timeout(phase)) => {
-                let is_proxy_rotated = self
-                    .check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        target.account_id,
-                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                        None,
-                    )
-                    .await;
-                let phase_label = match phase {
-                    openproxy_adapters::upstream::UpstreamPhase::Dns => "dns",
-                    openproxy_adapters::upstream::UpstreamPhase::Dial => "dial",
-                    openproxy_adapters::upstream::UpstreamPhase::Tls => "tls",
-                    openproxy_adapters::upstream::UpstreamPhase::Write => "write",
-                    openproxy_adapters::upstream::UpstreamPhase::Headers => "headers",
-                    openproxy_adapters::upstream::UpstreamPhase::Body => "body",
-                    openproxy_adapters::upstream::UpstreamPhase::Total => "total",
-                };
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    phase = %phase,
-                    elapsed_ms = connect_and_send_ms,
-                    "upstream phase timed out; aborting streaming attempt"
-                );
-                let err = CoreError::UpstreamError {
-                    status: 504,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: format!(
-                        "upstream phase `{phase_label}` timed out after {connect_and_send_ms}ms"
-                    ),
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
-                );
-            }
-            Err(
-                UpstreamError::Connection(msg)
-                | UpstreamError::Tls(msg)
-                | UpstreamError::Http(msg)
-                | UpstreamError::Decode(msg)
-                | UpstreamError::Invalid(msg),
-            ) => {
-                let is_proxy_rotated = self
-                    .check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        target.account_id,
-                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                        None,
-                    )
-                    .await;
-                let err = CoreError::UpstreamError {
-                    status: 502,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: format!("upstream connection error: {msg}"),
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
-                );
-            }
-            Err(_) => {
-                let is_proxy_rotated = self
-                    .check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        target.account_id,
-                        req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                        None,
-                    )
-                    .await;
-                let err = CoreError::UpstreamError {
-                    status: 502,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: "unknown upstream error".to_string(),
-                    is_proxy_rotated,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
-                );
-            }
-        };
-
-        // `response_result` is `Ok` here because every error arm
-        // above already returned. The `match` is needed to satisfy
-        // the borrow checker (we move out of the binding), but
-        // we make the `Err` arm unreachable so the compiler is
-        // happy.
-        let response = match response_result {
+            let response = match result {
             Ok(r) => r,
-            Err(e) => unreachable!(
-                "dispatch_upstream_streaming: response_result was expected to be Ok after error-mapping match; got {:?}",
-                e
-            ),
+            Err(err) => {
+                return self
+                    .handle_upstream_error(
+                        err,
+                        req,
+                        combo,
+                        target,
+                        &dctx,
+                        connect_and_send_ms,
+                    )
+                    .await;
+            }
         };
 
         let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
-            let retry_after_ms: Option<u64> = response
+            let retry_after_header = response
                 .headers
                 .get("retry-after")
                 .or_else(|| response.headers.get("Retry-After"))
-                .and_then(|v| v.to_str().ok())
-                .and_then(parse_retry_after_ms);
-            let is_rate_limited_status =
-                status_code == 429 || status_code == 408 || status_code == 503;
-            let retry_ms = retry_after_ms.unwrap_or(300_000);
-
-            let is_proxy_rotated = if is_rate_limited_status {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    target.account_id,
-                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                    Some(retry_ms),
-                )
-                .await
-            } else {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    target.account_id,
-                    req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-                    None,
-                )
-                .await
-            };
+                .and_then(|v| v.to_str().ok());
             // Error responses should not stall the pipeline. We give the upstream
             // 5 seconds to send the error body; if it stalls, we drop the body
             // and proceed with the error status code. This prevents "ghost" requests
@@ -1915,88 +1750,20 @@ impl UpstreamDispatcher {
                 Ok(Ok(b)) => String::from_utf8_lossy(&b).to_string(),
                 _ => String::new(),
             };
-            // G2.3: surface `account_invalid` on 401/403 (mirrors the
-            // non-streaming path's hook above). The streaming path
-            // can hit this branch BEFORE any byte is streamed to the
-            // client — the upstream rejects the auth on the request
-            // headers, returns a non-2xx with a body, and we surface
-            // it as `UpstreamError`. See the non-streaming hook for
-            // the full rationale.
-            if (status_code == 401 || status_code == 403)
-                && let Some(aid) = target.account_id
-            {
-                let provider_id_str = target.provider_id.to_string();
-                let model_id_str = model.model_id.as_str().to_string();
-                let dedup_key = format!("account_invalid:{}", aid.0);
-                let payload = serde_json::json!({
-                    "code": "account_invalid",
-                    "message": format!(
-                        "Account {} on {} rejected by upstream (HTTP {})",
-                        aid.0, provider_id_str, status_code,
-                    ),
-                    "provider_id": &provider_id_str,
-                    "details": {
-                        "account_id": aid.0,
-                        "provider_id": &provider_id_str,
-                        "model_id": &model_id_str,
-                        "status_code": status_code,
-                    },
-                });
-                let repo = Arc::clone(&self.tracker.repo);
-                let provider_id_str_clone = provider_id_str.clone();
-                tokio::task::spawn_blocking(move || {
-                    let _ = repo.insert_and_broadcast_notification(
-                        "system",
-                        &payload,
-                        Some(&dedup_key),
-                        Some(&provider_id_str_clone),
-                    );
-                })
-                .await
-                .ok();
-            }
-            let err = if is_rate_limited_status {
-                CoreError::RateLimited {
-                    provider: target.provider_id.to_string(),
-                    retry_after_ms: retry_ms,
-                    is_proxy_rotated,
-                }
-            } else {
-                // Diagnostic: when MiniMax returns a 400 with error
-                // code 2013 ("tool call and result not match" or
-                // "tool call result does not follow tool call"), log
-                // the full error body and the request's tool-related
-                // metadata so we can diagnose the translation bug.
-                // This is the most common MiniMax failure and the
-                // error message alone doesn't tell us which
-                // tool_use/tool_result pair is the problem.
-                if status_code == 400 && body_str.contains("2013") {
-                    tracing::warn!(
-                        status_code = status_code,
-                        provider = %target.provider_id,
-                        model = %model.model_id.as_str(),
-                        error_body = %body_str,
-                        openai_request_messages_count = req.openai_request.messages.len(),
-                        openai_request_tools_count = req.openai_request.tools.as_ref().map_or(0, std::vec::Vec::len),
-                        "MiniMax 2013 error: tool_call/tool_result mismatch. \
-                         Enable RUST_LOG=openproxy_core::translation=debug to see the \
-                         translated Anthropic message structure."
-                    );
-                }
-                CoreError::UpstreamError {
-                    status: status_code,
-                    provider: target.provider_id.to_string(),
-                    model: model.model_id.as_str().to_string(),
-                    body: body_str,
-                    is_proxy_rotated,
-                }
-            };
-            return self.record_and_fail(
-                req,
-                combo,
-                target,
-                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, status_code),
-            );
+            return self
+                .handle_non_2xx_response(
+                    status_code,
+                    retry_after_header,
+                    body_str,
+                    req,
+                    combo,
+                    target,
+                    model,
+                    &dctx,
+                    connect_and_send_ms,
+                    None,
+                )
+                .await;
         }
 
         let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -2007,21 +1774,14 @@ impl UpstreamDispatcher {
         // body streaming next. This matches the non-streaming path's
         // stage sequence (started → connecting → waiting_ttft →
         // streaming → completed).
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: req.request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: None,
-            upstream_model_id: None,
-            stage: "waiting_ttft".into(),
+        openproxy_types::emit_stage_event!(
+            request_id: req.request_id,
+            trace_id: trace_id,
+            stage: "waiting_ttft",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: Some(connect_and_send_ms),
-            ttft_ms: None,
-            status_code: Some(status_code),
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: None,
-        });
+            connect_ms: connect_and_send_ms,
+            status_code: status_code,
+        );
 
         // The first SSE chunk emits the `streaming` stage event
         // (see the `if ttft_ms.is_none()` branch below) so we know

@@ -10,14 +10,32 @@ pub struct Cooldown {
     pub updated_at: String,
 }
 
+crate::def_table_select!(
+    target_cooldown_select,
+    "target_cooldowns tc",
+    "tc.combo_target_id, tc.cooldown_until, tc.reason, tc.failure_count, tc.updated_at"
+);
+
+crate::def_table_select!(
+    provider_proxy_cooldown_select,
+    "provider_proxy_cooldowns",
+    "cooldown_until"
+);
+
+crate::def_table_select!(
+    target_cooldown_failure_count_select,
+    "target_cooldowns",
+    "failure_count"
+);
+
 impl crate::crud::FromRow for Cooldown {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
-        Ok(Cooldown {
-            combo_target_id: ComboTargetId(row.get(0)?),
-            cooldown_until: row.get(1)?,
-            reason: row.get(2)?,
-            failure_count: row.get(3)?,
-            updated_at: row.get(4)?,
+        crate::map_row_struct!(row, Cooldown {
+            combo_target_id: @id(0, ComboTargetId),
+            cooldown_until: 1,
+            reason: 2,
+            failure_count: @u32(3),
+            updated_at: 4,
         })
     }
 }
@@ -28,10 +46,9 @@ pub fn list_for_combo(
 ) -> openproxy_types::error::Result<Vec<Cooldown>> {
     crate::db_query_all!(
         conn,
-        "SELECT tc.combo_target_id, tc.cooldown_until, tc.reason, tc.failure_count, tc.updated_at
-         FROM target_cooldowns tc
-         INNER JOIN combo_targets ct ON ct.id = tc.combo_target_id
-         WHERE ct.combo_id = ?1",
+        target_cooldown_select!(
+            "INNER JOIN combo_targets ct ON ct.id = tc.combo_target_id WHERE ct.combo_id = ?1"
+        ),
         rusqlite::params![combo_id.0],
         format!("list cooldowns for combo {}", combo_id.0)
     )
@@ -55,9 +72,7 @@ pub fn get_for_target(
 ) -> openproxy_types::error::Result<Option<Cooldown>> {
     crate::db_query_one!(
         conn,
-        "SELECT combo_target_id, cooldown_until, reason, failure_count, updated_at
-         FROM target_cooldowns
-         WHERE combo_target_id = ?1",
+        target_cooldown_select!("WHERE tc.combo_target_id = ?1"),
         rusqlite::params![target_id.0],
         format!("get cooldown for target {}", target_id.0)
     )
@@ -106,10 +121,7 @@ pub fn add_provider_proxy_cooldown(
             created_at = datetime('now')",
         rusqlite::params![provider_id, proxy_id, until_str],
     )
-    .map_err(|e| openproxy_types::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -120,8 +132,7 @@ pub fn is_provider_proxy_in_cooldown(
 ) -> bool {
     let Ok(Some(until_str)) = conn
         .query_row(
-            "SELECT cooldown_until FROM provider_proxy_cooldowns \
-             WHERE provider_id = ?1 AND proxy_id = ?2",
+            provider_proxy_cooldown_select!("WHERE provider_id = ?1 AND proxy_id = ?2"),
             rusqlite::params![provider_id, proxy_id],
             |row| row.get::<_, String>(0),
         )
@@ -156,7 +167,7 @@ pub fn record_cooldown(
 
     let current_count: u32 = conn
         .query_row(
-            "SELECT failure_count FROM target_cooldowns WHERE combo_target_id = ?1",
+            target_cooldown_failure_count_select!("WHERE combo_target_id = ?1"),
             rusqlite::params![target_id.0],
             |row| row.get(0),
         )

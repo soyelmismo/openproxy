@@ -242,7 +242,7 @@ fn is_build_output(lines: &[&str]) -> bool {
     // Scan up to 200 lines for build-output patterns — test output
     // often has a header in the first few lines and errors/summaries
     // at the end, so scanning only 50 lines misses the error signals.
-    let head: Vec<&str> = lines.iter().take(200).copied().collect();
+    let head = &lines[..lines.len().min(200)];
     let mut matches = 0;
 
     // pytest

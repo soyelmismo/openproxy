@@ -1,7 +1,6 @@
 use super::{
     AccountId, ApiError, AppState, Arc, ComboId, CoreError, Deserialize, ModelRowId, ProviderId,
     RequestId, TraceId, adapters, core_accounts, core_models, core_oauth, core_providers,
-    refresh_oauth_if_needed,
 };
 use axum::{
     Json,
@@ -35,13 +34,14 @@ pub async fn bulk_toggle_models(
     })))
 }
 
-pub async fn delete_model(
-    State(s): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let removed = core_models::delete(&w, ModelRowId(id))?;
-    Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
+crate::admin_entity_action_handler! {
+    pub async fn delete_model(
+        State(s) with writer(w),
+        Path(id): Path<i64>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        let removed = core_models::delete(&w, ModelRowId(id))?;
+        Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
+    }
 }
 
 pub async fn update_model(
@@ -1006,15 +1006,9 @@ pub(crate) async fn run_refresh(
     q: RefreshQuery,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let row_id = ModelRowId(id);
-    let ttl_seconds = q.ttl_seconds.unwrap_or(3_600);
-
-    // 1. Look up the model to find the provider.
     let provider_id = {
-        let w = s.db_pool().writer();
-        let found = match core_models::get_by_row_id(&w, row_id) {
-            Ok(opt) => opt,
-            Err(e) => return Err(ApiError(e)),
-        };
+        let r = s.db_pool().reader();
+        let found = core_models::get_by_row_id(&r, row_id)?;
         match found {
             Some(m) => m.provider_id,
             None => {
@@ -1026,111 +1020,11 @@ pub(crate) async fn run_refresh(
         }
     };
 
-    // 2. Find the adapter for that provider. Check built-in adapters
-    //    first, then fall back to constructing a CustomAdapter from the
-    //    DB row.
-    let adapter = match resolve_adapter(&s, &provider_id, s.adapters().as_slice()) {
-        Ok(a) => a,
-        Err(e) => return Err(ApiError(e)),
+    let provider_q = super::providers::ProviderRefreshQuery {
+        ttl_seconds: q.ttl_seconds,
+        account_id: q.account_id,
     };
-
-    // 3. Resolve an account and decrypt/refresh its credential.
-    let selected_account_id = {
-        let w = s.db_pool().writer();
-
-        let provider_row = match core_providers::get(&w, &provider_id) {
-            Ok(p) => p,
-            Err(e) => return Err(ApiError(e)),
-        };
-        let accounts_list =
-            match core_accounts::list(&w, Some(&provider_id), s.master_key().as_ref()) {
-                Ok(l) => l,
-                Err(e) => return Err(ApiError(e)),
-            };
-
-        let is_anonymous = match &provider_row {
-            Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
-            _ if accounts_list.is_empty() => true,
-            _ => false,
-        };
-
-        if is_anonymous {
-            None
-        } else {
-            match q.account_id {
-                Some(aid) => Some(AccountId::new(aid)),
-                None => accounts_list.first().map(|a| a.id),
-            }
-        }
-    };
-
-    let api_key = match selected_account_id {
-        Some(account_id) => {
-            let account = {
-                let w = s.db_pool().writer();
-                match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
-                    Ok(Some(a)) => a,
-                    Ok(None) => {
-                        return Err(ApiError(CoreError::AccountNotFound(account_id.0)));
-                    }
-                    Err(e) => return Err(ApiError(e)),
-                }
-            };
-            if account.auth_type == "oauth" {
-                refresh_oauth_if_needed(&s, account, &provider_id).await
-            } else {
-                let w = s.db_pool().writer();
-                match core_accounts::decrypt_api_key(&w, account_id, s.master_key().as_ref()) {
-                    Ok(k) => k,
-                    Err(e) => return Err(ApiError(e)),
-                }
-            }
-        }
-        None => String::new(),
-    };
-
-    // Resolve account label for CloudFlare / label-based providers.
-    let account_label = match selected_account_id {
-        Some(account_id) => {
-            let w = s.db_pool().writer();
-            match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
-                Ok(Some(a)) => a.label.unwrap_or_default(),
-                _ => String::new(),
-            }
-        }
-        None => String::new(),
-    };
-    // 4. Run the refresh. `core_admin::refresh_models` takes the connection
-    //    by value (not by reference) so the future is `Send`-able
-    //    end to end: `rusqlite::Connection: !Sync` (it has internal
-    //    `RefCell`s), and a `&Connection` borrowed across the await
-    //    would propagate `!Send` to the outer future, breaking axum's
-    //    `Handler` trait. We open a fresh handle via `DbPool::open_connection`
-    //    and pass it by value; the writer mutex is unaffected.
-    let conn_for_refresh = match s.db_pool().open_connection() {
-        Ok(c) => c,
-        Err(e) => return Err(ApiError(e)),
-    };
-    let upsert = match core_admin::refresh_models(
-        conn_for_refresh,
-        &provider_id,
-        &api_key,
-        &adapter,
-        s.upstream_client(),
-        ttl_seconds,
-        &account_label,
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => return Err(ApiError(e)),
-    };
-
-    Ok(Json(serde_json::json!({
-        "touched": upsert.touched,
-        "new_model_ids": upsert.new_model_ids,
-        "provider_id": provider_id.as_str(),
-    })))
+    super::providers::run_provider_refresh(s, provider_id.as_str(), provider_q).await
 }
 
 pub(crate) fn resolve_adapter(

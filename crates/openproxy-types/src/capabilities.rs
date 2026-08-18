@@ -50,6 +50,17 @@ impl ModelCapabilities {
     }
 }
 
+use std::borrow::Cow;
+
+#[inline]
+fn to_lower_cow(s: &str) -> Cow<'_, str> {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
 pub const STT_KEYWORDS: &[&str] = &[
     "whisper",
     "asr",
@@ -62,6 +73,11 @@ pub const STT_KEYWORDS: &[&str] = &[
 ];
 
 pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
+    let lower = to_lower_cow(model_id);
+    infer_capabilities_lower(&lower)
+}
+
+fn infer_capabilities_lower(lower: &str) -> ModelCapabilities {
     const VISION_KW: &[&str] = &[
         "gpt-4o",
         "gpt-4-vision",
@@ -93,7 +109,6 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
         "deepseek-r1",
     ];
 
-    let lower = model_id.to_lowercase();
     let mut caps = ModelCapabilities::empty();
 
     if VISION_KW.iter().any(|k| lower.contains(k)) {
@@ -128,8 +143,15 @@ pub fn infer_input_modalities_for_model(
     model_id: &str,
     caps: &ModelCapabilities,
 ) -> Vec<&'static str> {
-    let m_type = infer_model_type(model_id);
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
+    infer_input_modalities_for_model_lower(&lower, caps)
+}
+
+fn infer_input_modalities_for_model_lower(
+    lower: &str,
+    caps: &ModelCapabilities,
+) -> Vec<&'static str> {
+    let m_type = infer_model_type_lower(lower);
 
     match m_type {
         "embedding" => {
@@ -184,8 +206,12 @@ pub fn infer_input_modalities_for_model(
 }
 
 pub fn infer_output_modalities(model_id: &str) -> Vec<&'static str> {
-    let m_type = infer_model_type(model_id);
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
+    infer_output_modalities_lower(&lower)
+}
+
+fn infer_output_modalities_lower(lower: &str) -> Vec<&'static str> {
+    let m_type = infer_model_type_lower(lower);
 
     match m_type {
         "embedding" => vec!["embedding"],
@@ -251,7 +277,7 @@ pub fn infer_context_length(model_id: &str) -> Option<i64> {
         ("mistral-large", 128_000),
     ];
 
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
     find_substring_match(&lower, KNOWN)
 }
 
@@ -267,7 +293,7 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
         ("deepseek", 8_192),
     ];
 
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
     find_substring_match(&lower, KNOWN)
 }
 
@@ -410,8 +436,11 @@ pub const IMAGE_KEYWORDS: &[&str] = &[
 ];
 
 pub fn infer_model_type(model_id: &str) -> &'static str {
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
+    infer_model_type_lower(&lower)
+}
 
+fn infer_model_type_lower(lower: &str) -> &'static str {
     // 1. Rerank models (highest priority unambiguous keyword)
     if RERANK_KEYWORDS.iter().any(|k| lower.contains(k)) {
         return "rerank";
@@ -462,18 +491,20 @@ fn serialize_modalities(mods: &[&str]) -> String {
 }
 
 pub fn infer_input_modalities_json(model_id: &str) -> String {
-    let caps = infer_capabilities(model_id);
-    let mods = infer_input_modalities_for_model(model_id, &caps);
+    let lower = to_lower_cow(model_id);
+    let caps = infer_capabilities_lower(&lower);
+    let mods = infer_input_modalities_for_model_lower(&lower, &caps);
     serialize_modalities(&mods)
 }
 
 pub fn infer_output_modalities_json(model_id: &str) -> String {
-    let mods = infer_output_modalities(model_id);
+    let lower = to_lower_cow(model_id);
+    let mods = infer_output_modalities_lower(&lower);
     serialize_modalities(&mods)
 }
 
 pub fn is_stt_model(model_id: &str) -> bool {
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
     STT_KEYWORDS.iter().any(|k| lower.contains(k))
 }
 
@@ -507,7 +538,7 @@ pub fn infer_family(model_id: &str) -> Option<String> {
         "cogito",
     ];
 
-    let lower = model_id.to_lowercase();
+    let lower = to_lower_cow(model_id);
     for f in FAMILIES {
         if lower.contains(f) {
             return Some((*f).to_string());

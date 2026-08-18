@@ -60,16 +60,14 @@ use openproxy_types::{
 };
 use std::fmt::Write as _;
 
-/// Cliente HTTP para la admin API de openproxy.
-///
-/// Mantiene un `UpstreamClient` reutilizable y la `base_url` del server.
-/// Es `Send + Sync` y barato de clonar (comparte el `UpstreamClient`
-/// interior, que ya es `Arc`-interno).
-fn missing_field_err(msg: impl Into<String>) -> ClientError {
-    ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        msg.into(),
-    )))
+#[derive(serde::Deserialize)]
+struct IdEnvelope<T> {
+    id: T,
+}
+
+#[derive(serde::Deserialize)]
+struct TouchedEnvelope {
+    touched: usize,
 }
 
 #[derive(Clone)]
@@ -191,39 +189,16 @@ impl Client {
     }
 
     // -----------------------------------------------------------------
-    // Health
-    // -----------------------------------------------------------------
-
-    /// `GET /admin/health` — liveness con tag de versión.
-    pub async fn health(&self) -> Result<serde_json::Value, ClientError> {
-        self.get_json("/admin/health").await
-    }
-
-    // -----------------------------------------------------------------
     // Providers
     // -----------------------------------------------------------------
-
-    /// `GET /admin/providers`.
-    pub async fn list_providers(&self) -> Result<Vec<providers::Provider>, ClientError> {
-        self.get_json("/admin/providers").await
-    }
 
     /// `POST /admin/providers`. Devuelve el `ProviderId` recién creado.
     pub async fn create_provider(
         &self,
         input: CreateProviderInput,
     ) -> Result<ProviderId, ClientError> {
-        let body: serde_json::Value = self.post_json_resp("/admin/providers", &input).await?;
-        let id = body.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-            missing_field_err("missing \"id\" string in create_provider response")
-        })?;
-        Ok(ProviderId::new(id.to_string()))
-    }
-
-    /// `DELETE /admin/providers/:id`. Idempotente.
-    pub async fn delete_provider(&self, id: &ProviderId) -> Result<(), ClientError> {
-        let path = format!("/admin/providers/{}", urlencoded(id.as_str()));
-        self.delete_unit(&path).await
+        let env: IdEnvelope<String> = self.post_json_resp("/admin/providers", &input).await?;
+        Ok(ProviderId::new(env.id))
     }
 
     // -----------------------------------------------------------------
@@ -251,17 +226,8 @@ impl Client {
         &self,
         input: CreateAccountInput,
     ) -> Result<AccountId, ClientError> {
-        let body: serde_json::Value = self.post_json_resp("/admin/accounts", &input).await?;
-        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
-            missing_field_err("missing numeric \"id\" in create_account response")
-        })?;
-        Ok(AccountId::new(id))
-    }
-
-    /// `DELETE /admin/accounts/:id`. Idempotente.
-    pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
-        let path = format!("/admin/accounts/{}", id.0);
-        self.delete_unit(&path).await
+        let env: IdEnvelope<i64> = self.post_json_resp("/admin/accounts", &input).await?;
+        Ok(AccountId::new(env.id))
     }
 
     /// `PUT /admin/accounts/:id/api-key`. Encripta y guarda (o limpia)
@@ -279,25 +245,10 @@ impl Client {
     // Combos
     // -----------------------------------------------------------------
 
-    /// `GET /admin/combos`.
-    pub async fn list_combos(&self) -> Result<Vec<combos::Combo>, ClientError> {
-        self.get_json("/admin/combos").await
-    }
-
     /// `POST /admin/combos`. Devuelve el `ComboId` recién creado.
     pub async fn create_combo(&self, input: CreateComboInput) -> Result<ComboId, ClientError> {
-        let body: serde_json::Value = self.post_json_resp("/admin/combos", &input).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| missing_field_err("missing numeric \"id\" in create_combo response"))?;
-        Ok(ComboId(id))
-    }
-
-    /// `DELETE /admin/combos/:id`. Idempotente.
-    pub async fn delete_combo(&self, id: ComboId) -> Result<(), ClientError> {
-        let path = format!("/admin/combos/{}", id.0);
-        self.delete_unit(&path).await
+        let env: IdEnvelope<i64> = self.post_json_resp("/admin/combos", &input).await?;
+        Ok(ComboId(env.id))
     }
 
     /// `GET /admin/combos/:id/targets`.
@@ -318,28 +269,13 @@ impl Client {
         input: AddTargetInput,
     ) -> Result<i64, ClientError> {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
-        let body: serde_json::Value = self.post_json_resp(&path, &input).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| missing_field_err("missing numeric \"id\" in add_target response"))?;
-        Ok(id)
+        let env: IdEnvelope<i64> = self.post_json_resp(&path, &input).await?;
+        Ok(env.id)
     }
 
     // -----------------------------------------------------------------
     // Models
     // -----------------------------------------------------------------
-
-    /// `GET /v1/models` (endpoint público, no `/admin/...`).
-    ///
-    /// El server devuelve la lista de modelos en formato OpenAI
-    /// (`{"object": "list", "data": [...]}`). Mantenemos el tipo laxo
-    /// `serde_json::Value` para no atar el cliente a una versión concreta
-    /// del shape; los consumidores que necesiten los campos pueden
-    /// deserializar desde aquí.
-    pub async fn list_models(&self) -> Result<serde_json::Value, ClientError> {
-        self.get_json("/v1/models").await
-    }
 
     /// `POST /admin/models/:id/refresh`.
     ///
@@ -353,13 +289,8 @@ impl Client {
     /// `models`, según reporta el server.
     pub async fn refresh_models(&self, model_row_id: ModelRowId) -> Result<usize, ClientError> {
         let path = format!("/admin/models/{}/refresh", model_row_id.0);
-        let body: serde_json::Value = self.post_json_resp(&path, serde_json::json!({})).await?;
-        let touched = body
-            .get("touched")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| missing_field_err("missing \"touched\" in refresh_models response"))?;
-        usize::try_from(touched)
-            .map_err(|_| missing_field_err(format!("\"touched\" does not fit in usize: {touched}")))
+        let env: TouchedEnvelope = self.post_json_resp(&path, serde_json::json!({})).await?;
+        Ok(env.touched)
     }
 
     // -----------------------------------------------------------------
@@ -376,29 +307,6 @@ impl Client {
             .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
-    }
-
-    /// `GET /admin/usage/summary?from=...&to=...&provider_id=...&...`.
-    pub async fn usage_summary(&self, f: &UsageFilter) -> Result<UsageSummary, ClientError> {
-        self.get_analytics("/admin/usage/summary", f).await
-    }
-
-    /// `GET /admin/usage/by-model?from=...&...`.
-    pub async fn usage_by_model(&self, f: &UsageFilter) -> Result<Vec<ByModelRow>, ClientError> {
-        self.get_analytics("/admin/usage/by-model", f).await
-    }
-
-    /// `GET /admin/usage/by-account?from=...&...`.
-    pub async fn usage_by_account(
-        &self,
-        f: &UsageFilter,
-    ) -> Result<Vec<ByAccountRow>, ClientError> {
-        self.get_analytics("/admin/usage/by-account", f).await
-    }
-
-    /// `GET /admin/usage/by-status?from=...&...`.
-    pub async fn usage_by_status(&self, f: &UsageFilter) -> Result<Vec<ByStatusRow>, ClientError> {
-        self.get_analytics("/admin/usage/by-status", f).await
     }
 
     /// `GET /admin/usage/errors?from=...&...&limit=N`.
@@ -419,16 +327,101 @@ impl Client {
             .await?;
         parse_json(resp).await
     }
+}
+
+/// Macro declarativa para generar métodos CRUD estándar del cliente SDK sin duplicación.
+macro_rules! impl_client_crud_methods {
+    (
+        $(#[$get_doc:meta])*
+        get $get_fn:ident ( $get_path:literal ) -> $get_ret:ty;
+        $($rest:tt)*
+    ) => {
+        impl Client {
+            $(#[$get_doc])*
+            pub async fn $get_fn(&self) -> Result<$get_ret, ClientError> {
+                self.get_json($get_path).await
+            }
+        }
+        impl_client_crud_methods! { $($rest)* }
+    };
+
+    (
+        $(#[$del_doc:meta])*
+        delete $del_fn:ident ( $del_id:ident : $del_id_ty:ty => $del_path:expr );
+        $($rest:tt)*
+    ) => {
+        impl Client {
+            $(#[$del_doc])*
+            pub async fn $del_fn(&self, $del_id: $del_id_ty) -> Result<(), ClientError> {
+                let path = $del_path;
+                self.delete_unit(&path).await
+            }
+        }
+        impl_client_crud_methods! { $($rest)* }
+    };
+
+    (
+        $(#[$analytics_doc:meta])*
+        analytics $analytics_fn:ident ( $analytics_path:literal ) -> $analytics_ret:ty;
+        $($rest:tt)*
+    ) => {
+        impl Client {
+            $(#[$analytics_doc])*
+            pub async fn $analytics_fn(&self, f: &UsageFilter) -> Result<$analytics_ret, ClientError> {
+                self.get_analytics($analytics_path, f).await
+            }
+        }
+        impl_client_crud_methods! { $($rest)* }
+    };
+
+    () => {};
+}
+
+impl_client_crud_methods! {
+    /// `GET /admin/health` — liveness con tag de versión.
+    get health("/admin/health") -> serde_json::Value;
+
+    /// `GET /admin/providers`.
+    get list_providers("/admin/providers") -> Vec<providers::Provider>;
+
+    /// `GET /admin/combos`.
+    get list_combos("/admin/combos") -> Vec<combos::Combo>;
+
+    /// `GET /v1/models` (endpoint público, no `/admin/...`).
+    ///
+    /// El server devuelve la lista de modelos en formato OpenAI
+    /// (`{"object": "list", "data": [...]}`). Mantenemos el tipo laxo
+    /// `serde_json::Value` para no atar el cliente a una versión concreta
+    /// del shape; los consumidores que necesiten los campos pueden
+    /// deserializar desde aquí.
+    get list_models("/v1/models") -> serde_json::Value;
+
+    /// `DELETE /admin/providers/:id`. Idempotente.
+    delete delete_provider(id: &ProviderId => format!("/admin/providers/{}", urlencoded(id.as_str())));
+
+    /// `DELETE /admin/accounts/:id`. Idempotente.
+    delete delete_account(id: AccountId => format!("/admin/accounts/{}", id.0));
+
+    /// `DELETE /admin/combos/:id`. Idempotente.
+    delete delete_combo(id: ComboId => format!("/admin/combos/{}", id.0));
+
+    /// `GET /admin/usage/summary?from=...&to=...&provider_id=...&...`.
+    analytics usage_summary("/admin/usage/summary") -> UsageSummary;
+
+    /// `GET /admin/usage/by-model?from=...&...`.
+    analytics usage_by_model("/admin/usage/by-model") -> Vec<ByModelRow>;
+
+    /// `GET /admin/usage/by-account?from=...&...`.
+    analytics usage_by_account("/admin/usage/by-account") -> Vec<ByAccountRow>;
+
+    /// `GET /admin/usage/by-status?from=...&...`.
+    analytics usage_by_status("/admin/usage/by-status") -> Vec<ByStatusRow>;
 
     /// `GET /admin/usage/latency?from=...&...`.
-    pub async fn usage_latency(&self, f: &UsageFilter) -> Result<LatencyPercentiles, ClientError> {
-        self.get_analytics("/admin/usage/latency", f).await
-    }
+    analytics usage_latency("/admin/usage/latency") -> LatencyPercentiles;
 
     /// `GET /admin/usage/races?from=...&...`.
-    pub async fn usage_races(&self, f: &UsageFilter) -> Result<RaceStats, ClientError> {
-        self.get_analytics("/admin/usage/races", f).await
-    }
+    analytics usage_races("/admin/usage/races") -> RaceStats;
 }
 
 // =====================================================================
@@ -472,37 +465,32 @@ pub enum ClientError {
 ///    `code` no se reconoce, devuelve [`ClientError::Status`] con el
 ///    código y mensaje crudos.
 /// 3. `4xx/5xx` con body que no encaja en el sobre → [`ClientError::Status`].
-async fn parse_json<T: serde::de::DeserializeOwned>(
+async fn collect_response_bytes(
     resp: openproxy_adapters::upstream::UpstreamResponse,
-) -> Result<T, ClientError> {
+) -> Result<(http::StatusCode, bytes::Bytes), ClientError> {
     let status = resp.status;
     let bytes = resp
         .collect()
         .await
         .map_err(|e| ClientError::Http(e.to_string()))?;
     if status.is_success() {
-        Ok(serde_json::from_slice(&bytes)?)
+        Ok((status, bytes))
     } else {
         Err(map_error_body(status.as_u16(), &bytes))
     }
 }
 
-/// Variante para endpoints que devuelven `{"deleted": ...}` u otro body
-/// informativo. No necesitamos el body, solo verificar que el status
-/// sea 2xx y que, si no lo es, el body se traduzca a `ClientError`.
+async fn parse_json<T: serde::de::DeserializeOwned>(
+    resp: openproxy_adapters::upstream::UpstreamResponse,
+) -> Result<T, ClientError> {
+    let (_, bytes) = collect_response_bytes(resp).await?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 async fn parse_unit(
     resp: openproxy_adapters::upstream::UpstreamResponse,
 ) -> Result<(), ClientError> {
-    let status = resp.status;
-    let bytes = resp
-        .collect()
-        .await
-        .map_err(|e| ClientError::Http(e.to_string()))?;
-    if status.is_success() {
-        Ok(())
-    } else {
-        Err(map_error_body(status.as_u16(), &bytes))
-    }
+    collect_response_bytes(resp).await.map(|_| ())
 }
 
 /// Convierte un body de error HTTP en un [`ClientError`].
@@ -524,91 +512,21 @@ fn map_error_body(status: u16, bytes: &[u8]) -> ClientError {
     }
 
     if let Ok(env) = serde_json::from_slice::<Envelope>(bytes) {
-        match core_error_from_code(&env.error.code, &env.error.message) {
-            Some(core_err) => return ClientError::Api(core_err),
-            None => {
-                return ClientError::Status(
-                    status,
-                    format!("{}: {}", env.error.code, env.error.message),
-                );
-            }
+        if let Some(core_err) =
+            CoreError::from_code_and_message(&env.error.code, &env.error.message)
+        {
+            return ClientError::Api(core_err);
         }
+        return ClientError::Status(
+            status,
+            format!("{}: {}", env.error.code, env.error.message),
+        );
     }
 
     // Body no es JSON o no encaja en el sobre. Reportamos el cuerpo crudo
     // (truncado) para diagnóstico.
     let snippet = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
     ClientError::Status(status, snippet.into_owned())
-}
-
-/// Mapea un `code` textual de la API al variante correspondiente de
-/// [`CoreError`]. Devuelve `None` si el `code` no se reconoce, en cuyo
-/// caso el llamador decide si preservarlo como `Status` o tratarlo como
-/// un error de servidor genérico.
-///
-/// Solo conocemos los códigos que [`CoreError::code`] puede emitir —
-/// cualquier otra cosa (e.g. códigos personalizados del server para
-/// cosas que aún no se han modelado en core) se trata como desconocida.
-fn core_error_from_code(code: &str, message: &str) -> Option<CoreError> {
-    macro_rules! map_core_error {
-        (
-            string => [ $( $s_pat:pat => $s_var:ident ),* $(,)? ],
-            id => [ $( $i_pat:pat => $i_var:ident ),* $(,)? ],
-            custom => [ $( $c_pat:pat => $c_expr:expr ),* $(,)? ]
-        ) => {
-            match code {
-                $( $s_pat => Some(CoreError::$s_var(message.to_string())), )*
-                $( $i_pat => parse_i64(message).map(CoreError::$i_var), )*
-                $( $c_pat => $c_expr, )*
-                _ => None,
-            }
-        };
-    }
-
-    map_core_error! {
-        string => [
-            "auth" => Auth,
-            "validation" => Validation,
-            "provider_not_found" => ProviderNotFound,
-            "upstream_connection" => UpstreamConnection,
-            "parse_error" => Parse,
-            "config" => Config,
-            "database" | "migration" | "internal" => Internal,
-        ],
-        id => [
-            "account_not_found" => AccountNotFound,
-            "combo_not_found" => ComboNotFound,
-            "no_healthy_targets" => NoHealthyTargets,
-        ],
-        custom => [
-            "model_not_found" => Some(CoreError::ModelNotFound {
-                provider: "<see message>".to_string(),
-                model: message.to_string(),
-            }),
-            "upstream_timeout" => Some(CoreError::UpstreamTimeout {
-                phase: "<unknown>".to_string(),
-                ms: 0,
-            }),
-            "upstream_error" => Some(CoreError::UpstreamError {
-                status: 0,
-                provider: "<see message>".to_string(),
-                model: "<see message>".to_string(),
-                body: message.to_string(),
-                is_proxy_rotated: false,
-            }),
-            "rate_limited" => Some(CoreError::RateLimited {
-                provider: "<see message>".to_string(),
-                retry_after_ms: 0,
-                is_proxy_rotated: false,
-            }),
-            "client_disconnected" => Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)),
-            "race_lost" => Some(CoreError::RaceLost),
-        ]
-    }
-}
-
-fn parse_i64(s: &str) -> Option<i64> {
-    s.trim().parse::<i64>().ok()
 }
 
 /// Construye un query string a partir de pares `(clave, valor)`. Las claves
@@ -826,17 +744,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_i64() {
-        assert_eq!(parse_i64("123"), Some(123));
-        assert_eq!(parse_i64("  -456  "), Some(-456));
-        assert_eq!(parse_i64("0"), Some(0));
-        assert_eq!(parse_i64("abc"), None);
-        assert_eq!(parse_i64(""), None);
-        assert_eq!(parse_i64("  "), None);
-        assert_eq!(parse_i64("12.34"), None);
-    }
-
-    #[test]
     fn test_list_combo_targets() {
         unsafe {
             std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
@@ -873,86 +780,86 @@ mod tests {
 
         // String error mappings
         assert!(matches!(
-            core_error_from_code("auth", "unauthorized"),
+            CoreError::from_code_and_message("auth", "unauthorized"),
             Some(CoreError::Auth(msg)) if msg == "unauthorized"
         ));
         assert!(matches!(
-            core_error_from_code("validation", "invalid param"),
+            CoreError::from_code_and_message("validation", "invalid param"),
             Some(CoreError::Validation(msg)) if msg == "invalid param"
         ));
         assert!(matches!(
-            core_error_from_code("provider_not_found", "missing provider"),
+            CoreError::from_code_and_message("provider_not_found", "missing provider"),
             Some(CoreError::ProviderNotFound(msg)) if msg == "missing provider"
         ));
         assert!(matches!(
-            core_error_from_code("upstream_connection", "conn reset"),
+            CoreError::from_code_and_message("upstream_connection", "conn reset"),
             Some(CoreError::UpstreamConnection(msg)) if msg == "conn reset"
         ));
         assert!(matches!(
-            core_error_from_code("parse_error", "bad json"),
+            CoreError::from_code_and_message("parse_error", "bad json"),
             Some(CoreError::Parse(msg)) if msg == "bad json"
         ));
         assert!(matches!(
-            core_error_from_code("config", "bad cfg"),
+            CoreError::from_code_and_message("config", "bad cfg"),
             Some(CoreError::Config(msg)) if msg == "bad cfg"
         ));
         assert!(matches!(
-            core_error_from_code("database", "sqlite lock"),
-            Some(CoreError::Internal(msg)) if msg == "sqlite lock"
+            CoreError::from_code_and_message("database", "sqlite lock"),
+            Some(CoreError::Database { message, .. }) if message == "sqlite lock"
         ));
         assert!(matches!(
-            core_error_from_code("migration", "mismatch"),
-            Some(CoreError::Internal(msg)) if msg == "mismatch"
+            CoreError::from_code_and_message("migration", "mismatch"),
+            Some(CoreError::Migration { message, .. }) if message == "mismatch"
         ));
         assert!(matches!(
-            core_error_from_code("internal", "panic"),
+            CoreError::from_code_and_message("internal", "panic"),
             Some(CoreError::Internal(msg)) if msg == "panic"
         ));
 
         // ID error mappings
         assert!(matches!(
-            core_error_from_code("account_not_found", "42"),
+            CoreError::from_code_and_message("account_not_found", "42"),
             Some(CoreError::AccountNotFound(42))
         ));
-        assert!(core_error_from_code("account_not_found", "invalid").is_none());
+        assert!(CoreError::from_code_and_message("account_not_found", "invalid").is_none());
         assert!(matches!(
-            core_error_from_code("combo_not_found", "100"),
+            CoreError::from_code_and_message("combo_not_found", "100"),
             Some(CoreError::ComboNotFound(100))
         ));
-        assert!(core_error_from_code("combo_not_found", "not_an_id").is_none());
+        assert!(CoreError::from_code_and_message("combo_not_found", "not_an_id").is_none());
         assert!(matches!(
-            core_error_from_code("no_healthy_targets", "5"),
+            CoreError::from_code_and_message("no_healthy_targets", "5"),
             Some(CoreError::NoHealthyTargets(5))
         ));
-        assert!(core_error_from_code("no_healthy_targets", "nan").is_none());
+        assert!(CoreError::from_code_and_message("no_healthy_targets", "nan").is_none());
 
         // Custom mappings
         assert!(matches!(
-            core_error_from_code("model_not_found", "gpt-4"),
+            CoreError::from_code_and_message("model_not_found", "gpt-4"),
             Some(CoreError::ModelNotFound { model, .. }) if model == "gpt-4"
         ));
         assert!(matches!(
-            core_error_from_code("upstream_timeout", "timeout msg"),
+            CoreError::from_code_and_message("upstream_timeout", "timeout msg"),
             Some(CoreError::UpstreamTimeout { .. })
         ));
         assert!(matches!(
-            core_error_from_code("upstream_error", "server 500"),
+            CoreError::from_code_and_message("upstream_error", "server 500"),
             Some(CoreError::UpstreamError { body, .. }) if body == "server 500"
         ));
         assert!(matches!(
-            core_error_from_code("rate_limited", "slow down"),
+            CoreError::from_code_and_message("rate_limited", "slow down"),
             Some(CoreError::RateLimited { .. })
         ));
         assert!(matches!(
-            core_error_from_code("client_disconnected", "drop"),
+            CoreError::from_code_and_message("client_disconnected", "drop"),
             Some(CoreError::Cancelled(CancelReason::ClientDisconnected))
         ));
         assert!(matches!(
-            core_error_from_code("race_lost", "lost"),
+            CoreError::from_code_and_message("race_lost", "lost"),
             Some(CoreError::RaceLost)
         ));
 
         // Unknown code
-        assert!(core_error_from_code("unrecognized_code", "some error").is_none());
+        assert!(CoreError::from_code_and_message("unrecognized_code", "some error").is_none());
     }
 }

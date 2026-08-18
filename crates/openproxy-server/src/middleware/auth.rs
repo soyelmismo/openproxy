@@ -362,24 +362,23 @@ pub async fn auth_middleware(
     }
     parsed.messages = valid_messages;
 
-    for i in 0..parsed.messages.len() {
-        if parsed.messages[i].role == "assistant" && parsed.messages[i].tool_calls.is_some() {
-            let (left, right) = parsed.messages.split_at_mut(i + 1);
-            if let Some(msg) = left.last_mut()
-                && let Some(calls) = &mut msg.tool_calls
-            {
-                calls.retain(|call| {
-                    let call_id = call.get("id").and_then(|v| v.as_str());
-                    call_id.is_some_and(|id| {
-                        right
-                            .iter()
-                            .take_while(|m| m.role == "tool")
-                            .any(|m| m.tool_call_id.as_deref() == Some(id))
-                    })
-                });
-                if calls.is_empty() {
-                    msg.tool_calls = None;
-                }
+    let mut remainder = parsed.messages.as_mut_slice();
+    while let Some((msg, tail)) = remainder.split_first_mut() {
+        remainder = tail;
+        if msg.role == "assistant"
+            && let Some(calls) = &mut msg.tool_calls
+        {
+            calls.retain(|call| {
+                let call_id = call.get("id").and_then(|v| v.as_str());
+                call_id.is_some_and(|id| {
+                    remainder
+                        .iter()
+                        .take_while(|m| m.role == "tool")
+                        .any(|m| m.tool_call_id.as_deref() == Some(id))
+                })
+            });
+            if calls.is_empty() {
+                msg.tool_calls = None;
             }
         }
     }

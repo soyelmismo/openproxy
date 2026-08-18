@@ -52,23 +52,19 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
     }
 }
 
+crate::def_table_select!(
+    provider_select,
+    "providers",
+    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64"
+);
+
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
-             FROM providers WHERE id = ?1",
-        )
-        .map_err(crate::error::map_db_error_ctx("prepare get provider"))?;
-
-    let mut rows = stmt
-        .query_map(params![id.as_str()], row_to_provider)
-        .map_err(crate::error::map_db_error_ctx("query get provider"))?;
-
-    match rows.next() {
-        Some(Ok(p)) => Ok(Some(p)),
-        Some(Err(e)) => Err(crate::error::map_db_error_ctx("read provider row")(e)),
-        None => Ok(None),
-    }
+    crate::db_query_one!(
+        conn,
+        provider_select!("WHERE id = ?1"),
+        params![id.as_str()],
+        format!("get provider {id}")
+    )
 }
 
 pub fn update_current_proxy(
@@ -76,11 +72,12 @@ pub fn update_current_proxy(
     id: &ProviderId,
     proxy_id: Option<&str>,
 ) -> Result<()> {
-    crate::db_execute!(
+    crate::db_update_field!(
         conn,
-        "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
-        params![proxy_id, id.as_str()],
-        format!("update current proxy for provider {}", id)
+        "providers",
+        current_proxy_id = proxy_id,
+        WHERE id = id.as_str(),
+        format!("update current proxy for provider {id}")
     )?;
     Ok(())
 }

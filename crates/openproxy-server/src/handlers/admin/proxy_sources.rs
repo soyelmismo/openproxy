@@ -77,11 +77,10 @@ pub struct TestSourceInput {
 }
 
 pub async fn test_source_by_id(
-    db_reader: DbReader,
+    DbReader(r): DbReader,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let url = {
-        let DbReader(r) = db_reader;
         let src = get_proxy_source(&r, &id)?
             .ok_or_else(|| CoreError::Validation(format!("proxy source '{id}' not found")))?;
         src.url

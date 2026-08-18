@@ -1,3 +1,4 @@
+use openproxy_types::combos::ComboTarget;
 use openproxy_types::config::CircuitBreakerConfig;
 use openproxy_types::ids::{AccountId, ModelRowId};
 use parking_lot::Mutex;
@@ -88,6 +89,20 @@ impl CircuitBreakerRegistry {
         }
         entry.last_activity_ms = now_ms();
         entry.state
+    }
+
+    pub fn is_target_healthy(&self, target: &ComboTarget) -> bool {
+        match target.account_id {
+            Some(aid) => {
+                let key = CircuitBreakerKey::from_target(
+                    aid,
+                    target.rate_limit_scope,
+                    target.model_row_id,
+                );
+                self.is_healthy(key) == Health::Healthy
+            }
+            None => true,
+        }
     }
 
     pub fn record_success(&self, account: CircuitBreakerKey) {
@@ -218,5 +233,40 @@ mod tests {
         // Now that unhealthy_until has expired and activity is older than max_idle (0ms), it gets pruned
         assert_eq!(cb.prune_idle(Duration::from_millis(0)), 1);
         assert_eq!(cb.len(), 0);
+    }
+
+    #[test]
+    fn test_is_target_healthy() {
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            unhealthy_duration_ms: 100,
+        };
+        let cb = CircuitBreakerRegistry::new(&config);
+
+        let target_no_acc = ComboTarget {
+            id: openproxy_types::ids::ComboTargetId(1),
+            combo_id: openproxy_types::ids::ComboId(1),
+            provider_id: openproxy_types::ids::ProviderId::new("openai"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 1,
+            active: true,
+            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+        };
+        assert!(cb.is_target_healthy(&target_no_acc));
+
+        let mut target_acc = target_no_acc;
+        target_acc.account_id = Some(AccountId(42));
+        assert!(cb.is_target_healthy(&target_acc));
+
+        let key = CircuitBreakerKey::Account(AccountId(42));
+        cb.record_failure(key);
+        assert!(!cb.is_target_healthy(&target_acc));
     }
 }

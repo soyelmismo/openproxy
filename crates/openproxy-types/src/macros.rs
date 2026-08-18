@@ -14,48 +14,19 @@ macro_rules! impl_string_enum {
         }
         error: $err_label:literal
     ) => {
-        $(#[$meta])*
-        $vis enum $name {
-            $(
-                $(#[$var_meta])*
-                $variant,
-            )*
-        }
-
-        impl $name {
-            #[inline]
-            pub const fn as_str(&self) -> &'static str {
-                match self {
-                    $(
-                        Self::$variant => $str,
-                    )*
-                }
-            }
-
-            pub fn parse(s: &str) -> std::result::Result<Self, String> {
-                match s {
-                    $(
-                        $str $(| $alias)* => Ok(Self::$variant),
-                    )*
-                    other => Err(format!("invalid {}: {other}", $err_label)),
-                }
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            #[inline]
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl std::str::FromStr for $name {
-            type Err = String;
-
-            #[inline]
-            fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-                Self::parse(s)
-            }
+        $crate::impl_string_enum! {
+            @impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            name: $name,
+            variants: [
+                $(
+                    [$(#[$var_meta])*] $variant => $str $(| $alias)*
+                ),*
+            ],
+            err_type: std::string::String,
+            err_map: (|s: &str| format!("invalid {}: {s}", $err_label)),
+            from_str_res: std::result::Result<$name, std::string::String>
         }
     };
     (
@@ -67,6 +38,35 @@ macro_rules! impl_string_enum {
             ),* $(,)?
         }
         core_error: $err_label:literal
+    ) => {
+        $crate::impl_string_enum! {
+            @impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            name: $name,
+            variants: [
+                $(
+                    [$(#[$var_meta])*] $variant => $str $(| $alias)*
+                ),*
+            ],
+            err_type: $crate::error::CoreError,
+            err_map: (|s: &str| $crate::error::CoreError::Validation(format!("invalid {}: {s}", $err_label))),
+            from_str_res: $crate::error::Result<$name>
+        }
+    };
+    (
+        @impl
+        meta: [$(#[$meta:meta])*],
+        vis: $vis:vis,
+        name: $name:ident,
+        variants: [
+            $(
+                [$(#[$var_meta:meta])*] $variant:ident => $str:literal $(| $alias:literal)*
+            ),* $(,)?
+        ],
+        err_type: $err_ty:ty,
+        err_map: ($err_fn:expr),
+        from_str_res: $res_ty:ty
     ) => {
         $(#[$meta])*
         $vis enum $name {
@@ -86,16 +86,19 @@ macro_rules! impl_string_enum {
                 }
             }
 
-            pub fn parse(s: &str) -> $crate::error::Result<Self> {
+            pub fn parse(s: &str) -> $res_ty {
                 match s {
                     $(
                         $str $(| $alias)* => Ok(Self::$variant),
                     )*
-                    other => Err($crate::error::CoreError::Validation(format!(
-                        "invalid {}: {other}",
-                        $err_label
-                    ))),
+                    other => Err(($err_fn)(other)),
                 }
+            }
+
+            #[inline]
+            #[allow(dead_code)]
+            pub fn from_db_opt(s: Option<&str>) -> Option<Self> {
+                s.and_then(|v| Self::parse(v).ok())
             }
         }
 
@@ -107,14 +110,35 @@ macro_rules! impl_string_enum {
         }
 
         impl std::str::FromStr for $name {
-            type Err = $crate::error::CoreError;
+            type Err = $err_ty;
 
             #[inline]
-            fn from_str(s: &str) -> $crate::error::Result<Self> {
+            fn from_str(s: &str) -> $res_ty {
                 Self::parse(s)
             }
         }
     };
+}
+
+/// Trait for decoding string-backed enums and config types from database column values.
+pub trait FromDb: Sized {
+    fn from_db(s: Option<&str>) -> Self;
+    fn from_db_opt(s: Option<&str>) -> Option<Self>;
+}
+
+impl<T> FromDb for T
+where
+    T: Default + std::str::FromStr,
+{
+    #[inline]
+    fn from_db(s: Option<&str>) -> Self {
+        s.and_then(|v| v.parse().ok()).unwrap_or_default()
+    }
+
+    #[inline]
+    fn from_db_opt(s: Option<&str>) -> Option<Self> {
+        s.and_then(|v| v.parse().ok())
+    }
 }
 
 /// Implements `From<T>` conversions for enum variants, optionally applying
@@ -263,5 +287,37 @@ mod tests {
             CoreError::Validation(msg) => assert_eq!(msg, "invalid core_error_enum: bad2"),
             other => panic!("expected Validation error, got {other:?}"),
         }
+    }
+
+    impl_string_enum! {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+        pub enum DefaultableEnum {
+            #[default]
+            Standard => "standard",
+            Enhanced => "enhanced",
+        }
+        error: "defaultable_enum"
+    }
+
+    #[test]
+    fn test_impl_string_enum_from_db() {
+        use super::FromDb;
+
+        assert_eq!(
+            DefaultableEnum::from_db(Some("enhanced")),
+            DefaultableEnum::Enhanced
+        );
+        assert_eq!(
+            DefaultableEnum::from_db(Some("unknown")),
+            DefaultableEnum::Standard
+        );
+        assert_eq!(DefaultableEnum::from_db(None), DefaultableEnum::Standard);
+
+        assert_eq!(
+            DefaultableEnum::from_db_opt(Some("enhanced")),
+            Some(DefaultableEnum::Enhanced)
+        );
+        assert_eq!(DefaultableEnum::from_db_opt(Some("unknown")), None);
+        assert_eq!(DefaultableEnum::from_db_opt(None), None);
     }
 }

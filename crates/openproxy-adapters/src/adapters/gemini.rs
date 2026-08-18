@@ -350,11 +350,12 @@ pub fn openai_to_gemini(
     }
 }
 
-fn map_gemini_finish_reason(reason: &str) -> String {
-    match reason {
-        "MAX_TOKENS" => "length".to_string(),
-        "SAFETY" | "RECITATION" | "BLOCKLIST" => "content_filter".to_string(),
-        _ => "stop".to_string(),
+crate::define_jump_map! {
+    /// O(1) jump-map for translating Gemini finish reasons to OpenAI finish reasons.
+    pub fn map_gemini_finish_reason(reason: &str) -> &'static str {
+        "MAX_TOKENS" => "length",
+        "SAFETY" | "RECITATION" | "BLOCKLIST" => "content_filter",
+        _ => "stop",
     }
 }
 
@@ -382,7 +383,8 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
 
     let finish_reason = candidate
         .and_then(|c| c.finish_reason.as_deref())
-        .map(map_gemini_finish_reason);
+        .map(map_gemini_finish_reason)
+        .map(String::from);
 
     let usage_metadata = resp.usage_metadata.as_ref().or_else(|| {
         resp.response
@@ -537,5 +539,15 @@ mod tests {
             gemini_req.contents[1].parts[1].text.as_deref(),
             Some("Part 2")
         );
+    }
+
+    #[test]
+    fn test_gemini_finish_reason_mapping() {
+        assert_eq!(map_gemini_finish_reason("MAX_TOKENS"), "length");
+        assert_eq!(map_gemini_finish_reason("SAFETY"), "content_filter");
+        assert_eq!(map_gemini_finish_reason("RECITATION"), "content_filter");
+        assert_eq!(map_gemini_finish_reason("BLOCKLIST"), "content_filter");
+        assert_eq!(map_gemini_finish_reason("STOP"), "stop");
+        assert_eq!(map_gemini_finish_reason("OTHER"), "stop");
     }
 }

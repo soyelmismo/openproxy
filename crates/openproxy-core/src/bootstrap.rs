@@ -37,7 +37,7 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
         .query_row("SELECT COUNT(*) FROM api_keys", [], |r| r.get(0))
         .map_err(|e| crate::error::CoreError::Database {
             message: format!("count api_keys: {e}"),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     if count > 0 {
         return Ok(None);

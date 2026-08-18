@@ -212,7 +212,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
                 "antigravity post_exchange update project_id for account {}: {}",
                 account_id.0, e
             ),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
         // 4. Update email and label on the account row if we fetched it.
@@ -226,7 +226,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
                     "antigravity post_exchange update email and label for account {}: {}",
                     account_id.0, e
                 ),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })?;
         }
 

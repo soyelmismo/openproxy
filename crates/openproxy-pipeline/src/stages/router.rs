@@ -1,5 +1,4 @@
 use crate::PipelineResult;
-use crate::circuit_breaker::Health;
 use crate::context::PipelineContext;
 use crate::stage::PipelineStage;
 use openproxy_types::combos::ComboTarget;
@@ -26,18 +25,9 @@ impl PipelineStage for RouterStage {
 
         let flat_targets = ctx.pipeline.flatten_targets(&combo.id, targets).await?;
 
-        let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) =
-            flat_targets.into_iter().partition(|t| match t.account_id {
-                Some(aid) => {
-                    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
-                        aid,
-                        t.rate_limit_scope,
-                        t.model_row_id,
-                    );
-                    ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
-                }
-                None => true,
-            });
+        let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) = flat_targets
+            .into_iter()
+            .partition(|t| ctx.pipeline.circuit_breaker.is_target_healthy(t));
 
         if eligible.is_empty() && !parked.is_empty() {
             tracing::warn!(
@@ -59,17 +49,7 @@ impl PipelineStage for RouterStage {
                     let flat_targets = ctx.pipeline.flatten_targets(&combo.id, targets).await?;
                     let re_eligible: Vec<ComboTarget> = flat_targets
                         .into_iter()
-                        .filter(|t| match t.account_id {
-                            Some(aid) => {
-                                let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
-                                    aid,
-                                    t.rate_limit_scope,
-                                    t.model_row_id,
-                                );
-                                ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
-                            }
-                            None => true,
-                        })
+                        .filter(|t| ctx.pipeline.circuit_breaker.is_target_healthy(t))
                         .collect();
                     if !re_eligible.is_empty() {
                         eligible = re_eligible;

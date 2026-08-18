@@ -62,5 +62,118 @@ pub(crate) use openproxy_types::{
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use serde_json::json;
 pub(crate) use std::sync::Arc;
-
 pub(crate) use crate::{error::ApiError, state::AppState};
+
+/// Macro declarativa para estandarizar handlers de acción/eliminación sobre entidades administrativas.
+#[macro_export]
+macro_rules! admin_entity_action_handler {
+    (
+        $(#[$meta:meta])*
+        pub async fn $fn_name:ident(
+            State($state:ident): State<AppState>,
+            Path($id:pat): Path<$id_ty:ty> $(,)?
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            exec: $action:expr,
+            response: $resp:expr $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        pub async fn $fn_name(
+            axum::extract::State($state): axum::extract::State<$crate::state::AppState>,
+            axum::extract::Path($id): axum::extract::Path<$id_ty>,
+        ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
+            $action;
+            Ok(axum::Json($resp))
+        }
+    };
+
+    (
+        $(#[$meta:meta])*
+        pub async fn $fn_name:ident(
+            State($state:ident) with writer($w:ident),
+            Path($id:pat): Path<$id_ty:ty> $(,)?
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            exec: $action:expr,
+            response: $resp:expr $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        pub async fn $fn_name(
+            axum::extract::State($state): axum::extract::State<$crate::state::AppState>,
+            axum::extract::Path($id): axum::extract::Path<$id_ty>,
+        ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
+            let $w = $state.db_pool().writer();
+            $action;
+            Ok(axum::Json($resp))
+        }
+    };
+
+    (
+        $(#[$meta:meta])*
+        pub async fn $fn_name:ident(
+            DbWriter($w:ident): DbWriter,
+            Path($id:pat): Path<$id_ty:ty> $(,)?
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            exec: $action:expr,
+            response: $resp:expr $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        pub async fn $fn_name(
+            $crate::extractors::DbWriter($w): $crate::extractors::DbWriter,
+            axum::extract::Path($id): axum::extract::Path<$id_ty>,
+        ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
+            $action;
+            Ok(axum::Json($resp))
+        }
+    };
+
+    (
+        $(#[$meta:meta])*
+        pub async fn $fn_name:ident(
+            State($state:ident): State<AppState>,
+            Path($id:pat): Path<$id_ty:ty> $(,)?
+        ) -> Result<Json<serde_json::Value>, ApiError> $body:block
+    ) => {
+        $(#[$meta])*
+        pub async fn $fn_name(
+            axum::extract::State($state): axum::extract::State<$crate::state::AppState>,
+            axum::extract::Path($id): axum::extract::Path<$id_ty>,
+        ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
+            $body
+        }
+    };
+
+    (
+        $(#[$meta:meta])*
+        pub async fn $fn_name:ident(
+            State($state:ident) with writer($w:ident),
+            Path($id:pat): Path<$id_ty:ty> $(,)?
+        ) -> Result<Json<serde_json::Value>, ApiError> $body:block
+    ) => {
+        $(#[$meta])*
+        pub async fn $fn_name(
+            axum::extract::State($state): axum::extract::State<$crate::state::AppState>,
+            axum::extract::Path($id): axum::extract::Path<$id_ty>,
+        ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
+            let $w = $state.db_pool().writer();
+            $body
+        }
+    };
+
+    (
+        $(#[$meta:meta])*
+        pub async fn $fn_name:ident(
+            DbWriter($w:ident): DbWriter,
+            Path($id:pat): Path<$id_ty:ty> $(,)?
+        ) -> Result<Json<serde_json::Value>, ApiError> $body:block
+    ) => {
+        $(#[$meta])*
+        pub async fn $fn_name(
+            $crate::extractors::DbWriter($w): $crate::extractors::DbWriter,
+            axum::extract::Path($id): axum::extract::Path<$id_ty>,
+        ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
+            $body
+        }
+    };
+}

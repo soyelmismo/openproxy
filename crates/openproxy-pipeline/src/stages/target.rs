@@ -326,21 +326,12 @@ impl PipelineStage for DispatchStage {
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let headers = adapter.build_headers(api_key, target_format, &model.model_id);
 
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: ctx.req.request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: None,
-            upstream_model_id: None,
-            stage: "connecting".into(),
+        openproxy_types::emit_stage_event!(
+            request_id: ctx.req.request_id,
+            trace_id: trace_id,
+            stage: "connecting",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: None,
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: None,
-        });
+        );
 
         let body_bytes = ctx
             .body_bytes

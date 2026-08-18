@@ -53,27 +53,36 @@ pub async fn update_api_key(
     // present + array = set to that array.
     let allowed_models_owned =
         extract_tristate_array(&body, "allowed_models", |x| x.as_str().map(String::from));
-    let allowed_models_slice = allowed_models_owned.as_ref().map(|o| o.as_deref());
+    let allowed_models_slice =
+        allowed_models_owned.as_ref().map(|v| v.as_slice()).into_nested_option();
 
     let allowed_combos_owned =
         extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
-    let allowed_combos_slice = allowed_combos_owned.as_ref().map(|o| o.as_deref());
+    let allowed_combos_slice =
+        allowed_combos_owned.as_ref().map(|v| v.as_slice()).into_nested_option();
 
     let blacklisted_providers_owned = extract_tristate_array(&body, "blacklisted_providers", |x| {
         x.as_str().map(String::from)
     });
-    let blacklisted_providers_slice = blacklisted_providers_owned.as_ref().map(|o| o.as_deref());
+    let blacklisted_providers_slice =
+        blacklisted_providers_owned.as_ref().map(|v| v.as_slice()).into_nested_option();
 
     let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
         x.as_str().map(String::from)
     });
-    let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|o| o.as_deref());
+    let blacklisted_models_slice =
+        blacklisted_models_owned.as_ref().map(|v| v.as_slice()).into_nested_option();
 
     let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
-    let expires_owned: Option<Option<String>> =
-        body.get("expires_at").map(|v| v.as_str().map(String::from));
-    let expires_slice: Option<Option<&str>> = expires_owned.as_ref().map(|o| o.as_deref());
+    let expires_field = match body.get("expires_at") {
+        None => UpdateField::Ignore,
+        Some(v) => match v.as_str() {
+            Some(s) => UpdateField::Set(s.to_string()),
+            None => UpdateField::Reset,
+        },
+    };
+    let expires_slice = expires_field.as_ref().map(|s| s.as_str()).into_nested_option();
 
     s.services().api_keys.update(
         ApiKeyId(id),
@@ -91,22 +100,24 @@ pub async fn update_api_key(
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
-pub async fn revoke_api_key(
-    State(s): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    core_api_keys::revoke(&w, ApiKeyId(id))?;
-    Ok(Json(serde_json::json!({ "id": id, "revoked": true })))
+crate::admin_entity_action_handler! {
+    pub async fn revoke_api_key(
+        State(s) with writer(w),
+        Path(id): Path<i64>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        core_api_keys::revoke(&w, ApiKeyId(id))?;
+        Ok(Json(serde_json::json!({ "id": id, "revoked": true })))
+    }
 }
 
-pub async fn delete_api_key(
-    State(s): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    core_api_keys::hard_delete(&w, ApiKeyId(id))?;
-    Ok(Json(serde_json::json!({ "id": id, "deleted": true })))
+crate::admin_entity_action_handler! {
+    pub async fn delete_api_key(
+        State(s) with writer(w),
+        Path(id): Path<i64>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        core_api_keys::hard_delete(&w, ApiKeyId(id))?;
+        Ok(Json(serde_json::json!({ "id": id, "deleted": true })))
+    }
 }
 
 pub async fn regenerate_api_key(
@@ -149,18 +160,51 @@ pub async fn api_key_usage(
     })))
 }
 
-#[allow(clippy::option_option)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateField<T> {
+    Ignore,
+    Reset,
+    Set(T),
+}
+
+impl<T> UpdateField<T> {
+    pub(crate) fn as_ref(&self) -> UpdateField<&T> {
+        match self {
+            Self::Ignore => UpdateField::Ignore,
+            Self::Reset => UpdateField::Reset,
+            Self::Set(v) => UpdateField::Set(v),
+        }
+    }
+
+    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> UpdateField<U> {
+        match self {
+            Self::Ignore => UpdateField::Ignore,
+            Self::Reset => UpdateField::Reset,
+            Self::Set(v) => UpdateField::Set(f(v)),
+        }
+    }
+
+    #[allow(clippy::option_option)]
+    pub(crate) fn into_nested_option(self) -> Option<Option<T>> {
+        match self {
+            Self::Ignore => None,
+            Self::Reset => Some(None),
+            Self::Set(v) => Some(Some(v)),
+        }
+    }
+}
+
 fn extract_tristate_array<T>(
     body: &serde_json::Value,
     key: &str,
     extractor: impl Fn(&serde_json::Value) -> Option<T>,
-) -> Option<Option<Vec<T>>> {
-    body.get(key).map(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_array()
-                .map(|a| a.iter().filter_map(&extractor).collect())
-        }
-    })
+) -> UpdateField<Vec<T>> {
+    match body.get(key) {
+        None => UpdateField::Ignore,
+        Some(v) if v.is_null() => UpdateField::Reset,
+        Some(v) => match v.as_array() {
+            Some(a) => UpdateField::Set(a.iter().filter_map(&extractor).collect()),
+            None => UpdateField::Reset,
+        },
+    }
 }

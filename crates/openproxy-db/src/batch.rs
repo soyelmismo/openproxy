@@ -47,22 +47,6 @@ pub fn values_placeholders(num_rows: usize, num_cols: usize) -> String {
     out
 }
 
-/// Repeats a custom row template for `num_rows`:
-/// e.g. `repeat_row_template("(?1, ?2, 'literal')", 3)` -> `"(?1, ?2, 'literal'), (?1, ?2, 'literal'), (?1, ?2, 'literal')"`
-pub fn repeat_row_template(template: &str, num_rows: usize) -> String {
-    if num_rows == 0 || template.is_empty() {
-        return String::new();
-    }
-    let mut out = String::with_capacity(num_rows * (template.len() + 2));
-    for r in 0..num_rows {
-        if r > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(template);
-    }
-    out
-}
-
 /// Builds a complete batch `INSERT` query.
 ///
 /// Example:
@@ -307,13 +291,6 @@ mod tests {
         assert_eq!(values_placeholders(3, 0), "");
         assert_eq!(values_placeholders(1, 2), "(?, ?)");
         assert_eq!(values_placeholders(2, 3), "(?, ?, ?), (?, ?, ?)");
-    }
-
-    #[test]
-    fn test_repeat_row_template() {
-        assert_eq!(repeat_row_template("(?1, ?2)", 0), "");
-        assert_eq!(repeat_row_template("(?1, ?2)", 1), "(?1, ?2)");
-        assert_eq!(repeat_row_template("(?1, ?2)", 2), "(?1, ?2), (?1, ?2)");
     }
 
     #[test]

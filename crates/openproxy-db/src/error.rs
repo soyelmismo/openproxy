@@ -1,9 +1,10 @@
 use openproxy_types::error::CoreError;
+use std::sync::Arc;
 
 pub fn map_db_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CoreError {
     CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(Arc::new(e)),
     }
 }
 
@@ -13,6 +14,6 @@ pub fn map_db_error_ctx<E: std::error::Error + Send + Sync + 'static>(
     let c = ctx.into();
     move |e| CoreError::Database {
         message: format!("{c}: {e}"),
-        source: Some(Box::new(e)),
+        source: Some(Arc::new(e)),
     }
 }

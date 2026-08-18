@@ -6,7 +6,6 @@ use openproxy_types::config::CooldownMode;
 use openproxy_types::error::CoreError;
 use openproxy_types::error::Result;
 use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelRowId};
-use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Row, params};
 pub fn create_combo(
     conn: &Connection,
@@ -44,44 +43,108 @@ pub fn create_combo(
     Ok(ComboId(conn.last_insert_rowid()))
 }
 
-macro_rules! combo_select {
-    ($tail:expr) => {
-        concat!(
-            "SELECT id, name, strategy, race_size, created_at, context_window, \
-                    priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
-                    cooldown_factor, lkgp_exploration_rate, selection_window_secs \
-             FROM combos ",
-            $tail
-        )
-    };
-    () => {
-        "SELECT id, name, strategy, race_size, created_at, context_window, \
-                priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
-                cooldown_factor, lkgp_exploration_rate, selection_window_secs \
-         FROM combos"
-    };
-}
+crate::def_table_select!(
+    combo_select,
+    "combos",
+    "id, name, strategy, race_size, created_at, context_window, \
+     priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
+     cooldown_factor, lkgp_exploration_rate, selection_window_secs"
+);
+
+crate::def_table_select!(
+    combo_target_select,
+    "combo_targets ct INNER JOIN providers p ON p.id = ct.provider_id",
+    "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
+     ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
+     ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor"
+);
+
+crate::def_table_select!(
+    combo_target_with_model_select,
+    "combo_targets ct \
+     LEFT JOIN providers p ON p.id = ct.provider_id \
+     LEFT JOIN models m ON m.id = ct.model_row_id \
+     LEFT JOIN combos sc ON sc.id = ct.sub_combo_id \
+     LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id",
+    "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
+     ct.sub_combo_id, sc.name as sub_combo_name, \
+     COALESCE(m.model_id, ''), m.display_name, ct.priority_order, \
+     tc.cooldown_until, \
+     CASE WHEN tc.cooldown_until IS NOT NULL \
+               AND datetime(tc.cooldown_until) > datetime('now') \
+          THEN 1 ELSE 0 END as in_cooldown, \
+     tc.reason, \
+     m.context_length, \
+     m.max_output_tokens, \
+     ct.weight, \
+     COALESCE(p.active, 0) as provider_active, \
+     ct.active, \
+     ct.cooldown_mode, \
+     ct.cooldown_base_secs, \
+     ct.cooldown_max_secs, \
+     ct.cooldown_factor"
+);
+
+crate::def_table_select!(
+    model_provider_id_select,
+    "models",
+    "provider_id"
+);
+
+crate::def_table_select!(
+    model_upstream_id_select,
+    "models",
+    "model_id"
+);
+
+crate::def_table_select!(
+    model_context_length_select,
+    "models",
+    "context_length"
+);
+
+crate::def_table_select!(
+    combo_context_window_select,
+    "combos",
+    "context_window"
+);
+
+crate::def_table_select!(
+    combo_target_ids_select,
+    "combo_targets",
+    "id"
+);
+
+crate::def_table_select!(
+    combo_target_model_sub_select,
+    "combo_targets ct",
+    "ct.model_row_id, ct.sub_combo_id"
+);
+
+crate::def_table_select!(
+    account_healthy_ids_select,
+    "accounts",
+    "id"
+);
 
 pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
-    let row = conn
-        .query_row(combo_select!("WHERE id = ?1"), params![id.0], row_to_combo)
-        .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "get combo {}",
-            id.0
-        )))?;
-    Ok(row)
+    crate::db_query_one!(
+        conn,
+        combo_select!("WHERE id = ?1"),
+        params![id.0],
+        row_to_combo,
+        format!("get combo {}", id.0)
+    )
 }
 
 pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
-    let mut stmt = conn
-        .prepare(combo_select!("ORDER BY id"))
-        .map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map([], row_to_combo)
-        .map_err(crate::error::map_db_error)?;
-    rows.map(|r| r.map_err(crate::error::map_db_error))
-        .collect()
+    crate::db_query_all!(
+        conn,
+        combo_select!("ORDER BY id"),
+        [],
+        row_to_combo,
+        "list combos"
+    )
 }
 
 /// Look up a combo by its exact (case-sensitive) name. Returns `Ok(None)`
@@ -92,16 +155,13 @@ pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
 /// match is case-sensitive to match how the names are stored and surfaced
 /// in the admin / `/v1/models` endpoints.
 pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>> {
-    let mut stmt = conn
-        .prepare(combo_select!("WHERE name = ?1"))
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query_map(params![name], row_to_combo)
-        .map_err(crate::error::map_db_error)?;
-    match rows.next() {
-        Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
-        None => Ok(None),
-    }
+    crate::db_query_one!(
+        conn,
+        combo_select!("WHERE name = ?1"),
+        params![name],
+        row_to_combo,
+        "get combo by name"
+    )
 }
 
 pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
@@ -148,17 +208,12 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     }
 
     // Validate the combo exists.
-    let combo_exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM combos WHERE id = ?1)",
-            params![combo_id.0],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|v| v != 0)
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "check combo {} exists",
-            combo_id.0
-        )))?;
+    let combo_exists = crate::db_exists!(
+        conn,
+        "combos",
+        WHERE id = combo_id.0,
+        format!("check combo {} exists", combo_id.0)
+    )?;
     if !combo_exists {
         return Err(CoreError::ComboNotFound(combo_id.0));
     }
@@ -166,17 +221,12 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     // Flat-target validations: model row exists and is owned by
     // the requested provider.
     if let Some(model_row_id) = model_row_id {
-        let model_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM models WHERE id = ?1)",
-                params![model_row_id.0],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|v| v != 0)
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "check model {} exists",
-                model_row_id.0
-            )))?;
+        let model_exists = crate::db_exists!(
+            conn,
+            "models",
+            WHERE id = model_row_id.0,
+            format!("check model {} exists", model_row_id.0)
+        )?;
         if !model_exists {
             return Err(CoreError::Validation(format!(
                 "model_row_id does not exist: {}",
@@ -192,7 +242,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
         // in depth on top of the FK on `combo_targets.provider_id`.
         let model_provider: String = conn
             .query_row(
-                "SELECT provider_id FROM models WHERE id = ?1",
+                model_provider_id_select!("WHERE id = ?1"),
                 params![model_row_id.0],
                 |r| r.get::<_, String>(0),
             )
@@ -215,17 +265,12 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
         if sub_id == combo_id {
             return Err(CoreError::Validation("combo cannot contain itself".into()));
         }
-        let sub_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM combos WHERE id = ?1)",
-                params![sub_id.0],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|v| v != 0)
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "check sub-combo {} exists",
-                sub_id.0
-            )))?;
+        let sub_exists = crate::db_exists!(
+            conn,
+            "combos",
+            WHERE id = sub_id.0,
+            format!("check sub-combo {} exists", sub_id.0)
+        )?;
         if !sub_exists {
             return Err(CoreError::Validation(format!(
                 "sub_combo_id does not exist: {}",
@@ -256,17 +301,12 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 "account_id is only valid on flat (model) targets".into(),
             ));
         }
-        let account_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)",
-                params![aid.0],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|v| v != 0)
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "check account {} exists",
-                aid.0
-            )))?;
+        let account_exists = crate::db_exists!(
+            conn,
+            "accounts",
+            WHERE id = aid.0,
+            format!("check account {} exists", aid.0)
+        )?;
         if !account_exists {
             return Err(CoreError::AccountNotFound(aid.0));
         }
@@ -282,7 +322,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     let upstream_model_id: Option<String> = if let Some(mrid) = model_row_id {
         Some(
             conn.query_row(
-                "SELECT model_id FROM models WHERE id = ?1",
+                model_upstream_id_select!("WHERE id = ?1"),
                 params![mrid.0],
                 |r| r.get::<_, String>(0),
             )
@@ -297,25 +337,25 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
 
     // Programmatic duplicate check to prevent duplicate targets (since SQLite's UNIQUE
     // constraint does not prevent duplicates when account_id is NULL).
-    let target_exists: bool = conn
-        .query_row(
-            "SELECT EXISTS( \
-             SELECT 1 FROM combo_targets \
-             WHERE combo_id = ?1 \
-               AND provider_id = ?2 \
-               AND COALESCE(account_id, -1) = COALESCE(?3, -1) \
-               AND COALESCE(model_row_id, -1) = COALESCE(?4, -1) \
-               AND COALESCE(sub_combo_id, -1) = COALESCE(?5, -1))",
-            params![
-                combo_id.0,
-                provider_id.as_str(),
-                account_id.map(|a| a.0),
-                model_row_id.map(|m| m.0),
-                sub_combo_id.map(|c| c.0),
-            ],
-            |r| r.get::<_, i64>(0),
-        )
-        .is_ok_and(|v| v != 0);
+    let target_exists: bool = crate::db_exists!(
+        conn,
+        "SELECT EXISTS( \
+         SELECT 1 FROM combo_targets \
+         WHERE combo_id = ?1 \
+           AND provider_id = ?2 \
+           AND COALESCE(account_id, -1) = COALESCE(?3, -1) \
+           AND COALESCE(model_row_id, -1) = COALESCE(?4, -1) \
+           AND COALESCE(sub_combo_id, -1) = COALESCE(?5, -1))",
+        params![
+            combo_id.0,
+            provider_id.as_str(),
+            account_id.map(|a| a.0),
+            model_row_id.map(|m| m.0),
+            sub_combo_id.map(|c| c.0),
+        ],
+        "check target exists"
+    )
+    .unwrap_or(false);
 
     if target_exists {
         return Err(CoreError::Validation(format!(
@@ -415,7 +455,7 @@ pub fn reconnect_orphan_targets(
                 "execute reconnect_orphan_targets (provider={}, upstream={}, new_id={}): {}",
                 provider, upstream_model_id, new_model_row_id.0, e
             ),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     Ok(updated)
 }
@@ -481,25 +521,19 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
     // Targets whose provider has been deactivated (active = 0) or are
     // in active cooldown in `target_cooldowns` (cooldown_until > now)
     // are excluded from the routable result.
-    let mut stmt = conn
-        .prepare(
-            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
-                    ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
-             FROM combo_targets ct \
-             INNER JOIN providers p ON p.id = ct.provider_id \
-             LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
+    crate::db_query_all!(
+        conn,
+        combo_target_select!(
+            "LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
              WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
                  AND (tc.cooldown_until IS NULL OR datetime(tc.cooldown_until) <= datetime('now')) \
                  AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL) \
-             ORDER BY ct.priority_order ASC, ct.id ASC",
-        )
-        .map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map(params![combo_id.0], row_to_target)
-        .map_err(crate::error::map_db_error)?;
-    rows.map(|r| r.map_err(crate::error::map_db_error))
-        .collect()
+             ORDER BY ct.priority_order ASC, ct.id ASC"
+        ),
+        params![combo_id.0],
+        row_to_target,
+        "list targets"
+    )
 }
 
 /// Like [`list_targets`], but joins against the `models` table so the
@@ -514,89 +548,26 @@ pub fn list_targets_with_model(
     conn: &Connection,
     combo_id: ComboId,
 ) -> Result<Vec<ComboTargetWithModel>> {
-    // Same filter + ordering as `list_targets`. The COALESCE on
-    // `m.model_id` defends against a stale row whose underlying model
-    // got deleted out from under it (FK cascade should make that
-    // impossible today, but the dashboard should never crash on a
-    // NULL string column).
-    //
-    // The join against `providers` is a `LEFT JOIN` (not INNER) so that
-    // targets with a deactivated provider are STILL returned. The
-    // dashboard needs to see and manage all targets (including inactive
-    // ones) so the operator can reorder them, delete them, or reactivate
-    // the provider. The `provider_active` flag (from `p.active`) tells
-    // the frontend which targets are currently routable.
-    //
-    // CRITICAL: the routing path (`list_targets` below) still uses
-    // `INNER JOIN providers p ON p.id = ct.provider_id WHERE p.active = 1`
-    // — only active targets are used for actual request routing. This
-    // dashboard view is a SUPERSET (includes inactive-provider targets)
-    // so the reorder validation (which operates on ALL combo_targets
-    // rows) is consistent with what the dashboard shows.
-    //
-    // Without this fix, the GET returned [A, B] (excluding C whose
-    // provider was inactive), the frontend sent `target_ids: [A, B]`,
-    // but the reorder validation compared against [A, B, C] (all
-    // combo_targets rows) → mismatch → 400 "target_ids must be a
-    // permutation of the combo's current targets".
-    //
-    // The `LEFT JOIN models m` is retained (sub-combo targets have
-    // `model_row_id = NULL`). The `LEFT JOIN combos sc` is retained
-    // (for the sub-combo's name). The `LEFT JOIN target_cooldowns tc`
-    // is retained (for the cooldown badge).
-    let mut stmt = conn
-        .prepare(
-            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, sc.name as sub_combo_name, \
-                    COALESCE(m.model_id, ''), m.display_name, ct.priority_order, \
-                    tc.cooldown_until, \
-                    CASE WHEN tc.cooldown_until IS NOT NULL \
-                              AND datetime(tc.cooldown_until) > datetime('now') \
-                         THEN 1 ELSE 0 END as in_cooldown, \
-                    tc.reason, \
-                    m.context_length, \
-                    m.max_output_tokens, \
-                    ct.weight, \
-                    COALESCE(p.active, 0) as provider_active, \
-                    ct.active, \
-                    ct.cooldown_mode, \
-                    ct.cooldown_base_secs, \
-                    ct.cooldown_max_secs, \
-                    ct.cooldown_factor \
-             FROM combo_targets ct \
-             LEFT JOIN providers p ON p.id = ct.provider_id \
-             LEFT JOIN models m ON m.id = ct.model_row_id \
-             LEFT JOIN combos sc ON sc.id = ct.sub_combo_id \
-             LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
-             WHERE ct.combo_id = ?1 \
-             ORDER BY ct.priority_order ASC, ct.id ASC",
-        )
-        .map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map(params![combo_id.0], row_to_target_with_model)
-        .map_err(crate::error::map_db_error)?;
-    rows.map(|r| r.map_err(crate::error::map_db_error))
-        .collect()
+    crate::db_query_all!(
+        conn,
+        combo_target_with_model_select!(
+            "WHERE ct.combo_id = ?1 \
+             ORDER BY ct.priority_order ASC, ct.id ASC"
+        ),
+        params![combo_id.0],
+        row_to_target_with_model,
+        "list targets with model"
+    )
 }
 
 pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTarget>> {
-    let row = conn
-        .query_row(
-            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
-                    ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
-             FROM combo_targets ct \
-             INNER JOIN providers p ON p.id = ct.provider_id \
-             WHERE ct.id = ?1",
-            params![id.0],
-            row_to_target,
-        )
-        .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "get combo_target {}",
-            id.0
-        )))?;
-    Ok(row)
+    crate::db_query_one!(
+        conn,
+        combo_target_select!("WHERE ct.id = ?1"),
+        params![id.0],
+        row_to_target,
+        format!("get combo_target {}", id.0)
+    )
 }
 
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {
@@ -625,7 +596,7 @@ pub fn update_target_priority(
             "update priority_order for combo_target {}: {}",
             target_id.0, e
         ),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
     Ok(())
 }
@@ -773,7 +744,7 @@ pub fn reorder_targets(
     // so a stray id from another combo can never sneak into the
     // validation set.
     let mut stmt = tx
-        .prepare("SELECT id FROM combo_targets WHERE combo_id = ?1")
+        .prepare(combo_target_ids_select!("WHERE combo_id = ?1"))
         .map_err(crate::error::map_db_error)?;
     let current: Vec<i64> = stmt
         .query_map(params![combo_id.0], |r| r.get::<_, i64>(0))
@@ -1133,11 +1104,11 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         id: @id(0, ComboId),
         name: 1,
         strategy: @enum_parse(2, Strategy),
-        race_size: (3, u8),
+        race_size: @expr(race_size),
         created_at: 4,
         context_window: 5,
-        priority_mode: @from_db(6, PriorityMode),
-        cooldown_mode: @from_db(7, CooldownMode),
+        priority_mode: @enum_or_default(6, PriorityMode),
+        cooldown_mode: @enum_or_default(7, CooldownMode),
         cooldown_base_secs: @opt_u64(8),
         cooldown_max_secs: @opt_u64(9),
         cooldown_factor: @opt_u32(10),
@@ -1214,7 +1185,7 @@ fn compute_effective_context_window_recursive(
 
     let cw: Option<i64> = conn
         .query_row(
-            "SELECT context_window FROM combos WHERE id = ?1",
+            combo_context_window_select!("WHERE id = ?1"),
             rusqlite::params![combo_id.0],
             |row| row.get(0),
         )
@@ -1228,9 +1199,7 @@ fn compute_effective_context_window_recursive(
     }
 
     let mut stmt = conn
-        .prepare(
-            "SELECT ct.model_row_id, ct.sub_combo_id FROM combo_targets ct WHERE ct.combo_id = ?1",
-        )
+        .prepare(combo_target_model_sub_select!("WHERE ct.combo_id = ?1"))
         .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(rusqlite::params![combo_id.0])
@@ -1238,8 +1207,8 @@ fn compute_effective_context_window_recursive(
 
     let mut min_window: Option<i64> = None;
     while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
-        let model_row_id: Option<i64> = row.get(0).map_err(crate::error::map_db_error)?;
-        let sub_combo_id: Option<i64> = row.get(1).map_err(crate::error::map_db_error)?;
+        let (model_row_id, sub_combo_id): (Option<i64>, Option<i64>) =
+            crate::map_row_tuple!(row => (0, 1)).map_err(crate::error::map_db_error)?;
 
         let target_cw = if let Some(sub_id) = sub_combo_id {
             compute_effective_context_window_recursive(
@@ -1251,7 +1220,7 @@ fn compute_effective_context_window_recursive(
         } else if let Some(row_id) = model_row_id {
             let model_cw: Option<i64> = conn
                 .query_row(
-                    "SELECT context_length FROM models WHERE id = ?1",
+                    model_context_length_select!("WHERE id = ?1"),
                     rusqlite::params![row_id],
                     |row| row.get(0),
                 )
@@ -1277,8 +1246,8 @@ fn compute_effective_context_window_recursive(
 
 pub fn compute_effective_context_window(
     conn: &rusqlite::Connection,
-    combo_id: openproxy_types::ComboId,
-) -> openproxy_types::error::Result<Option<i64>> {
+    combo_id: ComboId,
+) -> Result<Option<i64>> {
     let mut visited = Vec::new();
     compute_effective_context_window_recursive(conn, combo_id, &mut visited, 0)
 }
@@ -1327,7 +1296,9 @@ pub fn expand_account_rotation(
             continue;
         }
         let mut stmt = conn
-            .prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC")
+            .prepare(account_healthy_ids_select!(
+                "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
+            ))
             .map_err(crate::error::map_db_error)?;
         let mut rows = stmt
             .query(params![t.provider_id.as_str()])

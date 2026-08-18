@@ -5,33 +5,66 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3600;
 
-macro_rules! account_select {
-    ($tail:expr) => {
-        concat!(
-            "SELECT id, provider_id, label, priority, extra_config_json, \
-                    health_status, rate_limited_until, \
-                    quota_session_used, quota_session_limit, quota_session_reset_at, \
-                    quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
-                    quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
-                    quota_model_details, \
-                    auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at, current_proxy_id \
-             FROM accounts ",
-            $tail
-        )
-    };
-    () => {
-        "SELECT id, provider_id, label, priority, extra_config_json, \
-                health_status, rate_limited_until, \
-                quota_session_used, quota_session_limit, quota_session_reset_at, \
-                quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
-                quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
-                quota_model_details, \
-                auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                created_at, current_proxy_id \
-         FROM accounts"
-    };
-}
+crate::def_table_select!(
+    account_select,
+    "accounts",
+    "id, provider_id, label, priority, extra_config_json, \
+     health_status, rate_limited_until, \
+     quota_session_used, quota_session_limit, quota_session_reset_at, \
+     quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
+     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+     quota_model_details, \
+     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
+     created_at, current_proxy_id"
+);
+
+crate::def_table_select!(
+    account_api_key_select,
+    "accounts",
+    "api_key_encrypted"
+);
+
+crate::def_table_select!(
+    account_api_key_label_select,
+    "accounts",
+    "api_key_encrypted, label"
+);
+
+crate::def_table_select!(
+    account_access_token_select,
+    "accounts",
+    "access_token_encrypted"
+);
+
+crate::def_table_select!(
+    account_refresh_token_select,
+    "accounts",
+    "refresh_token_encrypted"
+);
+
+crate::def_table_select!(
+    account_refresh_tokens_select,
+    "accounts",
+    "id, refresh_token_encrypted"
+);
+
+crate::def_table_select!(
+    account_meta_select,
+    "accounts",
+    "id, api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email, extra_config_json"
+);
+
+crate::def_table_select!(
+    account_oauth_specific_select,
+    "accounts",
+    "oauth_provider_specific"
+);
+
+crate::def_table_select!(
+    account_current_proxy_select,
+    "accounts",
+    "current_proxy_id"
+);
 
 pub fn create(
     conn: &Connection,
@@ -75,16 +108,13 @@ pub fn create(
 }
 
 pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<Option<Account>> {
-    let row = conn
-        .query_row(account_select!("WHERE id = ?1"), params![id.0], |row| {
-            row_to_account(row, master_key)
-        })
-        .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "get account {}",
-            id.0
-        )))?;
-    Ok(row)
+    crate::db_query_one!(
+        conn,
+        account_select!("WHERE id = ?1"),
+        params![id.0],
+        |row| row_to_account(row, master_key),
+        format!("get account {}", id.0)
+    )
 }
 
 pub fn list(
@@ -97,25 +127,19 @@ pub fn list(
         None => account_select!("ORDER BY priority ASC, id ASC"),
     };
 
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(crate::error::map_db_error_ctx("list accounts prepare"))?;
-
-    let accounts: Vec<Account> = stmt
-        .query_map(
-            rusqlite::params_from_iter(provider.map(|p| p.as_str())),
-            |row| row_to_account(row, master_key),
-        )
-        .map_err(crate::error::map_db_error)?
-        .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
-        .collect::<Result<Vec<Account>>>()?;
-    Ok(accounts)
+    crate::db_query_all!(
+        conn,
+        sql,
+        rusqlite::params_from_iter(provider.map(|p| p.as_str())),
+        |row| row_to_account(row, master_key),
+        "list accounts"
+    )
 }
 
 pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<String> {
     let blob: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT api_key_encrypted FROM accounts WHERE id = ?1",
+            account_api_key_select!("WHERE id = ?1"),
             params![id.0],
             |r| r.get(0),
         )
@@ -138,9 +162,9 @@ pub fn decrypt_api_key_and_label(
 ) -> Result<(String, Option<String>)> {
     let row: Option<(Option<Vec<u8>>, Option<String>)> = conn
         .query_row(
-            "SELECT api_key_encrypted, label FROM accounts WHERE id = ?1",
+            account_api_key_label_select!("WHERE id = ?1"),
             params![id.0],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| crate::map_row_tuple!(r => (0, 1)),
         )
         .optional()
         .map_err(crate::error::map_db_error_ctx(format!(
@@ -157,15 +181,13 @@ pub fn decrypt_api_key_and_label(
 }
 
 pub fn set_health(conn: &Connection, id: AccountId, health: HealthStatus) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET health_status = ?1 WHERE id = ?2",
-            params![health.as_str(), id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update health for account {}",
-            id.0
-        )))?;
+    let affected = crate::db_update_field!(
+        conn,
+        "accounts",
+        health_status = health.as_str(),
+        WHERE id = id.0,
+        format!("update health for account {}", id.0)
+    )?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -177,15 +199,13 @@ pub fn set_rate_limited_until(
     id: AccountId,
     iso_ts: Option<&str>,
 ) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET rate_limited_until = ?1 WHERE id = ?2",
-            params![iso_ts, id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update rate_limited_until for account {}",
-            id.0
-        )))?;
+    let affected = crate::db_update_field!(
+        conn,
+        "accounts",
+        rate_limited_until = iso_ts,
+        WHERE id = id.0,
+        format!("update rate_limited_until for account {}", id.0)
+    )?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -203,15 +223,13 @@ pub fn update_api_key(
     } else {
         None
     };
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET api_key_encrypted = ?1 WHERE id = ?2",
-            params![blob, id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update api_key for account {}",
-            id.0
-        )))?;
+    let affected = crate::db_update_field!(
+        conn,
+        "accounts",
+        api_key_encrypted = blob,
+        WHERE id = id.0,
+        format!("update api_key for account {}", id.0)
+    )?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -219,15 +237,13 @@ pub fn update_api_key(
 }
 
 pub fn update_label(conn: &Connection, id: AccountId, label: Option<&str>) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET label = ?1 WHERE id = ?2",
-            params![label, id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update label for account {}",
-            id.0
-        )))?;
+    let affected = crate::db_update_field!(
+        conn,
+        "accounts",
+        label = label,
+        WHERE id = id.0,
+        format!("update label for account {}", id.0)
+    )?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -256,15 +272,13 @@ pub fn update_current_proxy(
     id: AccountId,
     proxy_id: Option<&str>,
 ) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
-            params![proxy_id, id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update current_proxy_id for account {}",
-            id.0
-        )))?;
+    let affected = crate::db_update_field!(
+        conn,
+        "accounts",
+        current_proxy_id = proxy_id,
+        WHERE id = id.0,
+        format!("update current_proxy_id for account {}", id.0)
+    )?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -368,7 +382,7 @@ pub fn decrypt_access_token(
 ) -> Result<String> {
     let blob: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT access_token_encrypted FROM accounts WHERE id = ?1",
+            account_access_token_select!("WHERE id = ?1"),
             params![id.0],
             |r| r.get(0),
         )
@@ -392,7 +406,7 @@ pub fn decrypt_refresh_token(
 ) -> Result<Option<String>> {
     let blob: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT refresh_token_encrypted FROM accounts WHERE id = ?1",
+            account_refresh_token_select!("WHERE id = ?1"),
             params![id.0],
             |r| r.get(0),
         )
@@ -416,13 +430,13 @@ pub fn decrypt_refresh_tokens(
     }
     let rows = crate::batch::query_in_chunks_by(
         conn,
-        "SELECT id, refresh_token_encrypted FROM accounts WHERE id IN ({})",
+        account_refresh_tokens_select!("WHERE id IN ({})"),
         ids,
         crate::batch::DEFAULT_CHUNK_SIZE,
         |id| id.0,
         |row| {
-            let id: i64 = row.get(0)?;
-            let blob: Option<Vec<u8>> = row.get(1)?;
+            let (id, blob): (i64, Option<Vec<u8>>) =
+                crate::map_row_tuple!(row => ((0, i64), (1, Option<Vec<u8>>)))?;
             let token = blob.map(|b| master_key.decrypt(&b)).transpose();
             Ok((AccountId(id), token))
         },
@@ -441,115 +455,70 @@ pub fn list_expiring_oauth_accounts(
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
-    let mut stmt = conn
-        .prepare(account_select!(
+    crate::db_query_all!(
+        conn,
+        account_select!(
             "WHERE auth_type = 'oauth' \
                AND expires_at IS NOT NULL \
                AND expires_at <= ?1 \
              ORDER BY priority ASC, id ASC"
-        ))
-        .map_err(crate::error::map_db_error)?;
-
-    let rows = stmt
-        .query_map(params![threshold], |row| row_to_account(row, master_key))
-        .map_err(crate::error::map_db_error)?;
-
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    Ok(out)
+        ),
+        params![threshold],
+        |row| row_to_account(row, master_key),
+        "list expiring oauth accounts"
+    )
 }
 
 pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
-    let mut stmt = conn
-        .prepare("SELECT id FROM accounts WHERE auth_type = 'oauth'")
-        .map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, i64>(0))
-        .map_err(crate::error::map_db_error)?;
-    rows.map(|r| r.map_err(crate::error::map_db_error))
-        .collect()
+    crate::db_query_all!(
+        conn,
+        "SELECT id FROM accounts WHERE auth_type = 'oauth'",
+        [],
+        |r| r.get::<_, i64>(0),
+        "list oauth account ids"
+    )
 }
 
 pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT provider_id FROM accounts WHERE auth_type = 'oauth'")
-        .map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))
-        .map_err(crate::error::map_db_error)?;
-    rows.map(|r| r.map_err(crate::error::map_db_error))
-        .collect()
+    crate::db_query_all!(
+        conn,
+        "SELECT DISTINCT provider_id FROM accounts WHERE auth_type = 'oauth'",
+        [],
+        |r| r.get::<_, String>(0),
+        "list oauth provider ids"
+    )
 }
 
 fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::Result<Account> {
-    let id: i64 = row.get(0)?;
-    let provider_id: String = row.get(1)?;
-    let label: Option<String> = row.get(2)?;
-    let priority: i32 = row.get(3)?;
-    let extra_config_json: Option<String> = row.get(4)?;
-    let health_status: String = row.get(5)?;
-    let rate_limited_until: Option<String> = row.get(6)?;
-    let quota_session_used: Option<i64> = row.get(7)?;
-    let quota_session_limit: Option<i64> = row.get(8)?;
-    let quota_session_reset_at: Option<String> = row.get(9)?;
-    let quota_weekly_used: Option<i64> = row.get(10)?;
-    let quota_weekly_limit: Option<i64> = row.get(11)?;
-    let quota_weekly_reset_at: Option<String> = row.get(12)?;
-    let quota_plan_name: Option<String> = row.get(13)?;
-    let quota_last_fetched_at: Option<String> = row.get(14)?;
-    let quota_fetch_error: Option<String> = row.get(15)?;
-    let quota_model_details_raw: Option<String> = row.get(16).unwrap_or(None);
-    let auth_type: String = row.get(17)?;
-    let email: Option<String> = row.get(18)?;
-    let oauth_scope: Option<String> = row.get(19)?;
     let oauth_provider_specific_encrypted: Option<String> = row.get(20)?;
-    let expires_at: Option<String> = row.get(21)?;
-    let created_at: String = row.get(22)?;
-    let quota_model_details: Option<serde_json::Value> = quota_model_details_raw
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| serde_json::from_str(s).ok());
-
-    let health_status = HealthStatus::parse(&health_status).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            5,
-            rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-        )
-    })?;
-
     let oauth_provider_specific =
         decrypt_oauth_provider_specific(oauth_provider_specific_encrypted.as_deref(), master_key);
 
-    let current_proxy_id: Option<String> = row.get(23)?;
-
-    Ok(Account {
-        id: AccountId(id),
-        provider_id: ProviderId::new(provider_id),
-        label,
-        priority,
-        extra_config_json,
-        health_status,
-        rate_limited_until,
-        quota_session_used,
-        quota_session_limit,
-        quota_session_reset_at,
-        quota_weekly_used,
-        quota_weekly_limit,
-        quota_weekly_reset_at,
-        quota_plan_name,
-        quota_last_fetched_at,
-        quota_fetch_error,
-        quota_model_details,
-        auth_type,
-        email,
-        oauth_scope,
-        oauth_provider_specific,
-        expires_at,
-        created_at,
-        current_proxy_id,
+    crate::map_row_struct!(row, Account {
+        id: @id(0, AccountId),
+        provider_id: @id_str(1, ProviderId),
+        label: 2,
+        priority: 3,
+        extra_config_json: 4,
+        health_status: @enum_parse(5, HealthStatus),
+        rate_limited_until: 6,
+        quota_session_used: 7,
+        quota_session_limit: 8,
+        quota_session_reset_at: 9,
+        quota_weekly_used: 10,
+        quota_weekly_limit: 11,
+        quota_weekly_reset_at: 12,
+        quota_plan_name: 13,
+        quota_last_fetched_at: 14,
+        quota_fetch_error: 15,
+        quota_model_details: @json(16),
+        auth_type: 17,
+        email: 18,
+        oauth_scope: 19,
+        oauth_provider_specific: @expr(oauth_provider_specific),
+        expires_at: 21,
+        created_at: 22,
+        current_proxy_id: 23,
     })
 }
 
@@ -598,23 +567,11 @@ pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result
 
     let rows: Vec<AccountRowTuple> = crate::batch::query_in_chunks_by(
         conn,
-        "SELECT id, api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email, extra_config_json FROM accounts WHERE id IN ({})",
+        account_meta_select!("WHERE id IN ({})"),
         account_ids,
         crate::batch::DEFAULT_CHUNK_SIZE,
         |id| id.0,
-        |r| {
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get(6)?,
-                r.get(7)?,
-                r.get(8)?,
-            ))
-        },
+        |r| crate::map_row_tuple!(r => (0, 1, 2, 3, 4, 5, 6, 7, 8)),
     )
     .map_err(crate::error::map_db_error_ctx("batch query accounts"))?;
 
@@ -690,7 +647,7 @@ pub fn update_antigravity_project_id(
 ) -> Result<()> {
     let current_json_opt: Option<String> = conn
         .query_row(
-            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            account_oauth_specific_select!("WHERE id = ?1"),
             params![account_id],
             |row| row.get(0),
         )
@@ -725,7 +682,7 @@ pub fn update_antigravity_project_id(
 
 pub fn get_current_proxy_id(conn: &Connection, account_id: AccountId) -> Result<Option<String>> {
     conn.query_row(
-        "SELECT current_proxy_id FROM accounts WHERE id = ?1",
+        account_current_proxy_select!("WHERE id = ?1"),
         params![account_id.0],
         |row| row.get(0),
     )

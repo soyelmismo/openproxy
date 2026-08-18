@@ -81,3 +81,62 @@ pub async fn fetch_opencode_models(
         .collect();
     Ok(out)
 }
+
+#[macro_export]
+macro_rules! define_opencode_adapter {
+    (
+        $(#[$meta:meta])*
+        $struct_name:ident,
+        id: $id:literal,
+        name: $name:literal,
+        base_url: $base_url:literal $(,)?
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        pub struct $struct_name {
+            config: $crate::adapters::ProviderAdapterConfig,
+        }
+
+        impl $struct_name {
+            pub fn new() -> Self {
+                Self {
+                    config: $crate::adapters::ProviderAdapterConfig {
+                        id: openproxy_types::ProviderId::new($id),
+                        name: $name.into(),
+                        anonymous_fallback: true,
+                        rate_limit_scope: "account".into(),
+                        base_url: $base_url.into(),
+                        auth_type: $crate::adapters::AdapterAuthType::Bearer,
+                        format: $crate::adapters::AdapterFormat::Mixed,
+                        extra_headers: vec![],
+                    },
+                }
+            }
+        }
+
+        $crate::adapters::derive_default_from_new!($struct_name);
+
+        impl $crate::adapters::ProviderAdapter for $struct_name {
+            fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
+                &self.config
+            }
+
+            fn build_headers(
+                &self,
+                api_key: &str,
+                target_format: openproxy_types::TargetFormat,
+                _model: &openproxy_types::ModelId,
+            ) -> Vec<(String, String)> {
+                $crate::adapters::opencode_common::build_opencode_headers(self, api_key, target_format)
+            }
+
+            async fn fetch_models(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+            ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
+                $crate::adapters::opencode_common::fetch_opencode_models(self, upstream_client, api_key).await
+            }
+        }
+    };
+}

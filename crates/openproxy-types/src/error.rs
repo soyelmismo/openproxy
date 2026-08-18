@@ -44,7 +44,7 @@ impl fmt::Display for ErrorContext {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum CoreError {
     #[error("config: {0}")]
     Config(String),
@@ -52,7 +52,7 @@ pub enum CoreError {
     #[error("database: {message}")]
     Database {
         message: String,
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+        source: Option<std::sync::Arc<dyn std::error::Error + Send + Sync>>,
     },
 
     #[error("migration {version} failed: {message}")]
@@ -142,73 +142,10 @@ impl CoreError {
         }
     }
 
-    /// Produce a best-effort clone that drops any non-cloneable boxed source.
-    ///
-    /// `CoreError` cannot derive `Clone` because the `Database` variant holds a
-    /// `Box<dyn Error + Send + Sync>`. Callers that need to ship a
-    /// [`CoreError`] across an async boundary (e.g. into a `PipelineResult`)
-    /// use this method, which copies the textual message and drops the
-    /// source. The semantic content of the error is preserved: the variant,
-    /// the message, and any structured fields (status, retry_after_ms,
-    /// provider, model, account) survive.
+    /// Produce a clone of the error.
+    #[inline]
     pub fn clone_for_result(&self) -> CoreError {
-        match self {
-            CoreError::Config(s) => CoreError::Config(s.to_owned()),
-            CoreError::Database { message, source: _ } => CoreError::Database {
-                message: message.to_owned(),
-                source: None,
-            },
-            CoreError::Migration { version, message } => CoreError::Migration {
-                version: *version,
-                message: message.to_owned(),
-            },
-            CoreError::ProviderNotFound(s) => CoreError::ProviderNotFound(s.to_owned()),
-            CoreError::AccountNotFound(i) => CoreError::AccountNotFound(*i),
-            CoreError::ComboNotFound(i) => CoreError::ComboNotFound(*i),
-            CoreError::ModelNotFound { provider, model } => CoreError::ModelNotFound {
-                provider: provider.to_owned(),
-                model: model.to_owned(),
-            },
-            CoreError::NoHealthyTargets(i) => CoreError::NoHealthyTargets(*i),
-            CoreError::UpstreamTimeout { phase, ms } => CoreError::UpstreamTimeout {
-                phase: phase.to_owned(),
-                ms: *ms,
-            },
-            CoreError::UpstreamError {
-                status,
-                provider,
-                model,
-                body,
-                is_proxy_rotated,
-            } => CoreError::UpstreamError {
-                status: *status,
-                provider: provider.to_owned(),
-                model: model.to_owned(),
-                body: body.to_owned(),
-                is_proxy_rotated: *is_proxy_rotated,
-            },
-            CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.to_owned()),
-            CoreError::RateLimited {
-                provider,
-                retry_after_ms,
-                is_proxy_rotated,
-            } => CoreError::RateLimited {
-                provider: provider.to_owned(),
-                retry_after_ms: *retry_after_ms,
-                is_proxy_rotated: *is_proxy_rotated,
-            },
-            CoreError::Parse(s) => CoreError::Parse(s.to_owned()),
-            CoreError::Cancelled(r) => CoreError::Cancelled(*r),
-            CoreError::RaceLost => CoreError::RaceLost,
-            CoreError::Auth(s) => CoreError::Auth(s.to_owned()),
-            CoreError::Validation(s) => CoreError::Validation(s.to_owned()),
-            CoreError::Internal(s) => CoreError::Internal(s.to_owned()),
-            CoreError::ServiceUnavailable(s) => CoreError::ServiceUnavailable(s.to_owned()),
-            CoreError::NotFound { what, id } => CoreError::NotFound {
-                what: what.to_owned(),
-                id: id.to_owned(),
-            },
-        }
+        self.clone()
     }
 
     /// HTTP status code to return to the client.
@@ -264,6 +201,85 @@ impl CoreError {
             CoreError::NotFound { .. } => "not_found",
         }
     }
+
+    /// Reconstructs a [`CoreError`] from a canonical error code and message.
+    pub fn from_code_and_message(code: &str, message: &str) -> Option<Self> {
+        match code {
+            "auth" => Some(CoreError::Auth(message.to_string())),
+            "validation" => Some(CoreError::Validation(message.to_string())),
+            "provider_not_found" => Some(CoreError::ProviderNotFound(message.to_string())),
+            "account_not_found" => message
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .map(CoreError::AccountNotFound),
+            "combo_not_found" => message
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .map(CoreError::ComboNotFound),
+            "model_not_found" => Some(CoreError::ModelNotFound {
+                provider: "<see message>".to_string(),
+                model: message.to_string(),
+            }),
+            "no_healthy_targets" => message
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .map(CoreError::NoHealthyTargets),
+            "upstream_timeout" => Some(CoreError::UpstreamTimeout {
+                phase: "<unknown>".to_string(),
+                ms: 0,
+            }),
+            "upstream_connection" => Some(CoreError::UpstreamConnection(message.to_string())),
+            "upstream_error" => Some(CoreError::UpstreamError {
+                status: 0,
+                provider: "<see message>".to_string(),
+                model: "<see message>".to_string(),
+                body: message.to_string(),
+                is_proxy_rotated: false,
+            }),
+            "rate_limited" => Some(CoreError::RateLimited {
+                provider: "<see message>".to_string(),
+                retry_after_ms: 0,
+                is_proxy_rotated: false,
+            }),
+            "parse_error" => Some(CoreError::Parse(message.to_string())),
+            "client_disconnected" => Some(CoreError::Cancelled(CancelReason::ClientDisconnected)),
+            "watchdog_timeout" => Some(CoreError::Cancelled(CancelReason::WatchdogTimeout)),
+            "race_lost" => Some(CoreError::RaceLost),
+            "database" => Some(CoreError::Database {
+                message: message.to_string(),
+                source: None,
+            }),
+            "migration" => Some(CoreError::Migration {
+                version: 0,
+                message: message.to_string(),
+            }),
+            "config" => Some(CoreError::Config(message.to_string())),
+            "internal" => Some(CoreError::Internal(message.to_string())),
+            "service_unavailable" => Some(CoreError::ServiceUnavailable(message.to_string())),
+            "not_found" => {
+                if let Some((what, id)) = message.split_once(" not found: ") {
+                    Some(CoreError::NotFound {
+                        what: what.trim().to_string(),
+                        id: id.trim().to_string(),
+                    })
+                } else if let Some((what, id)) = message.split_once(':') {
+                    Some(CoreError::NotFound {
+                        what: what.trim().to_string(),
+                        id: id.trim().to_string(),
+                    })
+                } else {
+                    Some(CoreError::NotFound {
+                        what: "resource".to_string(),
+                        id: message.to_string(),
+                    })
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -271,6 +287,72 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_core_error_clone() {
+        let err = CoreError::Database {
+            message: "disk full".into(),
+            source: None,
+        };
+        let cloned = err.clone();
+        assert_eq!(err.code(), cloned.code());
+        assert_eq!(err.http_status(), cloned.http_status());
+        assert_eq!(err.clone_for_result().code(), "database");
+    }
+
+    #[test]
+    fn test_from_code_and_message() {
+        assert!(matches!(
+            CoreError::from_code_and_message("auth", "bad token"),
+            Some(CoreError::Auth(msg)) if msg == "bad token"
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("validation", "invalid param"),
+            Some(CoreError::Validation(msg)) if msg == "invalid param"
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("provider_not_found", "openrouter"),
+            Some(CoreError::ProviderNotFound(msg)) if msg == "openrouter"
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("account_not_found", "42"),
+            Some(CoreError::AccountNotFound(42))
+        ));
+        assert!(CoreError::from_code_and_message("account_not_found", "nan").is_none());
+        assert!(matches!(
+            CoreError::from_code_and_message("combo_not_found", "10"),
+            Some(CoreError::ComboNotFound(10))
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("no_healthy_targets", "99"),
+            Some(CoreError::NoHealthyTargets(99))
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("service_unavailable", "overloaded"),
+            Some(CoreError::ServiceUnavailable(msg)) if msg == "overloaded"
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("watchdog_timeout", "timeout"),
+            Some(CoreError::Cancelled(CancelReason::WatchdogTimeout))
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("client_disconnected", "drop"),
+            Some(CoreError::Cancelled(CancelReason::ClientDisconnected))
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("race_lost", "loser"),
+            Some(CoreError::RaceLost)
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("not_found", "ticket not found: abc-123"),
+            Some(CoreError::NotFound { what, id }) if what == "ticket" && id == "abc-123"
+        ));
+        assert!(matches!(
+            CoreError::from_code_and_message("not_found", "user: 42"),
+            Some(CoreError::NotFound { what, id }) if what == "user" && id == "42"
+        ));
+        assert!(CoreError::from_code_and_message("unknown_code", "foo").is_none());
+    }
 
     #[test]
     fn http_status_mapping() {

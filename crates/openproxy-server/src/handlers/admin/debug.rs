@@ -142,7 +142,7 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
                              mv data.db data.db.bak && \
                              sqlite3 data.db < recovered.sql'"
                         ),
-                        source: Some(Box::new(e)),
+                        source: Some(std::sync::Arc::new(e)),
                     }));
                 }
             }
@@ -193,7 +193,7 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
                                  may be locked by another process. Free disk space and retry, \
                                  or restart the server."
                             ),
-                            source: Some(Box::new(e2)),
+                            source: Some(std::sync::Arc::new(e2)),
                         }))
                     }
                 }
@@ -247,7 +247,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         let table_names = openproxy_db::maintenance::list_user_tables(&w).map_err(|e| {
             ApiError(CoreError::Database {
                 message: format!("repair: list tables: {e}"),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })
         })?;
 

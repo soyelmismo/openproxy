@@ -17,6 +17,45 @@ pub struct NotificationRow {
     pub provider_id: Option<String>,
 }
 
+crate::def_table_select!(
+    notification_select,
+    "notifications",
+    "id, kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id"
+);
+
+crate::def_table_select!(
+    notification_id_select,
+    "notifications",
+    "id"
+);
+
+crate::def_table_select!(
+    notification_dedup_select,
+    "notifications",
+    "id, dedup_key"
+);
+
+crate::def_table_select!(
+    notification_created_at_select,
+    "notifications",
+    "created_at"
+);
+
+impl crate::crud::FromRow for NotificationRow {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        crate::map_row_struct!(row, NotificationRow {
+            id: 0,
+            kind: 1,
+            payload: @json_or_default(2),
+            read_at: 3,
+            archived_at: 4,
+            created_at: 5,
+            dedup_key: 6,
+            provider_id: 7,
+        })
+    }
+}
+
 /// Insert a notification row. Uses `INSERT OR IGNORE` so the dedup unique
 /// index silently drops duplicates within the same UTC day.
 ///
@@ -49,9 +88,10 @@ pub fn insert(
         // that blocked the insert.
         let existing: Option<i64> = if let Some(dk) = dedup_key {
             conn.query_row(
-                "SELECT id FROM notifications
-                 WHERE kind = ?1 AND dedup_key = ?2 AND date(created_at) = date('now')
-                 LIMIT 1",
+                notification_id_select!(
+                    "WHERE kind = ?1 AND dedup_key = ?2 AND date(created_at) = date('now') \
+                     LIMIT 1"
+                ),
                 params![kind, dk],
                 |row| row.get(0),
             )
@@ -150,11 +190,13 @@ pub fn insert_many(
             let missing_rows: Vec<(i64, String)> =
                 crate::batch::query_in_chunks_with_params(
                     conn,
-                    "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
+                    notification_dedup_select!(
+                        "WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')"
+                    ),
                     &[&kind as &dyn rusqlite::ToSql],
                     &dedup_keys,
                     crate::batch::DEFAULT_CHUNK_SIZE,
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| crate::map_row_tuple!(r => (0, 1)),
                 )
                 .map_err(crate::error::map_db_error)?;
             for (id, dk) in missing_rows {
@@ -190,7 +232,7 @@ pub fn insert_many(
 /// Get created_at timestamp for a notification ID.
 pub fn get_created_at(conn: &Connection, id: i64) -> Result<Option<String>> {
     conn.query_row(
-        "SELECT created_at FROM notifications WHERE id = ?1",
+        notification_created_at_select!("WHERE id = ?1"),
         params![id],
         |row| row.get(0),
     )
@@ -214,118 +256,99 @@ pub fn list(
     before_id: Option<i64>,
 ) -> Result<Vec<NotificationRow>> {
     let limit = limit.clamp(1, 200);
-    let sql =
-        format!(
-        "SELECT id, kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id
-         FROM notifications
-         WHERE archived_at IS NULL{unread}
-           AND id < COALESCE(:before, 9223372036854775807)
-         ORDER BY id DESC LIMIT :limit",
-        unread = if unread_only { " AND read_at IS NULL" } else { "" }
-    );
-
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map(
-            &[
-                (":before", &before_id as &dyn rusqlite::ToSql),
-                (":limit", &limit as &dyn rusqlite::ToSql),
-            ],
-            |row| {
-                let payload_str: String = row.get(2)?;
-                let payload: serde_json::Value =
-                    serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
-                Ok(NotificationRow {
-                    id: row.get(0)?,
-                    kind: row.get(1)?,
-                    payload,
-                    read_at: row.get(3)?,
-                    archived_at: row.get(4)?,
-                    created_at: row.get(5)?,
-                    dedup_key: row.get(6)?,
-                    provider_id: row.get(7)?,
-                })
-            },
+    let sql = if unread_only {
+        notification_select!(
+            "WHERE archived_at IS NULL AND read_at IS NULL \
+             AND id < COALESCE(?1, 9223372036854775807) \
+             ORDER BY id DESC LIMIT ?2"
         )
-        .map_err(crate::error::map_db_error)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    Ok(out)
+    } else {
+        notification_select!(
+            "WHERE archived_at IS NULL \
+             AND id < COALESCE(?1, 9223372036854775807) \
+             ORDER BY id DESC LIMIT ?2"
+        )
+    };
+
+    crate::db_query_all!(
+        conn,
+        sql,
+        params![before_id, limit],
+        "list notifications"
+    )
 }
 
 /// Count unread, non-archived notifications.
 pub fn unread_count(conn: &Connection) -> Result<i64> {
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM notifications
-             WHERE read_at IS NULL AND archived_at IS NULL",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(crate::error::map_db_error_ctx("unread_count"))?;
-    Ok(count)
+    let count: Option<i64> = crate::db_query_one!(
+        conn,
+        "SELECT COUNT(*) FROM notifications \
+         WHERE read_at IS NULL AND archived_at IS NULL",
+        [],
+        |row| row.get(0),
+        "unread_count"
+    )?;
+    Ok(count.unwrap_or(0))
 }
 
 /// Mark a single notification as read (sets `read_at` to now). Idempotent.
 pub fn mark_read(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute(
+    crate::db_execute!(
+        conn,
         "UPDATE notifications SET read_at = datetime('now') WHERE id = ?1 AND read_at IS NULL",
         params![id],
-    )
-    .map_err(crate::error::map_db_error_ctx("mark_read"))?;
+        "mark_read"
+    )?;
     Ok(())
 }
 
 /// Mark all unread, non-archived notifications as read. Returns the number of rows updated.
 pub fn mark_all_read(conn: &Connection) -> Result<usize> {
-    let changed = conn
-        .execute(
-            "UPDATE notifications SET read_at = datetime('now')
-             WHERE read_at IS NULL AND archived_at IS NULL",
-            [],
-        )
-        .map_err(crate::error::map_db_error_ctx("mark_all_read"))?;
-    Ok(changed)
+    crate::db_execute!(
+        conn,
+        "UPDATE notifications SET read_at = datetime('now') \
+         WHERE read_at IS NULL AND archived_at IS NULL",
+        [],
+        "mark_all_read"
+    )
 }
 
 /// Archive all non-archived notifications (sets `archived_at` to now).
 /// Returns the number of rows updated.
 pub fn archive_all(conn: &Connection) -> Result<usize> {
-    let changed = conn
-        .execute(
-            "UPDATE notifications SET archived_at = datetime('now')
-             WHERE archived_at IS NULL",
-            [],
-        )
-        .map_err(crate::error::map_db_error_ctx("archive_all"))?;
-    Ok(changed)
+    crate::db_execute!(
+        conn,
+        "UPDATE notifications SET archived_at = datetime('now') \
+         WHERE archived_at IS NULL",
+        [],
+        "archive_all"
+    )
 }
 
 /// Archive a single notification (sets `archived_at` to now).
 pub fn archive(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute(
-        "UPDATE notifications SET archived_at = datetime('now')
+    crate::db_execute!(
+        conn,
+        "UPDATE notifications SET archived_at = datetime('now') \
          WHERE id = ?1 AND archived_at IS NULL",
         params![id],
-    )
-    .map_err(crate::error::map_db_error_ctx("archive"))?;
+        "archive"
+    )?;
     Ok(())
 }
 
 /// Permanently delete a notification.
 pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
-    let changed = conn
-        .execute(
-            "DELETE FROM notifications
-             WHERE id = ?1 AND (
-                 kind = 'system'
-                 OR created_at < datetime('now', '-30 days')
-             )",
-            params![id],
-        )
-        .map_err(crate::error::map_db_error_ctx("delete notification"))?;
+    let changed = crate::db_execute!(
+        conn,
+        "DELETE FROM notifications \
+         WHERE id = ?1 AND ( \
+             kind = 'system' \
+             OR created_at < datetime('now', '-30 days') \
+         )",
+        params![id],
+        "delete notification"
+    )?;
     Ok(changed > 0)
 }
 

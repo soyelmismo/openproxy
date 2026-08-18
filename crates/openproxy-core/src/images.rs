@@ -156,31 +156,18 @@ pub async fn execute_image_generation(
             .skip(attempt)
             .any(|t| t.provider.as_str() != "horde");
 
-        if !is_target_available(
-            db_pool,
-            circuit_breaker,
-            target.account_id,
-            target.combo_target_id,
-        ) {
-            continue;
-        }
+        crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
 
         // Publish live log in-flight stage event
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: Some(target.provider.as_str().to_string()),
-            upstream_model_id: Some(target.upstream_model.clone()),
-            stage: "attempt_started".to_string(),
+        openproxy_types::emit_stage_event!(
+            request_id: request_id,
+            trace_id: trace_id,
+            stage: "attempt_started",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: None,
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-        });
+            provider_id: target.provider.as_str(),
+            upstream_model_id: target.upstream_model.clone(),
+            endpoint_kind: openproxy_types::EndpointKind::Image,
+        );
 
         // Adapter resolution.
         let Some(adapter) = adapters
@@ -234,24 +221,18 @@ pub async fn execute_image_generation(
         {
             Ok(r) => r,
             Err(e) => {
-                if let Some(account_id) = target.account_id {
-                    circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                }
-                openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                    request_id: request_id.to_string(),
-                    trace_id: trace_id.clone(),
-                    provider_id: Some(target.provider.as_str().to_string()),
-                    upstream_model_id: Some(target.upstream_model.clone()),
-                    stage: "failed".to_string(),
+                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+                openproxy_types::emit_stage_event!(
+                    request_id: request_id,
+                    trace_id: trace_id,
+                    stage: "failed",
                     elapsed_ms: started.elapsed().as_millis() as u64,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: Some(503),
-                    error: Some(format!("{e:?}")),
-                    stop_reason: None,
-                    timestamp: None,
-                    endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                });
+                    provider_id: target.provider.as_str(),
+                    upstream_model_id: target.upstream_model.clone(),
+                    status_code: 503,
+                    error: format!("{e:?}"),
+                    endpoint_kind: openproxy_types::EndpointKind::Image,
+                );
                 tracing::warn!(
                     "Image target failed (connection error): provider={}, error={:?}",
                     target.provider,
@@ -267,24 +248,18 @@ pub async fn execute_image_generation(
             Ok(b) => b,
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-                if let Some(account_id) = target.account_id {
-                    circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                }
-                openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                    request_id: request_id.to_string(),
-                    trace_id: trace_id.clone(),
-                    provider_id: Some(target.provider.as_str().to_string()),
-                    upstream_model_id: Some(target.upstream_model.clone()),
-                    stage: "failed".to_string(),
+                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+                openproxy_types::emit_stage_event!(
+                    request_id: request_id,
+                    trace_id: trace_id,
+                    stage: "failed",
                     elapsed_ms: started.elapsed().as_millis() as u64,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: Some(status_code),
-                    error: Some(format!("{err:?}")),
-                    stop_reason: None,
-                    timestamp: None,
-                    endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                });
+                    provider_id: target.provider.as_str(),
+                    upstream_model_id: target.upstream_model.clone(),
+                    status_code: status_code,
+                    error: format!("{err:?}"),
+                    endpoint_kind: openproxy_types::EndpointKind::Image,
+                );
                 tracing::warn!(
                     "Image target body read failed: provider={}, error={:?}",
                     target.provider,
@@ -296,25 +271,19 @@ pub async fn execute_image_generation(
         };
 
         if status_code >= 400 {
-            if let Some(account_id) = target.account_id {
-                circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-            }
+            crate::guarded_unary_target!(record_failure: circuit_breaker, target);
             let err_text = String::from_utf8_lossy(&body_bytes);
-            openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                request_id: request_id.to_string(),
-                trace_id: trace_id.clone(),
-                provider_id: Some(target.provider.as_str().to_string()),
-                upstream_model_id: Some(target.upstream_model.clone()),
-                stage: "failed".to_string(),
+            openproxy_types::emit_stage_event!(
+                request_id: request_id,
+                trace_id: trace_id,
+                stage: "failed",
                 elapsed_ms: started.elapsed().as_millis() as u64,
-                connect_ms: None,
-                ttft_ms: None,
-                status_code: Some(status_code),
-                error: Some(err_text.to_string()),
-                stop_reason: None,
-                timestamp: None,
-                endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-            });
+                provider_id: target.provider.as_str(),
+                upstream_model_id: target.upstream_model.clone(),
+                status_code: status_code,
+                error: err_text.to_string(),
+                endpoint_kind: openproxy_types::EndpointKind::Image,
+            );
             tracing::warn!(
                 "Image target returned error status: provider={}, status={}, body={}",
                 target.provider,
@@ -354,25 +323,17 @@ pub async fn execute_image_generation(
                 Ok(res) => res,
                 Err(e) => {
                     let err = CoreError::UpstreamConnection(format!("horde generation error: {e}"));
-                    if let Some(account_id) = target.account_id {
-                        circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                    }
-                    openproxy_types::usage::publish_stage_event(
-                        openproxy_types::usage::StageEvent {
-                            request_id: request_id.to_string(),
-                            trace_id: trace_id.clone(),
-                            provider_id: Some(target.provider.as_str().to_string()),
-                            upstream_model_id: Some(target.upstream_model.clone()),
-                            stage: "failed".to_string(),
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: Some(504),
-                            error: Some(format!("{err:?}")),
-                            stop_reason: None,
-                            timestamp: None,
-                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                        },
+                    crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+                    openproxy_types::emit_stage_event!(
+                        request_id: request_id,
+                        trace_id: trace_id,
+                        stage: "failed",
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        provider_id: target.provider.as_str(),
+                        upstream_model_id: target.upstream_model.clone(),
+                        status_code: 504,
+                        error: format!("{err:?}"),
+                        endpoint_kind: openproxy_types::EndpointKind::Image,
                     );
                     tracing::warn!("Horde generation polling failed: {err:?}");
                     last_error = Some(err);
@@ -395,21 +356,16 @@ pub async fn execute_image_generation(
         }
 
         // Publish live log completed event
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: Some(target.provider.as_str().to_string()),
-            upstream_model_id: Some(target.upstream_model.clone()),
-            stage: "completed".to_string(),
+        openproxy_types::emit_stage_event!(
+            request_id: request_id,
+            trace_id: trace_id,
+            stage: "completed",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: Some(status_code),
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-        });
+            provider_id: target.provider.as_str(),
+            upstream_model_id: target.upstream_model.clone(),
+            status_code: status_code,
+            endpoint_kind: openproxy_types::EndpointKind::Image,
+        );
 
         // Record usage row in openproxy-db.
         let total_ms = started.elapsed().as_millis() as u64;
@@ -878,31 +834,18 @@ async fn execute_image_multipart(
             .skip(attempt)
             .any(|t| t.provider.as_str() != "horde");
 
-        if !is_target_available(
-            ctx.db_pool,
-            ctx.circuit_breaker,
-            target.account_id,
-            target.combo_target_id,
-        ) {
-            continue;
-        }
+        crate::guarded_unary_target!(check: ctx.db_pool, ctx.circuit_breaker, target);
 
         // Publish live log in-flight stage event
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: Some(target.provider.as_str().to_string()),
-            upstream_model_id: Some(target.upstream_model.clone()),
-            stage: "attempt_started".to_string(),
+        openproxy_types::emit_stage_event!(
+            request_id: request_id,
+            trace_id: trace_id,
+            stage: "attempt_started",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: None,
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-        });
+            provider_id: target.provider.as_str(),
+            upstream_model_id: target.upstream_model.clone(),
+            endpoint_kind: openproxy_types::EndpointKind::Image,
+        );
 
         // Adapter resolution.
         let Some(adapter) = ctx
@@ -962,26 +905,17 @@ async fn execute_image_multipart(
             match horde_result {
                 Ok((resp, url)) => (resp, url),
                 Err(e) => {
-                    if let Some(account_id) = target.account_id {
-                        ctx.circuit_breaker
-                            .record_failure(CircuitBreakerKey::Account(account_id));
-                    }
-                    openproxy_types::usage::publish_stage_event(
-                        openproxy_types::usage::StageEvent {
-                            request_id: request_id.to_string(),
-                            trace_id: trace_id.clone(),
-                            provider_id: Some(target.provider.as_str().to_string()),
-                            upstream_model_id: Some(target.upstream_model.clone()),
-                            stage: "failed".to_string(),
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: Some(503),
-                            error: Some(format!("{e:?}")),
-                            stop_reason: None,
-                            timestamp: None,
-                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                        },
+                    crate::guarded_unary_target!(record_failure: ctx.circuit_breaker, target);
+                    openproxy_types::emit_stage_event!(
+                        request_id: request_id,
+                        trace_id: trace_id,
+                        stage: "failed",
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        provider_id: target.provider.as_str(),
+                        upstream_model_id: target.upstream_model.clone(),
+                        status_code: 503,
+                        error: format!("{e:?}"),
+                        endpoint_kind: openproxy_types::EndpointKind::Image,
                     );
                     tracing::warn!(
                         "Horde img2img dispatch failed: provider={}, error={:?}",
@@ -1009,26 +943,17 @@ async fn execute_image_multipart(
             match dispatch_result {
                 Ok(r) => (r, target_url),
                 Err(e) => {
-                    if let Some(account_id) = target.account_id {
-                        ctx.circuit_breaker
-                            .record_failure(CircuitBreakerKey::Account(account_id));
-                    }
-                    openproxy_types::usage::publish_stage_event(
-                        openproxy_types::usage::StageEvent {
-                            request_id: request_id.to_string(),
-                            trace_id: trace_id.clone(),
-                            provider_id: Some(target.provider.as_str().to_string()),
-                            upstream_model_id: Some(target.upstream_model.clone()),
-                            stage: "failed".to_string(),
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: Some(503),
-                            error: Some(format!("{e:?}")),
-                            stop_reason: None,
-                            timestamp: None,
-                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                        },
+                    crate::guarded_unary_target!(record_failure: ctx.circuit_breaker, target);
+                    openproxy_types::emit_stage_event!(
+                        request_id: request_id,
+                        trace_id: trace_id,
+                        stage: "failed",
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        provider_id: target.provider.as_str(),
+                        upstream_model_id: target.upstream_model.clone(),
+                        status_code: 503,
+                        error: format!("{e:?}"),
+                        endpoint_kind: openproxy_types::EndpointKind::Image,
                     );
                     tracing::warn!(
                         "Image multipart target failed (connection error): provider={}, url={}, error={:?}",
@@ -1047,25 +972,18 @@ async fn execute_image_multipart(
             Ok(b) => b,
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-                if let Some(account_id) = target.account_id {
-                    ctx.circuit_breaker
-                        .record_failure(CircuitBreakerKey::Account(account_id));
-                }
-                openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                    request_id: request_id.to_string(),
-                    trace_id: trace_id.clone(),
-                    provider_id: Some(target.provider.as_str().to_string()),
-                    upstream_model_id: Some(target.upstream_model.clone()),
-                    stage: "failed".to_string(),
+                crate::guarded_unary_target!(record_failure: ctx.circuit_breaker, target);
+                openproxy_types::emit_stage_event!(
+                    request_id: request_id,
+                    trace_id: trace_id,
+                    stage: "failed",
                     elapsed_ms: started.elapsed().as_millis() as u64,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: Some(status_code),
-                    error: Some(format!("{err:?}")),
-                    stop_reason: None,
-                    timestamp: None,
-                    endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                });
+                    provider_id: target.provider.as_str(),
+                    upstream_model_id: target.upstream_model.clone(),
+                    status_code: status_code,
+                    error: format!("{err:?}"),
+                    endpoint_kind: openproxy_types::EndpointKind::Image,
+                );
                 tracing::warn!(
                     "Image multipart body read failed: provider={}, error={:?}",
                     target.provider,
@@ -1077,26 +995,19 @@ async fn execute_image_multipart(
         };
 
         if status_code >= 400 {
-            if let Some(account_id) = target.account_id {
-                ctx.circuit_breaker
-                    .record_failure(CircuitBreakerKey::Account(account_id));
-            }
+            crate::guarded_unary_target!(record_failure: ctx.circuit_breaker, target);
             let err_text = String::from_utf8_lossy(&body_bytes);
-            openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-                request_id: request_id.to_string(),
-                trace_id: trace_id.clone(),
-                provider_id: Some(target.provider.as_str().to_string()),
-                upstream_model_id: Some(target.upstream_model.clone()),
-                stage: "failed".to_string(),
+            openproxy_types::emit_stage_event!(
+                request_id: request_id,
+                trace_id: trace_id,
+                stage: "failed",
                 elapsed_ms: started.elapsed().as_millis() as u64,
-                connect_ms: None,
-                ttft_ms: None,
-                status_code: Some(status_code),
-                error: Some(err_text.to_string()),
-                stop_reason: None,
-                timestamp: None,
-                endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-            });
+                provider_id: target.provider.as_str(),
+                upstream_model_id: target.upstream_model.clone(),
+                status_code: status_code,
+                error: err_text.to_string(),
+                endpoint_kind: openproxy_types::EndpointKind::Image,
+            );
             tracing::warn!(
                 "Image multipart target returned error status: provider={}, status={}, body={}",
                 target.provider,
@@ -1139,26 +1050,17 @@ async fn execute_image_multipart(
                 Ok(res) => res,
                 Err(e) => {
                     let err = CoreError::UpstreamConnection(format!("horde img2img error: {e}"));
-                    if let Some(account_id) = target.account_id {
-                        ctx.circuit_breaker
-                            .record_failure(CircuitBreakerKey::Account(account_id));
-                    }
-                    openproxy_types::usage::publish_stage_event(
-                        openproxy_types::usage::StageEvent {
-                            request_id: request_id.to_string(),
-                            trace_id: trace_id.clone(),
-                            provider_id: Some(target.provider.as_str().to_string()),
-                            upstream_model_id: Some(target.upstream_model.clone()),
-                            stage: "failed".to_string(),
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: Some(504),
-                            error: Some(format!("{err:?}")),
-                            stop_reason: None,
-                            timestamp: None,
-                            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-                        },
+                    crate::guarded_unary_target!(record_failure: ctx.circuit_breaker, target);
+                    openproxy_types::emit_stage_event!(
+                        request_id: request_id,
+                        trace_id: trace_id,
+                        stage: "failed",
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        provider_id: target.provider.as_str(),
+                        upstream_model_id: target.upstream_model.clone(),
+                        status_code: 504,
+                        error: format!("{err:?}"),
+                        endpoint_kind: openproxy_types::EndpointKind::Image,
                     );
                     tracing::warn!("Horde img2img polling failed: {err:?}");
                     last_error = Some(err);
@@ -1182,21 +1084,16 @@ async fn execute_image_multipart(
         }
 
         // Publish live log completed event
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: request_id.to_string(),
-            trace_id: trace_id.clone(),
-            provider_id: Some(target.provider.as_str().to_string()),
-            upstream_model_id: Some(target.upstream_model.clone()),
-            stage: "completed".to_string(),
+        openproxy_types::emit_stage_event!(
+            request_id: request_id,
+            trace_id: trace_id,
+            stage: "completed",
             elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: Some(status_code),
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-        });
+            provider_id: target.provider.as_str(),
+            upstream_model_id: target.upstream_model.clone(),
+            status_code: status_code,
+            endpoint_kind: openproxy_types::EndpointKind::Image,
+        );
 
         // Record usage row in openproxy-db.
         let total_ms = started.elapsed().as_millis() as u64;
@@ -1400,21 +1297,15 @@ async fn poll_horde_image_generation(
             .map_err(|e| CoreError::Parse(format!("horde check parse error: {e}")))?;
 
         // Emit in-flight stage event to live logs
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: ctx.request_id.to_string(),
-            trace_id: ctx.trace_id.to_string(),
-            provider_id: Some("horde".to_string()),
-            upstream_model_id: None,
-            stage: "waiting_upstream".to_string(),
+        openproxy_types::emit_stage_event!(
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+            stage: "waiting_upstream",
             elapsed_ms: ctx.started.elapsed().as_millis() as u64,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: Some(202),
-            error: None,
-            stop_reason: None,
-            timestamp: None,
-            endpoint_kind: Some(openproxy_types::EndpointKind::Image),
-        });
+            provider_id: "horde",
+            status_code: 202,
+            endpoint_kind: openproxy_types::EndpointKind::Image,
+        );
 
         if check.faulted == Some(true) {
             cancel_horde_job(upstream_client, base_url, &job_id, &auth_headers).await;

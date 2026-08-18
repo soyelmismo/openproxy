@@ -47,7 +47,7 @@ declare_openai_adapter!(
                 .into_iter()
                 .map(|m| {
                     let id = m.name.unwrap_or_default();
-                    let family = derive_ollama_family(&id);
+                    let family = openproxy_types::capabilities::infer_family(&id);
                     let display_name = m.display_name.or_else(|| Some(id.clone()));
                     let m_type = openproxy_types::capabilities::infer_model_type(&id);
                     let caps = openproxy_types::capabilities::infer_capabilities(&id);
@@ -85,31 +85,4 @@ struct OllamaTagEntry {
     name: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
-}
-
-/// Best-effort family extraction from an Ollama model id.
-fn derive_ollama_family(id: &str) -> Option<String> {
-    let lower = id.to_ascii_lowercase();
-    if lower.contains("deepseek") {
-        return Some("deepseek".into());
-    }
-    if lower.contains("kimi") {
-        return Some("kimi".into());
-    }
-    if lower.contains("glm") {
-        return Some("glm".into());
-    }
-    if lower.contains("minimax") {
-        return Some("minimax".into());
-    }
-    if lower.contains("gemma") {
-        return Some("gemma".into());
-    }
-    if lower.contains("nemotron") {
-        return Some("nemotron".into());
-    }
-    if lower.contains("qwen") {
-        return Some("qwen".into());
-    }
-    None
 }

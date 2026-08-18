@@ -115,6 +115,32 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
 
     let result = (|| -> Result<usize> {
         let mut total = 0usize;
+        let mut stmt = conn.prepare(
+            "INSERT INTO model_capabilities_sync \
+             (provider_id, model_id, context_length, max_output_tokens, \
+              pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
+              tool_call, reasoning, vision, structured_output, \
+              modalities_input, modalities_output, family, status, \
+              model_id_normalized) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
+             ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+              context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),\
+              max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),\
+              pricing_input_per_1m = coalesce(excluded.pricing_input_per_1m, model_capabilities_sync.pricing_input_per_1m),\
+              pricing_output_per_1m= coalesce(excluded.pricing_output_per_1m,model_capabilities_sync.pricing_output_per_1m),\
+              pricing_cached_per_1m= coalesce(excluded.pricing_cached_per_1m,model_capabilities_sync.pricing_cached_per_1m),\
+              tool_call     = coalesce(excluded.tool_call,     model_capabilities_sync.tool_call),\
+              reasoning     = coalesce(excluded.reasoning,     model_capabilities_sync.reasoning),\
+              vision        = coalesce(excluded.vision,        model_capabilities_sync.vision),\
+              structured_output = coalesce(excluded.structured_output, model_capabilities_sync.structured_output),\
+              modalities_input  = coalesce(excluded.modalities_input,  model_capabilities_sync.modalities_input),\
+              modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),\
+              family        = coalesce(excluded.family,        model_capabilities_sync.family),\
+              status        = coalesce(excluded.status,        model_capabilities_sync.status),\
+              model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),\
+              fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+        ).map_err(openproxy_db::error::map_db_error)?;
+
         for (ext_id, provider_val) in &root {
             let ext_id_str: &str = ext_id.as_str();
             let mapped_ids: &[&str] = PROVIDER_MAP
@@ -129,32 +155,6 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
             let Some(models_obj) = provider_val.get("models").and_then(|v| v.as_object()) else {
                 continue;
             };
-
-            let mut stmt = conn.prepare(
-                "INSERT INTO model_capabilities_sync \
-                 (provider_id, model_id, context_length, max_output_tokens, \
-                  pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
-                  tool_call, reasoning, vision, structured_output, \
-                  modalities_input, modalities_output, family, status, \
-                  model_id_normalized) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
-                 ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-                  context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),\
-                  max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),\
-                  pricing_input_per_1m = coalesce(excluded.pricing_input_per_1m, model_capabilities_sync.pricing_input_per_1m),\
-                  pricing_output_per_1m= coalesce(excluded.pricing_output_per_1m,model_capabilities_sync.pricing_output_per_1m),\
-                  pricing_cached_per_1m= coalesce(excluded.pricing_cached_per_1m,model_capabilities_sync.pricing_cached_per_1m),\
-                  tool_call     = coalesce(excluded.tool_call,     model_capabilities_sync.tool_call),\
-                  reasoning     = coalesce(excluded.reasoning,     model_capabilities_sync.reasoning),\
-                  vision        = coalesce(excluded.vision,        model_capabilities_sync.vision),\
-                  structured_output = coalesce(excluded.structured_output, model_capabilities_sync.structured_output),\
-                  modalities_input  = coalesce(excluded.modalities_input,  model_capabilities_sync.modalities_input),\
-                  modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),\
-                  family        = coalesce(excluded.family,        model_capabilities_sync.family),\
-                  status        = coalesce(excluded.status,        model_capabilities_sync.status),\
-                  model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),\
-                  fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
-            ).map_err(openproxy_db::error::map_db_error)?;
 
             for model_val in models_obj.values() {
                 let model: ModelsDevModel = match serde::Deserialize::deserialize(model_val) {

@@ -3,7 +3,6 @@ use super::{
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile, UpstreamClient,
     UpstreamRequest, fetch_openai_models,
 };
-use crate::upstream::UpstreamError;
 // =====================================================================
 // MiniMax (Coding)
 // =====================================================================
@@ -152,17 +151,7 @@ impl MiniMaxAdapter {
         let response = upstream
             .call(req, TimeoutProfile::Quota, cancel)
             .await
-            .map_err(|e| match e {
-                UpstreamError::Cancel => {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                }
-                UpstreamError::Timeout(_)
-                | UpstreamError::Connection(_)
-                | UpstreamError::Tls(_)
-                | UpstreamError::Http(_)
-                | UpstreamError::Decode(_)
-                | UpstreamError::Invalid(_) => CoreError::UpstreamConnection(format!("{url}: {e}")),
-            })?;
+            .map_err(|e| e.to_core_error(url))?;
 
         if !response.status.is_success() {
             return Err(CoreError::UpstreamConnection(format!(
@@ -175,7 +164,7 @@ impl MiniMaxAdapter {
         let body = response
             .collect()
             .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("{url}: {e}")))?;
+            .map_err(|e| e.to_core_error(url))?;
 
         let json: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;

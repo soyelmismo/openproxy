@@ -57,6 +57,17 @@ impl UpstreamPhase {
             UpstreamPhase::Total => "total",
         }
     }
+
+    /// Corresponding configuration key in timeouts config.
+    pub fn config_hint(&self) -> &'static str {
+        match self {
+            UpstreamPhase::Dns | UpstreamPhase::Dial | UpstreamPhase::Tls => "connect_ms",
+            UpstreamPhase::Write => "request_send_ms",
+            UpstreamPhase::Headers => "ttft_ms",
+            UpstreamPhase::Body => "idle_chunk_ms",
+            UpstreamPhase::Total => "total_ms",
+        }
+    }
 }
 
 #[cfg(test)]

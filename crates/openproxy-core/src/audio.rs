@@ -10,7 +10,7 @@ use openproxy_adapters::upstream::{
 };
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
-use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
+use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;
 use openproxy_types::{
     CoreError, Result,
     ids::{ApiKeyId, RequestId},
@@ -144,6 +144,9 @@ pub async fn execute_transcribe(
     // 3. Multi-target dispatch loop
     for target in targets {
         attempt += 1;
+
+        crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
+
         let Some(adapter) = adapters
             .iter()
             .find(|a| a.id() == &target.provider)
@@ -180,9 +183,7 @@ pub async fn execute_transcribe(
         {
             Ok(r) => r,
             Err(e) => {
-                if let Some(account_id) = target.account_id {
-                    circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                }
+                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
                 tracing::warn!(
                     "Audio target failed (connection error): provider={}, error={:?}",
                     target.provider,
@@ -205,9 +206,7 @@ pub async fn execute_transcribe(
             Ok(b) => b,
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-                if let Some(account_id) = target.account_id {
-                    circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-                }
+                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
                 tracing::warn!(
                     "Audio target body read failed: provider={}, error={:?}",
                     target.provider,
@@ -220,9 +219,7 @@ pub async fn execute_transcribe(
 
         let code_u16 = status_code.as_u16();
         if code_u16 >= 400 {
-            if let Some(account_id) = target.account_id {
-                circuit_breaker.record_failure(CircuitBreakerKey::Account(account_id));
-            }
+            crate::guarded_unary_target!(record_failure: circuit_breaker, target);
             tracing::warn!(
                 "Audio target returned error status: provider={}, status={}",
                 target.provider,

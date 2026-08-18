@@ -179,21 +179,16 @@ impl Pipeline {
             ctx.trace_id = ctx.req.trace_id.to_string();
         }
 
-        openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
-            request_id: ctx.req.request_id.to_string(),
-            trace_id: ctx.trace_id.clone(),
-            provider_id: Some(resolved_target.target.provider_id.to_string()),
-            upstream_model_id: Some(resolved_target.model.model_id.as_str().to_string()),
-            stage: "started".into(),
+        openproxy_types::emit_stage_event!(
+            request_id: ctx.req.request_id,
+            trace_id: ctx.trace_id,
+            stage: "started",
             elapsed_ms: 0,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: None,
-            error: None,
-            stop_reason: None,
-            timestamp: Some(String::new()),
-            endpoint_kind: Some(openproxy_types::endpoint::EndpointKind::Chat),
-        });
+            provider_id: resolved_target.target.provider_id.to_string(),
+            upstream_model_id: resolved_target.model.model_id.as_str(),
+            timestamp: String::new(),
+            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+        );
         use crate::pipeline_chain;
         use crate::stages::target::{
             CustomAdapterStage, DispatchStage, FormattingStage, OAuthRefreshStage,

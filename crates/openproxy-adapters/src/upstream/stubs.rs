@@ -150,6 +150,38 @@ impl std::fmt::Display for UpstreamError {
 }
 impl std::error::Error for UpstreamError {}
 
+impl UpstreamError {
+    pub fn to_core_error(&self, context: &str) -> openproxy_types::CoreError {
+        match self {
+            UpstreamError::Cancel => {
+                openproxy_types::CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+            }
+            UpstreamError::Timeout(phase) => openproxy_types::CoreError::UpstreamTimeout {
+                phase: format!("{phase:?}"),
+                ms: 0,
+            },
+            UpstreamError::Connection(_)
+            | UpstreamError::Tls(_)
+            | UpstreamError::Http(_)
+            | UpstreamError::Decode(_)
+            | UpstreamError::Invalid(_) => {
+                let msg = if context.is_empty() {
+                    format!("{self}")
+                } else {
+                    format!("{context}: {self}")
+                };
+                openproxy_types::CoreError::UpstreamConnection(msg)
+            }
+        }
+    }
+}
+
+impl From<UpstreamError> for openproxy_types::CoreError {
+    fn from(err: UpstreamError) -> Self {
+        err.to_core_error("")
+    }
+}
+
 pub type UpstreamResult<T> = Result<T, UpstreamError>;
 
 #[derive(Debug)]

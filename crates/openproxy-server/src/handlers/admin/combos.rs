@@ -201,14 +201,15 @@ pub async fn test_combo_targets(
     res
 }
 
-pub async fn delete_combo(
-    State(s): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let id = ComboId(id);
-    core_admin::delete_combo(&w, id)?;
-    Ok(Json(serde_json::json!({ "deleted": id.0 })))
+crate::admin_entity_action_handler! {
+    pub async fn delete_combo(
+        State(s) with writer(w),
+        Path(id): Path<i64>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        let id = ComboId(id);
+        core_admin::delete_combo(&w, id)?;
+        Ok(Json(serde_json::json!({ "deleted": id.0 })))
+    }
 }
 
 pub async fn list_combo_targets(
@@ -527,24 +528,24 @@ pub async fn update_combo_target(
     })))
 }
 
-pub async fn delete_combo_target(
-    State(s): State<AppState>,
-    Path((combo_id, target_id)): Path<(i64, i64)>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    core_admin::delete_combo_target(&w, ComboId(combo_id), ComboTargetId(target_id))?;
-    Ok(Json(serde_json::json!({ "deleted": target_id })))
+crate::admin_entity_action_handler! {
+    pub async fn delete_combo_target(
+        State(s) with writer(w),
+        Path((combo_id, target_id)): Path<(i64, i64)>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        core_admin::delete_combo_target(&w, ComboId(combo_id), ComboTargetId(target_id))?;
+        Ok(Json(serde_json::json!({ "deleted": target_id })))
+    }
 }
 
-pub async fn clear_combo_target_cooldown(
-    State(s): State<AppState>,
-    Path((combo_id, target_id)): Path<(i64, i64)>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    core_admin::clear_combo_target_cooldown(&w, ComboId(combo_id), ComboTargetId(target_id))?;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "cleared": target_id }),
-    ))
+crate::admin_entity_action_handler! {
+    pub async fn clear_combo_target_cooldown(
+        State(s) with writer(w),
+        Path((combo_id, target_id)): Path<(i64, i64)>,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        core_admin::clear_combo_target_cooldown(&w, ComboId(combo_id), ComboTargetId(target_id))?;
+        Ok(Json(serde_json::json!({ "ok": true, "cleared": target_id })))
+    }
 }
 
 /// Body for `POST /admin/combos/:id/targets/reorder`.

@@ -203,6 +203,36 @@ pub fn is_target_available(
     true
 }
 
+/// Standardizes target availability checking and circuit breaker failure recording
+/// across unary endpoints (images, audio, embeddings).
+#[macro_export]
+macro_rules! guarded_unary_target {
+    (check: $db_pool:expr, $circuit_breaker:expr, $target:expr $(,)?) => {
+        if !$crate::unary::is_target_available(
+            $db_pool,
+            $circuit_breaker,
+            $target.account_id,
+            $target.combo_target_id,
+        ) {
+            continue;
+        }
+    };
+    (record_failure: $circuit_breaker:expr, $target:expr $(,)?) => {
+        if let Some(account_id) = $target.account_id {
+            $circuit_breaker.record_failure(
+                openproxy_pipeline::circuit_breaker::CircuitBreakerKey::Account(account_id),
+            );
+        }
+    };
+    (record_success: $circuit_breaker:expr, $target:expr $(,)?) => {
+        if let Some(account_id) = $target.account_id {
+            $circuit_breaker.record_success(
+                openproxy_pipeline::circuit_breaker::CircuitBreakerKey::Account(account_id),
+            );
+        }
+    };
+}
+
 #[derive(Debug)]
 pub struct UnaryUsageArgs<'a> {
     pub request_id: RequestId,

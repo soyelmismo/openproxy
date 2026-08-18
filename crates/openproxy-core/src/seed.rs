@@ -208,7 +208,7 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
             )
             .map_err(|e| crate::error::CoreError::Database {
                 message: format!("backfill_model_metadata for {model_id}: {e}"),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })?;
 
         updated += changed as u64;

@@ -634,7 +634,7 @@ impl OAuthProvider for KiroOAuthProvider {
                             "kiro post_exchange read meta for account {}: {}",
                             account_id.0, e
                         ),
-                        source: Some(Box::new(e)),
+                        source: Some(std::sync::Arc::new(e)),
                     })?;
                 let raw = raw.flatten();
 
@@ -644,7 +644,7 @@ impl OAuthProvider for KiroOAuthProvider {
                     None => KiroProviderMeta::default(),
                 };
 
-                Ok((access_token, meta))
+                Ok::<_, CoreError>((access_token, meta))
             })
             .await
             .map_err(|e| CoreError::Internal(e.to_string()))??
@@ -680,7 +680,7 @@ impl OAuthProvider for KiroOAuthProvider {
         let meta_json = serde_json::to_string(&meta)
             .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
         let db_pool = Arc::clone(db_pool);
-        let res = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || -> std::result::Result<(), CoreError> {
             let conn = db_pool.writer();
             conn.execute(
                 "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
@@ -691,13 +691,12 @@ impl OAuthProvider for KiroOAuthProvider {
                     "kiro post_exchange update meta for account {}: {}",
                     account_id.0, e
                 ),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })?;
             Ok(())
         })
         .await
-        .map_err(|e| CoreError::Internal(e.to_string()))?;
-        res?;
+        .map_err(|e| CoreError::Internal(e.to_string()))??;
 
         Ok(())
     }

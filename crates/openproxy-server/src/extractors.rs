@@ -8,8 +8,7 @@ use openproxy_db as db;
 use std::ops::{Deref, DerefMut};
 
 use crate::{
-    error::ApiError, handlers::admin::authenticate_admin_ws, middleware::auth::ValidatedApiToken,
-    state::AppState,
+    error::ApiError, middleware::auth::ValidatedApiToken, state::AppState,
 };
 
 /// Axum extractor that acquires a read connection from [`AppState`].
@@ -65,29 +64,6 @@ where
         let app_state = AppState::from_ref(state);
         let w = app_state.db_pool().writer_guard();
         Ok(DbWriter(w))
-    }
-}
-
-/// Axum extractor that validates admin authorization from headers or query token.
-pub struct AdminAuth;
-
-impl<S> FromRequestParts<S> for AdminAuth
-where
-    AppState: FromRef<S>,
-    S: Send + Sync,
-{
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let app_state = AppState::from_ref(state);
-        let query_token = parts.uri.query().and_then(|q| {
-            q.split('&')
-                .find_map(|pair| pair.split_once('='))
-                .filter(|(k, _)| *k == "token")
-                .map(|(_, v)| v.to_string())
-        });
-        authenticate_admin_ws(&app_state, &parts.headers, query_token.as_deref())?;
-        Ok(AdminAuth)
     }
 }
 

@@ -144,10 +144,10 @@ fn compress_log_content(text: &str) -> Option<String> {
 
 /// Detect log format from the first 50 lines.
 fn detect_format(lines: &[&str]) -> Option<LogFormat> {
-    let head: Vec<&str> = lines.iter().take(50).copied().collect();
+    let head = &lines[..lines.len().min(50)];
 
     // Pytest
-    for l in &head {
+    for l in head {
         if l.contains("===== test session starts =====") {
             return Some(LogFormat::Pytest);
         }
@@ -166,7 +166,7 @@ fn detect_format(lines: &[&str]) -> Option<LogFormat> {
     }
 
     // Npm/Jest
-    for l in &head {
+    for l in head {
         if l.starts_with("PASS ")
             || l.starts_with("FAIL ")
             || l.contains("Test Suites:")
@@ -177,7 +177,7 @@ fn detect_format(lines: &[&str]) -> Option<LogFormat> {
     }
 
     // Cargo
-    for l in &head {
+    for l in head {
         if l.starts_with("running ") && l.contains(" test") {
             return Some(LogFormat::Cargo);
         }
@@ -190,7 +190,7 @@ fn detect_format(lines: &[&str]) -> Option<LogFormat> {
     }
 
     // Make
-    for l in &head {
+    for l in head {
         if l.starts_with("make[") {
             // Validate make[N]: structure (N is digits).
             if let Some(end) = l.find("]:") {
@@ -209,13 +209,17 @@ fn detect_format(lines: &[&str]) -> Option<LogFormat> {
     let generic_matches = head
         .iter()
         .filter(|l| {
-            let low = l.to_lowercase();
-            low.contains("error")
-                || low.contains("fail")
-                || low.contains("warn")
-                || low.contains("traceback")
-                || low.contains("panic")
-                || low.contains("exception")
+            const GENERIC_TOKENS: &[&str] = &[
+                "error",
+                "fail",
+                "warn",
+                "traceback",
+                "panic",
+                "exception",
+            ];
+            GENERIC_TOKENS
+                .iter()
+                .any(|t| contains_case_insensitive_ascii(l, t))
         })
         .count();
     if generic_matches >= 5 {
@@ -246,17 +250,15 @@ fn classify_line(line: &str) -> LineKind {
         }
     }
 
-    let low = line.to_lowercase();
-
     // Error: contains an error token (case-insensitive substring).
     // Substring match is intentional — "FAILED", "ValueError", "runtime error"
     // all carry error semantics for log compression purposes.
-    if contains_error_token(&low) {
+    if contains_error_token(line) {
         return LineKind::Error;
     }
 
     // Warning: "warn" (case-insensitive).
-    if low.contains("warn") {
+    if contains_case_insensitive_ascii(line, "warn") {
         return LineKind::Warning;
     }
 
@@ -287,14 +289,32 @@ fn classify_line(line: &str) -> LineKind {
     LineKind::Other
 }
 
-/// Check if a lowercased line contains an error token (substring match).
-fn contains_error_token(low: &str) -> bool {
-    low.contains("error")
-        || low.contains("fatal")
-        || low.contains("panic")
-        || low.contains("exception")
-        || low.contains("traceback")
-        || low.contains("fail")
+fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+/// Check if a line contains an error token (case-insensitive substring match).
+fn contains_error_token(line: &str) -> bool {
+    const ERROR_TOKENS: &[&str] = &[
+        "error",
+        "fatal",
+        "panic",
+        "exception",
+        "traceback",
+        "fail",
+    ];
+    ERROR_TOKENS
+        .iter()
+        .any(|t| contains_case_insensitive_ascii(line, t))
 }
 
 /// Select line indices to keep, applying the selection algorithm:

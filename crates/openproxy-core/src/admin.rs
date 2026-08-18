@@ -772,7 +772,7 @@ fn ensure_target_in_combo(
                 "check combo_target {} belongs to combo {}: {}",
                 target_id.0, combo_id.0, e
             ),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     if !belongs {
         return Err(CoreError::Validation(format!(
@@ -848,11 +848,10 @@ pub fn clear_combo_target_cooldown(
 /// When `provider` is `None`, every row in the `models` table is returned.
 pub fn list_models(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<models::Model>> {
     match provider {
-        Some(p) => models::list_all(conn)?
+        Some(p) => Ok(models::list_all(conn)?
             .into_iter()
             .filter(|m| &m.provider_id == p)
-            .collect::<Vec<_>>()
-            .pipe(Ok),
+            .collect()),
         None => models::list_all(conn),
     }
 }
@@ -989,15 +988,6 @@ pub fn set_active_bulk(conn: &Connection, input: BulkToggleInput) -> Result<u64>
     models::set_active_bulk(conn, &provider, input.active)
 }
 
-// Tiny pipe helper to keep `list_models` readable without pulling in a
-// dependency on a full pipe library. Lives here (not in lib root) because
-// it has no use outside this module.
-trait Pipe: Sized {
-    fn pipe<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -342,7 +342,7 @@ pub fn get_by_id(conn: &Connection, id: ApiKeyId) -> Result<Option<ApiKey>> {
         .optional()
         .map_err(|e| CoreError::Database {
             message: format!("get api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     Ok(row)
 }
@@ -415,7 +415,7 @@ pub fn revoke(conn: &Connection, id: ApiKeyId) -> Result<()> {
         )
         .map_err(|e| CoreError::Database {
             message: format!("revoke api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
@@ -430,7 +430,7 @@ pub fn hard_delete(conn: &Connection, id: ApiKeyId) -> Result<()> {
     conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id.0])
         .map_err(|e| CoreError::Database {
             message: format!("delete api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     Ok(())
 }
@@ -453,7 +453,7 @@ pub fn regenerate(conn: &Connection, id: ApiKeyId) -> Result<(ApiKey, String)> {
         )
         .map_err(|e| CoreError::Database {
             message: format!("regenerate api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
@@ -480,7 +480,7 @@ pub fn touch_last_used(conn: &Connection, id: ApiKeyId) -> Result<()> {
         )
         .map_err(|e| CoreError::Database {
             message: format!("touch_last_used api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     // affected=0 means either the id is gone (treat as no-op) or
     // the throttle kicked in. Both are fine, so we don't surface
@@ -630,7 +630,7 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
             )
             .map_err(|e| CoreError::Database {
                 message: format!("count api_key {}: {e}", id.0),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })?;
         if present == 0 {
             return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
@@ -649,7 +649,7 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
         .execute(&sql, rusqlite::params_from_iter(param_refs))
         .map_err(|e| CoreError::Database {
             message: format!("update api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
@@ -691,7 +691,7 @@ pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
         )
         .map_err(|e| CoreError::Database {
             message: format!("usage_summary for api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     let last_used_at: Option<String> = conn
         .query_row(
@@ -702,7 +702,7 @@ pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
         .optional()
         .map_err(|e| CoreError::Database {
             message: format!("select last_used_at for api_key {}: {e}", id.0),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?
         .flatten(); // outer None (row gone) → None; inner None (column NULL) → None.
 

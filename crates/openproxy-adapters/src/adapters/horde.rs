@@ -1017,6 +1017,22 @@ pub fn normalize_dimension_64(val: u32) -> u32 {
     rounded.clamp(MIN_HORDE_DIMENSION, MAX_HORDE_DIMENSION)
 }
 
+crate::define_jump_map! {
+    /// O(1) jump-map for aspect ratio to pixel dimensions.
+    pub fn aspect_ratio_to_dimensions(ar: &str) -> (u32, u32) {
+        "16:9" => (1024, 576),
+        "9:16" => (576, 1024),
+        "3:2" => (960, 640),
+        "2:3" => (640, 960),
+        "4:3" => (1024, 768),
+        "3:4" => (768, 1024),
+        "21:9" => (1344, 576),
+        "9:21" => (576, 1344),
+        "1:1" => (1024, 1024),
+        _ => (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
+    }
+}
+
 /// Parse dimensions from size string (e.g. "1024x1024") or aspect ratio (e.g. "16:9"),
 /// guaranteeing both width and height are strict multiples of 64.
 pub fn parse_dimensions(size: Option<&str>, aspect_ratio: Option<&str>) -> (u32, u32) {
@@ -1028,18 +1044,7 @@ pub fn parse_dimensions(size: Option<&str>, aspect_ratio: Option<&str>) -> (u32,
     }
 
     if let Some(ar) = aspect_ratio {
-        let (w, h) = match ar {
-            "16:9" => (1024, 576),
-            "9:16" => (576, 1024),
-            "3:2" => (960, 640),
-            "2:3" => (640, 960),
-            "4:3" => (1024, 768),
-            "3:4" => (768, 1024),
-            "21:9" => (1344, 576),
-            "9:21" => (576, 1344),
-            "1:1" => (1024, 1024),
-            _ => (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
-        };
+        let (w, h) = aspect_ratio_to_dimensions(ar);
         (normalize_dimension_64(w), normalize_dimension_64(h))
     } else {
         (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION)

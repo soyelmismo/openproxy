@@ -97,7 +97,7 @@ pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary
         )
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let row = stmt
@@ -117,19 +117,19 @@ pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary
         })
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let mut sources_stmt = conn
         .prepare("SELECT DISTINCT source FROM free_proxies WHERE source IS NOT NULL AND source != '' ORDER BY source ASC")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     let sources_rows = sources_stmt.query_map([], |r| r.get(0)).map_err(|e| {
         crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         }
     })?;
     let sources: Vec<String> = sources_rows.filter_map(std::result::Result::ok).collect();
@@ -138,14 +138,14 @@ pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary
         .prepare("SELECT DISTINCT type FROM free_proxies WHERE type IS NOT NULL AND type != '' ORDER BY type ASC")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     let proto_rows =
         proto_stmt
             .query_map([], |r| r.get(0))
             .map_err(|e| crate::error::CoreError::Database {
                 message: e.to_string(),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })?;
     let protocols: Vec<String> = proto_rows.filter_map(std::result::Result::ok).collect();
 
@@ -222,7 +222,7 @@ pub fn list_proxies(
         .prepare(&sql)
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let rows = stmt
@@ -249,14 +249,14 @@ pub fn list_proxies(
         )
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let mut list = Vec::new();
     for r in rows {
         list.push(r.map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?);
     }
     Ok(list)
@@ -267,7 +267,7 @@ pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<Fre
         .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, username, password, priority, created_at, updated_at FROM free_proxies WHERE id = ?1")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let res = stmt.query_row(rusqlite::params![id], |row| {
@@ -294,7 +294,7 @@ pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<Fre
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         }),
     }
 }
@@ -338,14 +338,14 @@ pub fn add_custom_proxy(
     )
     .map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
 
     let mut stmt = conn
         .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, username, password, priority, created_at, updated_at FROM free_proxies WHERE host = ?1 AND port = ?2")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let p = stmt
@@ -369,7 +369,7 @@ pub fn add_custom_proxy(
         })
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     Ok(p)
@@ -382,7 +382,7 @@ pub fn delete_proxy(conn: &Connection, id: &str) -> crate::error::Result<()> {
     )
     .map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
     Ok(())
 }
@@ -400,7 +400,7 @@ pub fn update_proxy_status(
     )
     .map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
     Ok(())
 }
@@ -434,7 +434,7 @@ pub fn upsert_scraped_proxies(
         .transaction()
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
@@ -497,12 +497,12 @@ pub fn upsert_scraped_proxies(
     )
     .map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
 
     tx.commit().map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
     Ok(())
 }
@@ -1011,14 +1011,14 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
         .prepare("SELECT id, name, url, priority, active, is_builtin, created_at, updated_at FROM proxy_sources ORDER BY priority DESC, name ASC")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let mut stats_stmt = conn
         .prepare("SELECT source, status, COUNT(*) FROM free_proxies GROUP BY source, status")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     let mut stats = std::collections::HashMap::new();
     let stats_rows = stats_stmt
@@ -1031,7 +1031,7 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
         })
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
     for row in stats_rows.flatten() {
         stats
@@ -1058,14 +1058,14 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
         })
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let mut list = Vec::new();
     for row_res in rows {
         let mut r = row_res.map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
         let sources = if r.is_builtin {
@@ -1115,7 +1115,7 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
         .prepare("SELECT id, name, url, priority, active, is_builtin, created_at, updated_at FROM proxy_sources WHERE id = ?1")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?;
 
     let res = stmt.query_row(rusqlite::params![id], |row| {
@@ -1142,7 +1142,7 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
                 )
                 .map_err(|e| crate::error::CoreError::Database {
                     message: e.to_string(),
-                    source: Some(Box::new(e)),
+                    source: Some(std::sync::Arc::new(e)),
                 })?;
             let mut stats = std::collections::HashMap::new();
             let stats_rows = stats_stmt
@@ -1155,7 +1155,7 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
                 })
                 .map_err(|e| crate::error::CoreError::Database {
                     message: e.to_string(),
-                    source: Some(Box::new(e)),
+                    source: Some(std::sync::Arc::new(e)),
                 })?;
             for row in stats_rows.flatten() {
                 stats
@@ -1206,7 +1206,7 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         }),
     }
 }
@@ -1225,7 +1225,7 @@ pub fn create_proxy_source(
     )
     .map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
 
     get_proxy_source(conn, &id)?.ok_or_else(|| crate::error::CoreError::NotFound {
@@ -1256,7 +1256,7 @@ pub fn update_proxy_source(
     )
     .map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     })?;
 
     get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::NotFound {
@@ -1548,7 +1548,7 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
             .prepare("SELECT type, host, port, username, password FROM free_proxies WHERE id = ?1")
             .map_err(|e| crate::error::CoreError::Database {
                 message: e.to_string(),
-                source: Some(Box::new(e)),
+                source: Some(std::sync::Arc::new(e)),
             })?;
         stmt.query_row(rusqlite::params![id], |row| {
             Ok((
@@ -1561,7 +1561,7 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
         })
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
-            source: Some(Box::new(e)),
+            source: Some(std::sync::Arc::new(e)),
         })?
     };
 
@@ -1666,7 +1666,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                     let mut w = pool.open_connection()?;
                     let tx_db = w.transaction().map_err(|e| crate::error::CoreError::Database {
                         message: e.to_string(),
-                        source: Some(Box::new(e)),
+                        source: Some(std::sync::Arc::new(e)),
                     })?;
                     let now = chrono::Utc::now().to_rfc3339();
                     {
@@ -1676,7 +1676,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                             )
                             .map_err(|e| crate::error::CoreError::Database {
                                 message: e.to_string(),
-                                source: Some(Box::new(e)),
+                                source: Some(std::sync::Arc::new(e)),
                             })?;
 
                         for (id, test_res) in batch {
@@ -1692,7 +1692,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                     }
                     tx_db.commit().map_err(|e| crate::error::CoreError::Database {
                         message: e.to_string(),
-                        source: Some(Box::new(e)),
+                        source: Some(std::sync::Arc::new(e)),
                     })?;
                     Ok(())
                 })

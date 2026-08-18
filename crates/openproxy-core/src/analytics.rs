@@ -286,7 +286,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
 fn map_row_err(e: rusqlite::Error, column: &'static str) -> CoreError {
     CoreError::Database {
         message: format!("read latency_percentiles column {column}: {e}"),
-        source: Some(Box::new(e)),
+        source: Some(std::sync::Arc::new(e)),
     }
 }
 
