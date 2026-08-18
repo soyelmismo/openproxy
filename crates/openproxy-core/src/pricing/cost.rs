@@ -15,10 +15,11 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
     let cost = if input.status_code >= 400 {
         0.0
     } else {
-        pricing::compute_cost(
+        pricing::compute_cost_with_cache(
             price,
             input.prompt_tokens.unwrap_or(0),
             input.completion_tokens.unwrap_or(0),
+            input.cached_tokens,
         )
     };
     let tps = match (input.completion_tokens, input.ttft_ms) {

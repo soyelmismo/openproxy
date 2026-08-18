@@ -1104,3 +1104,60 @@ async fn openai_to_anthropic_sse_stream_translates_chunks() {
     assert!(third.contains("event: message_delta"));
     assert!(third.contains("event: message_stop"));
 }
+
+#[test]
+fn anthropic_to_openai_normalizes_cache_tokens() {
+    let raw = json!({
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Cached response"}],
+        "model": "claude-3-5-sonnet",
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200
+        }
+    });
+    let anthropic_resp: crate::translation::types::AnthropicResponse =
+        serde_json::from_value(raw).unwrap();
+    let openai_resp = anthropic_to_openai(&anthropic_resp);
+    let usage = openai_resp.usage.expect("usage present");
+    // Total prompt tokens should be 50 + 1000 + 200 = 1250
+    assert_eq!(usage.prompt_tokens, 1250);
+    assert_eq!(usage.completion_tokens, 20);
+    assert_eq!(usage.total_tokens, 1270);
+    assert_eq!(
+        usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens),
+        Some(1000)
+    );
+}
+
+#[test]
+fn anthropic_sse_forwards_cached_usage() {
+    let event = AnthropicSseEvent::MessageDelta {
+        delta: json!({"stop_reason": "end_turn"}),
+        usage: Some(crate::translation::types::AnthropicUsage {
+            input_tokens: 50,
+            output_tokens: 100,
+            cache_read_input_tokens: Some(500),
+            cache_creation_input_tokens: Some(100),
+        }),
+    };
+    let chunks = anthropic_sse_to_openai_chunks(&event, "cmpl_1", 123456, "claude-3-5-sonnet");
+    assert_eq!(chunks.len(), 1);
+    let payload_str = chunks[0].strip_prefix("data: ").unwrap().trim();
+    let json_val: Value = serde_json::from_str(payload_str).unwrap();
+    assert_eq!(json_val["usage"]["prompt_tokens"], 650);
+    assert_eq!(json_val["usage"]["completion_tokens"], 100);
+    assert_eq!(json_val["usage"]["total_tokens"], 750);
+    assert_eq!(
+        json_val["usage"]["prompt_tokens_details"]["cached_tokens"],
+        500
+    );
+}

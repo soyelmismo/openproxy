@@ -236,6 +236,22 @@ struct OpenAiUsageProbe {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
+    #[serde(default)]
+    input_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
+    #[serde(default)]
+    cached_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAiPromptTokensDetailsProbe {
+    #[serde(default)]
+    cached_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -267,15 +283,32 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     let probe: OpenAiSseProbe = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("openai sse json: {e}")))?;
 
-    let usage = probe.usage.map(|u| OpenAIUsage {
-        prompt_tokens: u.prompt_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
-        completion_tokens: u
-            .completion_tokens
-            .unwrap_or(0)
-            .try_into()
-            .unwrap_or(u32::MAX),
-        total_tokens: u.total_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
-        prompt_tokens_details: None,
+    let usage = probe.usage.map(|u| {
+        let cached = u
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens))
+            .or_else(|| {
+                u.input_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens))
+            })
+            .or(u.cached_tokens)
+            .or(u.cache_read_input_tokens)
+            .and_then(|c| u32::try_from(c).ok());
+
+        OpenAIUsage {
+            prompt_tokens: u.prompt_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+            completion_tokens: u
+                .completion_tokens
+                .unwrap_or(0)
+                .try_into()
+                .unwrap_or(u32::MAX),
+            total_tokens: u.total_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+            prompt_tokens_details: cached.map(|c| openproxy_types::message::PromptTokensDetails {
+                cached_tokens: Some(c),
+            }),
+        }
     });
     // o1-style reasoning models (o1, o3, deepseek-r1) emit
     // `delta.reasoning_content` on chunks that also carry `usage`
@@ -2834,6 +2867,22 @@ mod atomesus_sse_tests {
             parse_atomesus_sse_line(heartbeat, "cmpl_1", 100, "atomesus")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn openai_sse_parses_cached_tokens() {
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":300,"total_tokens":1500,"prompt_tokens_details":{"cached_tokens":1000}}}"#;
+        let chunk = parse_openai_sse_line(line).unwrap().unwrap();
+        let usage = chunk.usage.expect("usage should be parsed");
+        assert_eq!(usage.prompt_tokens, 1200);
+        assert_eq!(usage.completion_tokens, 300);
+        assert_eq!(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(1000)
         );
     }
 }

@@ -97,7 +97,7 @@ pub fn anthropic_sse_to_openai_chunks(
             vec![format_sse_data(&chunk)]
         }
 
-        AnthropicSseEvent::MessageDelta { delta, .. } => {
+        AnthropicSseEvent::MessageDelta { delta, usage } => {
             // The delta carries stop_reason. Forward it as a finish_reason chunk.
             let stop_reason = delta
                 .get("stop_reason")
@@ -117,13 +117,34 @@ pub fn anthropic_sse_to_openai_chunks(
                 }),
             };
 
-            let chunk = serde_json::json!({
+            let mut chunk = serde_json::json!({
                 "id": chunk_id,
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": model,
                 "choices": [choice],
             });
+
+            if let Some(u) = usage {
+                let cache_read = u.cache_read_input_tokens.unwrap_or(0);
+                let cache_creation = u.cache_creation_input_tokens.unwrap_or(0);
+                let prompt = u.input_tokens.saturating_add(cache_read).saturating_add(cache_creation);
+                let completion = u.output_tokens;
+                let total = prompt.saturating_add(completion);
+
+                let mut usage_json = serde_json::json!({
+                    "prompt_tokens": prompt,
+                    "completion_tokens": completion,
+                    "total_tokens": total,
+                });
+                if let Some(cached) = u.cache_read_input_tokens {
+                    usage_json["prompt_tokens_details"] = serde_json::json!({
+                        "cached_tokens": cached
+                    });
+                }
+                chunk["usage"] = usage_json;
+            }
+
             vec![format_sse_data(&chunk)]
         }
 

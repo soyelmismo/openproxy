@@ -315,7 +315,13 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
         .collect::<Vec<_>>()
         .join("");
 
-    let prompt_tokens = resp.usage.input_tokens;
+    let cache_read = resp.usage.cache_read_input_tokens.unwrap_or(0);
+    let cache_creation = resp.usage.cache_creation_input_tokens.unwrap_or(0);
+    let prompt_tokens = resp
+        .usage
+        .input_tokens
+        .saturating_add(cache_read)
+        .saturating_add(cache_creation);
     let completion_tokens = resp.usage.output_tokens;
     let total_tokens = prompt_tokens.saturating_add(completion_tokens);
 

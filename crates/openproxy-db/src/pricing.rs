@@ -373,10 +373,11 @@ fn strip_model_suffixes(model: &str) -> Vec<&str> {
     results
 }
 
-pub fn compute_cost_opt(
+pub fn compute_cost_opt_with_cache(
     price: Option<Price>,
     prompt_tokens: u32,
     completion_tokens: u32,
+    cached_tokens: Option<u32>,
 ) -> Option<f64> {
     let price = price?;
     match price.kind.as_str() {
@@ -386,11 +387,34 @@ pub fn compute_cost_opt(
         }
         "image" => Some(price.input_per_1m * f64::from(prompt_tokens) / 1_000_000.0),
         _ => {
-            let input_cost = price.input_per_1m * f64::from(prompt_tokens) / 1_000_000.0;
+            let cached = cached_tokens.unwrap_or(0).min(prompt_tokens);
+            let non_cached = prompt_tokens.saturating_sub(cached);
+            // Default cache read discount is 50% of input rate
+            let cached_price_per_1m = price.input_per_1m * 0.5;
+            let input_cost = (price.input_per_1m * f64::from(non_cached)
+                + cached_price_per_1m * f64::from(cached))
+                / 1_000_000.0;
             let output_cost = price.output_per_1m * f64::from(completion_tokens) / 1_000_000.0;
             Some(input_cost + output_cost)
         }
     }
+}
+
+pub fn compute_cost_opt(
+    price: Option<Price>,
+    prompt_tokens: u32,
+    completion_tokens: u32,
+) -> Option<f64> {
+    compute_cost_opt_with_cache(price, prompt_tokens, completion_tokens, None)
+}
+
+pub fn compute_cost_with_cache(
+    price: Option<Price>,
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    cached_tokens: Option<u32>,
+) -> f64 {
+    compute_cost_opt_with_cache(price, prompt_tokens, completion_tokens, cached_tokens).unwrap_or(0.0)
 }
 
 pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {
@@ -513,6 +537,23 @@ mod tests {
         });
         let cost = compute_cost(price, 4, 0);
         assert!((cost - 40.0 / 1_000_000.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn compute_cost_with_cache_discount() {
+        let price = Some(Price {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+            kind: "chat".to_string(),
+        });
+        // 1000 prompt tokens total, 800 cached, 200 uncached, 100 completion tokens
+        // non_cached cost = 200 * 3.0 / 1M = 0.0006
+        // cached cost = 800 * 1.5 / 1M = 0.0012
+        // completion cost = 100 * 15.0 / 1M = 0.0015
+        // total = 0.0033
+        let cost = compute_cost_with_cache(price, 1000, 100, Some(800));
+        let expected = (200.0 * 3.0 + 800.0 * 1.5 + 100.0 * 15.0) / 1_000_000.0;
+        assert!((cost - expected).abs() < 1e-9);
     }
 
     #[test]
