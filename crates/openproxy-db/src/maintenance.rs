@@ -38,7 +38,8 @@ pub fn list_user_tables(conn: &Connection) -> Result<Vec<String>> {
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(crate::error::map_db_error)?;
-    rows.map(|r| r.map_err(crate::error::map_db_error)).collect()
+    rows.map(|r| r.map_err(crate::error::map_db_error))
+        .collect()
 }
 
 /// Count rows in a specific table.

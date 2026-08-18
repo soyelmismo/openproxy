@@ -170,35 +170,35 @@ where
 }
 
 /// Helper to query rows in chunks using an extraction closure to convert items to `ToSql`.
-pub fn query_in_chunks_by<T, V, R, E, F>(
+pub fn query_in_chunks_by<'a, T, V, R, E, F>(
     conn: &Connection,
     sql_template: &str,
-    items: &[T],
+    items: &'a [T],
     chunk_size: usize,
     extract: E,
     map_row: F,
 ) -> rusqlite::Result<Vec<R>>
 where
     V: rusqlite::ToSql,
-    E: Fn(&T) -> V,
+    E: Fn(&'a T) -> V,
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
 {
     query_in_chunks_by_with_params(conn, sql_template, &[], items, chunk_size, extract, map_row)
 }
 
 /// Helper to query rows in chunks with prefix parameters and an extraction closure.
-pub fn query_in_chunks_by_with_params<T, V, R, E, F>(
+pub fn query_in_chunks_by_with_params<'a, T, V, R, E, F>(
     conn: &Connection,
     sql_template: &str,
     prefix_params: &[&dyn rusqlite::ToSql],
-    items: &[T],
+    items: &'a [T],
     chunk_size: usize,
     extract: E,
     map_row: F,
 ) -> rusqlite::Result<Vec<R>>
 where
     V: rusqlite::ToSql,
-    E: Fn(&T) -> V,
+    E: Fn(&'a T) -> V,
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
 {
     if items.is_empty() {

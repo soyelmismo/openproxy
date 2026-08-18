@@ -47,8 +47,7 @@ pub fn inject_model_and_serialize<T: Serialize>(
     req: &T,
     upstream_model: &str,
 ) -> std::result::Result<Bytes, CoreError> {
-    let mut val = serde_json::to_value(req)
-        .map_err(|e| CoreError::Validation(e.to_string()))?;
+    let mut val = serde_json::to_value(req).map_err(|e| CoreError::Validation(e.to_string()))?;
     if let serde_json::Value::Object(ref mut map) = val {
         map.insert(
             "model".to_string(),
@@ -969,10 +968,7 @@ pub async fn upstream_get_bytes(
         ));
     }
 
-    response
-        .collect()
-        .await
-        .map_err(|e| format!("{url}: {e}"))
+    response.collect().await.map_err(|e| format!("{url}: {e}"))
 }
 
 pub(crate) async fn upstream_get_json(
@@ -1022,6 +1018,27 @@ pub(crate) struct OpenAIModelEntry {
 // Shared OpenAI model-list fetcher-list fetcher
 // =====================================================================
 
+/// Helper to construct a [`DiscoveredModel`] with standard capability inferences.
+pub fn build_discovered_model_with(id: String, target_format: TargetFormat) -> DiscoveredModel {
+    let m_type = openproxy_types::capabilities::infer_model_type(&id);
+    let caps = openproxy_types::capabilities::infer_capabilities(&id);
+    let in_mods = openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
+    let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
+    let family = openproxy_types::capabilities::infer_family(&id);
+    DiscoveredModel {
+        display_name: Some(id.clone()),
+        model_id: ModelId::new(id),
+        target_format,
+        context_length: None,
+        max_output_tokens: None,
+        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+        model_type: Some(m_type.to_string()),
+        family,
+        capabilities: Some(caps),
+    }
+}
+
 /// Fetch and parse an OpenAI-shaped `GET /models` response.
 ///
 /// All three new OpenAI-compatible providers (Nous Research, NVIDIA NIM,
@@ -1046,27 +1063,7 @@ pub(crate) async fn fetch_openai_models(
     let out = payload
         .data
         .into_iter()
-        .map(|m| {
-            let id = m.id;
-            let m_type = openproxy_types::capabilities::infer_model_type(&id);
-            let caps = openproxy_types::capabilities::infer_capabilities(&id);
-            let in_mods =
-                openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
-            let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
-            let family = openproxy_types::capabilities::infer_family(&id);
-            DiscoveredModel {
-                display_name: Some(id.clone()),
-                model_id: ModelId::new(id),
-                target_format,
-                context_length: None,
-                max_output_tokens: None,
-                input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                model_type: Some(m_type.to_string()),
-                family,
-                capabilities: Some(caps),
-            }
-        })
+        .map(|m| build_discovered_model_with(m.id, target_format))
         .collect();
     Ok(out)
 }
@@ -1815,7 +1812,10 @@ mod tests {
             openproxy_types::ProviderFormat::Openai,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        assert_eq!(a.build_embeddings_url(), "https://zenmux.example.com/v1/embeddings");
+        assert_eq!(
+            a.build_embeddings_url(),
+            "https://zenmux.example.com/v1/embeddings"
+        );
 
         let req = openproxy_types::embeddings::EmbeddingRequest {
             model: "text-embedding-3-small".into(),
@@ -1824,7 +1824,9 @@ mod tests {
             dimensions: None,
             user: None,
         };
-        let formatted = a.format_embedding_request(&req, "text-embedding-3-small").unwrap();
+        let formatted = a
+            .format_embedding_request(&req, "text-embedding-3-small")
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&formatted).unwrap();
         assert_eq!(val["model"], "text-embedding-3-small");
         assert_eq!(val["input"], "hello");
@@ -1839,9 +1841,18 @@ mod tests {
             openproxy_types::ProviderFormat::Openai,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        assert_eq!(a.build_image_url(), "https://zenmux.example.com/v1/images/generations");
-        assert_eq!(a.build_image_edits_url(), "https://zenmux.example.com/v1/images/edits");
-        assert_eq!(a.build_image_variations_url(), "https://zenmux.example.com/v1/images/variations");
+        assert_eq!(
+            a.build_image_url(),
+            "https://zenmux.example.com/v1/images/generations"
+        );
+        assert_eq!(
+            a.build_image_edits_url(),
+            "https://zenmux.example.com/v1/images/edits"
+        );
+        assert_eq!(
+            a.build_image_variations_url(),
+            "https://zenmux.example.com/v1/images/variations"
+        );
 
         let req = openproxy_types::images::ImageGenerationRequest {
             prompt: "a landscape".into(),

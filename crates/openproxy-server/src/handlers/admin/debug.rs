@@ -1,4 +1,4 @@
-use super::{Deserialize, Serialize, AppState, ApiError, ADMIN_LOCK_TIMEOUT, CoreError};
+use super::{ADMIN_LOCK_TIMEOUT, ApiError, AppState, CoreError, Deserialize, Serialize};
 use axum::{
     Json,
     extract::{Query, State},
@@ -208,7 +208,6 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
 pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     s.set_vacuum_in_progress(true);
     let res: Result<Json<serde_json::Value>, ApiError> = async {
-
         // We need exclusive access to the DB for the entire repair.
         // Take the writer lock and hold it.
         let w = s
@@ -245,11 +244,12 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         );
 
         // List all tables so we can rebuild them.
-        let table_names = openproxy_db::maintenance::list_user_tables(&w)
-            .map_err(|e| ApiError(CoreError::Database {
+        let table_names = openproxy_db::maintenance::list_user_tables(&w).map_err(|e| {
+            ApiError(CoreError::Database {
                 message: format!("repair: list tables: {e}"),
                 source: Some(Box::new(e)),
-            }))?;
+            })
+        })?;
 
         tracing::info!(
             tables = ?table_names,
@@ -293,7 +293,9 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         // connections, rename the file, and create a new one.
         // That requires a server restart. So we return the
         // diagnostic info + instructions.
-        s.record_vacuum_result(&format!("recovery diagnostic ({total_rows_recovered} rows readable)"));
+        s.record_vacuum_result(&format!(
+            "recovery diagnostic ({total_rows_recovered} rows readable)"
+        ));
 
         if integrity == "ok" {
             return Ok(Json(serde_json::json!({
@@ -329,15 +331,13 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                 db_path.display()
             )
         })))
-
-    }.await;
+    }
+    .await;
     s.set_vacuum_in_progress(false);
     res
 }
 
-pub async fn get_recording(
-    State(s): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+pub async fn get_recording(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(serde_json::json!({ "recording": s.is_recording() })))
 }
 

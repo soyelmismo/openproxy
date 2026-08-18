@@ -1,4 +1,8 @@
-use super::{Deserialize, Serialize, json, AppState, ApiError, analytics, StreamExt, HeaderMap, WebSocketUpgrade, IntoResponse, StatusCode, authenticate_admin_ws, CoreError, WebSocket, Message, ADMIN_LOCK_TIMEOUT, UsageFilter, ProviderId, AccountId, ComboId, ApiKeyId};
+use super::{
+    ADMIN_LOCK_TIMEOUT, AccountId, ApiError, ApiKeyId, AppState, ComboId, CoreError, Deserialize,
+    HeaderMap, IntoResponse, Message, ProviderId, Serialize, StatusCode, StreamExt, UsageFilter,
+    WebSocket, WebSocketUpgrade, analytics, authenticate_admin_ws, json,
+};
 use crate::handlers::admin::debug::json_text;
 use axum::{
     Json,
@@ -246,16 +250,15 @@ pub async fn usage_detail(
     authenticate_admin_ws(&s, &headers, None)?;
     // Read-only SELECT — use the READER.
     let r = s.db_pool().reader();
-    let row = if let Some(id) = q.id.filter(|&id| id != 0) {
-        core_usage::detail_by_id(&r, id)?
-    } else if let Some(trace_id) = &q.trace_id {
-        core_usage::detail_by_trace_id(&r, trace_id)?
-    } else if let Some(id) = q.id {
-        core_usage::detail_by_id(&r, id)?
-    } else {
-        return Err(ApiError(CoreError::Validation(
-            "Either 'id' or 'trace_id' query parameter must be provided".into(),
-        )));
+    let row = match (q.id, q.trace_id.as_deref()) {
+        (Some(id), _) if id != 0 => core_usage::detail_by_id(&r, id)?,
+        (_, Some(trace_id)) => core_usage::detail_by_trace_id(&r, trace_id)?,
+        (Some(id), _) => core_usage::detail_by_id(&r, id)?,
+        (None, None) => {
+            return Err(ApiError(CoreError::Validation(
+                "Either 'id' or 'trace_id' query parameter must be provided".into(),
+            )));
+        }
     };
     match row {
         Some(r) => Ok(Json(UsageDetailResponse { row: r })),
@@ -824,10 +827,7 @@ pub(crate) async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: s
     }
 }
 
-pub(crate) fn outbox_try_send(
-    tx: &tokio::sync::mpsc::Sender<String>,
-    value: &serde_json::Value,
-) {
+pub(crate) fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, value: &serde_json::Value) {
     let text: String = match json_text(value) {
         Ok(t) => t,
         Err(e) => {
@@ -928,9 +928,7 @@ impl UsageQuery {
         if let (Some(f), Some(t)) = (&from, &to)
             && f > t
         {
-            return Err(
-                CoreError::Validation(format!("from ({f}) must be <= to ({t})")).into(),
-            );
+            return Err(CoreError::Validation(format!("from ({f}) must be <= to ({t})")).into());
         }
         let account_id = self.account_id.map(AccountId::new);
         let combo_id = self.combo_id.map(ComboId);

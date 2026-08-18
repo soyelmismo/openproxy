@@ -464,7 +464,11 @@ impl ChunkProcessor<'_> {
         if json_payload == "[DONE]" {
             // Race cancellation guard: if another target
             // already won, discard this chunk instantly.
-            if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
+            if req
+                .race_cancel
+                .as_ref()
+                .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
+            {
                 return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
@@ -669,7 +673,11 @@ impl ChunkProcessor<'_> {
                     // Race cancellation guard: if another
                     // target won the race, discard this
                     // chunk to prevent interleaving.
-                    if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
+                    if req
+                        .race_cancel
+                        .as_ref()
+                        .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
+                    {
                         return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
@@ -813,7 +821,11 @@ impl ChunkProcessor<'_> {
 
             // Race cancellation guard: check before
             // writing to the shared sink.
-            if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
+            if req
+                .race_cancel
+                .as_ref()
+                .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
+            {
                 return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
@@ -966,7 +978,11 @@ impl ChunkProcessor<'_> {
                     // H4 fix: record the fact that we sent
                     // the upstream's [DONE] so the post-loop
                     // sentinel below does not double-emit.
-                    if req.race_cancel.as_ref().is_some_and(openproxy_adapters::CancellationToken::is_cancelled) {
+                    if req
+                        .race_cancel
+                        .as_ref()
+                        .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
+                    {
                         return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
@@ -1031,123 +1047,123 @@ impl ChunkProcessor<'_> {
                 if chunk.usage.is_some() {
                     state.usage = chunk.usage.take();
                 }
-                    if chunk.stop_reason.is_some() && state.stop_reason.is_none() {
-                        state.stop_reason = chunk.stop_reason.take();
+                if chunk.stop_reason.is_some() && state.stop_reason.is_none() {
+                    state.stop_reason = chunk.stop_reason.take();
+                }
+                // G1 fix: feed the accumulator. Per-format
+                // dispatch covers Gemini and Anthropic
+                // (the OpenAI slow path is handled at
+                // line 2632). The translated chunk's
+                // payload is already OpenAI-shaped JSON
+                // (sse.rs's translators emit OpenAI
+                // JSON for both Gemini and Anthropic),
+                // so we hand the final JSON to
+                // `append_openai_raw` for content
+                // reconstruction in `finish()`.
+                //
+                // Extract the per-chunk fields that
+                // don't fit the OpenAI shape before
+                // consuming the chunk.
+                let delta_reasoning = chunk.delta_reasoning.take();
+                let _delta_tool_calls = std::mem::take(&mut chunk.delta_tool_calls);
+                // Capture has_content BEFORE consuming
+                // the chunk — `into_json_string()` takes
+                // `self` by value. We use this flag below
+                // to decide whether to call
+                // `note_content_chunk()`. Metadata-only
+                // events (message_start, message_delta,
+                // content_block_start for tool_use) have
+                // `has_content == false` and must NOT
+                // reset the chunk-gap timer.
+                let chunk_has_content = chunk.has_content;
+                let json_str = chunk.into_json_string();
+                if let Some(a) = state.acc.as_mut() {
+                    if let Some(u) = &state.usage {
+                        a.set_usage(u.to_owned());
                     }
-                    // G1 fix: feed the accumulator. Per-format
-                    // dispatch covers Gemini and Anthropic
-                    // (the OpenAI slow path is handled at
-                    // line 2632). The translated chunk's
-                    // payload is already OpenAI-shaped JSON
-                    // (sse.rs's translators emit OpenAI
-                    // JSON for both Gemini and Anthropic),
-                    // so we hand the final JSON to
-                    // `append_openai_raw` for content
-                    // reconstruction in `finish()`.
-                    //
-                    // Extract the per-chunk fields that
-                    // don't fit the OpenAI shape before
-                    // consuming the chunk.
-                    let delta_reasoning = chunk.delta_reasoning.take();
-                    let _delta_tool_calls = std::mem::take(&mut chunk.delta_tool_calls);
-                    // Capture has_content BEFORE consuming
-                    // the chunk — `into_json_string()` takes
-                    // `self` by value. We use this flag below
-                    // to decide whether to call
-                    // `note_content_chunk()`. Metadata-only
-                    // events (message_start, message_delta,
-                    // content_block_start for tool_use) have
-                    // `has_content == false` and must NOT
-                    // reset the chunk-gap timer.
-                    let chunk_has_content = chunk.has_content;
-                    let json_str = chunk.into_json_string();
-                    if let Some(a) = state.acc.as_mut() {
-                        if let Some(u) = &state.usage {
-                            a.set_usage(u.to_owned());
-                        }
-                        if let Some(sr) = &state.stop_reason {
-                            a.set_stop_reason(sr);
-                        }
-                        if let Some(dr) = &delta_reasoning
-                            && !dr.is_empty()
-                        {
-                            a.append_reasoning(dr);
-                        }
-                        // Anthropic tool_use threading. The
-                        // Open-shape events carry `id` and
-                        // `function.name`; delta-shape
-                        // events carry only `function.arguments`.
-                        // `content_block_stop` returns
-                        // `Ok(None)` upstream so we never see
-                        // a Close event here (the accumulator's
-                        // Close is a no-op anyway).
+                    if let Some(sr) = &state.stop_reason {
+                        a.set_stop_reason(sr);
+                    }
+                    if let Some(dr) = &delta_reasoning
+                        && !dr.is_empty()
+                    {
+                        a.append_reasoning(dr);
+                    }
+                    // Anthropic tool_use threading. The
+                    // Open-shape events carry `id` and
+                    // `function.name`; delta-shape
+                    // events carry only `function.arguments`.
+                    // `content_block_stop` returns
+                    // `Ok(None)` upstream so we never see
+                    // a Close event here (the accumulator's
+                    // Close is a no-op anyway).
 
-                        a.append_openai_raw(&json_str);
-                    }
-                    // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.
-                    let sse_frame = crate::sse::build_sse_frame(&json_str);
-                    // Mark this chunk as "real content" so the
-                    // body stream switches from `total_deadline`
-                    // to the chunk-gap timer for the next read.
-                    // Only chunks with `has_content == true`
-                    // reset the timer — metadata-only events
-                    // (message_start, message_delta,
-                    // content_block_start for tool_use) have
-                    // `has_content == false` because they
-                    // carry no generated tokens. This is the
-                    // root fix for the "idle_chunk after
-                    // 10000ms" bug on MiniMax-M3 tool calls:
-                    // the content_block_start event arrived
-                    // at ~0ms with empty arguments, and
-                    // resetting the timer there caused the
-                    // 10s gap timer to fire while the model
-                    // was still generating the first argument
-                    // fragment.
-                    if chunk_has_content {
-                        stream.note_content_chunk();
-                    }
-                    if let Err(e) = sink.send(sse_frame).await {
-                        // C4 fix: a real client disconnect
-                        // mid-stream previously returned
-                        // `PipelineResult { error: None }`
-                        // — no state.usage row, tokens consumed
-                        // at the upstream were unbilled.
-                        // Hand off to
-                        // `record_and_fail_with_trace_id`
-                        // (H3 fix: the row's `trace_id`
-                        // matches the StageEvent's
-                        // `trace_id`) so the row lands in
-                        // the DB with status_code = 499
-                        // and the operator sees a real
-                        // failure event. The `state.usage` we
-                        // accumulated up to this point
-                        // still goes into the row because
-                        // `UsageRecordBuilder`
-                        // accepts an `Option<u32>` pair.
-                        return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                            self.dispatcher.fail_on_sink_send_error(
-                                e,
-                                crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: ctx.proxy_url.clone(),
-                                    proxy_status: ctx.proxy_status.clone(),
-                                    req: req.to_owned(),
-                                    combo,
-                                    target,
-                                    attempt,
-                                    race_size,
-                                    started,
-                                    model,
-                                    connect_ms: connect_and_send_ms,
-                                    ttft_ms: state.ttft_ms,
-                                    trace_id: trace_id.to_string(),
-                                    acc: state.acc.as_mut(),
-                                    chunk_id,
-                                    created,
-                                    model_name,
-                                },
-                            ),
-                        )));
-                    }
+                    a.append_openai_raw(&json_str);
+                }
+                // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.
+                let sse_frame = crate::sse::build_sse_frame(&json_str);
+                // Mark this chunk as "real content" so the
+                // body stream switches from `total_deadline`
+                // to the chunk-gap timer for the next read.
+                // Only chunks with `has_content == true`
+                // reset the timer — metadata-only events
+                // (message_start, message_delta,
+                // content_block_start for tool_use) have
+                // `has_content == false` because they
+                // carry no generated tokens. This is the
+                // root fix for the "idle_chunk after
+                // 10000ms" bug on MiniMax-M3 tool calls:
+                // the content_block_start event arrived
+                // at ~0ms with empty arguments, and
+                // resetting the timer there caused the
+                // 10s gap timer to fire while the model
+                // was still generating the first argument
+                // fragment.
+                if chunk_has_content {
+                    stream.note_content_chunk();
+                }
+                if let Err(e) = sink.send(sse_frame).await {
+                    // C4 fix: a real client disconnect
+                    // mid-stream previously returned
+                    // `PipelineResult { error: None }`
+                    // — no state.usage row, tokens consumed
+                    // at the upstream were unbilled.
+                    // Hand off to
+                    // `record_and_fail_with_trace_id`
+                    // (H3 fix: the row's `trace_id`
+                    // matches the StageEvent's
+                    // `trace_id`) so the row lands in
+                    // the DB with status_code = 499
+                    // and the operator sees a real
+                    // failure event. The `state.usage` we
+                    // accumulated up to this point
+                    // still goes into the row because
+                    // `UsageRecordBuilder`
+                    // accepts an `Option<u32>` pair.
+                    return Ok(crate::streaming::ChunkEvent::Return(Box::new(
+                        self.dispatcher.fail_on_sink_send_error(
+                            e,
+                            crate::upstream_dispatcher::StreamFailureContext {
+                                proxy_url: ctx.proxy_url.clone(),
+                                proxy_status: ctx.proxy_status.clone(),
+                                req: req.to_owned(),
+                                combo,
+                                target,
+                                attempt,
+                                race_size,
+                                started,
+                                model,
+                                connect_ms: connect_and_send_ms,
+                                ttft_ms: state.ttft_ms,
+                                trace_id: trace_id.to_string(),
+                                acc: state.acc.as_mut(),
+                                chunk_id,
+                                created,
+                                model_name,
+                            },
+                        ),
+                    )));
+                }
             }
             Ok(None) => return Ok(crate::streaming::ChunkEvent::Skip),
             Err(e) => {

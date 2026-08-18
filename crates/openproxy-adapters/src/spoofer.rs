@@ -30,6 +30,29 @@ pub trait ClientSpoofer: Send + Sync {
     }
 }
 
+macro_rules! impl_static_spoofer {
+    ($struct_name:ident, $headers:ident) => {
+        impl ClientSpoofer for $struct_name {
+            fn headers(&self) -> Vec<(String, String)> {
+                $headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect()
+            }
+
+            fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
+                for &(k, v) in $headers {
+                    if let Ok(name) = http::header::HeaderName::try_from(k)
+                        && let Ok(val) = HeaderValue::try_from(v)
+                    {
+                        headers.insert(name, val);
+                    }
+                }
+            }
+        }
+    };
+}
+
 // =====================================================================
 // Cline Preset
 // =====================================================================
@@ -50,24 +73,7 @@ pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClineSpoofer;
 
-impl ClientSpoofer for ClineSpoofer {
-    fn headers(&self) -> Vec<(String, String)> {
-        CLINE_SPOOFING_HEADERS
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
-        for &(k, v) in CLINE_SPOOFING_HEADERS {
-            if let Ok(name) = http::header::HeaderName::try_from(k)
-                && let Ok(val) = HeaderValue::try_from(v)
-            {
-                headers.insert(name, val);
-            }
-        }
-    }
-}
+impl_static_spoofer!(ClineSpoofer, CLINE_SPOOFING_HEADERS);
 
 // =====================================================================
 // OpenCode Preset
@@ -83,24 +89,7 @@ pub const OPENCODE_SPOOFING_HEADERS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenCodeSpoofer;
 
-impl ClientSpoofer for OpenCodeSpoofer {
-    fn headers(&self) -> Vec<(String, String)> {
-        OPENCODE_SPOOFING_HEADERS
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
-        for &(k, v) in OPENCODE_SPOOFING_HEADERS {
-            if let Ok(name) = http::header::HeaderName::try_from(k)
-                && let Ok(val) = HeaderValue::try_from(v)
-            {
-                headers.insert(name, val);
-            }
-        }
-    }
-}
+impl_static_spoofer!(OpenCodeSpoofer, OPENCODE_SPOOFING_HEADERS);
 
 // =====================================================================
 // Antigravity Preset

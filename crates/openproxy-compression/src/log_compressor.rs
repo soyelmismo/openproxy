@@ -389,10 +389,7 @@ fn dedup_key(line: &str) -> String {
     match sep_char_idx {
         Some(idx) => {
             // Convert char index to byte index.
-            let byte_idx = line
-                .char_indices()
-                .nth(idx)
-                .map_or(line.len(), |(b, _)| b);
+            let byte_idx = line.char_indices().nth(idx).map_or(line.len(), |(b, _)| b);
             // Include the separator in the prefix.
             let sep_end = (byte_idx + 1).min(line.len());
             let prefix = &line[..sep_end];

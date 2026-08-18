@@ -596,97 +596,111 @@ pub type AccountsMetaMaps = (
     std::collections::HashMap<i64, String>,
 );
 
-pub fn get_accounts_meta(
-    conn: &Connection,
-    account_ids: &[AccountId],
-) -> Result<AccountsMetaMaps> {
-    let mut raw_map = std::collections::HashMap::new();
+pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
+    if account_ids.is_empty() {
+        return Ok((
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        ));
+    }
+
+    type AccountRowTuple = (
+        i64,
+        Option<Vec<u8>>,
+        Option<String>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+
+    let rows: Vec<AccountRowTuple> = crate::batch::query_in_chunks_by(
+        conn,
+        "SELECT id, api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email, extra_config_json FROM accounts WHERE id IN ({})",
+        account_ids,
+        crate::batch::DEFAULT_CHUNK_SIZE,
+        |id| id.0,
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+            ))
+        },
+    )
+    .map_err(crate::error::map_db_error_ctx("batch query accounts"))?;
+
+    let mut raw_map = std::collections::HashMap::with_capacity(rows.len());
     let mut kiro_map = std::collections::HashMap::new();
     let mut ag_map = std::collections::HashMap::new();
-    for id in account_ids {
-        let row = conn.query_row(
-            "SELECT api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email, extra_config_json FROM accounts WHERE id = ?1",
-            params![id.0],
-            |r| {
-                Ok((
-                    r.get::<_, Option<Vec<u8>>>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<Vec<u8>>>(2)?,
-                    r.get::<_, Option<Vec<u8>>>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                    r.get::<_, Option<String>>(5)?,
-                    r.get::<_, Option<String>>(6)?,
-                    r.get::<_, Option<String>>(7)?,
-                ))
-            }
-        ).optional().map_err(crate::error::map_db_error_ctx("query accounts"))?;
-        if let Some((
-            api_key,
-            label,
-            access,
-            refresh,
-            expires,
-            oauth_prov,
-            _email,
-            extra_json,
-        )) = row
+
+    for (id_val, api_key, label, access, refresh, expires, oauth_prov, _email, extra_json) in rows {
+        if let Some(ref oauth_json) = oauth_prov
+            && let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json)
+            && let Some(pid) = meta
+                .get("projectId")
+                .or_else(|| meta.get("project_id"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
         {
-            if let Some(ref oauth_json) = oauth_prov
-                && let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json)
-                && let Some(pid) = meta
-                    .get("projectId")
-                    .or_else(|| meta.get("project_id"))
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-            {
-                ag_map.insert(id.0, pid.to_string());
-            }
+            ag_map.insert(id_val, pid.to_string());
+        }
 
-            raw_map.insert(
-                id.0,
-                RawAccount {
-                    api_key_encrypted: api_key,
-                    label,
-                    access_token_encrypted: access,
-                    refresh_token_encrypted: refresh,
-                    expires_at: expires,
-                    oauth_provider_specific: oauth_prov,
-                    quota_session_reset_at: None,
-                    quota_model_details: None,
-                },
-            );
+        raw_map.insert(
+            id_val,
+            RawAccount {
+                api_key_encrypted: api_key,
+                label,
+                access_token_encrypted: access,
+                refresh_token_encrypted: refresh,
+                expires_at: expires,
+                oauth_provider_specific: oauth_prov,
+                quota_session_reset_at: None,
+                quota_model_details: None,
+            },
+        );
 
-            if let Some(cfg_str) = extra_json
-                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
-            {
-                let region = val
-                    .get("region")
-                    .or(val.get("aws_region"))
-                    .and_then(|v| v.as_str())
-                    .map(std::string::ToString::to_string);
-                let profile_arn = val
-                    .get("profile_arn")
-                    .or(val.get("aws_role_arn"))
-                    .and_then(|v| v.as_str())
-                    .map(std::string::ToString::to_string);
-                if region.is_some() || profile_arn.is_some() {
-                    kiro_map.insert(
-                        id.0,
-                        KiroMeta {
-                            region,
-                            profile_arn,
-                        },
-                    );
-                }
+        if let Some(cfg_str) = extra_json
+            && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
+        {
+            let region = val
+                .get("region")
+                .or(val.get("aws_region"))
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string);
+            let profile_arn = val
+                .get("profile_arn")
+                .or(val.get("aws_role_arn"))
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string);
+            if region.is_some() || profile_arn.is_some() {
+                kiro_map.insert(
+                    id_val,
+                    KiroMeta {
+                        region,
+                        profile_arn,
+                    },
+                );
             }
-        } else {
-            return Err(CoreError::Validation(format!(
-                "account {} not found",
-                id.0
-            )));
         }
     }
+
+    for id in account_ids {
+        if !raw_map.contains_key(&id.0) {
+            return Err(CoreError::Validation(format!("account {} not found", id.0)));
+        }
+    }
+
     Ok((raw_map, kiro_map, ag_map))
 }
 

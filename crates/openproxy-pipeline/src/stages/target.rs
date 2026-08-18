@@ -496,9 +496,10 @@ impl PipelineStage for CustomAdapterStage {
             .find(|a| a.id() == &target.provider_id)
         else {
             let err = CoreError::ProviderNotFound(target.provider_id.to_string());
-            let combo = ctx.combo.as_ref().ok_or_else(|| {
-                CoreError::Internal("missing combo in pipeline context".into())
-            })?;
+            let combo = ctx
+                .combo
+                .as_ref()
+                .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
             return Ok(ctx.pipeline.record_and_fail_with_trace_id(
                 ctx.req.clone(),
                 combo,

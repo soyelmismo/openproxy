@@ -1,4 +1,4 @@
-use super::{Deserialize, ApiError, AppState, Arc, CoreError};
+use super::{ApiError, AppState, Arc, CoreError, Deserialize};
 use crate::extractors::{DbReader, DbWriter};
 use axum::{
     Json,

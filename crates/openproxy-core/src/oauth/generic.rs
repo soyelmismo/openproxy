@@ -13,9 +13,11 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth::{
+    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+};
 use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 
 /// How token/device requests are encoded on the wire.
@@ -409,21 +411,12 @@ async fn call_oauth_endpoint(
     let response = upstream_client
         .call(req, TimeoutProfile::OAuth, cancel)
         .await
-        .map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("{} {purpose}: {e}", spec.id))
-            }
-        })?;
+        .map_err(|e| map_upstream_err(e, &format!("{} {purpose}", spec.id)))?;
     let status = response.status;
-    let body = response.collect().await.map_err(|e| {
-        if matches!(e, UpstreamError::Cancel) {
-            CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-        } else {
-            CoreError::UpstreamConnection(format!("{} {purpose} body read: {e}", spec.id))
-        }
-    })?;
+    let body = response
+        .collect()
+        .await
+        .map_err(|e| map_upstream_err(e, &format!("{} {purpose} body read", spec.id)))?;
 
     if !status.is_success() {
         return Err(CoreError::UpstreamError {

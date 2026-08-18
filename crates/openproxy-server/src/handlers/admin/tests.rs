@@ -440,10 +440,7 @@ fn usage_filter_preset_this_month_resolves_to_month_bounds() {
     let f = q.into_filter().expect("this_month preset is valid");
     let from = f.from.expect("from is computed from preset");
     let to = f.to.expect("to is computed from preset");
-    assert!(
-        from.ends_with("T00:00:00Z"),
-        "from is midnight UTC: {from}"
-    );
+    assert!(from.ends_with("T00:00:00Z"), "from is midnight UTC: {from}");
     assert!(to.ends_with("T00:00:00Z"), "to is midnight UTC: {to}");
     assert!(
         from.ends_with("-01T00:00:00Z"),
@@ -480,10 +477,7 @@ fn usage_filter_preset_overrides_explicit_from_to() {
         !from.starts_with("2000-"),
         "preset must override explicit from: {from}"
     );
-    assert!(
-        from.starts_with("20"),
-        "from is a recent-ish year: {from}"
-    );
+    assert!(from.starts_with("20"), "from is a recent-ish year: {from}");
 }
 
 #[test]
@@ -554,9 +548,8 @@ async fn body_limit_accepts_10_mib_chat_body() {
     let (state, _key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let big = "x".repeat(10 * 1024 * 1024);
-    let body_json = format!(
-        r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{big}"}}]}}"#
-    );
+    let body_json =
+        format!(r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{big}"}}]}}"#);
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")
@@ -585,9 +578,8 @@ async fn body_limit_rejects_100_mib_chat_body() {
     let (state, _key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let big = "x".repeat(100 * 1024 * 1024);
-    let body_json = format!(
-        r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{big}"}}]}}"#
-    );
+    let body_json =
+        format!(r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{big}"}}]}}"#);
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")

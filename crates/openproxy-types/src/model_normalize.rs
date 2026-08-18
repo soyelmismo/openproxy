@@ -53,7 +53,11 @@ fn strip_date_suffix(s: &str) -> Option<&str> {
     if s.len() <= 11 {
         return None;
     }
-    let suffix = &s[s.len() - 11..];
+    let idx = s.len() - 11;
+    if !s.is_char_boundary(idx) {
+        return None;
+    }
+    let suffix = &s[idx..];
     let bytes = suffix.as_bytes();
     if bytes[0] == b'-'
         && bytes[1..5].iter().all(u8::is_ascii_digit)
@@ -62,7 +66,7 @@ fn strip_date_suffix(s: &str) -> Option<&str> {
         && bytes[8] == b'-'
         && bytes[9..11].iter().all(u8::is_ascii_digit)
     {
-        Some(&s[..s.len() - 11])
+        Some(&s[..idx])
     } else {
         None
     }
@@ -72,10 +76,14 @@ fn strip_4digit_suffix(s: &str) -> Option<&str> {
     if s.len() <= 5 {
         return None;
     }
-    let suffix = &s[s.len() - 5..];
+    let idx = s.len() - 5;
+    if !s.is_char_boundary(idx) {
+        return None;
+    }
+    let suffix = &s[idx..];
     let bytes = suffix.as_bytes();
     if bytes[0] == b'-' && bytes[1..5].iter().all(u8::is_ascii_digit) {
-        Some(&s[..s.len() - 5])
+        Some(&s[..idx])
     } else {
         None
     }
@@ -91,11 +99,14 @@ fn strip_version_suffix(s: &str) -> Option<&str> {
 }
 
 fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
-    let bytes = s.as_bytes();
-    if bytes.len() <= 9 {
+    if s.len() <= 9 {
         return None;
     }
-    let suffix = &s[s.len() - 9..];
+    let idx = s.len() - 9;
+    if !s.is_char_boundary(idx) {
+        return None;
+    }
+    let suffix = &s[idx..];
     if !suffix.starts_with('-') {
         return None;
     }
@@ -107,7 +118,7 @@ fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
     if !(year.starts_with("19") || year.starts_with("20")) {
         return None;
     }
-    Some(&s[..s.len() - 9])
+    Some(&s[..idx])
 }
 
 fn normalize_family(s: &str) -> String {
@@ -242,10 +253,7 @@ mod tests {
             strip_compact_yyyymmdd("claude-3-5-sonnet-20241022"),
             Some("claude-3-5-sonnet")
         );
-        assert_eq!(
-            strip_compact_yyyymmdd("model-19991231"),
-            Some("model")
-        );
+        assert_eq!(strip_compact_yyyymmdd("model-19991231"), Some("model"));
 
         // Too short (len <= 9)
         assert_eq!(strip_compact_yyyymmdd("m-202410"), None);
@@ -264,5 +272,12 @@ mod tests {
         // Invalid year (doesn't start with 19 or 20)
         assert_eq!(strip_compact_yyyymmdd("model-21241022"), None);
         assert_eq!(strip_compact_yyyymmdd("model-18991231"), None);
+    }
+
+    #[test]
+    fn handles_multibyte_utf8_safely() {
+        assert_eq!(normalize_model_id("🤖-20241022"), "🤖");
+        assert_eq!(normalize_model_id("modèle-2024-01-01"), "modèle");
+        assert_eq!(normalize_model_id("🦀-v1"), "🦀");
     }
 }

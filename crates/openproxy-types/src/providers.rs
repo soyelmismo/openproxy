@@ -40,98 +40,42 @@ impl ProviderMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderFormat {
-    Openai,
-    Anthropic,
-    Mixed,
-    Gemini,
-    Responses,
-    Atomesus,
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum ProviderFormat {
+        Openai => "openai",
+        Anthropic => "anthropic",
+        Mixed => "mixed",
+        Gemini => "gemini",
+        Responses => "responses",
+        Atomesus => "atomesus",
+    }
+    error: "provider format"
 }
 
-impl ProviderFormat {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ProviderFormat::Openai => "openai",
-            ProviderFormat::Anthropic => "anthropic",
-            ProviderFormat::Mixed => "mixed",
-            ProviderFormat::Gemini => "gemini",
-            ProviderFormat::Responses => "responses",
-            ProviderFormat::Atomesus => "atomesus",
-        }
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum AuthType {
+        Bearer => "bearer",
+        XApiKey => "x-api-key",
+        GoogApiKey => "goog-api-key",
+        OAuth => "oauth",
+        None => "none",
     }
-
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "openai" => Ok(ProviderFormat::Openai),
-            "anthropic" => Ok(ProviderFormat::Anthropic),
-            "mixed" => Ok(ProviderFormat::Mixed),
-            "gemini" => Ok(ProviderFormat::Gemini),
-            "responses" => Ok(ProviderFormat::Responses),
-            "atomesus" => Ok(ProviderFormat::Atomesus),
-            other => Err(format!("invalid provider format: {other}")),
-        }
-    }
+    error: "auth_type"
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthType {
-    Bearer,
-    XApiKey,
-    GoogApiKey,
-    OAuth,
-    None,
-}
-
-impl AuthType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AuthType::Bearer => "bearer",
-            AuthType::XApiKey => "x-api-key",
-            AuthType::GoogApiKey => "goog-api-key",
-            AuthType::OAuth => "oauth",
-            AuthType::None => "none",
-        }
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+    #[serde(rename_all = "lowercase")]
+    pub enum RateLimitScope {
+        #[default]
+        Account => "account",
+        Model => "model",
     }
-
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "bearer" => Ok(AuthType::Bearer),
-            "x-api-key" => Ok(AuthType::XApiKey),
-            "goog-api-key" => Ok(AuthType::GoogApiKey),
-            "oauth" => Ok(AuthType::OAuth),
-            "none" => Ok(AuthType::None),
-            other => Err(format!("invalid auth_type: {other}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum RateLimitScope {
-    #[default]
-    Account,
-    Model,
-}
-
-impl RateLimitScope {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RateLimitScope::Account => "account",
-            RateLimitScope::Model => "model",
-        }
-    }
-
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "account" => Ok(RateLimitScope::Account),
-            "model" => Ok(RateLimitScope::Model),
-            other => Err(format!("invalid rate_limit_scope: {other}")),
-        }
-    }
+    error: "rate_limit_scope"
 }
 
 fn default_proxy_rotation_errors() -> String {

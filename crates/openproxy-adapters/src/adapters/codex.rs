@@ -1,4 +1,8 @@
-use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, ModelId, TargetFormat, Arc, UpstreamClient, Result, UpstreamRequest, CancellationToken, TimeoutProfile, CoreError};
+use super::{
+    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, DiscoveredModel, ModelId,
+    ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
+    UpstreamClient, UpstreamRequest,
+};
 
 const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.0";
 
@@ -235,7 +239,7 @@ impl CodexAdapter {
             .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
 
         let status = response.status.as_u16();
-        if !(200..300).contains(&status) {
+        if !response.status.is_success() {
             let body = response.collect().await.unwrap_or_default();
             let snippet = String::from_utf8_lossy(&body)
                 .chars()

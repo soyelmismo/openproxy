@@ -1,6 +1,7 @@
 use crate::ids::ComboTargetId;
-use parking_lot::Mutex;
+use crate::time::now_ms;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 #[derive(Default)]
 pub struct SelectionRegistry {
@@ -21,7 +22,7 @@ impl SelectionRegistry {
 
     pub fn record_success(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        let mut g = self.inner.lock();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let e = g.entry(target_id.0).or_default();
         e.last_success_ms = now;
         e.last_activity_ms = now;
@@ -30,7 +31,7 @@ impl SelectionRegistry {
 
     pub fn record_failure(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        let mut g = self.inner.lock();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let e = g.entry(target_id.0).or_default();
         e.last_activity_ms = now;
         e.last_success_ms = 0;
@@ -39,14 +40,14 @@ impl SelectionRegistry {
 
     pub fn record_request(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        let mut g = self.inner.lock();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let e = g.entry(target_id.0).or_default();
         e.last_activity_ms = now;
         e.request_count = e.request_count.saturating_add(1);
     }
 
     pub fn last_success_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
-        let g = self.inner.lock();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match g.get(&target_id.0) {
             Some(e) if e.last_success_ms > 0 => {
                 let now = now_ms();
@@ -62,7 +63,7 @@ impl SelectionRegistry {
     }
 
     pub fn last_activity_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
-        let g = self.inner.lock();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match g.get(&target_id.0) {
             Some(e) if e.last_activity_ms > 0 => {
                 let now = now_ms();
@@ -78,7 +79,7 @@ impl SelectionRegistry {
     }
 
     pub fn request_count_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
-        let g = self.inner.lock();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match g.get(&target_id.0) {
             Some(e) if e.request_count > 0 => {
                 let reference_ms = if e.last_success_ms > 0 {
@@ -102,7 +103,7 @@ impl SelectionRegistry {
     }
 
     pub fn prune_stale(&self, max_age: std::time::Duration) -> usize {
-        let mut g = self.inner.lock();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_ms();
         let cutoff = now.saturating_sub(max_age.as_millis() as u64);
         let before = g.len();
@@ -114,18 +115,15 @@ impl SelectionRegistry {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
 }
 
 #[cfg(test)]

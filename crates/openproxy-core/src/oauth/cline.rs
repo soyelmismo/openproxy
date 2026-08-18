@@ -1,9 +1,11 @@
 //! Cline OAuth provider.
 
 use crate::error::{CoreError, Result};
-use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth::{
+    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+};
 use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use std::sync::Arc;
 
@@ -82,22 +84,13 @@ impl OAuthProvider for ClineOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("cline exchange: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "cline exchange"))?;
 
         let status = response.status;
-        let resp_body = response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("cline exchange body: {e}"))
-            }
-        })?;
+        let resp_body = response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "cline exchange body"))?;
 
         if !status.is_success() {
             return Err(CoreError::UpstreamError {
@@ -178,22 +171,13 @@ impl OAuthProvider for ClineOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("cline refresh: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "cline refresh"))?;
 
         let status = response.status;
-        let resp_body = response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("cline refresh body: {e}"))
-            }
-        })?;
+        let resp_body = response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "cline refresh body"))?;
 
         if !status.is_success() {
             return Err(CoreError::UpstreamError {

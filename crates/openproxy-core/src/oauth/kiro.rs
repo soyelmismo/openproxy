@@ -16,9 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth::{
+    DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+};
 use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use openproxy_db::secrets::MasterKey;
 use std::sync::Arc;
@@ -147,7 +149,10 @@ async fn register_oidc_client(
     let register_body = serde_json::to_vec(&RegisterClientRequest {
         client_name: "openproxy-kiro".into(),
         client_type: "public".into(),
-        scopes: SCOPES.iter().map(std::string::ToString::to_string).collect(),
+        scopes: SCOPES
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         grant_types: vec![
             "urn:ietf:params:oauth:grant-type:device_code".into(),
             "refresh_token".into(),
@@ -161,22 +166,13 @@ async fn register_oidc_client(
     let register_response = upstream_client
         .call(register_req, TimeoutProfile::OAuth, cancel)
         .await
-        .map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro client register: {e}"))
-            }
-        })?;
+        .map_err(|e| map_upstream_err(e, "kiro client register"))?;
 
     let register_status = register_response.status;
-    let register_body = register_response.collect().await.map_err(|e| {
-        if matches!(e, UpstreamError::Cancel) {
-            CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-        } else {
-            CoreError::UpstreamConnection(format!("kiro register body read: {e}"))
-        }
-    })?;
+    let register_body = register_response
+        .collect()
+        .await
+        .map_err(|e| map_upstream_err(e, "kiro register body read"))?;
 
     if !register_status.is_success() {
         let body_str = String::from_utf8_lossy(&register_body).to_string();
@@ -248,7 +244,10 @@ impl OAuthProvider for KiroOAuthProvider {
         let register_body = serde_json::to_vec(&RegisterClientRequest {
             client_name: "openproxy-kiro".into(),
             client_type: "public".into(),
-            scopes: SCOPES.iter().map(std::string::ToString::to_string).collect(),
+            scopes: SCOPES
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             grant_types: vec![
                 "urn:ietf:params:oauth:grant-type:device_code".into(),
                 "refresh_token".into(),
@@ -261,23 +260,14 @@ impl OAuthProvider for KiroOAuthProvider {
         let cancel = CancellationToken::new();
         let register_response = upstream_client
             .call(register_req, TimeoutProfile::OAuth, cancel)
-            .await;
-        let register_response = register_response.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro client register: {e}"))
-            }
-        })?;
+            .await
+            .map_err(|e| map_upstream_err(e, "kiro client register"))?;
 
         let register_status = register_response.status;
-        let register_body = register_response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro register body read: {e}"))
-            }
-        })?;
+        let register_body = register_response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "kiro register body read"))?;
         if !register_status.is_success() {
             let body_str = String::from_utf8_lossy(&register_body).to_string();
             return Err(CoreError::UpstreamError {
@@ -310,23 +300,14 @@ impl OAuthProvider for KiroOAuthProvider {
                 TimeoutProfile::OAuth,
                 CancellationToken::new(),
             )
-            .await;
-        let device_auth_response = device_auth_response.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro device authorization: {e}"))
-            }
-        })?;
+            .await
+            .map_err(|e| map_upstream_err(e, "kiro device authorization"))?;
 
         let device_auth_status = device_auth_response.status;
-        let device_auth_body = device_auth_response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro device auth body read: {e}"))
-            }
-        })?;
+        let device_auth_body = device_auth_response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "kiro device auth body read"))?;
         if !device_auth_status.is_success() {
             let body_str = String::from_utf8_lossy(&device_auth_body).to_string();
             return Err(CoreError::UpstreamError {
@@ -384,22 +365,13 @@ impl OAuthProvider for KiroOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("kiro device poll: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "kiro device poll"))?;
 
         let status = response.status;
-        let body = response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro device poll body read: {e}"))
-            }
-        })?;
+        let body = response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "kiro device poll body read"))?;
 
         if status.as_u16() == 400 || status.as_u16() == 428 {
             // Authorization_pending or similar — caller should retry.
@@ -457,24 +429,13 @@ impl OAuthProvider for KiroOAuthProvider {
             let response = upstream_client
                 .call(req, TimeoutProfile::OAuth, cancel)
                 .await
-                .map_err(|e| {
-                    if matches!(e, UpstreamError::Cancel) {
-                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                    } else {
-                        CoreError::UpstreamConnection(format!("kiro social token refresh: {e}"))
-                    }
-                })?;
+                .map_err(|e| map_upstream_err(e, "kiro social token refresh"))?;
 
             let status = response.status;
-            let body_bytes = response.collect().await.map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!(
-                        "kiro social token refresh body read: {e}"
-                    ))
-                }
-            })?;
+            let body_bytes = response
+                .collect()
+                .await
+                .map_err(|e| map_upstream_err(e, "kiro social token refresh body read"))?;
 
             if !status.is_success() {
                 let body_str = String::from_utf8_lossy(&body_bytes).to_string();
@@ -536,22 +497,13 @@ impl OAuthProvider for KiroOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("kiro token refresh: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "kiro token refresh"))?;
 
         let status = response.status;
-        let body_bytes = response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("kiro token refresh body read: {e}"))
-            }
-        })?;
+        let body_bytes = response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "kiro token refresh body read"))?;
 
         let mut success_body = None;
         if status.is_success() {

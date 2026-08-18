@@ -1,31 +1,15 @@
 use crate::ids::{AccountId, ProviderId};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HealthStatus {
-    Healthy,
-    Degraded,
-    Unhealthy,
-}
-
-impl HealthStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Healthy => "healthy",
-            Self::Degraded => "degraded",
-            Self::Unhealthy => "unhealthy",
-        }
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum HealthStatus {
+        Healthy => "healthy",
+        Degraded => "degraded",
+        Unhealthy => "unhealthy",
     }
-
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "healthy" => Ok(Self::Healthy),
-            "degraded" => Ok(Self::Degraded),
-            "unhealthy" => Ok(Self::Unhealthy),
-            other => Err(format!("invalid health: {other}")),
-        }
-    }
+    error: "health"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

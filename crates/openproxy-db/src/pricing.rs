@@ -414,7 +414,8 @@ pub fn compute_cost_with_cache(
     completion_tokens: u32,
     cached_tokens: Option<u32>,
 ) -> f64 {
-    compute_cost_opt_with_cache(price, prompt_tokens, completion_tokens, cached_tokens).unwrap_or(0.0)
+    compute_cost_opt_with_cache(price, prompt_tokens, completion_tokens, cached_tokens)
+        .unwrap_or(0.0)
 }
 
 pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {

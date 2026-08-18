@@ -1,5 +1,8 @@
+use super::{
+    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
+    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
+};
 use std::fmt::Write;
-use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, TargetFormat, ModelId, Result, CoreError, Arc, UpstreamClient, DiscoveredModel};
 
 // =====================================================================
 // Atomesus Adapter

@@ -53,7 +53,13 @@ pub async fn dispatch_embedding_request(
     let payload = adapter.format_embedding_request(req, upstream_model_id)?;
     let mut upstream_req = UpstreamRequest::post_json(upstream_url, payload);
 
-    apply_adapter_headers(&mut upstream_req, adapter, api_key, upstream_model_id, false);
+    apply_adapter_headers(
+        &mut upstream_req,
+        adapter,
+        api_key,
+        upstream_model_id,
+        false,
+    );
 
     let cancel = CancellationToken::new();
     upstream_client
@@ -80,7 +86,8 @@ pub async fn execute_embeddings(
     };
 
     // 2. Resolve embedding targets.
-    let targets = resolve_embedding_targets(db_pool, routing_plan, &req.model, api_key_id, started)?;
+    let targets =
+        resolve_embedding_targets(db_pool, routing_plan, &req.model, api_key_id, started)?;
 
     let mut last_error = None;
     let mut attempt = 0;
@@ -244,8 +251,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-embedding-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-embedding-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");

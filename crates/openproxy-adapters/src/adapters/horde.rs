@@ -181,8 +181,10 @@ impl ProviderAdapter for HordeAdapter {
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let headers = self.build_headers(api_key, TargetFormat::Openai, &ModelId::new(""));
-        let header_refs: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let header_refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
         let mut discovered = Vec::new();
 
@@ -343,16 +345,13 @@ impl HordeAdapter {
         let url = format!("{}/find_user", self.config.base_url);
         let mut req = UpstreamRequest::get(url);
         if let Ok(v) = http::HeaderValue::from_str(key) {
-            req.headers.insert(
-                http::header::HeaderName::from_static("apikey"),
-                v,
-            );
+            req.headers
+                .insert(http::header::HeaderName::from_static("apikey"), v);
         }
-        if let Ok(v) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
-            req.headers.insert(
-                http::header::HeaderName::from_static("client-agent"),
-                v,
-            );
+        if let Ok(v) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
+        {
+            req.headers
+                .insert(http::header::HeaderName::from_static("client-agent"), v);
         }
         req.headers.insert(
             http::header::ACCEPT,
@@ -611,8 +610,11 @@ impl HordeAdapter {
             source_image: clean_image_str(source_image),
         };
 
-        let vec = serde_json::to_vec(&payload)
-            .map_err(|e| CoreError::Parse(format!("failed to serialize horde interrogate request: {e}")))?;
+        let vec = serde_json::to_vec(&payload).map_err(|e| {
+            CoreError::Parse(format!(
+                "failed to serialize horde interrogate request: {e}"
+            ))
+        })?;
         Ok(Bytes::from(vec))
     }
 
@@ -661,7 +663,14 @@ impl HordeAdapter {
                         return Some(s.trim().to_string());
                     }
                     if let Some(obj) = result.as_object() {
-                        for key in ["caption", "text", "interrogation", "description", "summary", "result"] {
+                        for key in [
+                            "caption",
+                            "text",
+                            "interrogation",
+                            "description",
+                            "summary",
+                            "result",
+                        ] {
                             if let Some(s) = obj.get(key).and_then(|v| v.as_str())
                                 && !s.trim().is_empty()
                             {
@@ -704,19 +713,31 @@ impl HordeAdapter {
 
     /// Check if interrogation status is done or faulted.
     pub fn is_interrogate_done(status_json: &serde_json::Value) -> (bool, bool) {
-        let state = status_json.get("state").and_then(|v| v.as_str()).unwrap_or("");
+        let state = status_json
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let is_done = state.eq_ignore_ascii_case("done")
-            || status_json.get("done").and_then(|v| v.as_bool()).unwrap_or(false)
-            || status_json.get("forms").and_then(|v| v.as_array()).is_some_and(|arr| {
-                arr.iter().any(|f| {
-                    f.get("state")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|s| s.eq_ignore_ascii_case("done"))
-                        || f.get("result").is_some()
-                })
-            });
+            || status_json
+                .get("done")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            || status_json
+                .get("forms")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| {
+                    arr.iter().any(|f| {
+                        f.get("state")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|s| s.eq_ignore_ascii_case("done"))
+                            || f.get("result").is_some()
+                    })
+                });
         let is_faulted = state.eq_ignore_ascii_case("faulted")
-            || status_json.get("faulted").and_then(|v| v.as_bool()).unwrap_or(false);
+            || status_json
+                .get("faulted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
         (is_done, is_faulted)
     }
 
@@ -742,7 +763,9 @@ impl HordeAdapter {
                 .headers
                 .insert(http::header::HeaderName::from_static("apikey"), val);
         }
-        if let Ok(val) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
+        if let Ok(val) =
+            http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
+        {
             post_req
                 .headers
                 .insert(http::header::HeaderName::from_static("client-agent"), val);
@@ -823,7 +846,9 @@ impl HordeAdapter {
                 continue;
             }
 
-            let Ok(body) = resp.collect().await else { continue };
+            let Ok(body) = resp.collect().await else {
+                continue;
+            };
 
             let Ok(status_json) = serde_json::from_slice::<serde_json::Value>(&body) else {
                 continue;
@@ -964,7 +989,10 @@ fn infer_horde_family(model_name: &str) -> String {
         "sdxl".to_string()
     } else if lower.contains("pony") {
         "pony".to_string()
-    } else if lower.contains("stable_diffusion") || lower.contains("sd 1.5") || lower.contains("sd15") {
+    } else if lower.contains("stable_diffusion")
+        || lower.contains("sd 1.5")
+        || lower.contains("sd15")
+    {
         "sd15".to_string()
     } else if lower.contains("dreamshaper") {
         "dreamshaper".to_string()
@@ -1133,10 +1161,16 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
             "--hires" | "--hires_fix" => {
                 i += 1;
                 if i < words.len() && !words[i].starts_with("--") {
-                    if words[i].eq_ignore_ascii_case("false") || words[i] == "0" || words[i].eq_ignore_ascii_case("off") {
+                    if words[i].eq_ignore_ascii_case("false")
+                        || words[i] == "0"
+                        || words[i].eq_ignore_ascii_case("off")
+                    {
                         hires_fix = Some(false);
                         i += 1;
-                    } else if words[i].eq_ignore_ascii_case("true") || words[i] == "1" || words[i].eq_ignore_ascii_case("on") {
+                    } else if words[i].eq_ignore_ascii_case("true")
+                        || words[i] == "1"
+                        || words[i].eq_ignore_ascii_case("on")
+                    {
                         hires_fix = Some(true);
                         i += 1;
                     } else {
@@ -1161,7 +1195,8 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
             "--sampler" | "--sampler_name" => {
                 i += 1;
                 if i < words.len() && !words[i].starts_with("--") {
-                    sampler_name = Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
+                    sampler_name =
+                        Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
                     i += 1;
                 }
             }
@@ -1213,7 +1248,8 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
             "--control" | "--control_type" => {
                 i += 1;
                 if i < words.len() && !words[i].starts_with("--") {
-                    control_type = Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
+                    control_type =
+                        Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
                     i += 1;
                 }
             }
@@ -1249,7 +1285,8 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
                 }
                 if !neg_tokens.is_empty() {
                     let neg_str = neg_tokens.join(" ");
-                    let cleaned_neg = clean_residual_prompt(neg_str.trim_matches(|c| c == '"' || c == '\''));
+                    let cleaned_neg =
+                        clean_residual_prompt(neg_str.trim_matches(|c| c == '"' || c == '\''));
                     if !cleaned_neg.is_empty() {
                         negative_prompts.push(cleaned_neg);
                     }
@@ -1334,10 +1371,7 @@ pub fn parse_horde_quota(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("Anonymous");
 
-    let kudos = body
-        .get("kudos")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
+    let kudos = body.get("kudos").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
     let worker_count = body
         .get("worker_count")
@@ -1452,10 +1486,7 @@ mod tests {
             a.build_chat_url(TargetFormat::Openai, &ModelId::new("any")),
             "https://oai.aihorde.net/v1/chat/completions"
         );
-        assert_eq!(
-            a.models_url().unwrap(),
-            "https://oai.aihorde.net/v1/models"
-        );
+        assert_eq!(a.models_url().unwrap(), "https://oai.aihorde.net/v1/models");
     }
 
     #[test]
@@ -1674,12 +1705,18 @@ mod tests {
 
     #[test]
     fn test_build_interrogate_payload() {
-        let bytes = HordeAdapter::build_interrogate_payload("data:image/png;base64,iVBORw0KGgo=", &[]).unwrap();
+        let bytes =
+            HordeAdapter::build_interrogate_payload("data:image/png;base64,iVBORw0KGgo=", &[])
+                .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(val["source_image"], "iVBORw0KGgo=");
         assert_eq!(val["forms"][0]["name"], "caption");
 
-        let bytes_custom = HordeAdapter::build_interrogate_payload("https://example.com/cat.jpg", &["caption", "nsfw"]).unwrap();
+        let bytes_custom = HordeAdapter::build_interrogate_payload(
+            "https://example.com/cat.jpg",
+            &["caption", "nsfw"],
+        )
+        .unwrap();
         let val_custom: serde_json::Value = serde_json::from_slice(&bytes_custom).unwrap();
         assert_eq!(val_custom["source_image"], "https://example.com/cat.jpg");
         assert_eq!(val_custom["forms"].as_array().unwrap().len(), 2);
@@ -1743,7 +1780,9 @@ mod tests {
         // 4. Plain string with data URI
         let msg4 = OpenAIMessage {
             role: "user".into(),
-            content: Some(serde_json::Value::String("data:image/png;base64,c3RyaW5nZGF0YQ==".into())),
+            content: Some(serde_json::Value::String(
+                "data:image/png;base64,c3RyaW5nZGF0YQ==".into(),
+            )),
             name: None,
             tool_call_id: None,
             tool_calls: None,
@@ -1822,10 +1861,16 @@ mod tests {
         assert_eq!(HordeAdapter::is_interrogate_done(&done_json), (true, false));
 
         let faulted_json = serde_json::json!({"state": "faulted"});
-        assert_eq!(HordeAdapter::is_interrogate_done(&faulted_json), (false, true));
+        assert_eq!(
+            HordeAdapter::is_interrogate_done(&faulted_json),
+            (false, true)
+        );
 
         let waiting_json = serde_json::json!({"state": "waiting"});
-        assert_eq!(HordeAdapter::is_interrogate_done(&waiting_json), (false, false));
+        assert_eq!(
+            HordeAdapter::is_interrogate_done(&waiting_json),
+            (false, false)
+        );
     }
 
     #[test]
@@ -1855,7 +1900,8 @@ mod tests {
 
     #[test]
     fn test_parse_prompt_directives_tis_and_embeddings() {
-        let prompt = "sunset landscape <ti:bad_hands:0.9> <ti:easynegative> <emb:deepneg:0.6> <EMB:fastneg>";
+        let prompt =
+            "sunset landscape <ti:bad_hands:0.9> <ti:easynegative> <emb:deepneg:0.6> <EMB:fastneg>";
         let parsed = parse_prompt_directives(prompt);
 
         assert_eq!(parsed.clean_prompt, "sunset landscape");
@@ -1913,8 +1959,14 @@ mod tests {
 
     #[test]
     fn test_clean_residual_prompt() {
-        assert_eq!(clean_residual_prompt("  A  cat , , on a tree , "), "A cat, on a tree");
-        assert_eq!(clean_residual_prompt("A mountain, , highly detailed, "), "A mountain, highly detailed");
+        assert_eq!(
+            clean_residual_prompt("  A  cat , , on a tree , "),
+            "A cat, on a tree"
+        );
+        assert_eq!(
+            clean_residual_prompt("A mountain, , highly detailed, "),
+            "A mountain, highly detailed"
+        );
         assert_eq!(clean_residual_prompt(", leading comma, "), "leading comma");
     }
 
@@ -1939,7 +1991,10 @@ mod tests {
         let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(v["prompt"], "A fantasy warrior ### blurry, bad anatomy, extra limbs");
+        assert_eq!(
+            v["prompt"],
+            "A fantasy warrior ### blurry, bad anatomy, extra limbs"
+        );
         assert_eq!(v["params"]["width"], 1024);
         assert_eq!(v["params"]["height"], 1024);
         assert_eq!(v["params"]["steps"], 40);
@@ -1970,4 +2025,3 @@ mod tests {
         assert_eq!(v["trusted_workers"], true);
     }
 }
-

@@ -1,8 +1,9 @@
+use crate::visitor::mutate_message_text;
+use openproxy_types::OpenAIMessage;
 /// 5 técnicas deterministas de compresión ligera (zero semantic change).
 ///
 /// Cada técnica opera sobre `Vec<OpenAIMessage>` y reporta si aplicó cambios.
-use crate::visitor::mutate_message_text;
-use openproxy_types::OpenAIMessage;
+use std::borrow::Cow;
 
 type Messages = Vec<OpenAIMessage>;
 
@@ -11,13 +12,9 @@ type Messages = Vec<OpenAIMessage>;
 pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if mutate_message_text(msg, |text| {
-            let normalized = normalize_message_whitespace(text);
-            if normalized == text {
-                None
-            } else {
-                Some(normalized)
-            }
+        if mutate_message_text(msg, |text| match normalize_message_whitespace(text) {
+            Cow::Borrowed(_) => None,
+            Cow::Owned(normalized) => Some(normalized),
         }) {
             applied.push("lite::collapse_whitespace");
         }
@@ -28,16 +25,12 @@ pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<&'static str> {
 /// Collapse 3+ consecutive newlines to 2, and trim trailing whitespace
 /// (spaces, tabs) from each line. Single-pass, single allocation.
 ///
-/// If the input is already normalized, returns a clone (the caller's
-/// `collapse_whitespace` wrapper checks for equality and skips the
-/// write-back, so the clone is cheap insurance against a false-positive
-/// "changed" detection).
-fn normalize_message_whitespace(s: &str) -> String {
+/// If the input is already normalized, returns `Cow::Borrowed`.
+fn normalize_message_whitespace(s: &str) -> Cow<'_, str> {
     // Fast path: if the string has no 3+ newline runs AND no trailing
-    // whitespace before newlines, it's already normalized — clone and
-    // return. This is the common case for well-formed prompts.
+    // whitespace before newlines, it's already normalized.
     if !needs_normalization(s) {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
 
     let mut out = String::with_capacity(s.len());
@@ -67,7 +60,7 @@ fn normalize_message_whitespace(s: &str) -> String {
     }
     // Trim trailing whitespace of the last line (no trailing newline).
     trim_trailing_ws_in_place(&mut out, line_start);
-    out
+    Cow::Owned(out)
 }
 
 /// Quick check: does `s` need normalization? Returns true if there's a
@@ -227,15 +220,19 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                 let fmt = part
                     .get("image_url")
                     .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str()).map_or_else(|| "unknown".to_string(), |url| {
-                        let semi = url.find(';').unwrap_or(url.len());
-                        let fmt = &url["data:image/".len()..semi];
-                        if fmt.is_empty() {
-                            "unknown".to_string()
-                        } else {
-                            fmt.to_string()
-                        }
-                    });
+                    .and_then(|v| v.as_str())
+                    .map_or_else(
+                        || "unknown".to_string(),
+                        |url| {
+                            let semi = url.find(';').unwrap_or(url.len());
+                            let fmt = &url["data:image/".len()..semi];
+                            if fmt.is_empty() {
+                                "unknown".to_string()
+                            } else {
+                                fmt.to_string()
+                            }
+                        },
+                    );
                 if let Some(obj) = part.as_object_mut() {
                     *obj = serde_json::json!({
                         "type": "text",

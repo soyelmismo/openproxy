@@ -164,20 +164,21 @@ pub fn get_auth_types(
     conn: &Connection,
     provider_ids: &[ProviderId],
 ) -> Result<std::collections::HashMap<String, String>> {
-    use rusqlite::OptionalExtension;
-    let mut map = std::collections::HashMap::new();
-    for id in provider_ids {
-        let auth: Option<String> = conn
-            .query_row(
-                "SELECT auth_type FROM providers WHERE id = ?1",
-                params![id.as_str()],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(crate::error::map_db_error_ctx("query providers auth_type"))?;
-        if let Some(a) = auth {
-            map.insert(id.as_str().to_string(), a);
-        }
+    if provider_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
     }
-    Ok(map)
+
+    let rows: Vec<(String, String)> = crate::batch::query_in_chunks_by(
+        conn,
+        "SELECT id, auth_type FROM providers WHERE id IN ({})",
+        provider_ids,
+        crate::batch::DEFAULT_CHUNK_SIZE,
+        |id| id.as_str().to_string(),
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .map_err(crate::error::map_db_error_ctx(
+        "batch query providers auth_type",
+    ))?;
+
+    Ok(rows.into_iter().collect())
 }

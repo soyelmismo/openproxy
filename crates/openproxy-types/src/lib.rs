@@ -1,5 +1,10 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+#[macro_use]
+pub mod macros;
+pub mod time;
+pub use time::now_ms;
+
 pub mod config;
 pub mod error;
 pub mod ids;
@@ -7,7 +12,6 @@ pub mod message;
 pub mod providers;
 
 pub mod quota;
-
 
 pub mod accounts;
 pub mod capabilities;

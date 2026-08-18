@@ -150,24 +150,7 @@ impl CoreError {
             | CoreError::RateLimited {
                 is_proxy_rotated, ..
             } => *is_proxy_rotated,
-            CoreError::Config(_)
-            | CoreError::Database { .. }
-            | CoreError::Migration { .. }
-            | CoreError::ProviderNotFound(_)
-            | CoreError::AccountNotFound(_)
-            | CoreError::ComboNotFound(_)
-            | CoreError::ModelNotFound { .. }
-            | CoreError::NoHealthyTargets(_)
-            | CoreError::UpstreamTimeout { .. }
-            | CoreError::UpstreamConnection(_)
-            | CoreError::Parse(_)
-            | CoreError::Cancelled(_)
-            | CoreError::RaceLost
-            | CoreError::Auth(_)
-            | CoreError::Validation(_)
-            | CoreError::Internal(_)
-            | CoreError::ServiceUnavailable(_)
-            | CoreError::NotFound { .. } => false,
+            _ => false,
         }
     }
 

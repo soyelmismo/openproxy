@@ -265,31 +265,19 @@ impl Default for SmartWarmupConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum CooldownMode {
-    #[default]
-    Flat,
-    Exponential,
-    None,
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CooldownMode {
+        #[default]
+        Flat => "flat",
+        Exponential => "exponential",
+        None => "none" | "disabled" | "off",
+    }
+    error: "cooldown_mode"
 }
 
 impl CooldownMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Flat => "flat",
-            Self::Exponential => "exponential",
-            Self::None => "none",
-        }
-    }
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "flat" => Ok(Self::Flat),
-            "exponential" => Ok(Self::Exponential),
-            "none" | "disabled" | "off" => Ok(Self::None),
-            other => Err(format!("invalid cooldown_mode: {other}")),
-        }
-    }
     pub fn from_db(s: Option<&str>) -> Self {
         match s {
             Some("exponential") => Self::Exponential,

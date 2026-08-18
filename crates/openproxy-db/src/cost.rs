@@ -29,30 +29,39 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
         regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex")
     });
 
-    let mut sanitized = raw.to_string();
+    let mut sanitized = std::borrow::Cow::Borrowed(raw);
     if RE_SK.is_match(&sanitized) {
-        sanitized = RE_SK.replace_all(&sanitized, "sk-[REDACTED]").into_owned();
+        sanitized =
+            std::borrow::Cow::Owned(RE_SK.replace_all(&sanitized, "sk-[REDACTED]").into_owned());
     }
     if RE_XAPIKEY.is_match(&sanitized) {
-        sanitized = RE_XAPIKEY
-            .replace_all(&sanitized, "x-api-key: [REDACTED]")
-            .into_owned();
+        sanitized = std::borrow::Cow::Owned(
+            RE_XAPIKEY
+                .replace_all(&sanitized, "x-api-key: [REDACTED]")
+                .into_owned(),
+        );
     }
     if RE_BEARER.is_match(&sanitized) {
-        sanitized = RE_BEARER
-            .replace_all(&sanitized, "Authorization: Bearer [REDACTED]")
-            .into_owned();
+        sanitized = std::borrow::Cow::Owned(
+            RE_BEARER
+                .replace_all(&sanitized, "Authorization: Bearer [REDACTED]")
+                .into_owned(),
+        );
     }
     if sanitized.len() > 2048 {
+        let mut s = sanitized.into_owned();
         let mut idx = 2048;
-        while idx > 0 && !sanitized.is_char_boundary(idx) {
+        while idx > 0 && !s.is_char_boundary(idx) {
             idx -= 1;
         }
-        sanitized.truncate(idx);
-        sanitized.push_str("...[truncated]");
+        s.truncate(idx);
+        s.push_str("...[truncated]");
+        let copy = s.clone();
+        (copy, s)
+    } else {
+        let copy = sanitized.as_ref().to_string();
+        (copy, sanitized.into_owned())
     }
-    let copy = sanitized.clone();
-    (copy, sanitized)
 }
 
 pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {
@@ -244,7 +253,6 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
     }
     Ok(total_updated)
 }
-
 
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     conn.execute(

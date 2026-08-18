@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -64,8 +65,7 @@ fn leak_string(s: String) -> &'static str {
 /// filter-construction time; all patterns are static literals, so a
 /// compile error is a programmer bug that should fail startup loudly.
 fn compile_re(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern)
-        .unwrap_or_else(|e| panic!("invalid filter pattern {pattern:?}: {e}"))
+    regex::Regex::new(pattern).unwrap_or_else(|e| panic!("invalid filter pattern {pattern:?}: {e}"))
 }
 
 /// Pre-compute a rule name like `"git-status::strip_ansi"`.
@@ -421,9 +421,9 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
     // 1. Strip ANSI codes
     if filter.strip_ansi {
         let stripped = strip_ansi(&result);
-        if stripped != result {
+        if let Cow::Owned(s) = stripped {
             applied_rules.push(filter.rule_strip_ansi);
-            result = stripped;
+            result = s;
         }
     }
 
@@ -545,14 +545,20 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
 ///
 /// Uses a byte scanner with memchr to find the next ESC (0x1B) — ~10x
 /// faster than the regex it replaces, and no per-call regex compilation.
+/// Fast-paths to `Cow::Borrowed` if no ESC byte is found.
 ///
 /// SAFETY: we only remove ASCII bytes (all CSI grammar bytes are ASCII),
 /// so UTF-8 multi-byte sequences in the content are never split. The
 /// final `String::from_utf8_unchecked` is safe.
-fn strip_ansi(text: &str) -> String {
+fn strip_ansi(text: &str) -> Cow<'_, str> {
     let bytes = text.as_bytes();
+    let Some(first_esc) = memchr::memchr(0x1B, bytes) else {
+        return Cow::Borrowed(text);
+    };
+
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0usize;
+    out.extend_from_slice(&bytes[..first_esc]);
+    let mut i = first_esc;
     while i < bytes.len() {
         if bytes[i] == 0x1B {
             if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
@@ -579,7 +585,7 @@ fn strip_ansi(text: &str) -> String {
     // ASCII bytes are always single-byte in UTF-8, so removing them never
     // splits a multi-byte sequence. The remaining bytes are a valid UTF-8
     // subsequence of the original valid UTF-8 string.
-    String::from_utf8(out).unwrap_or_default()
+    Cow::Owned(String::from_utf8(out).unwrap_or_default())
 }
 
 fn truncate_unicode_safe(s: &str, max_chars: usize) -> String {

@@ -1,4 +1,7 @@
-use super::{Serialize, TimeoutsConfig, RetriesConfig, CircuitBreakerConfig, RacingConfig, AppState, ApiError, core_db, CoreError};
+use super::{
+    ApiError, AppState, CircuitBreakerConfig, CoreError, RacingConfig, RetriesConfig, Serialize,
+    TimeoutsConfig, core_db,
+};
 use axum::{Json, extract::State};
 
 /// Read-only view of the relevant `AppConfig` sections.
@@ -160,10 +163,16 @@ pub async fn put_maintenance_config(
     if let Some(v) = body.get("auto_vacuum").and_then(serde_json::Value::as_bool) {
         cfg.auto_vacuum = v;
     }
-    if let Some(v) = body.get("vacuum_interval_hours").and_then(serde_json::Value::as_u64) {
+    if let Some(v) = body
+        .get("vacuum_interval_hours")
+        .and_then(serde_json::Value::as_u64)
+    {
         cfg.interval_secs = v.max(1) * 3600;
     }
-    if let Some(v) = body.get("usage_retention_days").and_then(serde_json::Value::as_u64) {
+    if let Some(v) = body
+        .get("usage_retention_days")
+        .and_then(serde_json::Value::as_u64)
+    {
         cfg.usage_retention_days = v as u32;
     }
     let auto_vacuum = cfg.auto_vacuum;

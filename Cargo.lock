@@ -1760,13 +1760,11 @@ name = "openproxy-compression"
 version = "1.0.0"
 dependencies = [
  "criterion",
- "hex",
  "memchr",
  "openproxy-types",
  "regex",
  "serde",
  "serde_json",
- "sha2",
  "tiktoken-rs",
  "tracing",
 ]
@@ -1793,7 +1791,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "memchr",
  "miniz_oxide",
  "openproxy-adapters",
  "openproxy-compression",
@@ -1852,7 +1849,6 @@ dependencies = [
  "bytes",
  "chrono",
  "futures-util",
- "hex",
  "http",
  "http-body",
  "http-body-util",
@@ -1921,12 +1917,9 @@ name = "openproxy-types"
 version = "1.0.0"
 dependencies = [
  "bytes",
- "chrono",
- "parking_lot",
  "serde",
  "serde_json",
  "thiserror",
- "tracing",
  "uuid",
 ]
 

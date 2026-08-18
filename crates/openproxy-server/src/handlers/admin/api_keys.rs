@@ -1,4 +1,4 @@
-use super::{AppState, core_api_keys, ApiError, ApiKeyId, CoreError, core_usage, UsageFilter};
+use super::{ApiError, ApiKeyId, AppState, CoreError, UsageFilter, core_api_keys, core_usage};
 use axum::{
     Json,
     extract::{Path, State},
@@ -59,15 +59,15 @@ pub async fn update_api_key(
         extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
     let allowed_combos_slice = allowed_combos_owned.as_ref().map(|o| o.as_deref());
 
-    let blacklisted_providers_owned =
-        extract_tristate_array(&body, "blacklisted_providers", |x| x.as_str().map(String::from));
-    let blacklisted_providers_slice =
-        blacklisted_providers_owned.as_ref().map(|o| o.as_deref());
+    let blacklisted_providers_owned = extract_tristate_array(&body, "blacklisted_providers", |x| {
+        x.as_str().map(String::from)
+    });
+    let blacklisted_providers_slice = blacklisted_providers_owned.as_ref().map(|o| o.as_deref());
 
-    let blacklisted_models_owned =
-        extract_tristate_array(&body, "blacklisted_models", |x| x.as_str().map(String::from));
-    let blacklisted_models_slice =
-        blacklisted_models_owned.as_ref().map(|o| o.as_deref());
+    let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
+        x.as_str().map(String::from)
+    });
+    let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|o| o.as_deref());
 
     let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 

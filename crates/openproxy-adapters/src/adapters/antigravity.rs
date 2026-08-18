@@ -1,4 +1,8 @@
-use super::{ProviderAdapterConfig, ProviderAdapter, ProviderId, AdapterAuthType, AdapterFormat, DiscoveredModel, TargetFormat, ModelId, CoreError, Result, Arc, UpstreamClient, UpstreamRequest, Bytes, HeaderValue, CancellationToken, TimeoutProfile};
+use super::{
+    AdapterAuthType, AdapterFormat, Arc, Bytes, CancellationToken, CoreError, DiscoveredModel,
+    HeaderValue, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat,
+    TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
 // =====================================================================
@@ -69,7 +73,11 @@ impl AntigravityAdapter {
             let context_length = model_data
                 .get("maxTokens")
                 .and_then(serde_json::Value::as_u64)
-                .or_else(|| model_data.get("contextLength").and_then(serde_json::Value::as_u64))
+                .or_else(|| {
+                    model_data
+                        .get("contextLength")
+                        .and_then(serde_json::Value::as_u64)
+                })
                 .map(|v| v as i64);
 
             // Read maxOutputTokens as max_output_tokens
@@ -352,12 +360,16 @@ impl AntigravityAdapter {
                     if summary_quota.weekly_used.is_some() {
                         models_quota.weekly_used = summary_quota.weekly_used;
                         models_quota.weekly_limit = summary_quota.weekly_limit;
-                        models_quota.weekly_reset_at.clone_from(&summary_quota.weekly_reset_at);
+                        models_quota
+                            .weekly_reset_at
+                            .clone_from(&summary_quota.weekly_reset_at);
                     }
                     if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
                         models_quota.session_used = summary_quota.session_used;
                         models_quota.session_limit = summary_quota.session_limit;
-                        models_quota.session_reset_at.clone_from(&summary_quota.session_reset_at);
+                        models_quota
+                            .session_reset_at
+                            .clone_from(&summary_quota.session_reset_at);
                     }
                 }
 

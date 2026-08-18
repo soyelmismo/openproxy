@@ -1,9 +1,11 @@
 use openproxy_types::ProviderId;
-use openproxy_types::combos::{Strategy, Combo, MAX_SUB_COMBO_DEPTH, ComboTarget, ComboTargetWithModel, PriorityMode};
+use openproxy_types::combos::{
+    Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH, PriorityMode, Strategy,
+};
 use openproxy_types::config::CooldownMode;
 use openproxy_types::error::CoreError;
 use openproxy_types::error::Result;
-use openproxy_types::ids::{ComboId, AccountId, ModelRowId, ComboTargetId};
+use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelRowId};
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Row, params};
 pub fn create_combo(
@@ -717,7 +719,12 @@ pub fn update_target_cooldown_base(
     target_id: ComboTargetId,
     base: Option<u64>,
 ) -> Result<()> {
-    update_target_column(conn, target_id, "cooldown_base_secs", base.map(|v| v as i64))
+    update_target_column(
+        conn,
+        target_id,
+        "cooldown_base_secs",
+        base.map(|v| v as i64),
+    )
 }
 
 pub fn update_target_cooldown_max(
@@ -1008,12 +1015,12 @@ fn update_combo_column<T: rusqlite::ToSql>(
     value: T,
 ) -> Result<()> {
     let sql = format!("UPDATE combos SET {column} = ?1 WHERE id = ?2");
-    let affected = conn
-        .execute(&sql, params![value, id.0])
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update {column} for combo {}",
-            id.0
-        )))?;
+    let affected =
+        conn.execute(&sql, params![value, id.0])
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "update {column} for combo {}",
+                id.0
+            )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -1144,9 +1151,7 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         return Err(rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Integer,
-            Box::new(FromStrError(format!(
-                "race_size out of range: {race_size}"
-            ))),
+            Box::new(FromStrError(format!("race_size out of range: {race_size}"))),
         ));
     }
 
@@ -1410,7 +1415,9 @@ pub fn expand_account_rotation(
         let mut count = 0;
         while let Some(r) = rows.next().map_err(crate::error::map_db_error)? {
             let mut ct = t.clone();
-            ct.account_id = Some(AccountId(r.get::<_, i64>(0).map_err(crate::error::map_db_error)?));
+            ct.account_id = Some(AccountId(
+                r.get::<_, i64>(0).map_err(crate::error::map_db_error)?,
+            ));
             out.push(ct);
             count += 1;
         }
@@ -1497,12 +1504,18 @@ mod tests {
         // Race size 0 is invalid
         let err = create_combo(&conn, combo_name, strategy, 0)
             .expect_err("create combo should fail with race size 0");
-        assert!(matches!(err, CoreError::Validation(ref msg) if msg.contains("race_size must be in 1..=8")), "Expected Validation error, got {err:?}");
+        assert!(
+            matches!(err, CoreError::Validation(ref msg) if msg.contains("race_size must be in 1..=8")),
+            "Expected Validation error, got {err:?}"
+        );
 
         // Race size 9 is invalid
         let err2 = create_combo(&conn, combo_name, strategy, 9)
             .expect_err("create combo should fail with race size 9");
-        assert!(matches!(err2, CoreError::Validation(ref msg) if msg.contains("race_size must be in 1..=8")), "Expected Validation error, got {err2:?}");
+        assert!(
+            matches!(err2, CoreError::Validation(ref msg) if msg.contains("race_size must be in 1..=8")),
+            "Expected Validation error, got {err2:?}"
+        );
     }
 
     #[test]
@@ -1521,7 +1534,10 @@ mod tests {
         let err = create_combo(&conn, combo_name, strategy, race_size)
             .expect_err("create duplicate combo should fail");
 
-        assert!(matches!(err, CoreError::Validation(ref msg) if msg.contains("combo name already exists")), "Expected Validation error for duplicate name, got {err:?}");
+        assert!(
+            matches!(err, CoreError::Validation(ref msg) if msg.contains("combo name already exists")),
+            "Expected Validation error for duplicate name, got {err:?}"
+        );
     }
 
     #[test]
@@ -1548,9 +1564,7 @@ mod tests {
                     .contains("CHECK constraint failed")
             );
         } else {
-            panic!(
-                "Expected Database error with CHECK constraint failure, got {err:?}"
-            );
+            panic!("Expected Database error with CHECK constraint failure, got {err:?}");
         }
     }
 

@@ -153,7 +153,13 @@ pub fn start_with_container(
     let master_key = services.master_key()?;
     let adapters = services.adapters()?;
     let upstream_client = services.upstream_client()?;
-    Ok(start(db_pool, master_key, adapters, upstream_client, config))
+    Ok(start(
+        db_pool,
+        master_key,
+        adapters,
+        upstream_client,
+        config,
+    ))
 }
 
 pub fn start(
@@ -479,7 +485,14 @@ async fn run_one_tick(
     .await;
 
     let duration_ms = started.elapsed().as_millis();
-    handle_discovery_outcome(db_pool, &provider, provider_row.as_ref(), result, duration_ms).await;
+    handle_discovery_outcome(
+        db_pool,
+        &provider,
+        provider_row.as_ref(),
+        result,
+        duration_ms,
+    )
+    .await;
 
     if let Some(ref p) = provider_row
         && p.favicon_base64.is_none()
@@ -631,8 +644,7 @@ async fn handle_discovery_outcome(
 
             let db_pool_clone = Arc::clone(db_pool);
             let provider_clone = provider.clone();
-            let keyword = provider_row
-                .and_then(|p| p.auto_activate_keyword.clone());
+            let keyword = provider_row.and_then(|p| p.auto_activate_keyword.clone());
             let _ = tokio::task::spawn_blocking(move || match db_pool_clone.open_connection() {
                 Ok(aa_conn) => {
                     if let Err(e) =
@@ -710,8 +722,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-discovery-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-discovery-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("discovery.db");
         let pool = DbPool::open(&path).expect("open pool");

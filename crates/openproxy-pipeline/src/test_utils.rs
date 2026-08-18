@@ -1,7 +1,7 @@
 pub use openproxy_adapters::MockAdapter;
 use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
 pub mod combos {
-    use super::{ComboId, ProviderId, ModelRowId, AccountId, Connection};
+    use super::{AccountId, ComboId, Connection, ModelRowId, ProviderId};
     pub use openproxy_types::combos::Strategy;
 
     pub struct AddTargetInput {

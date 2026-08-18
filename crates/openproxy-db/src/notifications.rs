@@ -32,7 +32,9 @@ pub fn insert(
     provider_id: Option<&str>,
 ) -> Result<Option<i64>> {
     let payload_str = serde_json::to_string(payload).map_err(|e| {
-        openproxy_types::error::CoreError::Validation(format!("serialize notification payload: {e}"))
+        openproxy_types::error::CoreError::Validation(format!(
+            "serialize notification payload: {e}"
+        ))
     })?;
     let changed = conn
         .execute(
@@ -54,7 +56,9 @@ pub fn insert(
                 |row| row.get(0),
             )
             .optional()
-            .map_err(crate::error::map_db_error_ctx("query dedup notification id"))?
+            .map_err(crate::error::map_db_error_ctx(
+                "query dedup notification id",
+            ))?
         } else {
             None
         };
@@ -77,8 +81,8 @@ pub fn insert_many(
 
     let mut all_results = Vec::with_capacity(rows.len());
 
-    let chunk_size = (crate::batch::SQLITE_MAX_VARIABLE_NUMBER / 4)
-        .clamp(1, crate::batch::DEFAULT_CHUNK_SIZE);
+    let chunk_size =
+        (crate::batch::SQLITE_MAX_VARIABLE_NUMBER / 4).clamp(1, crate::batch::DEFAULT_CHUNK_SIZE);
     for chunk in rows.chunks(chunk_size) {
         let sql = crate::batch::build_insert_sql(
             "INSERT OR IGNORE INTO",
@@ -92,7 +96,9 @@ pub fn insert_many(
         for row in chunk {
             params.push(kind.to_owned().into());
             let payload_str = serde_json::to_string(&row.0).map_err(|e| {
-                openproxy_types::error::CoreError::Validation(format!("serialize notification payload: {e}"))
+                openproxy_types::error::CoreError::Validation(format!(
+                    "serialize notification payload: {e}"
+                ))
             })?;
             params.push(payload_str.into());
             match &row.1 {
@@ -189,7 +195,9 @@ pub fn get_created_at(conn: &Connection, id: i64) -> Result<Option<String>> {
         |row| row.get(0),
     )
     .optional()
-    .map_err(crate::error::map_db_error_ctx("get notification created_at"))
+    .map_err(crate::error::map_db_error_ctx(
+        "get notification created_at",
+    ))
 }
 
 /// List notifications, most recent first (by descending id).
@@ -206,7 +214,8 @@ pub fn list(
     before_id: Option<i64>,
 ) -> Result<Vec<NotificationRow>> {
     let limit = limit.clamp(1, 200);
-    let sql = format!(
+    let sql =
+        format!(
         "SELECT id, kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id
          FROM notifications
          WHERE archived_at IS NULL{unread}

@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::error::{CoreError, Result};
-use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth::{
+    DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+};
 use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -110,22 +112,13 @@ impl OAuthProvider for CodexOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("codex deviceauth: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "codex deviceauth"))?;
 
         let status = response.status;
-        let body = response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("codex deviceauth body: {e}"))
-            }
-        })?;
+        let body = response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "codex deviceauth body"))?;
 
         if status.as_u16() == 404 {
             return Err(CoreError::Validation(
@@ -207,22 +200,13 @@ impl OAuthProvider for CodexOAuthProvider {
         let response = upstream_client
             .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("codex poll: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "codex poll"))?;
 
         let status = response.status;
-        let body = response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("codex poll body: {e}"))
-            }
-        })?;
+        let body = response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "codex poll body"))?;
 
         if status.as_u16() == 403 || status.as_u16() == 404 {
             return Ok(None);
@@ -259,22 +243,13 @@ impl OAuthProvider for CodexOAuthProvider {
         let token_response = upstream_client
             .call(token_req, TimeoutProfile::OAuth, CancellationToken::new())
             .await
-            .map_err(|e| {
-                if matches!(e, UpstreamError::Cancel) {
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-                } else {
-                    CoreError::UpstreamConnection(format!("codex exchange: {e}"))
-                }
-            })?;
+            .map_err(|e| map_upstream_err(e, "codex exchange"))?;
 
         let token_status = token_response.status;
-        let token_body_bytes = token_response.collect().await.map_err(|e| {
-            if matches!(e, UpstreamError::Cancel) {
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            } else {
-                CoreError::UpstreamConnection(format!("codex exchange body: {e}"))
-            }
-        })?;
+        let token_body_bytes = token_response
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "codex exchange body"))?;
 
         if !token_status.is_success() {
             return Err(CoreError::UpstreamError {

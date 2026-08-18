@@ -155,7 +155,8 @@ mod tests {
 
     #[test]
     fn test_image_generation_request_serde() {
-        let json_str = r#"{"prompt":"a cute cat","model":"dall-e-3","n":1,"size":"1024x1024","quality":"hd"}"#;
+        let json_str =
+            r#"{"prompt":"a cute cat","model":"dall-e-3","n":1,"size":"1024x1024","quality":"hd"}"#;
         let req: ImageGenerationRequest = serde_json::from_str(json_str).expect("deserialize");
         assert_eq!(req.prompt, "a cute cat");
         assert_eq!(req.model, "dall-e-3");
@@ -246,15 +247,18 @@ mod tests {
     fn test_image_post_processing_serde() {
         // Array format
         let json_arr = r#"{"prompt":"dragon","post_processing":["RealESRGAN_x4plus","GFPGAN"]}"#;
-        let req_arr: ImageGenerationRequest = serde_json::from_str(json_arr).expect("deserialize array");
+        let req_arr: ImageGenerationRequest =
+            serde_json::from_str(json_arr).expect("deserialize array");
         assert_eq!(
             req_arr.post_processing,
             Some(vec!["RealESRGAN_x4plus".to_string(), "GFPGAN".to_string()])
         );
 
         // Comma-separated string format
-        let json_str = r#"{"prompt":"dragon","post_processing":"RealESRGAN_x4plus, GFPGAN, CodeFormers"}"#;
-        let req_str: ImageGenerationRequest = serde_json::from_str(json_str).expect("deserialize string");
+        let json_str =
+            r#"{"prompt":"dragon","post_processing":"RealESRGAN_x4plus, GFPGAN, CodeFormers"}"#;
+        let req_str: ImageGenerationRequest =
+            serde_json::from_str(json_str).expect("deserialize string");
         assert_eq!(
             req_str.post_processing,
             Some(vec![
@@ -266,7 +270,8 @@ mod tests {
 
         // Null / omitted
         let json_none = r#"{"prompt":"dragon"}"#;
-        let req_none: ImageGenerationRequest = serde_json::from_str(json_none).expect("deserialize none");
+        let req_none: ImageGenerationRequest =
+            serde_json::from_str(json_none).expect("deserialize none");
         assert_eq!(req_none.post_processing, None);
     }
 }

@@ -4,63 +4,32 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_SUB_COMBO_DEPTH: u32 = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Strategy {
-    Priority,
-    RoundRobin,
-    Shuffle,
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Strategy {
+        Priority => "priority",
+        RoundRobin => "round_robin",
+        Shuffle => "shuffle",
+    }
+    error: "strategy"
 }
 
-impl Strategy {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Priority => "priority",
-            Self::RoundRobin => "round_robin",
-            Self::Shuffle => "shuffle",
-        }
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PriorityMode {
+        #[default]
+        Strict => "strict",
+        Lkgp => "lkgp",
+        Weighted => "weighted",
+        LeastUsed => "least_used",
+        P2c => "p2c",
     }
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "priority" => Ok(Self::Priority),
-            "round_robin" => Ok(Self::RoundRobin),
-            "shuffle" => Ok(Self::Shuffle),
-            other => Err(format!("invalid strategy: {other}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PriorityMode {
-    #[default]
-    Strict,
-    Lkgp,
-    Weighted,
-    LeastUsed,
-    P2c,
+    error: "priority_mode"
 }
 
 impl PriorityMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Strict => "strict",
-            Self::Lkgp => "lkgp",
-            Self::Weighted => "weighted",
-            Self::LeastUsed => "least_used",
-            Self::P2c => "p2c",
-        }
-    }
-    pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        match s {
-            "strict" => Ok(Self::Strict),
-            "lkgp" => Ok(Self::Lkgp),
-            "weighted" => Ok(Self::Weighted),
-            "least_used" => Ok(Self::LeastUsed),
-            "p2c" => Ok(Self::P2c),
-            other => Err(format!("invalid priority_mode: {other}")),
-        }
-    }
     pub fn from_db(s: Option<&str>) -> Self {
         match s {
             Some("lkgp") => Self::Lkgp,

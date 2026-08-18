@@ -19,6 +19,21 @@ pub fn update_proxy_status(
     .map_err(crate::error::map_db_error)
 }
 
+/// Format a full proxy URL with optional authentication.
+pub fn format_proxy_url(
+    proto: &str,
+    host: &str,
+    port: i64,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> String {
+    if let (Some(u), Some(p)) = (username, password) {
+        format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)
+    } else {
+        format!("{}://{}:{}", proto.to_lowercase(), host, port)
+    }
+}
+
 /// Retrieve or assign an alive proxy for a provider or account.
 pub fn get_or_assign_provider_proxy(
     conn: &Connection,
@@ -74,21 +89,12 @@ pub fn get_or_assign_provider_proxy(
             .map_err(crate::error::map_db_error)?;
 
         if let Some((host, port, proto, username, password)) = exists_and_alive {
-            if let (Some(u), Some(p)) = (username, password) {
-                return Ok(Some(format!(
-                    "{}://{}:{}@{}:{}",
-                    proto.to_lowercase(),
-                    u,
-                    p,
-                    host,
-                    port
-                )));
-            }
-            return Ok(Some(format!(
-                "{}://{}:{}",
-                proto.to_lowercase(),
-                host,
-                port
+            return Ok(Some(format_proxy_url(
+                &proto,
+                &host,
+                port,
+                username.as_deref(),
+                password.as_deref(),
             )));
         }
     }
@@ -100,10 +106,7 @@ pub fn get_or_assign_provider_proxy(
             .map_err(crate::error::map_db_error)?;
         let rows = stmt
             .query_map(
-                params![
-                    provider_id.as_str(),
-                    account_id.map_or(0, |id| id.0)
-                ],
+                params![provider_id.as_str(), account_id.map_or(0, |id| id.0)],
                 |row| row.get::<_, String>(0),
             )
             .map_err(crate::error::map_db_error)?;
@@ -153,21 +156,12 @@ pub fn get_or_assign_provider_proxy(
             crate::providers::update_current_proxy(conn, provider_id, Some(&new_id))?;
         }
 
-        if let (Some(u), Some(p)) = (username, password) {
-            return Ok(Some(format!(
-                "{}://{}:{}@{}:{}",
-                proto.to_lowercase(),
-                u,
-                p,
-                host,
-                port
-            )));
-        }
-        return Ok(Some(format!(
-            "{}://{}:{}",
-            proto.to_lowercase(),
-            host,
-            port
+        return Ok(Some(format_proxy_url(
+            &proto,
+            &host,
+            port,
+            username.as_deref(),
+            password.as_deref(),
         )));
     }
 
@@ -211,11 +205,13 @@ pub fn get_candidate_proxies_for_provider(
             let username = item.4;
             let password = item.5;
 
-            let url = if let (Some(u), Some(p)) = (username, password) {
-                format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)
-            } else {
-                format!("{}://{}:{}", proto.to_lowercase(), host, port)
-            };
+            let url = format_proxy_url(
+                &proto,
+                &host,
+                port,
+                username.as_deref(),
+                password.as_deref(),
+            );
 
             candidates.push((proxy_id, url));
             if candidates.len() >= limit {
@@ -272,4 +268,21 @@ pub fn delete_proxy_source(conn: &Connection, id: &str) -> Result<bool> {
         .execute("DELETE FROM proxy_sources WHERE id = ?1", params![id])
         .map_err(crate::error::map_db_error)?;
     Ok(count > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_proxy_url() {
+        assert_eq!(
+            format_proxy_url("HTTP", "127.0.0.1", 8080, None, None),
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            format_proxy_url("SOCKS5", "proxy.org", 1080, Some("user"), Some("pass")),
+            "socks5://user:pass@proxy.org:1080"
+        );
+    }
 }

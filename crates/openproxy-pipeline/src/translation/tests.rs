@@ -398,7 +398,11 @@ fn openai_message_preserves_content_array() {
     let raw = r#"{"model":"test","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://example.com/img.png"}}]}],"stream":false}"#;
     let req: OpenAIRequest = serde_json::from_str(raw).unwrap();
     let msg = &req.messages[0];
-    assert!(msg.content.as_ref().is_some_and(serde_json::Value::is_array));
+    assert!(
+        msg.content
+            .as_ref()
+            .is_some_and(serde_json::Value::is_array)
+    );
     let serialized = serde_json::to_value(&req).unwrap();
     let arr = &serialized["messages"][0]["content"];
     assert!(arr.is_array());
@@ -1085,7 +1089,8 @@ async fn openai_to_anthropic_sse_stream_translates_chunks() {
         bytes::Bytes::from("data: [DONE]\n\n"),
     ];
     let stream = futures_util::stream::iter(chunks);
-    let sse_stream = OpenAIToAnthropicSseStream::new(stream, "msg_test".to_string(), "claude-3".to_string());
+    let sse_stream =
+        OpenAIToAnthropicSseStream::new(stream, "msg_test".to_string(), "claude-3".to_string());
     let results: Vec<bytes::Bytes> = sse_stream.map(|r| r.unwrap()).collect().await;
 
     assert_eq!(results.len(), 3);

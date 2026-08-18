@@ -1,41 +1,18 @@
-use crate::error::{CoreError, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-/// Output wire format the upstream model natively speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[serde(rename_all = "lowercase")]
-pub enum TargetFormat {
-    Openai,
-    Anthropic,
-    Gemini,
-    Responses,
-    Atomesus,
-}
-
-impl TargetFormat {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TargetFormat::Openai => "openai",
-            TargetFormat::Anthropic => "anthropic",
-            TargetFormat::Gemini => "gemini",
-            TargetFormat::Responses => "responses",
-            TargetFormat::Atomesus => "atomesus",
-        }
+impl_string_enum! {
+    /// Output wire format the upstream model natively speaks.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+    #[serde(rename_all = "lowercase")]
+    pub enum TargetFormat {
+        Openai => "openai",
+        Anthropic => "anthropic",
+        Gemini => "gemini",
+        Responses => "responses",
+        Atomesus => "atomesus",
     }
-
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "openai" => Ok(TargetFormat::Openai),
-            "anthropic" => Ok(TargetFormat::Anthropic),
-            "gemini" => Ok(TargetFormat::Gemini),
-            "responses" => Ok(TargetFormat::Responses),
-            "atomesus" => Ok(TargetFormat::Atomesus),
-            other => Err(CoreError::Validation(format!(
-                "invalid target_format: {other}"
-            ))),
-        }
-    }
+    core_error: "target_format"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

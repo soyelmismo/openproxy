@@ -550,8 +550,9 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
         .map(|inner| {
             inner
                 .map(|v| {
-                    serde_json::to_string(v)
-                        .map_err(|e| CoreError::Parse(format!("serialize blacklisted_providers: {e}")))
+                    serde_json::to_string(v).map_err(|e| {
+                        CoreError::Parse(format!("serialize blacklisted_providers: {e}"))
+                    })
                 })
                 .transpose()
         })
@@ -822,8 +823,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-apikeys-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-apikeys-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("apikeys.db");
         let mut conn = Connection::open(&path).expect("open");

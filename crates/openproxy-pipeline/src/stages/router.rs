@@ -36,9 +36,8 @@ impl PipelineStage for RouterStage {
             Err(e) => return Err(e),
         };
 
-        let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) = flat_targets
-            .into_iter()
-            .partition(|t| match t.account_id {
+        let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) =
+            flat_targets.into_iter().partition(|t| match t.account_id {
                 Some(aid) => {
                     let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
                         aid,
@@ -58,7 +57,6 @@ impl PipelineStage for RouterStage {
             );
             eligible = parked;
         }
-
 
         if eligible.is_empty() {
             if attempt == 1 {

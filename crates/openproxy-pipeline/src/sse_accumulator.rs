@@ -408,7 +408,10 @@ impl ResponseAccumulator {
         {
             for tc in tool_calls {
                 if let Some(tc_obj) = tc.as_object() {
-                    let index = tc_obj.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+                    let index = tc_obj
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as usize;
                     let id = tc_obj.get("id").and_then(|i| i.as_str());
                     let name = tc_obj
                         .get("function")

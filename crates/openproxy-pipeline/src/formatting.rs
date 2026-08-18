@@ -223,11 +223,14 @@ impl TargetFormatter for ResponsesFormatter {
         {
             hasher.update(tools_str.as_bytes());
         }
-        let hash_hex = hex::encode(hasher.finalize());
-        obj.insert(
-            "prompt_cache_key".to_string(),
-            Value::String(format!("pck_{}", &hash_hex[..24])),
-        );
+        let hash = hasher.finalize();
+        use std::fmt::Write;
+        let mut pck = String::with_capacity(28);
+        pck.push_str("pck_");
+        for b in &hash[..12] {
+            let _ = write!(pck, "{b:02x}");
+        }
+        obj.insert("prompt_cache_key".to_string(), Value::String(pck));
 
         match serde_json::to_vec(&Value::Object(obj)) {
             Ok(v) => Ok(bytes::Bytes::from(v)),

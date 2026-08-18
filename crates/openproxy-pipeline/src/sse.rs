@@ -113,7 +113,6 @@ impl UpstreamSseChunk {
     }
 }
 
-
 /// Build a `data: <payload>\n\n` SSE frame as `Bytes`, ready for socket write.
 /// The `+ 16` covers `"data: "` (6) + `"\n\n"` (2) + slack for BytesMut's
 /// allocation strategy. Caller passes the inner JSON (no leading `data: `).
@@ -1183,7 +1182,10 @@ mod tests {
         assert_eq!(parse_sse_data_line("data: [DONE]"), Some("[DONE]"));
         assert_eq!(parse_sse_data_line("data:[DONE]\r\n"), Some("[DONE]"));
         assert_eq!(parse_sse_data_line("data: {\"a\":1}\n"), Some("{\"a\":1}"));
-        assert_eq!(parse_sse_data_line("data:   hello world  \r\n"), Some("hello world  "));
+        assert_eq!(
+            parse_sse_data_line("data:   hello world  \r\n"),
+            Some("hello world  ")
+        );
     }
 
     #[test]
@@ -2477,12 +2479,10 @@ pub fn parse_responses_sse_stream_line(
         .or_else(|| value.get("response").and_then(|r| r.get("usage")))
         && let Ok(mut u_parsed) = <OpenAIUsage as serde::Deserialize>::deserialize(u)
     {
-        if u.get("input_tokens").is_some() {
-            let val = u.get("input_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        if let Some(val) = u.get("input_tokens").and_then(serde_json::Value::as_u64) {
             u_parsed.prompt_tokens = val.try_into().unwrap_or(u32::MAX);
         }
-        if u.get("output_tokens").is_some() {
-            let val = u.get("output_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        if let Some(val) = u.get("output_tokens").and_then(serde_json::Value::as_u64) {
             u_parsed.completion_tokens = val.try_into().unwrap_or(u32::MAX);
         }
         if u_parsed.total_tokens == 0 {

@@ -25,12 +25,24 @@ pub use crate::accounts::{
 
 pub(crate) fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
     use base64::Engine;
-    let payload = jwt.split('.').nth(1)?;
+    let (_, rest) = jwt.split_once('.')?;
+    let payload = rest.split_once('.').map_or(rest, |(p, _)| p);
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
         .ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+pub(crate) fn map_upstream_err(
+    e: openproxy_adapters::upstream::UpstreamError,
+    ctx: &str,
+) -> CoreError {
+    if matches!(e, openproxy_adapters::upstream::UpstreamError::Cancel) {
+        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+    } else {
+        CoreError::UpstreamConnection(format!("{ctx}: {e}"))
+    }
 }
 
 pub mod antigravity;

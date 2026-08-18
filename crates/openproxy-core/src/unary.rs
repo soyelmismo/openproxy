@@ -11,7 +11,9 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry, Health};
 use openproxy_types::{
     CoreError, EndpointKind, ModelId, Result, TargetFormat, UsageInput,
-    ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId},
+    ids::{
+        AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
+    },
 };
 
 use crate::{
@@ -51,8 +53,9 @@ pub fn resolve_unary_targets(
             let r = db_pool.reader();
             let targets = routing::flatten_targets(&r, targets)
                 .map_err(|e| CoreError::Validation(format!("flatten_targets failed: {e}")))?;
-            let targets = routing::expand_account_rotation(&r, targets)
-                .map_err(|e| CoreError::Validation(format!("expand_account_rotation failed: {e}")))?;
+            let targets = routing::expand_account_rotation(&r, targets).map_err(|e| {
+                CoreError::Validation(format!("expand_account_rotation failed: {e}"))
+            })?;
 
             let maybe_key = if let Some(key_id) = api_key_id {
                 crate::api_keys::get_by_id(&r, key_id).ok().flatten()
@@ -342,8 +345,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-unary-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-unary-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("unary.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -395,7 +397,10 @@ mod tests {
         assert!(matches!(err_400, CoreError::Validation(_)));
 
         let err_500 = map_upstream_status_error(500, "openai", "gpt-4o", "server error");
-        assert!(matches!(err_500, CoreError::UpstreamError { status: 500, .. }));
+        assert!(matches!(
+            err_500,
+            CoreError::UpstreamError { status: 500, .. }
+        ));
 
         let err_empty = map_upstream_status_error(502, "openai", "gpt-4o", "");
         match err_empty {

@@ -1,4 +1,7 @@
-use super::{Deserialize, AppState, types_combos, ApiError, ComboId, core_combos, CoreError, Arc, run_test_for_model, ModelRowId, TestOptions, ComboTargetId};
+use super::{
+    ApiError, AppState, Arc, ComboId, ComboTargetId, CoreError, Deserialize, ModelRowId,
+    TestOptions, core_combos, run_test_for_model, types_combos,
+};
 use axum::{
     Json,
     extract::{Path, State},
@@ -375,45 +378,46 @@ pub async fn update_combo_target(
     // Optional `priority_order` — the historical primary field.
     // Kept optional so a future dashboard that only wants to
     // PATCH `weight` can do so without round-tripping the order.
-    let priority_order: Option<i64> = match body.get("priority_order") {
+    let priority_order: Option<i32> = match body.get("priority_order") {
         None => None,
-        Some(v) => Some(v.as_i64().ok_or_else(|| {
-            ApiError(CoreError::Validation(
-                "priority_order must be an integer when present".into(),
-            ))
-        })?),
+        Some(v) => {
+            let p = v.as_i64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "priority_order must be an integer when present".into(),
+                ))
+            })?;
+            // Cast: i32 is well under i64::MAX in practice; the SQL
+            // column is INTEGER (i64 in rusqlite) so a non-negative
+            // i32 is safe.
+            if p < i64::from(i32::MIN) || p > i64::from(i32::MAX) {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "priority_order out of i32 range: {p}"
+                ))));
+            }
+            Some(p as i32)
+        }
     };
-    if let Some(priority_order) = priority_order {
-        // Cast: i32 is well under i64::MAX in practice; the SQL
-        // column is INTEGER (i64 in rusqlite) so a non-negative
-        // i32 is safe.
-        if priority_order < i64::from(i32::MIN) || priority_order > i64::from(i32::MAX) {
-            return Err(ApiError(CoreError::Validation(format!(
-                "priority_order out of i32 range: {priority_order}"
-            ))));
-        }
-        let w = s.db_pool().writer();
-        core_combos::update_target_priority(&w, ComboTargetId(target_id), priority_order as i32)?;
-    }
     // Optional `weight` (migration 000035).
-    if let Some(v) = body.get("weight") {
-        let weight_i64 = v.as_i64().ok_or_else(|| {
-            ApiError(CoreError::Validation(
-                "weight must be an integer when present".into(),
-            ))
-        })?;
-        // Range-check before the i32 cast so an out-of-range
-        // value surfaces as a 400 instead of a silent wrap.
-        if weight_i64 < 1 || weight_i64 > i64::from(i32::MAX) {
-            return Err(ApiError(CoreError::Validation(format!(
-                "weight must be a positive i32 (1..={}), got {}",
-                i32::MAX,
-                weight_i64
-            ))));
+    let weight: Option<i32> = match body.get("weight") {
+        None => None,
+        Some(v) => {
+            let weight_i64 = v.as_i64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "weight must be an integer when present".into(),
+                ))
+            })?;
+            // Range-check before the i32 cast so an out-of-range
+            // value surfaces as a 400 instead of a silent wrap.
+            if weight_i64 < 1 || weight_i64 > i64::from(i32::MAX) {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "weight must be a positive i32 (1..={}), got {}",
+                    i32::MAX,
+                    weight_i64
+                ))));
+            }
+            Some(weight_i64 as i32)
         }
-        let w = s.db_pool().writer();
-        core_combos::update_target_weight(&w, ComboTargetId(target_id), weight_i64 as i32)?;
-    }
+    };
     // Optional `active` flag.
     let active: Option<bool> = match body.get("active") {
         None => None,
@@ -423,79 +427,95 @@ pub async fn update_combo_target(
             ))
         })?),
     };
-    if let Some(active_val) = active {
-        let w = s.db_pool().writer();
-        core_combos::update_target_active(&w, ComboTargetId(target_id), active_val)?;
-    }
     // Optional per-target `cooldown_mode`
-    if let Some(v) = body.get("cooldown_mode") {
-        let mode = if v.is_null() {
-            None
-        } else if let Some(s) = v.as_str() {
-            Some(s)
-        } else {
-            return Err(ApiError(CoreError::Validation(format!(
-                "cooldown_mode must be a string or null, got {v}"
-            ))));
-        };
-        let w = s.db_pool().writer();
-        core_combos::update_target_cooldown_mode(&w, ComboTargetId(target_id), mode)?;
-    }
+    let cooldown_mode: Option<Option<&str>> = match body.get("cooldown_mode") {
+        None => None,
+        Some(v) if v.is_null() => Some(None),
+        Some(v) => match v.as_str() {
+            Some(s) => Some(Some(s)),
+            None => {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "cooldown_mode must be a string or null, got {v}"
+                ))));
+            }
+        },
+    };
     // Optional per-target `cooldown_base_secs`
-    if let Some(v) = body.get("cooldown_base_secs") {
-        let base = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
+    let cooldown_base_secs: Option<Option<u64>> = match body.get("cooldown_base_secs") {
+        None => None,
+        Some(v) if v.is_null() => Some(None),
+        Some(v) => {
+            let base = v.as_u64().ok_or_else(|| {
                 ApiError(CoreError::Validation(
                     "cooldown_base_secs must be a non-negative integer or null".into(),
                 ))
-            })?)
-        };
-        let w = s.db_pool().writer();
-        core_combos::update_target_cooldown_base(&w, ComboTargetId(target_id), base)?;
-    }
+            })?;
+            Some(Some(base))
+        }
+    };
     // Optional per-target `cooldown_max_secs`
-    if let Some(v) = body.get("cooldown_max_secs") {
-        let max = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
+    let cooldown_max_secs: Option<Option<u64>> = match body.get("cooldown_max_secs") {
+        None => None,
+        Some(v) if v.is_null() => Some(None),
+        Some(v) => {
+            let max = v.as_u64().ok_or_else(|| {
                 ApiError(CoreError::Validation(
                     "cooldown_max_secs must be a non-negative integer or null".into(),
                 ))
-            })?)
-        };
-        let w = s.db_pool().writer();
-        core_combos::update_target_cooldown_max(&w, ComboTargetId(target_id), max)?;
-    }
+            })?;
+            Some(Some(max))
+        }
+    };
     // Optional per-target `cooldown_factor`
-    if let Some(v) = body.get("cooldown_factor") {
-        let factor = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
+    let cooldown_factor: Option<Option<u32>> = match body.get("cooldown_factor") {
+        None => None,
+        Some(v) if v.is_null() => Some(None),
+        Some(v) => {
+            let factor = v.as_u64().ok_or_else(|| {
                 ApiError(CoreError::Validation(
                     "cooldown_factor must be a non-negative integer or null".into(),
                 ))
-            })? as u32)
-        };
-        let w = s.db_pool().writer();
-        core_combos::update_target_cooldown_factor(&w, ComboTargetId(target_id), factor)?;
-    }
+            })? as u32;
+            Some(Some(factor))
+        }
+    };
     // Backwards-compat: if no known field was present, surface validation error
     if priority_order.is_none()
-        && body.get("weight").is_none()
+        && weight.is_none()
         && active.is_none()
-        && body.get("cooldown_mode").is_none()
-        && body.get("cooldown_base_secs").is_none()
-        && body.get("cooldown_max_secs").is_none()
-        && body.get("cooldown_factor").is_none()
+        && cooldown_mode.is_none()
+        && cooldown_base_secs.is_none()
+        && cooldown_max_secs.is_none()
+        && cooldown_factor.is_none()
     {
         return Err(ApiError(CoreError::Validation(
             "missing update fields in request body".into(),
         )));
     }
+
+    let w = s.db_pool().writer();
+    if let Some(p) = priority_order {
+        core_combos::update_target_priority(&w, ComboTargetId(target_id), p)?;
+    }
+    if let Some(w_val) = weight {
+        core_combos::update_target_weight(&w, ComboTargetId(target_id), w_val)?;
+    }
+    if let Some(active_val) = active {
+        core_combos::update_target_active(&w, ComboTargetId(target_id), active_val)?;
+    }
+    if let Some(mode) = cooldown_mode {
+        core_combos::update_target_cooldown_mode(&w, ComboTargetId(target_id), mode)?;
+    }
+    if let Some(base) = cooldown_base_secs {
+        core_combos::update_target_cooldown_base(&w, ComboTargetId(target_id), base)?;
+    }
+    if let Some(max) = cooldown_max_secs {
+        core_combos::update_target_cooldown_max(&w, ComboTargetId(target_id), max)?;
+    }
+    if let Some(factor) = cooldown_factor {
+        core_combos::update_target_cooldown_factor(&w, ComboTargetId(target_id), factor)?;
+    }
+
     Ok(Json(serde_json::json!({
         "combo_id": combo_id,
         "id": target_id,

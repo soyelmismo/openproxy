@@ -4,7 +4,10 @@
 //! request headers (including client spoofing and per-format auth branching),
 //! and model list discovery format.
 
-use super::{TargetFormat, ProviderAdapter, Arc, UpstreamClient, Result, DiscoveredModel, CoreError, upstream_get_json, OpenAIModelsResponse, ModelId};
+use super::{
+    Arc, CoreError, DiscoveredModel, OpenAIModelsResponse, ProviderAdapter, Result, TargetFormat,
+    UpstreamClient, upstream_get_json,
+};
 use crate::spoofer::{ClientSpoofer, OpenCodeSpoofer};
 
 /// Heuristic for picking the wire format of a model in OpenCode's catalogue.
@@ -72,26 +75,8 @@ pub async fn fetch_opencode_models(
         .data
         .into_iter()
         .map(|m| {
-            let id = m.id;
-            let target_format = classify_opencode_target_format(&id);
-            let m_type = openproxy_types::capabilities::infer_model_type(&id);
-            let caps = openproxy_types::capabilities::infer_capabilities(&id);
-            let in_mods =
-                openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
-            let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
-            let family = openproxy_types::capabilities::infer_family(&id);
-            DiscoveredModel {
-                display_name: Some(id.clone()),
-                model_id: ModelId::new(id),
-                target_format,
-                context_length: None,
-                max_output_tokens: None,
-                input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                model_type: Some(m_type.to_string()),
-                family,
-                capabilities: Some(caps),
-            }
+            let target_format = classify_opencode_target_format(&m.id);
+            super::build_discovered_model_with(m.id, target_format)
         })
         .collect();
     Ok(out)

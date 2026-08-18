@@ -128,7 +128,10 @@ pub fn anthropic_sse_to_openai_chunks(
             if let Some(u) = usage {
                 let cache_read = u.cache_read_input_tokens.unwrap_or(0);
                 let cache_creation = u.cache_creation_input_tokens.unwrap_or(0);
-                let prompt = u.input_tokens.saturating_add(cache_read).saturating_add(cache_creation);
+                let prompt = u
+                    .input_tokens
+                    .saturating_add(cache_read)
+                    .saturating_add(cache_creation);
                 let completion = u.output_tokens;
                 let total = prompt.saturating_add(completion);
 

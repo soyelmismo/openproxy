@@ -106,27 +106,16 @@ pub async fn dispatch_audio_request(
     payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
     let content_type = format!("multipart/form-data; boundary={boundary}");
-    let mut req = UpstreamRequest::post_multipart(
-        upstream_url,
-        &content_type,
-        Bytes::from(payload),
-    );
+    let mut req =
+        UpstreamRequest::post_multipart(upstream_url, &content_type, Bytes::from(payload));
 
     apply_adapter_headers(&mut req, &adapter, api_key, upstream_model_id, true);
 
     let cancel = CancellationToken::new();
     upstream_client
-        .call(
-            req,
-            TimeoutProfile::Quota,
-            cancel,
-        )
+        .call(req, TimeoutProfile::Quota, cancel)
         .await
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!(
-                "{upstream_url}: {e:?}"
-            ))
-        })
+        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
 }
 
 pub async fn execute_transcribe(
@@ -168,13 +157,14 @@ pub async fn execute_transcribe(
         };
         let upstream_url = adapter.build_transcription_url();
 
-        let api_key = match resolve_api_key(db_pool, master_key, target.account_id, &target.provider) {
-            Ok(k) => k,
-            Err(e) => {
-                last_error = Some(e);
-                continue;
-            }
-        };
+        let api_key =
+            match resolve_api_key(db_pool, master_key, target.account_id, &target.provider) {
+                Ok(k) => k,
+                Err(e) => {
+                    last_error = Some(e);
+                    continue;
+                }
+            };
 
         let body_clone = parsed_body.clone();
 
@@ -295,7 +285,8 @@ pub fn generate_test_speech_wav() -> Vec<u8> {
         let t = i as f32 / SAMPLE_RATE as f32;
         let val = if t < 0.15 {
             // /h/ aspiration noise
-            let pseudo_rand = (((i.wrapping_mul(1103515245)).wrapping_add(12345)) % 65536) as f32 / 65536.0 - 0.5;
+            let pseudo_rand =
+                (((i.wrapping_mul(1103515245)).wrapping_add(12345)) % 65536) as f32 / 65536.0 - 0.5;
             pseudo_rand * 0.25 * (t / 0.15 * std::f32::consts::PI).sin()
         } else if t < 0.50 {
             // /e/ formant
@@ -306,7 +297,9 @@ pub fn generate_test_speech_wav() -> Vec<u8> {
             let glot = phase0.sin() + 0.5 * (2.0 * phase0).sin();
             let f1 = 530.0;
             let f2 = 1840.0;
-            env * (0.6 * (2.0 * std::f32::consts::PI * f1 * t).sin() + 0.3 * (2.0 * std::f32::consts::PI * f2 * t).sin() + 0.2 * glot)
+            env * (0.6 * (2.0 * std::f32::consts::PI * f1 * t).sin()
+                + 0.3 * (2.0 * std::f32::consts::PI * f2 * t).sin()
+                + 0.2 * glot)
         } else if t < 0.70 {
             // /l/
             let p = (t - 0.50) / 0.20;
@@ -315,7 +308,8 @@ pub fn generate_test_speech_wav() -> Vec<u8> {
             let env = 0.6 * (p * std::f32::consts::PI).sin();
             let f1 = 380.0;
             let f2 = 1200.0;
-            env * (0.5 * (2.0 * std::f32::consts::PI * f1 * t).sin() + 0.2 * (2.0 * std::f32::consts::PI * f2 * t).sin())
+            env * (0.5 * (2.0 * std::f32::consts::PI * f1 * t).sin()
+                + 0.2 * (2.0 * std::f32::consts::PI * f2 * t).sin())
         } else if t < 0.95 {
             // /o/ formant
             let p = (t - 0.70) / 0.25;
@@ -325,7 +319,9 @@ pub fn generate_test_speech_wav() -> Vec<u8> {
             let glot = phase0.sin() + 0.4 * (2.0 * phase0).sin();
             let f1 = 480.0;
             let f2 = 950.0;
-            env * (0.6 * (2.0 * std::f32::consts::PI * f1 * t).sin() + 0.3 * (2.0 * std::f32::consts::PI * f2 * t).sin() + 0.2 * glot)
+            env * (0.6 * (2.0 * std::f32::consts::PI * f1 * t).sin()
+                + 0.3 * (2.0 * std::f32::consts::PI * f2 * t).sin()
+                + 0.2 * glot)
         } else {
             0.0
         };
@@ -342,11 +338,11 @@ pub fn generate_test_speech_wav() -> Vec<u8> {
     wav.extend_from_slice(b"WAVE");
     wav.extend_from_slice(b"fmt ");
     wav.extend_from_slice(&16u32.to_le_bytes()); // subchunk1 size (16 for PCM)
-    wav.extend_from_slice(&1u16.to_le_bytes());  // PCM format = 1
-    wav.extend_from_slice(&1u16.to_le_bytes());  // Mono (1 channel)
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format = 1
+    wav.extend_from_slice(&1u16.to_le_bytes()); // Mono (1 channel)
     wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
     wav.extend_from_slice(&byte_rate.to_le_bytes());
-    wav.extend_from_slice(&2u16.to_le_bytes());  // Block align (2 bytes)
+    wav.extend_from_slice(&2u16.to_le_bytes()); // Block align (2 bytes)
     wav.extend_from_slice(&16u16.to_le_bytes()); // Bits per sample (16)
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&pcm_len.to_le_bytes());

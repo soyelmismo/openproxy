@@ -41,10 +41,9 @@ struct AccountBreaker {
 }
 
 fn now_ms() -> u64 {
-    use std::sync::OnceLock;
-    static START: OnceLock<Instant> = OnceLock::new();
-    let start = *START.get_or_init(Instant::now);
-    Instant::now().duration_since(start).as_millis() as u64
+    use std::sync::LazyLock;
+    static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+    Instant::now().duration_since(*START).as_millis() as u64
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

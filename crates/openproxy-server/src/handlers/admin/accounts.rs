@@ -1,4 +1,6 @@
-use super::{Deserialize, AppState, ApiError, ProviderId, ProviderRefreshQuery, AccountId, CoreError};
+use super::{
+    AccountId, ApiError, AppState, CoreError, Deserialize, ProviderId, ProviderRefreshQuery,
+};
 use crate::extractors::DbReader;
 use axum::{
     Json,

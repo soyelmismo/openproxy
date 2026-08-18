@@ -147,9 +147,7 @@ fn compress_diff_content(text: &str) -> Option<String> {
     if compressed_body.is_empty() {
         return None;
     }
-    let output = format!(
-        "[#diff_compressed: was {original_lines} lines]\n{compressed_body}"
-    );
+    let output = format!("[#diff_compressed: was {original_lines} lines]\n{compressed_body}");
     // Never produce a larger message.
     if output.len() >= text.len() {
         return None;
