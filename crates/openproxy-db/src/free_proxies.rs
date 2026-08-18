@@ -34,6 +34,20 @@ pub fn format_proxy_url(
     }
 }
 
+type ProxyRow = (String, String, i64, String, Option<String>, Option<String>);
+
+#[inline]
+fn map_proxy_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProxyRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+
 /// Retrieve or assign an alive proxy for a provider or account.
 pub fn get_or_assign_provider_proxy(
     conn: &Connection,
@@ -120,16 +134,7 @@ pub fn get_or_assign_provider_proxy(
         .map_err(crate::error::map_db_error)?;
 
     let candidate_rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-            ))
-        })
+        .query_map([], map_proxy_row)
         .map_err(crate::error::map_db_error)?;
 
     let mut selected_proxy = None;
@@ -183,16 +188,7 @@ pub fn get_candidate_proxies_for_provider(
         .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-            ))
-        })
+        .query_map([], map_proxy_row)
         .map_err(crate::error::map_db_error)?;
 
     let mut candidates = Vec::with_capacity(limit);

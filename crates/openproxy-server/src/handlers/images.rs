@@ -17,7 +17,7 @@ use openproxy_core::images::{
     MultipartFile, ParsedImageMultipartBody, execute_image_edit, execute_image_generation,
     execute_image_variation,
 };
-use openproxy_types::{CoreError, ids::ApiKeyId, images::ImageGenerationRequest};
+use openproxy_types::{CoreError, images::ImageGenerationRequest};
 
 use crate::{error::ApiError, state::AppState};
 
@@ -37,19 +37,8 @@ pub async fn generate_images(
         req.model = "dall-e-2".to_string();
     }
 
-    let auth_result = crate::middleware::auth::authenticate(&state, &headers, &req.model)?;
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
-
-    // Check combo authorization if applicable.
-    if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
-        openproxy_core::routing::resolve(&state.db_pool().reader(), &req.model)
-        && let Some(auth) = &auth_result
-        && !auth.is_combo_allowed(combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
-    }
+    let api_key_id =
+        crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, &req.model)?;
 
     let response = execute_image_generation(
         state.db_pool().as_ref(),
@@ -94,20 +83,11 @@ pub async fn edit_images(
         )));
     }
 
-    let auth_result =
-        crate::middleware::auth::authenticate(&state, &headers, &parsed_body.model_name)?;
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
-
-    // Check combo authorization if applicable.
-    if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
-        openproxy_core::routing::resolve(&state.db_pool().reader(), &parsed_body.model_name)
-        && let Some(auth) = &auth_result
-        && !auth.is_combo_allowed(combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
-    }
+    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
+        &state,
+        &headers,
+        &parsed_body.model_name,
+    )?;
 
     let response = execute_image_edit(
         state.db_pool().as_ref(),
@@ -142,20 +122,11 @@ pub async fn create_image_variation(
         )));
     }
 
-    let auth_result =
-        crate::middleware::auth::authenticate(&state, &headers, &parsed_body.model_name)?;
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
-
-    // Check combo authorization if applicable.
-    if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
-        openproxy_core::routing::resolve(&state.db_pool().reader(), &parsed_body.model_name)
-        && let Some(auth) = &auth_result
-        && !auth.is_combo_allowed(combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
-    }
+    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
+        &state,
+        &headers,
+        &parsed_body.model_name,
+    )?;
 
     let response = execute_image_variation(
         state.db_pool().as_ref(),
@@ -241,6 +212,15 @@ async fn parse_image_request(
     })
 }
 
+fn png_multipart_file(field_name: &str, bytes: bytes::Bytes) -> MultipartFile {
+    MultipartFile {
+        name: field_name.to_string(),
+        file_name: format!("{field_name}.png"),
+        content_type: "image/png".to_string(),
+        bytes,
+    }
+}
+
 async fn resolve_image_input(
     raw: &str,
     field_name: &str,
@@ -255,12 +235,7 @@ async fn resolve_image_input(
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64_part.trim())
             .map_err(|e| ApiError(CoreError::Validation(format!("invalid base64 image: {e}"))))?;
-        return Ok(MultipartFile {
-            name: field_name.to_string(),
-            file_name: format!("{field_name}.png"),
-            content_type: "image/png".to_string(),
-            bytes: bytes.into(),
-        });
+        return Ok(png_multipart_file(field_name, bytes.into()));
     }
 
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -279,12 +254,7 @@ async fn resolve_image_input(
                 "failed to read image URL body: {e}"
             )))
         })?;
-        return Ok(MultipartFile {
-            name: field_name.to_string(),
-            file_name: format!("{field_name}.png"),
-            content_type: "image/png".to_string(),
-            bytes,
-        });
+        return Ok(png_multipart_file(field_name, bytes));
     }
 
     let bytes = base64::engine::general_purpose::STANDARD
@@ -294,12 +264,7 @@ async fn resolve_image_input(
                 "invalid base64 image data: {e}"
             )))
         })?;
-    Ok(MultipartFile {
-        name: field_name.to_string(),
-        file_name: format!("{field_name}.png"),
-        content_type: "image/png".to_string(),
-        bytes: bytes.into(),
-    })
+    Ok(png_multipart_file(field_name, bytes.into()))
 }
 
 async fn parse_image_multipart(

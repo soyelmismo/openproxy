@@ -29,39 +29,24 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
         regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex")
     });
 
-    let mut sanitized = std::borrow::Cow::Borrowed(raw);
-    if RE_SK.is_match(&sanitized) {
-        sanitized =
-            std::borrow::Cow::Owned(RE_SK.replace_all(&sanitized, "sk-[REDACTED]").into_owned());
-    }
-    if RE_XAPIKEY.is_match(&sanitized) {
-        sanitized = std::borrow::Cow::Owned(
-            RE_XAPIKEY
-                .replace_all(&sanitized, "x-api-key: [REDACTED]")
-                .into_owned(),
-        );
-    }
-    if RE_BEARER.is_match(&sanitized) {
-        sanitized = std::borrow::Cow::Owned(
-            RE_BEARER
-                .replace_all(&sanitized, "Authorization: Bearer [REDACTED]")
-                .into_owned(),
-        );
-    }
-    if sanitized.len() > 2048 {
-        let mut s = sanitized.into_owned();
+    let sanitized = RE_SK.replace_all(raw, "sk-[REDACTED]");
+    let sanitized = RE_XAPIKEY.replace_all(&sanitized, "x-api-key: [REDACTED]");
+    let sanitized = RE_BEARER.replace_all(&sanitized, "Authorization: Bearer [REDACTED]");
+
+    let result = if sanitized.len() > 2048 {
         let mut idx = 2048;
-        while idx > 0 && !s.is_char_boundary(idx) {
+        while idx > 0 && !sanitized.is_char_boundary(idx) {
             idx -= 1;
         }
-        s.truncate(idx);
+        let mut s = String::with_capacity(idx + 14);
+        s.push_str(&sanitized[..idx]);
         s.push_str("...[truncated]");
-        let copy = s.clone();
-        (copy, s)
+        s
     } else {
-        let copy = sanitized.as_ref().to_string();
-        (copy, sanitized.into_owned())
-    }
+        sanitized.into_owned()
+    };
+
+    (result.clone(), result)
 }
 
 pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {

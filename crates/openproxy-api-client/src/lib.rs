@@ -235,7 +235,7 @@ impl Client {
         &self,
         provider: Option<&ProviderId>,
     ) -> Result<Vec<accounts::Account>, ClientError> {
-        let mut url = self.url("/admin/accounts").to_string();
+        let mut url = self.url("/admin/accounts");
         if let Some(p) = provider {
             let qs = build_query(&[("provider_id", Some(p.as_str()))]);
             write!(&mut url, "?{qs}").expect("writing to String never fails");

@@ -15,10 +15,11 @@ impl PipelineStage for OAuthRefreshStage {
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx
-            .current_target
-            .as_mut()
-            .expect("current_target must be set");
+        let Some(current) = ctx.current_target.as_mut() else {
+            return Err(CoreError::Internal(
+                "missing current_target in pipeline context".into(),
+            ));
+        };
         let target = &current.target;
 
         if let Some(account_id) = target.account_id
@@ -483,10 +484,11 @@ impl PipelineStage for CustomAdapterStage {
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx
-            .current_target
-            .as_mut()
-            .expect("current_target must be set");
+        let Some(current) = ctx.current_target.as_mut() else {
+            return Err(CoreError::Internal(
+                "missing current_target in pipeline context".into(),
+            ));
+        };
         let target = &current.target;
         let Some(_adapter) = ctx
             .pipeline

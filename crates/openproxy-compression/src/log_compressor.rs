@@ -385,25 +385,15 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
 /// (e.g. `warning: unused variable at line 12` and
 /// `warning: unused variable at line 99`) into a single dedup bucket.
 fn dedup_key(line: &str) -> String {
-    let sep_char_idx = line.chars().position(|c| c == ':' || c == '=');
-    match sep_char_idx {
-        Some(idx) => {
-            // Convert char index to byte index.
-            let byte_idx = line.char_indices().nth(idx).map_or(line.len(), |(b, _)| b);
-            // Include the separator in the prefix.
-            let sep_end = (byte_idx + 1).min(line.len());
-            let prefix = &line[..sep_end];
-            let rest = if sep_end <= line.len() {
-                &line[sep_end..]
-            } else {
-                ""
-            };
-            let mut out = String::with_capacity(prefix.len() + rest.len());
-            out.push_str(prefix);
-            out.push_str(&normalize_trailing(rest));
-            out
-        }
-        None => normalize_trailing(line),
+    if let Some((byte_idx, ch)) = line.char_indices().find(|&(_, c)| c == ':' || c == '=') {
+        let sep_end = byte_idx + ch.len_utf8();
+        let (prefix, rest) = line.split_at(sep_end);
+        let mut out = String::with_capacity(prefix.len() + rest.len());
+        out.push_str(prefix);
+        out.push_str(&normalize_trailing(rest));
+        out
+    } else {
+        normalize_trailing(line)
     }
 }
 

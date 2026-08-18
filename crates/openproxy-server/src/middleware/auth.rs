@@ -246,6 +246,31 @@ pub(crate) fn authenticate(
     }))
 }
 
+/// Authenticate the request against active API keys and verify model/combo authorization.
+///
+/// Returns `Ok(Some(key_id))` if authenticated with a key, `Ok(None)` if anonymous
+/// access is permitted (0 active keys configured), or an [`ApiError`] on failure.
+pub(crate) fn authenticate_and_authorize_model(
+    state: &AppState,
+    headers: &HeaderMap,
+    model_name: &str,
+) -> Result<Option<ApiKeyId>, ApiError> {
+    let auth_result = authenticate(state, headers, model_name)?;
+    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
+
+    if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
+        openproxy_core::routing::resolve(&state.db_pool().reader(), model_name)
+        && let Some(auth) = &auth_result
+        && !auth.is_combo_allowed(combo_id.0)
+    {
+        return Err(ApiError(CoreError::Auth(
+            "combo not allowed for this key".into(),
+        )));
+    }
+
+    Ok(api_key_id)
+}
+
 /// `POST /v1/chat/completions`.
 ///
 /// The full body is parsed as an `OpenAIRequest`; on parse failure we
@@ -323,7 +348,7 @@ pub async fn auth_middleware(
     }
     parsed.messages = valid_messages;
 
-    for i in 0..parsed.messages.len() {
+    for (i, _) in (0..parsed.messages.len()).enumerate() {
         if parsed.messages[i].role == "assistant" && parsed.messages[i].tool_calls.is_some() {
             let (left, right) = parsed.messages.split_at_mut(i + 1);
             if let Some(msg) = left.last_mut()

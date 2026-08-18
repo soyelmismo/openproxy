@@ -58,6 +58,32 @@ macro_rules! impl_string_id {
                 &self.0
             }
         }
+
+        impl std::ops::Deref for $name {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(s: String) -> Self {
+                Self(s)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(s: &str) -> Self {
+                Self(s.to_string())
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(id: $name) -> Self {
+                id.0
+            }
+        }
     };
 }
 
@@ -87,6 +113,12 @@ macro_rules! impl_numeric_id {
         impl From<i64> for $name {
             fn from(v: i64) -> Self {
                 Self(v)
+            }
+        }
+
+        impl From<$name> for i64 {
+            fn from(id: $name) -> Self {
+                id.0
             }
         }
     };
@@ -127,5 +159,23 @@ mod tests {
         let m = ModelId::new("anthropic/claude-sonnet-4");
         let s = serde_json::to_string(&m).unwrap();
         assert_eq!(s, "\"anthropic/claude-sonnet-4\"");
+    }
+
+    #[test]
+    fn string_id_conversions_and_deref() {
+        let p_from_str: ProviderId = "openai".into();
+        let p_from_string: ProviderId = String::from("openai").into();
+        assert_eq!(p_from_str, p_from_string);
+        assert_eq!(&*p_from_str, "openai");
+        assert_eq!(p_from_str.len(), 6);
+        let s: String = p_from_str.into();
+        assert_eq!(s, "openai");
+    }
+
+    #[test]
+    fn numeric_id_conversions() {
+        let acc: AccountId = 42.into();
+        let val: i64 = acc.into();
+        assert_eq!(val, 42);
     }
 }

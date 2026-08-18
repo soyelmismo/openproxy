@@ -9,9 +9,9 @@ use axum::{
     response::Response,
 };
 use openproxy_core::audio::{ParsedAudioBody, execute_transcribe};
-use openproxy_types::{CoreError, ids::ApiKeyId};
+use openproxy_types::CoreError;
 
-use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};
+use crate::{error::ApiError, middleware::auth::authenticate_and_authorize_model, state::AppState};
 
 /// `POST /v1/audio/transcriptions`.
 pub async fn transcribe(
@@ -22,22 +22,10 @@ pub async fn transcribe(
     // 1. Parse the multipart body.
     let parsed_body = parse_multipart_body(multipart).await?;
 
-    // 2. Authenticate (chat scope).
-    let auth_result = authenticate(&state, &headers, &parsed_body.model_name)?;
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
+    // 2. Authenticate & authorize model (chat scope + combo check).
+    let api_key_id = authenticate_and_authorize_model(&state, &headers, &parsed_body.model_name)?;
 
-    // 3. Check combo auth permission if applicable.
-    if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
-        openproxy_core::routing::resolve(&state.db_pool().reader(), &parsed_body.model_name)
-        && let Some(auth) = &auth_result
-        && !auth.is_combo_allowed(combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
-    }
-
-    // 4. Delegate resolution, multi-target dispatch, and usage recording to core::audio.
+    // 3. Delegate resolution, multi-target dispatch, and usage recording to core::audio.
     let response = execute_transcribe(
         state.db_pool().as_ref(),
         state.adapters().as_slice(),

@@ -27,7 +27,6 @@ pub mod repository;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
 pub mod redact;
-pub mod service;
 pub mod sse;
 pub mod sse_accumulator;
 pub mod stage;

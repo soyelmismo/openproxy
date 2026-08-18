@@ -1742,7 +1742,6 @@ dependencies = [
 name = "openproxy-api-client"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "bytes",
  "http",
  "httpmock",
@@ -1859,7 +1858,6 @@ dependencies = [
  "openproxy-types",
  "parking_lot",
  "rand 0.10.2",
- "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1867,8 +1865,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
- "tower",
- "tower-service",
  "tracing",
  "uuid",
 ]

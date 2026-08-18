@@ -4,8 +4,8 @@
 //! Embedding the nonce in the blob keeps encrypt output atomic (no separate
 //! nonce column required at rest).
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, Nonce, OsRng};
+use aes_gcm::{Aes256Gcm, Key};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use zeroize::Zeroize;
@@ -44,29 +44,20 @@ impl MasterKey {
         })?;
 
         // Load previous key for rotation (optional).
-        let previous = match std::env::var(PREVIOUS_ENV_VAR) {
-            Ok(prev_raw) => match BASE64.decode(prev_raw.trim()) {
-                Ok(decoded) => match TryInto::<[u8; KEY_LEN]>::try_into(decoded) {
-                    Ok(bytes) => {
-                        tracing::info!(
-                            "loaded OPENPROXY_MASTER_KEY_PREVIOUS for rotation fallback"
-                        );
-                        Some(bytes)
-                    }
-                    Err(v) => {
-                        let v_len = v.len();
-                        return Err(CoreError::Config(format!(
-                            "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {v_len}"
-                        )));
-                    }
-                },
-                Err(e) => {
-                    return Err(CoreError::Config(format!(
-                        "{PREVIOUS_ENV_VAR} is not valid base64: {e}"
-                    )));
-                }
-            },
-            Err(_) => None,
+        let previous = if let Ok(prev_raw) = std::env::var(PREVIOUS_ENV_VAR) {
+            let decoded = BASE64.decode(prev_raw.trim()).map_err(|e| {
+                CoreError::Config(format!("{PREVIOUS_ENV_VAR} is not valid base64: {e}"))
+            })?;
+            let bytes: [u8; KEY_LEN] = decoded.try_into().map_err(|v: Vec<u8>| {
+                CoreError::Config(format!(
+                    "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
+                    v.len()
+                ))
+            })?;
+            tracing::info!("loaded OPENPROXY_MASTER_KEY_PREVIOUS for rotation fallback");
+            Some(bytes)
+        } else {
+            None
         };
 
         Ok(Self { current, previous })
@@ -87,7 +78,7 @@ impl MasterKey {
     /// Output layout: `nonce (12 bytes) || ciphertext_with_tag`.
     pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.current));
-        let nonce: Nonce<_> = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let mut blob = nonce.to_vec();
         let ct = cipher
             .encrypt(&nonce, plaintext.as_bytes())
@@ -105,31 +96,38 @@ impl MasterKey {
             ));
         }
         let (nonce_bytes, ct) = blob.split_at(NONCE_LEN);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce = Nonce::<Aes256Gcm>::from_slice(nonce_bytes);
 
         // Try current key first.
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.current));
-        if let Ok(pt) = cipher.decrypt(nonce, ct) {
-            return String::from_utf8(pt).map_err(|e| {
-                CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))
-            });
+        if let Some(res) = try_decrypt(&self.current, nonce, ct) {
+            return res;
         }
 
         // Fall back to previous key (rotation).
-        if let Some(prev) = &self.previous {
-            let prev_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(prev));
-            if let Ok(pt) = prev_cipher.decrypt(nonce, ct) {
-                tracing::debug!("decrypted with previous master key (rotation fallback)");
-                return String::from_utf8(pt).map_err(|e| {
-                    CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))
-                });
-            }
+        if let Some(prev) = &self.previous
+            && let Some(res) = try_decrypt(prev, nonce, ct)
+        {
+            tracing::debug!("decrypted with previous master key (rotation fallback)");
+            return res;
         }
 
         Err(CoreError::Internal(
             "aes-gcm decrypt failed with both current and previous keys".into(),
         ))
     }
+}
+
+fn try_decrypt(
+    raw_key: &[u8; KEY_LEN],
+    nonce: &Nonce<Aes256Gcm>,
+    ct: &[u8],
+) -> Option<Result<String>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(raw_key));
+    let pt = cipher.decrypt(nonce, ct).ok()?;
+    Some(
+        String::from_utf8(pt)
+            .map_err(|e| CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))),
+    )
 }
 
 impl Drop for MasterKey {
@@ -215,5 +213,18 @@ mod tests {
         let key = MasterKey::generate();
         // 5 bytes is less than the 12-byte nonce.
         assert!(key.decrypt(&[0u8; 5]).is_err());
+    }
+
+    #[test]
+    fn rotation_fallback_decrypts_with_previous_key() {
+        let old_key = MasterKey::generate();
+        let new_key = MasterKey::generate();
+        let rotated_key = MasterKey {
+            current: new_key.current,
+            previous: Some(old_key.current),
+        };
+        let blob = old_key.encrypt("secret-value").unwrap();
+        let pt = rotated_key.decrypt(&blob).unwrap();
+        assert_eq!(pt, "secret-value");
     }
 }

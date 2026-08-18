@@ -48,7 +48,7 @@ impl ApiError {
     pub fn sanitized_message(&self) -> String {
         let raw = self.0.to_string();
         let redacted = openproxy_core::cost::redact_error_msg(&raw);
-        truncate_error_message(&redacted.0)
+        truncate_error_message(&redacted.0).into_owned()
     }
 
     /// Render this error as a pre-formatted SSE frame (`Bytes`).
@@ -126,9 +126,9 @@ impl IntoResponse for ApiError {
 /// disagree on how big an error message can be.
 const API_ERROR_MESSAGE_MAX: usize = 2048;
 
-pub(crate) fn truncate_error_message(raw: &str) -> String {
+pub(crate) fn truncate_error_message(raw: &str) -> std::borrow::Cow<'_, str> {
     if raw.len() <= API_ERROR_MESSAGE_MAX {
-        return raw.to_string();
+        return std::borrow::Cow::Borrowed(raw);
     }
     // Walk back to a valid UTF-8 boundary so we never slice a code
     // point in half. `is_char_boundary` is O(1) so this stays cheap.
@@ -139,7 +139,7 @@ pub(crate) fn truncate_error_message(raw: &str) -> String {
     let mut out = String::with_capacity(idx + "...[truncated]".len());
     out.push_str(&raw[..idx]);
     out.push_str("...[truncated]");
-    out
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]

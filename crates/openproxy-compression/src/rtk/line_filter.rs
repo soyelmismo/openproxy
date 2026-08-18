@@ -506,14 +506,20 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
 
     // 8. Truncate lines (unicode-safe)
     if filter.truncate_line_at > 0 {
-        let truncated: Vec<String> = result
+        let mut any_truncated = false;
+        let truncated: Vec<Cow<'_, str>> = result
             .lines()
-            .map(|l| truncate_unicode_safe(l, filter.truncate_line_at))
+            .map(|l| {
+                let t = truncate_unicode_safe(l, filter.truncate_line_at);
+                if t.len() != l.len() {
+                    any_truncated = true;
+                }
+                t
+            })
             .collect();
-        let new = truncated.join("\n");
-        if new != result {
+        if any_truncated {
             applied_rules.push(filter.rule_truncate_line);
-            result = new;
+            result = truncated.join("\n");
         }
     }
 
@@ -588,19 +594,35 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
     Cow::Owned(String::from_utf8(out).unwrap_or_default())
 }
 
-fn truncate_unicode_safe(s: &str, max_chars: usize) -> String {
+fn truncate_unicode_safe(s: &str, max_chars: usize) -> Cow<'_, str> {
     if max_chars == 0 {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        return s.to_string();
+    let mut cut_byte = None;
+    let mut count = 0;
+    let target_cut = if max_chars > 3 {
+        max_chars - 3
+    } else {
+        max_chars
+    };
+
+    for (byte_idx, _) in s.char_indices() {
+        if count == target_cut {
+            cut_byte = Some(byte_idx);
+        }
+        count += 1;
+        if count > max_chars {
+            let cut = cut_byte.unwrap_or(s.len());
+            return if max_chars <= 3 {
+                Cow::Borrowed(&s[..cut])
+            } else {
+                let prefix = &s[..cut];
+                Cow::Owned(format!("{prefix}..."))
+            };
+        }
     }
-    if max_chars <= 3 {
-        return chars[..max_chars].iter().collect();
-    }
-    let prefix: String = chars[..max_chars - 3].iter().collect();
-    format!("{prefix}...")
+
+    Cow::Borrowed(s)
 }
 
 #[cfg(test)]
@@ -729,5 +751,23 @@ mod tests {
         let input = "stderr| something\nerr: else\nplain line";
         let out = filter_stderr_prefixes(input);
         assert_eq!(out, "something\nelse\nplain line");
+    }
+
+    #[test]
+    fn test_truncate_unicode_safe() {
+        assert_eq!(truncate_unicode_safe("hello world", 0), "hello world");
+        assert_eq!(truncate_unicode_safe("hello", 5), "hello");
+        assert_eq!(truncate_unicode_safe("hello", 10), "hello");
+        assert_eq!(truncate_unicode_safe("hello", 2), "he");
+        assert_eq!(truncate_unicode_safe("hello world", 5), "he...");
+        assert_eq!(truncate_unicode_safe("🦀🦀🦀🦀", 4), "🦀🦀🦀🦀");
+        assert_eq!(truncate_unicode_safe("🦀🦀🦀🦀🦀", 4), "🦀...");
+        assert_eq!(truncate_unicode_safe("🦀🦀🦀🦀", 2), "🦀🦀");
+
+        // Verify Borrowed vs Owned
+        let s = "short";
+        assert!(matches!(truncate_unicode_safe(s, 10), Cow::Borrowed(_)));
+        let long = "longer string here";
+        assert!(matches!(truncate_unicode_safe(long, 6), Cow::Owned(_)));
     }
 }

@@ -147,12 +147,16 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
             continue;
         }
         if mutate_message_text(msg, |text| {
-            let total_chars = text.chars().count();
+            let mut cut_byte = None;
+            let mut total_chars = 0;
+            for (i, _) in text.char_indices() {
+                if total_chars == MAX_TOOL_CHARS {
+                    cut_byte = Some(i);
+                }
+                total_chars += 1;
+            }
             if total_chars > MAX_TOOL_CHARS {
-                let cut = text
-                    .char_indices()
-                    .nth(MAX_TOOL_CHARS)
-                    .map_or(text.len(), |(i, _)| i);
+                let cut = cut_byte.unwrap_or(text.len());
                 Some(format!(
                     "{}…[truncated {} chars]",
                     &text[..cut],

@@ -18,7 +18,7 @@ impl CircuitBreakerKey {
         model_row_id: Option<ModelRowId>,
     ) -> Self {
         if scope == openproxy_types::providers::RateLimitScope::Model {
-            CircuitBreakerKey::Model(aid, model_row_id.expect("flattened"))
+            CircuitBreakerKey::Model(aid, model_row_id.unwrap_or(ModelRowId(0)))
         } else {
             CircuitBreakerKey::Account(aid)
         }

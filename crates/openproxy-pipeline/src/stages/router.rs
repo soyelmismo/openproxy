@@ -14,27 +14,17 @@ impl PipelineStage for RouterStage {
         ctx: &mut PipelineContext,
         next: crate::stage::PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let combo = match ctx.pipeline.load_combo(&ctx.req).await {
-            Ok(c) => c,
-            Err(e) => return Err(e),
-        };
+        let combo = ctx.pipeline.load_combo(&ctx.req).await?;
 
         ctx.combo = Some(combo.clone());
 
         let attempt = ctx.attempt;
-        let targets = match ctx
+        let targets = ctx
             .pipeline
             .resolve_targets(&combo, ctx.req.targets_override.as_deref())
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => return Err(e),
-        };
+            .await?;
 
-        let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets).await {
-            Ok(t) => t,
-            Err(e) => return Err(e),
-        };
+        let flat_targets = ctx.pipeline.flatten_targets(&combo.id, targets).await?;
 
         let (mut eligible, parked): (Vec<ComboTarget>, Vec<ComboTarget>) =
             flat_targets.into_iter().partition(|t| match t.account_id {
@@ -60,24 +50,13 @@ impl PipelineStage for RouterStage {
 
         if eligible.is_empty() {
             if attempt == 1 {
-                let repopulated = match ctx.pipeline.auto_populate_if_empty(&combo).await {
-                    Ok(n) => n,
-                    Err(e) => return Err(e),
-                };
+                let repopulated = ctx.pipeline.auto_populate_if_empty(&combo).await?;
                 if repopulated > 0 {
-                    let targets = match ctx
+                    let targets = ctx
                         .pipeline
                         .resolve_targets(&combo, ctx.req.targets_override.as_deref())
-                        .await
-                    {
-                        Ok(t) => t,
-                        Err(e) => return Err(e),
-                    };
-                    let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets).await
-                    {
-                        Ok(t) => t,
-                        Err(e) => return Err(e),
-                    };
+                        .await?;
+                    let flat_targets = ctx.pipeline.flatten_targets(&combo.id, targets).await?;
                     let re_eligible: Vec<ComboTarget> = flat_targets
                         .into_iter()
                         .filter(|t| match t.account_id {

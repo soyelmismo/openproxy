@@ -46,19 +46,23 @@ pub fn parse_reset_time(s: &str) -> Option<u64> {
         return Some(secs_f.ceil() as u64);
     }
     let mut total_secs = 0.0;
-    let mut num_str = String::new();
-    for c in s.chars() {
-        if c.is_ascii_digit() || c == '.' {
-            num_str.push(c);
-        } else if matches!(c, 'h' | 'm' | 's') {
-            let val = num_str.parse::<f64>().unwrap_or(0.0);
-            match c {
-                'h' => total_secs += val * 3600.0,
-                'm' => total_secs += val * 60.0,
-                's' => total_secs += val,
+    let mut num_range: Option<(usize, usize)> = None;
+    for (i, b) in s.bytes().enumerate() {
+        if b.is_ascii_digit() || b == b'.' {
+            match num_range {
+                Some((start, _)) => num_range = Some((start, i + 1)),
+                None => num_range = Some((i, i + 1)),
+            }
+        } else if matches!(b, b'h' | b'm' | b's')
+            && let Some((start, end)) = num_range.take()
+        {
+            let val = s[start..end].parse::<f64>().unwrap_or(0.0);
+            match b {
+                b'h' => total_secs += val * 3600.0,
+                b'm' => total_secs += val * 60.0,
+                b's' => total_secs += val,
                 _ => {}
             }
-            num_str.clear();
         }
     }
     let total = total_secs.ceil() as u64;

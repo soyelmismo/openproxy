@@ -21,6 +21,36 @@ impl EmbeddingInput {
     }
 }
 
+impl From<String> for EmbeddingInput {
+    fn from(s: String) -> Self {
+        Self::Single(s)
+    }
+}
+
+impl From<&str> for EmbeddingInput {
+    fn from(s: &str) -> Self {
+        Self::Single(s.to_string())
+    }
+}
+
+impl From<Vec<String>> for EmbeddingInput {
+    fn from(v: Vec<String>) -> Self {
+        Self::Array(v)
+    }
+}
+
+impl From<Vec<u32>> for EmbeddingInput {
+    fn from(v: Vec<u32>) -> Self {
+        Self::Tokens(v)
+    }
+}
+
+impl From<Vec<Vec<u32>>> for EmbeddingInput {
+    fn from(v: Vec<Vec<u32>>) -> Self {
+        Self::TokenArrays(v)
+    }
+}
+
 /// Request payload for embedding generation (`POST /v1/embeddings`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmbeddingRequest {
@@ -277,6 +307,30 @@ mod tests {
         assert_eq!(
             res.data[0].embedding,
             EmbeddingVector::Floats(vec![0.5, 0.6])
+        );
+    }
+
+    #[test]
+    fn test_embedding_input_from_conversions() {
+        let from_str: EmbeddingInput = "hello".into();
+        assert_eq!(from_str, EmbeddingInput::Single("hello".to_string()));
+
+        let from_string: EmbeddingInput = String::from("world").into();
+        assert_eq!(from_string, EmbeddingInput::Single("world".to_string()));
+
+        let from_vec_str: EmbeddingInput = vec!["a".to_string(), "b".to_string()].into();
+        assert_eq!(
+            from_vec_str,
+            EmbeddingInput::Array(vec!["a".to_string(), "b".to_string()])
+        );
+
+        let from_tokens: EmbeddingInput = vec![1u32, 2, 3].into();
+        assert_eq!(from_tokens, EmbeddingInput::Tokens(vec![1, 2, 3]));
+
+        let from_token_arrays: EmbeddingInput = vec![vec![1u32, 2], vec![3u32, 4]].into();
+        assert_eq!(
+            from_token_arrays,
+            EmbeddingInput::TokenArrays(vec![vec![1, 2], vec![3, 4]])
         );
     }
 }
