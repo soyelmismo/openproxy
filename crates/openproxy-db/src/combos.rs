@@ -475,30 +475,9 @@ pub fn combo_in_chain(
 }
 
 pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-    // Targets whose provider has been deactivated (active = 0) are
-    // excluded from the result. The row is still in `combo_targets` —
-    // we don't mutate the table here — so a later reactivation of the
-    // provider brings the target back into the routable set without
-    // any extra steps. If every target of a combo is in inactive
-    // providers, the function returns an empty Vec and the pipeline
-    // surfaces `NoHealthyTargets` upstream.
-    //
-    // Sub-combo targets (where `model_row_id` is NULL) use the
-    // virtual `"combo"` provider id; the `p.active = 1` filter still
-    // applies to them so a deactivated "combo" provider would hide
-    // every sub-combo target. In practice the seed code creates the
-    // row with `active = 1` and there is no admin endpoint to
-    // deactivate it, but the filter is the same uniform rule for
-    // every target type.
-    //
-    // Orphan targets — rows where the upstream model was deleted,
-    // leaving `(model_row_id IS NULL, sub_combo_id IS NULL)` — are
-    // excluded. Under the current schema (ON DELETE CASCADE, migration
-    // 000030) these rows no longer exist, but the filter is retained
-    // as a safety net. Without this filter a surviving row would be
-    // passed to `RoutingPlan::Combo` and then to `execute_single`,
-    // which surfaces a confusing `5xx Internal: ... sub-combo target`
-    // (Gate E3).
+    // Targets whose provider has been deactivated (active = 0) or are
+    // in active cooldown in `target_cooldowns` (cooldown_until > now)
+    // are excluded from the routable result.
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
@@ -506,7 +485,9 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
                     ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
+             LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
              WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
+                 AND (tc.cooldown_until IS NULL OR datetime(tc.cooldown_until) <= datetime('now')) \
                  AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL) \
              ORDER BY ct.priority_order ASC, ct.id ASC",
         )
