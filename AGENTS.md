@@ -71,6 +71,7 @@ openproxy/
    - Usar `write!(buf, ...)` con buffer reutilizado en hot paths para evitar allocaciones de formato intermedias.
    - **Zero-Alloc Hashing para Claves Compuestas:** Usar `u64` (`DefaultHasher` / `Hasher`) en tablas hash de trackers, firmas o cooldowns en lugar de formatear e instanciar `String`s intermedios en memoria.
    - **Streaming SSE Byte-Safe:** Acumulación en `Vec<u8>` sobre chunks TCP crudos, extrayendo líneas en `b'\n'` y decodificando con `std::str::from_utf8` para blindar los límites de caracteres UTF-8 multibyte y deserializar chunks con `#[serde(borrow)]`.
+5. **Distributed Plugin / Trait Registry:** Para auto-registro y desacoplamiento modular de proveedores (`register_provider!`) en sus propios archivos sin requerir edición de enums centralizados en `mod.rs`.
 
 ---
 
