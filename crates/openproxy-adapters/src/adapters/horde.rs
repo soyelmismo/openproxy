@@ -136,6 +136,10 @@ impl ProviderAdapter for HordeAdapter {
         meta
     }
 
+    fn is_anonymous_fallback(&self) -> bool {
+        true
+    }
+
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         let key = if api_key.trim().is_empty() {
             "0000000000"

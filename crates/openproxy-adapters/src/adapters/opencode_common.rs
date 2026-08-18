@@ -122,6 +122,10 @@ macro_rules! define_opencode_adapter {
                 &self.config
             }
 
+            fn is_anonymous_fallback(&self) -> bool {
+                true
+            }
+
             $(
                 fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
                     $canon_ids

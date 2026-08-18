@@ -21,6 +21,13 @@ use openproxy_types::{CoreError, images::ImageGenerationRequest};
 
 use crate::{error::ApiError, state::AppState};
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/generations", axum::routing::post(generate_images))
+        .route("/edits", axum::routing::post(edit_images))
+        .route("/variations", axum::routing::post(create_image_variation))
+}
+
 /// `POST /v1/images/generations`.
 pub async fn generate_images(
     State(state): State<AppState>,

@@ -32,6 +32,10 @@ use openproxy_types::CoreError;
 
 use crate::{error::ApiError, state::AppState};
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new().route("/", axum::routing::get(list_models))
+}
+
 /// Default context length to report when neither the DB column nor
 /// the heuristic knows the model. 128k is the modern chat default and
 /// matches what OpenRouter returns for unknown models.

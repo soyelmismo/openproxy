@@ -39,10 +39,7 @@
 //! inside the handler (`handlers::admin::usage::usage_stream`) so it can accept `?token=`
 //! in the query string (browsers can't set headers on WS handshakes).
 
-use axum::{
-    Json, Router, middleware,
-    routing::{get, post},
-};
+use axum::{Json, Router, middleware, routing::get};
 use serde_json::json;
 
 use crate::{
@@ -51,91 +48,9 @@ use crate::{
     state::AppState,
 };
 
-/// Build the root [`Router`] for the server.
-///
-/// See the module docs for the full URL layout. The state is attached
-/// via `with_state` so individual handlers can accept `State<AppState>`
-/// in their extractor list. The request-id middleware is applied at
-/// the outermost layer.
-///
-/// The chat routes are wrapped in [`client_disconnect_middleware`]
-/// so the chat handler's `client_disconnected` watch is driven by
-/// real TCP-level events (request-body read errors + response-body
-/// write errors) instead of a time-based watchdog. See
-/// `crates/openproxy-server/src/disconnect.rs` for the rationale.
-fn chat_endpoint<H, T>(state: &AppState, handler: H) -> axum::routing::MethodRouter<AppState>
-where
-    H: axum::handler::Handler<T, AppState>,
-    T: 'static,
-{
-    post(handler)
-        .route_layer(middleware::from_fn(
-            crate::disconnect::client_disconnect_middleware,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::middleware::rate_limit::rate_limit_middleware,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::middleware::routing::routing_middleware,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::middleware::auth::auth_middleware,
-        ))
-}
-
 pub fn build_router(state: AppState) -> Router {
-    // Public + chat routes. `/v1/health` is a tiny liveness probe;
-    // `/v1/models` lists known models in OpenAI shape;
-    // `/v1/chat/completions` is the main entry point.
-    //
-    // The disconnect middleware is layered ONLY on the chat routes:
-    // admin CRUD endpoints are short-lived and don't need
-    // per-request cancel tracking, and the liveness probe would
-    // pay the wrapper cost on every health check.
-    //
-    // NOTE: client_disconnect_middleware is applied to the chat
-    // path. It previously caused false-positive "client disconnected"
-    // errors because the request body was also wrapped, meaning
-    // hyper could poll the socket after the request body had been
-    // fully read, encountering TCP read half-closes/RSTs and firing
-    // the cancellation watch.
-    //
-    // By modifying client_disconnect_middleware to ONLY wrap the
-    // response body, we safely avoid these false-positives while
-    // still reliably detecting actual client disconnects (write
-    // failures) during sync response writing or active SSE stream
-    // generation.
-
-    let public_api_routes = Router::new()
-        .route("/v1/models", get(handlers::models::list_models))
-        .route(
-            "/v1/chat/completions",
-            chat_endpoint(&state, handlers::chat::chat_completions),
-        )
-        .route(
-            "/v1/messages",
-            chat_endpoint(&state, handlers::messages::anthropic_messages),
-        )
-        .route(
-            "/v1/audio/transcriptions",
-            post(handlers::audio::transcribe),
-        )
-        .route(
-            "/v1/embeddings",
-            post(handlers::embeddings::create_embeddings),
-        )
-        .route(
-            "/v1/images/generations",
-            post(handlers::images::generate_images),
-        )
-        .route("/v1/images/edits", post(handlers::images::edit_images))
-        .route(
-            "/v1/images/variations",
-            post(handlers::images::create_image_variation),
-        );
+    // Public + chat routes assembled via handlers::public_api_routes.
+    let public_api_routes = handlers::public_api_routes(&state);
 
     // Admin REST API. Every route here is mounted under `/admin/api/*`
     // (see `admin_routes` below). The auth middleware

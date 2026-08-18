@@ -277,8 +277,7 @@ pub fn create_custom(
             |r| r.get(0),
         )
         .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("FOREIGN KEY") {
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::ForeignKeyViolation {
                 openproxy_types::CoreError::Validation(format!(
                     "provider_id does not exist: {provider_id}"
                 ))

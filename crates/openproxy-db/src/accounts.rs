@@ -95,8 +95,7 @@ pub fn create(
             Ok(AccountId(rowid))
         }
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("FOREIGN KEY") {
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::ForeignKeyViolation {
                 Err(CoreError::Validation("unknown provider".into()))
             } else {
                 Err(crate::error::map_db_error_ctx(format!(

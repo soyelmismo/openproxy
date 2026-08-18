@@ -27,3 +27,6 @@ pub mod free_proxies;
 pub mod maintenance;
 pub mod models;
 pub mod notifications;
+
+pub use error::{classify_sqlite_error, map_constraint_error, DbErrorKind};
+pub use maintenance::DbTable;

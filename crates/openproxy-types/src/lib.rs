@@ -63,7 +63,7 @@ pub use config::{
 };
 pub use quota::{AccountQuota, ModelQuotaDetail, now_unix_secs_str};
 pub mod model_normalize;
-pub use model_normalize::normalize_model_id;
+pub use model_normalize::{candidate_normalized_forms, normalize_model_id};
 
 pub mod selection_registry;
 pub use selection_registry::SelectionRegistry;

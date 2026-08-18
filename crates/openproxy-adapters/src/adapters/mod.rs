@@ -93,6 +93,12 @@ pub trait ProviderAdapter: Send + Sync {
         &[]
     }
 
+    /// Whether this provider supports anonymous fallback requests without an API key.
+    /// Default: false.
+    fn is_anonymous_fallback(&self) -> bool {
+        false
+    }
+
     /// Shortcut for `self.config().auth_type`.
     fn auth_type(&self) -> AdapterAuthType {
         self.config().auth_type
@@ -455,6 +461,9 @@ macro_rules! define_provider_adapter {
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 delegate_adapter_dispatch!(self, metadata())
             }
+            pub fn is_anonymous_fallback(&self) -> bool {
+                delegate_adapter_dispatch!(self, is_anonymous_fallback())
+            }
             pub fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
                 delegate_adapter_dispatch!(self, models_dev_canonical_ids())
             }
@@ -683,6 +692,9 @@ macro_rules! define_provider_adapter {
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 self.format_request(target_format, req, model, messages, stream)
             }
+            fn is_anonymous_fallback(&self) -> bool {
+                self.is_anonymous_fallback()
+            }
             fn translate_non_streaming_response(
                 &self,
                 target_format: openproxy_types::TargetFormat,
@@ -695,7 +707,8 @@ macro_rules! define_provider_adapter {
 }
 
 pub fn is_anonymous_fallback(provider_id: &str) -> bool {
-    matches!(provider_id, "horde" | "opencode-go" | "opencode-zen")
+    ProviderAdapterEnum::from_provider_id(provider_id)
+        .is_some_and(|adapter| adapter.is_anonymous_fallback())
 }
 
 define_provider_adapter! {
@@ -1938,6 +1951,15 @@ mod tests {
         assert!(!is_anonymous_fallback("openrouter"));
         assert!(!is_anonymous_fallback("gemini"));
         assert!(!is_anonymous_fallback("nonexistent"));
+
+        let horde = ProviderAdapterEnum::from_provider_id("horde").unwrap();
+        assert!(horde.is_anonymous_fallback());
+        let opencode_go = ProviderAdapterEnum::from_provider_id("opencode-go").unwrap();
+        assert!(opencode_go.is_anonymous_fallback());
+        let opencode_zen = ProviderAdapterEnum::from_provider_id("opencode-zen").unwrap();
+        assert!(opencode_zen.is_anonymous_fallback());
+        let openrouter = ProviderAdapterEnum::from_provider_id("openrouter").unwrap();
+        assert!(!openrouter.is_anonymous_fallback());
     }
 
     #[test]

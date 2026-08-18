@@ -8,6 +8,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use openproxy_types::ids::ApiKeyId;
+
+/// Key identifying a rate limit bucket without string allocations on the hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RateLimitKey {
+    Key(ApiKeyId),
+    Ip(std::net::IpAddr),
+}
 
 /// Configuration for the rate limiter.
 #[derive(Clone)]
@@ -27,12 +35,12 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// A per-key rate limiter. Keyed on `String` (typically the API key id
+/// A per-key rate limiter. Keyed on [`RateLimitKey`] (typically the API key id
 /// or the client IP).
 pub struct RateLimiter {
     config: RateLimitConfig,
     /// Map of key -> (count, window_start).
-    windows: Arc<DashMap<String, (u32, Instant)>>,
+    windows: Arc<DashMap<RateLimitKey, (u32, Instant)>>,
 }
 
 impl RateLimiter {
@@ -45,12 +53,12 @@ impl RateLimiter {
 
     /// Check if a request from `key` is allowed. Returns `true` if
     /// allowed, `false` if rate-limited.
-    pub fn check(&self, key: &str) -> bool {
+    pub fn check(&self, key: RateLimitKey) -> bool {
         let now = Instant::now();
         let max = self.config.max_requests;
         let window = self.config.window;
 
-        if let Some(mut entry) = self.windows.get_mut(key) {
+        if let Some(mut entry) = self.windows.get_mut(&key) {
             let (count, start) = entry.value_mut();
             if now.duration_since(*start) >= window {
                 // Window expired — reset.
@@ -64,7 +72,7 @@ impl RateLimiter {
             return false;
         }
 
-        self.windows.insert(key.to_string(), (1, now));
+        self.windows.insert(key, (1, now));
         true
     }
 
@@ -88,10 +96,11 @@ mod tests {
             max_requests: 3,
             window: Duration::from_mins(1),
         });
-        assert!(rl.check("key1"));
-        assert!(rl.check("key1"));
-        assert!(rl.check("key1"));
-        assert!(!rl.check("key1")); // 4th request blocked
+        let key = RateLimitKey::Key(ApiKeyId(1));
+        assert!(rl.check(key));
+        assert!(rl.check(key));
+        assert!(rl.check(key));
+        assert!(!rl.check(key)); // 4th request blocked
     }
 
     #[test]
@@ -100,12 +109,14 @@ mod tests {
             max_requests: 2,
             window: Duration::from_mins(1),
         });
-        assert!(rl.check("key1"));
-        assert!(rl.check("key1"));
-        assert!(!rl.check("key1")); // key1 blocked
-        assert!(rl.check("key2")); // key2 still ok
-        assert!(rl.check("key2"));
-        assert!(!rl.check("key2")); // key2 blocked
+        let key1 = RateLimitKey::Key(ApiKeyId(1));
+        let key2 = RateLimitKey::Key(ApiKeyId(2));
+        assert!(rl.check(key1));
+        assert!(rl.check(key1));
+        assert!(!rl.check(key1)); // key1 blocked
+        assert!(rl.check(key2)); // key2 still ok
+        assert!(rl.check(key2));
+        assert!(!rl.check(key2)); // key2 blocked
     }
 
     #[test]
@@ -114,9 +125,10 @@ mod tests {
             max_requests: 1,
             window: Duration::from_millis(50),
         });
-        assert!(rl.check("key1"));
-        assert!(!rl.check("key1")); // blocked
+        let key = RateLimitKey::Key(ApiKeyId(1));
+        assert!(rl.check(key));
+        assert!(!rl.check(key)); // blocked
         std::thread::sleep(Duration::from_millis(60));
-        assert!(rl.check("key1")); // window reset
+        assert!(rl.check(key)); // window reset
     }
 }

@@ -46,6 +46,13 @@ use crate::{
     state::AppState,
 };
 
+pub fn router(state: &AppState) -> axum::Router<AppState> {
+    axum::Router::new().route(
+        "/completions",
+        super::chat_endpoint(state, chat_completions),
+    )
+}
+
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
 /// periodically to keep the connection alive while the upstream is
 /// generating. This is critical for streaming requests where the

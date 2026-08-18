@@ -1,4 +1,4 @@
-use openproxy_types::normalize_model_id;
+use openproxy_types::{candidate_normalized_forms, normalize_model_id};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -105,8 +105,7 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
     if let Some(p) = lookup_exact_in_db(conn, provider, model) {
         return Some(p);
     }
-    let candidates = strip_model_suffixes(model);
-    for stripped in &candidates {
+    for stripped in candidate_normalized_forms(model) {
         if let Some(p) = lookup_exact_in_db(conn, provider, stripped) {
             return Some(p);
         }
@@ -123,7 +122,7 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
     if let Some(p) = lookup_by_normalized(conn, &normalized) {
         return Some(p);
     }
-    for stripped in &candidates {
+    for stripped in candidate_normalized_forms(model) {
         let norm = normalize_model_id(stripped);
         if let Some(p) = lookup_by_normalized(conn, &norm) {
             return Some(p);
@@ -132,7 +131,7 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
     if let Some(p) = lookup(provider, model) {
         return Some(p);
     }
-    for stripped in &candidates {
+    for stripped in candidate_normalized_forms(model) {
         if let Some(p) = lookup(provider, stripped) {
             return Some(p);
         }
@@ -185,25 +184,6 @@ pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price
         output_per_1m: out,
         ..Default::default()
     })
-}
-
-fn strip_model_suffixes(model: &str) -> Vec<&str> {
-    let mut results = Vec::new();
-    let mut current = model;
-
-    while let Some(stripped) = openproxy_types::model_normalize::MODEL_SUFFIXES
-        .iter()
-        .find_map(|s| {
-            current
-                .strip_suffix(s)
-                .filter(|rem| !rem.is_empty() && *rem != current)
-        })
-    {
-        results.push(stripped);
-        current = stripped;
-    }
-
-    results
 }
 
 pub fn compute_cost_opt_with_cache(

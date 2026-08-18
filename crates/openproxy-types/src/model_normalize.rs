@@ -24,6 +24,21 @@ pub const MODEL_SUFFIXES: &[&str] = &[
     ":nitro",
 ];
 
+/// Produces iterative candidate stripped forms of a model identifier by repeatedly
+/// removing suffixes defined in `MODEL_SUFFIXES` without heap allocation.
+pub fn candidate_normalized_forms(model: &str) -> impl Iterator<Item = &str> {
+    let mut current = model;
+    std::iter::from_fn(move || {
+        let stripped = MODEL_SUFFIXES.iter().find_map(|s| {
+            current
+                .strip_suffix(s)
+                .filter(|rem| !rem.is_empty() && *rem != current)
+        })?;
+        current = stripped;
+        Some(stripped)
+    })
+}
+
 pub fn normalize_model_id(id: &str) -> String {
     let mut s: &str = id.rsplit_once('/').map_or(id, |(_, rest)| rest);
     for suffix in MODEL_SUFFIXES {
@@ -285,5 +300,21 @@ mod tests {
             None
         );
         assert_eq!(strip_fixed_suffix("short", 10, |_| true), None);
+    }
+
+    #[test]
+    fn test_candidate_normalized_forms() {
+        let forms: Vec<&str> = candidate_normalized_forms("gpt-4o:free").collect();
+        assert_eq!(forms, vec!["gpt-4o"]);
+
+        let forms: Vec<&str> = candidate_normalized_forms("model-turbo:free").collect();
+        assert_eq!(forms, vec!["model-turbo", "model"]);
+
+        let forms: Vec<&str> = candidate_normalized_forms("claude-3-5-sonnet-preset-free-trial").collect();
+        assert_eq!(forms, vec!["claude-3-5-sonnet-preset", "claude-3-5-sonnet"]);
+
+        assert_eq!(candidate_normalized_forms("gpt-4o").count(), 0);
+        assert_eq!(candidate_normalized_forms("").count(), 0);
+        assert_eq!(candidate_normalized_forms(":free").count(), 0);
     }
 }

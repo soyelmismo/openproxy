@@ -28,3 +28,45 @@ pub mod embeddings;
 pub mod images;
 pub mod messages;
 pub mod models;
+
+use axum::routing::post;
+use crate::state::AppState;
+
+/// Shared chat/messages endpoint wrapper with disconnect, rate limiting,
+/// routing, and auth middlewares.
+pub(crate) fn chat_endpoint<H, T>(
+    state: &AppState,
+    handler: H,
+) -> axum::routing::MethodRouter<AppState>
+where
+    H: axum::handler::Handler<T, AppState>,
+    T: 'static,
+{
+    post(handler)
+        .route_layer(axum::middleware::from_fn(
+            crate::disconnect::client_disconnect_middleware,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::rate_limit::rate_limit_middleware,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::routing::routing_middleware,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ))
+}
+
+/// Assembles all public API sub-routers into the unified public API router under `/v1`.
+pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
+    axum::Router::new()
+        .nest("/v1/models", models::router())
+        .nest("/v1/chat", chat::router(state))
+        .nest("/v1/messages", messages::router(state))
+        .nest("/v1/audio", audio::router())
+        .nest("/v1/embeddings", embeddings::router())
+        .nest("/v1/images", images::router())
+}

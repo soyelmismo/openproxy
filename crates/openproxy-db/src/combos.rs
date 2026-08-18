@@ -28,8 +28,7 @@ pub fn create_combo(
     match result {
         Ok(_) => {}
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation {
                 return Err(CoreError::Validation(format!(
                     "combo name already exists: {name}"
                 )));
@@ -381,19 +380,20 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     match result {
         Ok(_) => {}
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("FOREIGN KEY") {
-                return Err(CoreError::Validation(format!(
-                    "provider_id or sub_combo_id does not exist: {provider_id}"
-                )));
+            match crate::error::classify_sqlite_error(&e) {
+                crate::error::DbErrorKind::ForeignKeyViolation => {
+                    return Err(CoreError::Validation(format!(
+                        "provider_id or sub_combo_id does not exist: {provider_id}"
+                    )));
+                }
+                crate::error::DbErrorKind::UniqueViolation => {
+                    return Err(CoreError::Validation(format!(
+                        "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
+                        combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
+                    )));
+                }
+                _ => return Err(crate::error::map_db_error_ctx("insert combo_target")(e)),
             }
-            if msg.contains("UNIQUE") {
-                return Err(CoreError::Validation(format!(
-                    "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
-                    combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
-                )));
-            }
-            return Err(crate::error::map_db_error_ctx("insert combo_target")(e));
         }
     }
 

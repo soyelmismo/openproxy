@@ -12,6 +12,13 @@ use crate::{
     services::PipelineRunner, state::AppState,
 };
 
+pub fn router(state: &AppState) -> axum::Router<AppState> {
+    axum::Router::new().route(
+        "/",
+        super::chat_endpoint(state, anthropic_messages),
+    )
+}
+
 pub async fn anthropic_messages(
     State(state): State<AppState>,
     headers: HeaderMap,

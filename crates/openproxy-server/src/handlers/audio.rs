@@ -13,6 +13,10 @@ use openproxy_types::CoreError;
 
 use crate::{error::ApiError, middleware::auth::authenticate_and_authorize_model, state::AppState};
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new().route("/transcriptions", axum::routing::post(transcribe))
+}
+
 /// `POST /v1/audio/transcriptions`.
 pub async fn transcribe(
     State(state): State<AppState>,

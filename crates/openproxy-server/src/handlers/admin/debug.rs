@@ -270,9 +270,10 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
         let mut table_stats: Vec<serde_json::Value> = Vec::new();
         let mut total_rows_recovered: u64 = 0;
         for table in &table_names {
-            let count_result = openproxy_db::maintenance::count_table_rows(&w, table);
+            let count_result = openproxy_db::maintenance::DbTable::parse(table)
+                .map(|t| openproxy_db::maintenance::count_table_rows(&w, t));
             match count_result {
-                Ok(count) => {
+                Some(Ok(count)) => {
                     total_rows_recovered += count as u64;
                     table_stats.push(serde_json::json!({
                         "table": table,
@@ -280,7 +281,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                         "status": "ok"
                     }));
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     tracing::warn!(
                         table = %table,
                         error = %e,
@@ -291,6 +292,17 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                         "rows": 0,
                         "status": "corrupt",
                         "error": openproxy_core::cost::redact_error_msg(&e.to_string()).0
+                    }));
+                }
+                None => {
+                    tracing::warn!(
+                        table = %table,
+                        "DB repair: table is unknown or unmodeled"
+                    );
+                    table_stats.push(serde_json::json!({
+                        "table": table,
+                        "rows": 0,
+                        "status": "unknown"
                     }));
                 }
             }
