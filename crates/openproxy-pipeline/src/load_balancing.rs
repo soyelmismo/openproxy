@@ -95,35 +95,63 @@ fn resolve_lkgp(
     // a target to discover and refresh cold or untried providers.
     let mut rng = rand::rng();
     if exploration_rate > 0.0 && rng.random::<f64>() < exploration_rate && !targets.is_empty() {
-        // Find indices of cold targets (no recent success in window).
-        let cold_indices: Vec<usize> = targets
+        // Prioritize exploring completely untried targets (request_count == 0 in window).
+        let untried_indices: Vec<usize> = targets
             .iter()
             .enumerate()
-            .filter(|(_, t)| registry.last_success_within(t.id, window_secs) == 0)
+            .filter(|(_, t)| registry.request_count_within(t.id, window_secs) == 0)
             .map(|(i, _)| i)
             .collect();
 
-        let idx = if !cold_indices.is_empty() {
-            // Prioritize exploring untested / cold targets uniformly
-            let pick = rng.random_range(0..cold_indices.len());
-            cold_indices[pick]
+        let idx = if !untried_indices.is_empty() {
+            // Uniformly sample from untried targets to guarantee starved providers are tested
+            let pick = rng.random_range(0..untried_indices.len());
+            untried_indices[pick]
         } else {
-            // Otherwise explore any target uniformly
-            rng.random_range(0..targets.len())
+            // All targets have been tried: find cold targets (no recent success in window)
+            let cold_indices: Vec<usize> = targets
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| registry.last_success_within(t.id, window_secs) == 0)
+                .map(|(i, _)| i)
+                .collect();
+
+            if !cold_indices.is_empty() {
+                let pick = rng.random_range(0..cold_indices.len());
+                cold_indices[pick]
+            } else {
+                rng.random_range(0..targets.len())
+            }
         };
 
         targets[..=idx].rotate_right(1);
         return targets;
     }
 
-    // Exploitation branch: sort by `last_success` DESC (most recent success first),
-    // with `priority_order` ASC as tiebreaker. Targets that failed have last_success = 0
-    // and sort behind active working targets.
+    // Exploitation branch:
+    // 1. Working targets (sorted by `last_success` DESC).
+    // 2. Untried targets (no recent activity/attempts, sorted by `priority_order` ASC).
+    // 3. Degraded/failing targets (attempted and failed recently, sorted behind untried targets).
     targets.sort_by(|a, b| {
         let la = registry.last_success_within(a.id, window_secs);
         let lb = registry.last_success_within(b.id, window_secs);
-        lb.cmp(&la)
-            .then_with(|| a.priority_order.cmp(&b.priority_order))
+
+        if la != lb {
+            return lb.cmp(&la);
+        }
+
+        // Neither has recent success (la == 0 && lb == 0):
+        // Prioritize unattempted targets over targets that have recently failed.
+        let fa = registry.last_activity_within(a.id, window_secs);
+        let fb = registry.last_activity_within(b.id, window_secs);
+        let a_has_failed = fa > 0;
+        let b_has_failed = fb > 0;
+
+        match (a_has_failed, b_has_failed) {
+            (false, true) => std::cmp::Ordering::Less,
+            (true, false) => std::cmp::Ordering::Greater,
+            _ => a.priority_order.cmp(&b.priority_order),
+        }
     });
     targets
 }
@@ -285,5 +313,45 @@ mod tests {
         assert_eq!(res[0].id.0, 2, "Target 2 should reclaim #1 after Target 3 fails");
         assert_eq!(res[1].id.0, 1, "Target 1 (priority 1) beats failed Target 3 (priority 3)");
         assert_eq!(res[2].id.0, 3);
+    }
+
+    #[test]
+    fn test_lkgp_untried_targets_beat_failed_favorites() {
+        let registry = SelectionRegistry::new();
+        let combo = make_combo(PriorityMode::Lkgp);
+
+        let t1 = make_target(1, 10); // Favorite that failed
+        let t2 = make_target(2, 20); // Untried target (e.g. fireworks)
+        let t3 = make_target(3, 30); // Another favorite that failed
+
+        registry.record_failure(ComboTargetId(1));
+        registry.record_failure(ComboTargetId(3));
+
+        let targets = vec![t1, t2, t3];
+        let res = resolve_lkgp(targets, &combo, &registry);
+
+        // Untried Target 2 (priority 20) MUST beat failing targets 1 and 3
+        assert_eq!(res[0].id.0, 2, "Untried target 2 must be tried before failed targets 1 and 3");
+        assert_eq!(res[1].id.0, 1, "Target 1 (priority 10) before Target 3 (priority 30)");
+        assert_eq!(res[2].id.0, 3);
+    }
+
+    #[test]
+    fn test_lkgp_exploration_picks_untried_targets() {
+        let registry = SelectionRegistry::new();
+        let mut combo = make_combo(PriorityMode::Lkgp);
+        combo.lkgp_exploration_rate = Some(1.0); // 100% exploration
+
+        let t1 = make_target(1, 1); // Tried
+        let t2 = make_target(2, 2); // Untried
+        let t3 = make_target(3, 3); // Tried
+
+        registry.record_request(ComboTargetId(1));
+        registry.record_request(ComboTargetId(3));
+
+        let targets = vec![t1, t2, t3];
+        let res = resolve_lkgp(targets, &combo, &registry);
+
+        assert_eq!(res[0].id.0, 2, "100% exploration must rotate untried Target 2 to head");
     }
 }

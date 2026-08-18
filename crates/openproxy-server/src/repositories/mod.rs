@@ -203,24 +203,22 @@ impl AccountRepository for SqliteRepository {
 
 impl ComboRepository for SqliteRepository {
     fn list_combos(&self) -> Result<Vec<Combo>, CoreError> {
-        let w = self.writer();
-        db::combos::list_combos(&w)
+        let r = self.reader();
+        db::combos::list_combos(&r)
     }
 
     fn compute_effective_context_window(
         &self,
         combo_id: ComboId,
     ) -> Result<Option<i64>, CoreError> {
-        let w = self.writer();
-        db::combos::compute_effective_context_window(&w, combo_id)
+        let r = self.reader();
+        db::combos::compute_effective_context_window(&r, combo_id)
     }
 }
 
 impl ModelRepository for SqliteRepository {
-    fn list_active_all_models(&self, timeout: Duration) -> Result<Vec<Model>, CoreError> {
-        let w = self.try_writer_for(timeout).ok_or_else(|| {
-            CoreError::ServiceUnavailable("database busy; retry in a few seconds".into())
-        })?;
-        openproxy_core::models::list_active_all(&w)
+    fn list_active_all_models(&self, _timeout: Duration) -> Result<Vec<Model>, CoreError> {
+        let r = self.reader();
+        openproxy_core::models::list_active_all(&r)
     }
 }

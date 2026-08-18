@@ -13,7 +13,7 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
 use openproxy_types::{
     CoreError, Result,
-    ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId},
+    ids::{ApiKeyId, RequestId},
 };
 
 use crate::routing::{self, RoutingPlan};
@@ -34,9 +34,12 @@ pub struct AudioTranscriptionResponse {
 }
 
 pub use crate::unary::{
-    UnaryTarget as AudioTargets, is_target_available, record_unary_usage, resolve_api_key,
+    UnaryTarget as AudioTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
+    is_target_available, map_upstream_status_error, record_unary_usage, resolve_api_key,
     resolve_unary_targets,
 };
+
+pub type AudioUsageArgs<'a> = UnaryUsageArgs<'a>;
 
 pub fn resolve_audio_targets(
     db_pool: &DbPool,
@@ -109,28 +112,7 @@ pub async fn dispatch_audio_request(
         Bytes::from(payload),
     );
 
-    for (k, v) in adapter.build_headers(
-        api_key,
-        openproxy_types::TargetFormat::Openai,
-        &openproxy_types::ModelId::new(upstream_model_id),
-    ) {
-        if k.eq_ignore_ascii_case("content-type") {
-            continue;
-        }
-        if let (Ok(name), Ok(val)) = (
-            axum::http::HeaderName::from_bytes(k.as_bytes()),
-            axum::http::HeaderValue::from_str(&v),
-        ) {
-            req.headers.insert(name, val);
-        }
-    }
-    for (k, v) in &adapter.config().extra_headers {
-        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
-        {
-            req.headers.insert(hn, hv);
-        }
-    }
+    apply_adapter_headers(&mut req, &adapter, api_key, upstream_model_id, true);
 
     let cancel = CancellationToken::new();
     upstream_client
@@ -145,42 +127,6 @@ pub async fn dispatch_audio_request(
                 "{upstream_url}: {e:?}"
             ))
         })
-}
-
-pub struct AudioUsageArgs<'a> {
-    pub db_pool: &'a DbPool,
-    pub request_id: RequestId,
-    pub api_key_id: Option<ApiKeyId>,
-    pub provider_id: &'a ProviderId,
-    pub account_id: Option<AccountId>,
-    pub combo_id: Option<ComboId>,
-    pub model_row_id: Option<ModelRowId>,
-    pub upstream_model_id: &'a str,
-    pub status_code: u16,
-    pub error_msg: Option<String>,
-    pub total_ms: u64,
-}
-
-pub fn record_audio_usage_row(args: AudioUsageArgs<'_>) {
-    record_unary_usage(
-        args.db_pool,
-        &crate::unary::UnaryUsageArgs {
-            request_id: args.request_id,
-            api_key_id: args.api_key_id,
-            provider_id: args.provider_id,
-            account_id: args.account_id,
-            combo_id: args.combo_id,
-            combo_target_id: None,
-            model_row_id: args.model_row_id,
-            upstream_model_id: args.upstream_model_id,
-            prompt_tokens: None,
-            completion_tokens: None,
-            status_code: args.status_code,
-            error_msg: args.error_msg,
-            total_ms: args.total_ms,
-            endpoint_kind: openproxy_types::EndpointKind::Audio,
-        },
-    );
 }
 
 pub async fn execute_transcribe(
@@ -292,44 +238,38 @@ pub async fn execute_transcribe(
                 target.provider,
                 status_code
             );
-            let err = if code_u16 == 429 {
-                CoreError::RateLimited {
-                    provider: target.provider.as_str().to_string(),
-                    retry_after_ms: 1000,
-                    is_proxy_rotated: false,
-                }
-            } else if code_u16 == 401 || code_u16 == 403 {
-                CoreError::Auth(format!("upstream status {code_u16}"))
-            } else if code_u16 == 400 {
-                CoreError::Validation(format!("upstream status {code_u16}"))
-            } else {
-                CoreError::UpstreamError {
-                    status: code_u16,
-                    provider: target.provider.as_str().to_string(),
-                    model: target.upstream_model.clone(),
-                    body: format!("upstream status {code_u16}"),
-                    is_proxy_rotated: false,
-                }
-            };
+            let err_text = String::from_utf8_lossy(&body_bytes);
+            let err = map_upstream_status_error(
+                code_u16,
+                target.provider.as_str(),
+                &target.upstream_model,
+                &err_text,
+            );
             last_error = Some(err);
             continue;
         }
 
         // Success! Record usage and return.
         let total_ms = started.elapsed().as_millis() as u64;
-        record_audio_usage_row(AudioUsageArgs {
+        record_unary_usage(
             db_pool,
-            request_id: RequestId::new(),
-            api_key_id,
-            provider_id: &target.provider,
-            account_id: target.account_id,
-            combo_id: target.combo_id,
-            model_row_id: target.model_row_id,
-            upstream_model_id: &target.upstream_model,
-            status_code: status_code.as_u16(),
-            error_msg: None,
-            total_ms,
-        });
+            &UnaryUsageArgs {
+                request_id: RequestId::new(),
+                api_key_id,
+                provider_id: &target.provider,
+                account_id: target.account_id,
+                combo_id: target.combo_id,
+                combo_target_id: target.combo_target_id,
+                model_row_id: target.model_row_id,
+                upstream_model_id: &target.upstream_model,
+                prompt_tokens: None,
+                completion_tokens: None,
+                status_code: status_code.as_u16(),
+                error_msg: None,
+                total_ms,
+                endpoint_kind: openproxy_types::EndpointKind::Audio,
+            },
+        );
 
         tracing::info!("Audio request succeeded after {} attempts", attempt);
         return Ok(AudioTranscriptionResponse {

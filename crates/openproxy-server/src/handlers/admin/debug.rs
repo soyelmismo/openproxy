@@ -336,14 +336,12 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
 }
 
 pub async fn get_recording(
-    _auth: crate::extractors::AdminAuth,
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(serde_json::json!({ "recording": s.is_recording() })))
 }
 
 pub async fn set_recording(
-    _auth: crate::extractors::AdminAuth,
     State(s): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {

@@ -61,6 +61,22 @@ impl SelectionRegistry {
         }
     }
 
+    pub fn last_activity_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
+        let g = self.inner.lock();
+        match g.get(&target_id.0) {
+            Some(e) if e.last_activity_ms > 0 => {
+                let now = now_ms();
+                let window_ms = window_secs.saturating_mul(1000);
+                if now.saturating_sub(e.last_activity_ms) <= window_ms {
+                    e.last_activity_ms
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+
     pub fn request_count_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
         let g = self.inner.lock();
         match g.get(&target_id.0) {

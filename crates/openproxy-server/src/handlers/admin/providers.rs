@@ -244,8 +244,8 @@ pub(crate) async fn run_provider_refresh(
     let api_key = match selected_account_id {
         Some(account_id) => {
             let account = {
-                let w = s.db_pool().writer();
-                match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
+                let r = s.db_pool().reader();
+                match core_accounts::get(&r, account_id, s.master_key().as_ref()) {
                     Ok(Some(a)) => a,
                     Ok(None) => {
                         return Err(ApiError(CoreError::AccountNotFound(account_id.0)));
@@ -256,8 +256,8 @@ pub(crate) async fn run_provider_refresh(
             if account.auth_type == "oauth" {
                 refresh_oauth_if_needed(&s, account, &provider).await
             } else {
-                let w = s.db_pool().writer();
-                match core_accounts::decrypt_api_key(&w, account_id, s.master_key().as_ref()) {
+                let r = s.db_pool().reader();
+                match core_accounts::decrypt_api_key(&r, account_id, s.master_key().as_ref()) {
                     Ok(k) => k,
                     Err(e) => return Err(ApiError(e)),
                 }
@@ -269,8 +269,8 @@ pub(crate) async fn run_provider_refresh(
     // Resolve account label for CloudFlare / label-based providers.
     let account_label = match selected_account_id {
         Some(account_id) => {
-            let w = s.db_pool().writer();
-            match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
+            let r = s.db_pool().reader();
+            match core_accounts::get(&r, account_id, s.master_key().as_ref()) {
                 Ok(Some(a)) => a.label.unwrap_or_default(),
                 _ => String::new(),
             }

@@ -125,6 +125,27 @@ pub fn build_sse_frame(payload: &str) -> bytes::Bytes {
     b.freeze()
 }
 
+/// Helper to extract data payload from an SSE line.
+///
+/// Trims line endings (`\r`, `\n`), ignores empty lines and comment lines (starting with `:`),
+/// strips the `data:` prefix, and trims leading whitespace.
+///
+/// Returns `None` if the line is empty, a comment, not a `data:` line, or has an empty payload.
+/// Otherwise returns `Some(payload)` (e.g. `Some("[DONE]")` or `Some("{\"content\":\"...\"}")`).
+#[inline]
+pub fn parse_sse_data_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() || trimmed.starts_with(':') {
+        return None;
+    }
+    let rest = trimmed.strip_prefix("data:")?;
+    let payload = rest.trim_start();
+    if payload.is_empty() {
+        return None;
+    }
+    Some(payload)
+}
+
 // =====================================================================
 // H5 fix: Anthropic tool_use stateful accumulator
 // =====================================================================
@@ -235,25 +256,11 @@ struct OpenAiDeltaProbe {
 /// Returns `Ok(None)` for empty lines, comments, and `[DONE]` sentinels.
 /// Returns `Ok(Some(chunk))` for valid data lines.
 pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
-    let trimmed = line.trim_end_matches(['\r', '\n']);
-    if trimmed.is_empty() || trimmed.starts_with(':') {
-        return Ok(None);
-    }
-    let Some(rest) = trimmed.strip_prefix("data:") else {
+    let Some(payload) = parse_sse_data_line(line) else {
         return Ok(None);
     };
-    let payload = rest.trim_start();
     if payload == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk {
-            raw_payload: None,
-            payload: Value::Null,
-            done: true,
-            usage: None,
-            stop_reason: None,
-            delta_reasoning: None,
-            delta_tool_calls: Vec::new(),
-            has_content: false, // [DONE] sentinel — no content
-        }));
+        return Ok(Some(UpstreamSseChunk::done()));
     }
     // Fast targeted parse: only extracts usage + finish_reason,
     // skips all other fields (delta.content, tool_calls, etc.)
@@ -383,25 +390,11 @@ pub fn parse_gemini_sse_line(
     created: u64,
     model: &str,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let trimmed = line.trim_end_matches(['\r', '\n']);
-    if trimmed.is_empty() || trimmed.starts_with(':') {
-        return Ok(None);
-    }
-    let Some(rest) = trimmed.strip_prefix("data:") else {
+    let Some(payload) = parse_sse_data_line(line) else {
         return Ok(None);
     };
-    let payload = rest.trim_start();
     if payload == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk {
-            raw_payload: None,
-            payload: Value::Null,
-            done: true,
-            usage: None,
-            stop_reason: None,
-            delta_reasoning: None,
-            delta_tool_calls: Vec::new(),
-            has_content: true,
-        }));
+        return Ok(Some(UpstreamSseChunk::done()));
     }
     // Fast targeted parse: only extracts candidates[].content.parts[].text
     // (+ thought flag), candidates[].finishReason, and usageMetadata.
@@ -1145,6 +1138,20 @@ pub const SSE_DONE: &str = "data: [DONE]\n\n";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_sse_data_line_variants() {
+        assert_eq!(parse_sse_data_line(""), None);
+        assert_eq!(parse_sse_data_line("\r\n"), None);
+        assert_eq!(parse_sse_data_line(": keep-alive"), None);
+        assert_eq!(parse_sse_data_line("event: message"), None);
+        assert_eq!(parse_sse_data_line("data:"), None);
+        assert_eq!(parse_sse_data_line("data:   \r\n"), None);
+        assert_eq!(parse_sse_data_line("data: [DONE]"), Some("[DONE]"));
+        assert_eq!(parse_sse_data_line("data:[DONE]\r\n"), Some("[DONE]"));
+        assert_eq!(parse_sse_data_line("data: {\"a\":1}\n"), Some("{\"a\":1}"));
+        assert_eq!(parse_sse_data_line("data:   hello world  \r\n"), Some("hello world  "));
+    }
 
     #[test]
     fn parse_openai_data_line() {
@@ -2410,22 +2417,11 @@ pub fn parse_responses_sse_stream_line(
     model_name: &str,
     state: &mut ResponsesSseState,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let line = line.trim();
-    if !line.starts_with("data:") {
+    let Some(data) = parse_sse_data_line(line) else {
         return Ok(None);
-    }
-    let data = line.trim_start_matches("data:").trim();
-    if data.is_empty() || data == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk {
-            raw_payload: None,
-            payload: serde_json::json!({}),
-            done: true,
-            usage: None,
-            stop_reason: None,
-            delta_reasoning: None,
-            delta_tool_calls: Vec::new(),
-            has_content: false,
-        }));
+    };
+    if data == "[DONE]" {
+        return Ok(Some(UpstreamSseChunk::done()));
     }
 
     let value: Value = serde_json::from_str(data)
@@ -2740,17 +2736,9 @@ pub fn parse_atomesus_sse_line(
     created: u64,
     model_name: &str,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') {
-        return Ok(None);
-    }
-    let Some(data_str) = line.strip_prefix("data:") else {
+    let Some(data_str) = parse_sse_data_line(line) else {
         return Ok(None);
     };
-    let data_str = data_str.trim();
-    if data_str.is_empty() {
-        return Ok(None);
-    }
     if data_str == "[DONE]" {
         return Ok(Some(UpstreamSseChunk::done()));
     }

@@ -155,23 +155,9 @@ pub fn anthropic_sse_to_openai_chunks(
 /// - `Err(CoreError::Parse(_))` for malformed JSON or event payload that should
 ///   be a valid event.
 pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>> {
-    let trimmed = line.trim_end_matches(['\r', '\n']);
-
-    // Empty / comment lines are ignored.
-    if trimmed.is_empty() || trimmed.starts_with(':') {
+    let Some(payload) = crate::sse::parse_sse_data_line(line) else {
         return Ok(None);
-    }
-
-    // We're only interested in the `data:` field. Other SSE fields (event:, id:, ...)
-    // are accepted for forward compatibility but ignored here.
-    let payload = match trimmed.strip_prefix("data:") {
-        Some(rest) => rest.trim_start(),
-        None => return Ok(None),
     };
-
-    if payload.is_empty() {
-        return Ok(None);
-    }
 
     // The OpenAI-style [DONE] sentinel is sometimes emitted by intermediate proxies.
     if payload == "[DONE]" {

@@ -13,7 +13,7 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
 use openproxy_types::{
     CoreError, EndpointKind, ImageData, ImageGenerationRequest, ImageGenerationResponse, Result,
-    ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId},
+    ids::{ApiKeyId, RequestId},
 };
 use serde::Deserialize;
 
@@ -35,9 +35,12 @@ pub struct ParsedImageMultipartBody {
 }
 
 pub use crate::unary::{
-    UnaryTarget as ImageTargets, is_target_available, record_unary_usage, resolve_api_key,
+    UnaryTarget as ImageTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
+    is_target_available, map_upstream_status_error, record_unary_usage, resolve_api_key,
     resolve_unary_targets,
 };
+
+pub type ImageUsageArgs<'a> = UnaryUsageArgs<'a>;
 
 pub fn resolve_image_targets(
     db_pool: &DbPool,
@@ -94,43 +97,6 @@ struct HordePollContext<'a> {
     has_alternatives: bool,
 }
 
-pub struct ImageUsageArgs<'a> {
-    pub db_pool: &'a DbPool,
-    pub request_id: RequestId,
-    pub api_key_id: Option<ApiKeyId>,
-    pub provider_id: &'a ProviderId,
-    pub account_id: Option<AccountId>,
-    pub combo_id: Option<ComboId>,
-    pub combo_target_id: Option<ComboTargetId>,
-    pub model_row_id: Option<ModelRowId>,
-    pub upstream_model_id: &'a str,
-    pub status_code: u16,
-    pub error_msg: Option<String>,
-    pub total_ms: u64,
-}
-
-pub fn record_image_usage_row(args: ImageUsageArgs<'_>) {
-    record_unary_usage(
-        args.db_pool,
-        &crate::unary::UnaryUsageArgs {
-            request_id: args.request_id,
-            api_key_id: args.api_key_id,
-            provider_id: args.provider_id,
-            account_id: args.account_id,
-            combo_id: args.combo_id,
-            combo_target_id: args.combo_target_id,
-            model_row_id: args.model_row_id,
-            upstream_model_id: args.upstream_model_id,
-            prompt_tokens: None,
-            completion_tokens: None,
-            status_code: args.status_code,
-            error_msg: args.error_msg,
-            total_ms: args.total_ms,
-            endpoint_kind: EndpointKind::Image,
-        },
-    );
-}
-
 pub async fn dispatch_image_request(
     upstream_client: &Arc<UpstreamClient>,
     adapter: &ProviderAdapterEnum,
@@ -142,26 +108,7 @@ pub async fn dispatch_image_request(
     let payload = adapter.format_image_request(req, upstream_model_id)?;
     let mut upstream_req = UpstreamRequest::post_json(upstream_url, payload);
 
-    for (k, v) in adapter.build_headers(
-        api_key,
-        openproxy_types::TargetFormat::Openai,
-        &openproxy_types::ModelId::new(upstream_model_id),
-    ) {
-        if let (Ok(name), Ok(val)) = (
-            axum::http::HeaderName::from_bytes(k.as_bytes()),
-            axum::http::HeaderValue::from_str(&v),
-        ) {
-            upstream_req.headers.insert(name, val);
-        }
-    }
-
-    for (k, v) in &adapter.config().extra_headers {
-        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
-        {
-            upstream_req.headers.insert(hn, hv);
-        }
-    }
+    apply_adapter_headers(&mut upstream_req, adapter, api_key, upstream_model_id, false);
 
     let cancel = CancellationToken::new();
     upstream_client
@@ -365,25 +312,12 @@ pub async fn execute_image_generation(
                 status_code,
                 err_text
             );
-            let err = if status_code == 429 {
-                CoreError::RateLimited {
-                    provider: target.provider.as_str().to_string(),
-                    retry_after_ms: 1000,
-                    is_proxy_rotated: false,
-                }
-            } else if status_code == 401 || status_code == 403 {
-                CoreError::Auth(err_text.to_string())
-            } else if status_code == 400 {
-                CoreError::Validation(err_text.to_string())
-            } else {
-                CoreError::UpstreamError {
-                    status: status_code,
-                    provider: target.provider.as_str().to_string(),
-                    model: target.upstream_model.clone(),
-                    body: err_text.to_string(),
-                    is_proxy_rotated: false,
-                }
-            };
+            let err = map_upstream_status_error(
+                status_code,
+                target.provider.as_str(),
+                &target.upstream_model,
+                &err_text,
+            );
             last_error = Some(err);
             continue;
         }
@@ -466,20 +400,25 @@ pub async fn execute_image_generation(
 
         // Record usage row in openproxy-db.
         let total_ms = started.elapsed().as_millis() as u64;
-        record_image_usage_row(ImageUsageArgs {
+        record_unary_usage(
             db_pool,
-            request_id,
-            api_key_id,
-            provider_id: &target.provider,
-            account_id: target.account_id,
-            combo_id: target.combo_id,
-            combo_target_id: target.combo_target_id,
-            model_row_id: target.model_row_id,
-            upstream_model_id: &target.upstream_model,
-            status_code,
-            error_msg: None,
-            total_ms,
-        });
+            &UnaryUsageArgs {
+                request_id,
+                api_key_id,
+                provider_id: &target.provider,
+                account_id: target.account_id,
+                combo_id: target.combo_id,
+                combo_target_id: target.combo_target_id,
+                model_row_id: target.model_row_id,
+                upstream_model_id: &target.upstream_model,
+                prompt_tokens: None,
+                completion_tokens: None,
+                status_code,
+                error_msg: None,
+                total_ms,
+                endpoint_kind: EndpointKind::Image,
+            },
+        );
 
         tracing::info!("Image request succeeded after {attempt} attempts");
         return Ok(parsed_response);
@@ -545,29 +484,7 @@ pub async fn dispatch_image_multipart_request(
         bytes::Bytes::from(payload),
     );
 
-    for (k, v) in adapter.build_headers(
-        api_key,
-        openproxy_types::TargetFormat::Openai,
-        &openproxy_types::ModelId::new(upstream_model_id),
-    ) {
-        if k.eq_ignore_ascii_case("content-type") {
-            continue;
-        }
-        if let (Ok(name), Ok(val)) = (
-            axum::http::HeaderName::from_bytes(k.as_bytes()),
-            axum::http::HeaderValue::from_str(&v),
-        ) {
-            upstream_req.headers.insert(name, val);
-        }
-    }
-
-    for (k, v) in &adapter.config().extra_headers {
-        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
-        {
-            upstream_req.headers.insert(hn, hv);
-        }
-    }
+    apply_adapter_headers(&mut upstream_req, adapter, api_key, upstream_model_id, true);
 
     let cancel = CancellationToken::new();
     upstream_client
@@ -885,26 +802,7 @@ async fn dispatch_horde_img2img(
     )?;
 
     let mut upstream_req = UpstreamRequest::post_json(&upstream_url, payload);
-    for (k, v) in adapter.build_headers(
-        api_key,
-        openproxy_types::TargetFormat::Openai,
-        &openproxy_types::ModelId::new(upstream_model_id),
-    ) {
-        if let (Ok(name), Ok(val)) = (
-            axum::http::HeaderName::from_bytes(k.as_bytes()),
-            axum::http::HeaderValue::from_str(&v),
-        ) {
-            upstream_req.headers.insert(name, val);
-        }
-    }
-
-    for (k, v) in &adapter.config().extra_headers {
-        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
-        {
-            upstream_req.headers.insert(hn, hv);
-        }
-    }
+    apply_adapter_headers(&mut upstream_req, adapter, api_key, upstream_model_id, false);
 
     let cancel = CancellationToken::new();
     let resp = upstream_client
@@ -1169,25 +1067,12 @@ async fn execute_image_multipart(
                 status_code,
                 err_text
             );
-            let err = if status_code == 429 {
-                CoreError::RateLimited {
-                    provider: target.provider.as_str().to_string(),
-                    retry_after_ms: 1000,
-                    is_proxy_rotated: false,
-                }
-            } else if status_code == 401 || status_code == 403 {
-                CoreError::Auth(err_text.to_string())
-            } else if status_code == 400 {
-                CoreError::Validation(err_text.to_string())
-            } else {
-                CoreError::UpstreamError {
-                    status: status_code,
-                    provider: target.provider.as_str().to_string(),
-                    model: target.upstream_model.clone(),
-                    body: err_text.to_string(),
-                    is_proxy_rotated: false,
-                }
-            };
+            let err = map_upstream_status_error(
+                status_code,
+                target.provider.as_str(),
+                &target.upstream_model,
+                &err_text,
+            );
             last_error = Some(err);
             continue;
         }
@@ -1275,20 +1160,25 @@ async fn execute_image_multipart(
 
         // Record usage row in openproxy-db.
         let total_ms = started.elapsed().as_millis() as u64;
-        record_image_usage_row(ImageUsageArgs {
-            db_pool: ctx.db_pool,
-            request_id,
-            api_key_id,
-            provider_id: &target.provider,
-            account_id: target.account_id,
-            combo_id: target.combo_id,
-            combo_target_id: target.combo_target_id,
-            model_row_id: target.model_row_id,
-            upstream_model_id: &target.upstream_model,
-            status_code,
-            error_msg: None,
-            total_ms,
-        });
+        record_unary_usage(
+            ctx.db_pool,
+            &UnaryUsageArgs {
+                request_id,
+                api_key_id,
+                provider_id: &target.provider,
+                account_id: target.account_id,
+                combo_id: target.combo_id,
+                combo_target_id: target.combo_target_id,
+                model_row_id: target.model_row_id,
+                upstream_model_id: &target.upstream_model,
+                prompt_tokens: None,
+                completion_tokens: None,
+                status_code,
+                error_msg: None,
+                total_ms,
+                endpoint_kind: EndpointKind::Image,
+            },
+        );
 
         tracing::info!("Image multipart request succeeded after {attempt} attempts, url={upstream_url}");
         return Ok(parsed_response);
@@ -1611,6 +1501,7 @@ async fn poll_horde_image_generation(
 mod tests {
     use super::*;
     use openproxy_db as core_db;
+    use openproxy_types::ids::ProviderId;
     use std::path::PathBuf;
 
     fn fresh_pool() -> (core_db::DbPool, PathBuf) {
@@ -1647,20 +1538,25 @@ mod tests {
     fn test_record_image_usage_row() {
         let (pool, _dir) = fresh_pool();
         let provider = ProviderId::new("openai");
-        record_image_usage_row(ImageUsageArgs {
-            db_pool: &pool,
-            request_id: RequestId::new(),
-            api_key_id: None,
-            provider_id: &provider,
-            account_id: None,
-            combo_id: None,
-            combo_target_id: None,
-            model_row_id: None,
-            upstream_model_id: "dall-e-3",
-            status_code: 200,
-            error_msg: None,
-            total_ms: 120,
-        });
+        record_unary_usage(
+            &pool,
+            &UnaryUsageArgs {
+                request_id: RequestId::new(),
+                api_key_id: None,
+                provider_id: &provider,
+                account_id: None,
+                combo_id: None,
+                combo_target_id: None,
+                model_row_id: None,
+                upstream_model_id: "dall-e-3",
+                prompt_tokens: None,
+                completion_tokens: None,
+                status_code: 200,
+                error_msg: None,
+                total_ms: 120,
+                endpoint_kind: EndpointKind::Image,
+            },
+        );
 
         let r = pool.reader();
         let count: i64 = r

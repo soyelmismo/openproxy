@@ -49,59 +49,24 @@ pub async fn update_api_key(
         });
     let scopes_slice: Option<&[String]> = scopes_owned.as_deref();
 
-    // `allowed_models`: absent = no-op; present + null = clear to NULL;
+    // Tri-state array fields: absent = no-op; present + null = clear to NULL;
     // present + array = set to that array.
-    let allowed_models_owned: Option<Option<Vec<String>>> = body.get("allowed_models").map(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_array().map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-        }
-    });
-    let allowed_models_slice: Option<Option<&[String]>> =
-        allowed_models_owned.as_ref().map(|o| o.as_deref());
+    let allowed_models_owned =
+        extract_tristate_array(&body, "allowed_models", |x| x.as_str().map(String::from));
+    let allowed_models_slice = allowed_models_owned.as_ref().map(|o| o.as_deref());
 
-    let allowed_combos_owned: Option<Option<Vec<i64>>> = body.get("allowed_combos").map(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_array()
-                .map(|a| a.iter().filter_map(serde_json::Value::as_i64).collect())
-        }
-    });
-    let allowed_combos_slice: Option<Option<&[i64]>> =
-        allowed_combos_owned.as_ref().map(|o| o.as_deref());
+    let allowed_combos_owned =
+        extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
+    let allowed_combos_slice = allowed_combos_owned.as_ref().map(|o| o.as_deref());
 
-    let blacklisted_providers_owned: Option<Option<Vec<String>>> = body.get("blacklisted_providers").map(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_array().map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-        }
-    });
-    let blacklisted_providers_slice: Option<Option<&[String]>> =
+    let blacklisted_providers_owned =
+        extract_tristate_array(&body, "blacklisted_providers", |x| x.as_str().map(String::from));
+    let blacklisted_providers_slice =
         blacklisted_providers_owned.as_ref().map(|o| o.as_deref());
 
-    let blacklisted_models_owned: Option<Option<Vec<String>>> = body.get("blacklisted_models").map(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_array().map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-        }
-    });
-    let blacklisted_models_slice: Option<Option<&[String]>> =
+    let blacklisted_models_owned =
+        extract_tristate_array(&body, "blacklisted_models", |x| x.as_str().map(String::from));
+    let blacklisted_models_slice =
         blacklisted_models_owned.as_ref().map(|o| o.as_deref());
 
     let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
@@ -182,4 +147,20 @@ pub async fn api_key_usage(
         "key": head,
         "summary": detailed,
     })))
+}
+
+#[allow(clippy::option_option)]
+fn extract_tristate_array<T>(
+    body: &serde_json::Value,
+    key: &str,
+    extractor: impl Fn(&serde_json::Value) -> Option<T>,
+) -> Option<Option<Vec<T>>> {
+    body.get(key).map(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_array()
+                .map(|a| a.iter().filter_map(&extractor).collect())
+        }
+    })
 }

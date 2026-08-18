@@ -4,11 +4,13 @@
 use std::fmt::Write as _;
 use std::time::Instant;
 
+use openproxy_adapters::adapters::ProviderAdapterEnum;
+use openproxy_adapters::upstream::UpstreamRequest;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry, Health};
 use openproxy_types::{
-    CoreError, EndpointKind, Result, UsageInput,
+    CoreError, EndpointKind, ModelId, Result, TargetFormat, UsageInput,
     ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId},
 };
 
@@ -26,6 +28,13 @@ pub struct UnaryTarget {
     pub upstream_model: String,
     pub combo_id: Option<ComboId>,
 }
+
+pub type AudioTarget = UnaryTarget;
+pub type AudioTargets = UnaryTarget;
+pub type ImageTarget = UnaryTarget;
+pub type ImageTargets = UnaryTarget;
+pub type EmbeddingTarget = UnaryTarget;
+pub type EmbeddingTargets = UnaryTarget;
 
 pub fn resolve_unary_targets(
     db_pool: &DbPool,
@@ -257,6 +266,67 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
     let _ = cost::record(&w, &input);
 }
 
+pub fn apply_adapter_headers(
+    req: &mut UpstreamRequest,
+    adapter: &ProviderAdapterEnum,
+    api_key: &str,
+    upstream_model_id: &str,
+    skip_content_type: bool,
+) {
+    for (k, v) in adapter.build_headers(
+        api_key,
+        TargetFormat::Openai,
+        &ModelId::new(upstream_model_id),
+    ) {
+        if skip_content_type && k.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        if let (Ok(name), Ok(val)) = (
+            axum::http::HeaderName::from_bytes(k.as_bytes()),
+            axum::http::HeaderValue::from_str(&v),
+        ) {
+            req.headers.insert(name, val);
+        }
+    }
+
+    for (k, v) in &adapter.config().extra_headers {
+        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
+            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
+        {
+            req.headers.insert(hn, hv);
+        }
+    }
+}
+
+pub fn map_upstream_status_error(
+    status_code: u16,
+    provider: &str,
+    model: &str,
+    err_body: &str,
+) -> CoreError {
+    let body_msg = if err_body.trim().is_empty() {
+        format!("upstream status {status_code}")
+    } else {
+        err_body.to_string()
+    };
+    match status_code {
+        429 => CoreError::RateLimited {
+            provider: provider.to_string(),
+            retry_after_ms: 1000,
+            is_proxy_rotated: false,
+        },
+        401 | 403 => CoreError::Auth(body_msg),
+        400 => CoreError::Validation(body_msg),
+        _ => CoreError::UpstreamError {
+            status: status_code,
+            provider: provider.to_string(),
+            model: model.to_string(),
+            body: body_msg,
+            is_proxy_rotated: false,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +378,32 @@ mod tests {
         let (pool, _path) = open_test_pool();
         let cb = CircuitBreakerRegistry::new(&CircuitBreakerConfig::default());
         assert!(is_target_available(&pool, &cb, None, None));
+    }
+
+    #[test]
+    fn test_map_upstream_status_error() {
+        let err_429 = map_upstream_status_error(429, "openai", "gpt-4o", "rate limited");
+        assert!(matches!(err_429, CoreError::RateLimited { .. }));
+
+        let err_401 = map_upstream_status_error(401, "openai", "gpt-4o", "unauthorized");
+        assert!(matches!(err_401, CoreError::Auth(_)));
+
+        let err_403 = map_upstream_status_error(403, "openai", "gpt-4o", "forbidden");
+        assert!(matches!(err_403, CoreError::Auth(_)));
+
+        let err_400 = map_upstream_status_error(400, "openai", "gpt-4o", "bad request");
+        assert!(matches!(err_400, CoreError::Validation(_)));
+
+        let err_500 = map_upstream_status_error(500, "openai", "gpt-4o", "server error");
+        assert!(matches!(err_500, CoreError::UpstreamError { status: 500, .. }));
+
+        let err_empty = map_upstream_status_error(502, "openai", "gpt-4o", "");
+        match err_empty {
+            CoreError::UpstreamError { status, body, .. } => {
+                assert_eq!(status, 502);
+                assert_eq!(body, "upstream status 502");
+            }
+            _ => panic!("expected UpstreamError"),
+        }
     }
 }

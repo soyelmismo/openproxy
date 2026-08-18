@@ -166,6 +166,10 @@ async fn put_runtime_timeouts_without_auth_returns_401() {
     let (state, _plaintext) = make_state_with_key(&dir).await;
     let app = Router::new()
         .route("/admin/config/timeouts", put(put_runtime_timeouts))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admin_auth_middleware,
+        ))
         .with_state(state);
     let body = serde_json::json!({
         "connect_ms": 1_u64, "request_send_ms": 2_u64, "ttft_ms": 3_u64,

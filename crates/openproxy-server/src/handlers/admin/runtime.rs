@@ -28,7 +28,6 @@ pub async fn admin_health() -> Json<serde_json::Value> {
 
 pub async fn get_runtime_config(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
 ) -> Result<Json<RuntimeConfigResponse>, ApiError> {
     let cfg = s.config();
     Ok(Json(RuntimeConfigResponse {
@@ -45,7 +44,6 @@ pub async fn get_runtime_config(
 
 pub async fn put_runtime_timeouts(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
     Json(body): Json<TimeoutsConfig>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // 1. Persist to DB first. The UPSERT is atomic in SQLite.
@@ -75,7 +73,6 @@ pub async fn put_runtime_timeouts(
 
 pub async fn put_runtime_compression(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
     Json(body): Json<openproxy_compression::CompressionMode>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     {
@@ -92,7 +89,6 @@ pub async fn put_runtime_compression(
 
 pub async fn put_idle_chunk_retryable(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let val = body
@@ -121,7 +117,6 @@ pub async fn put_idle_chunk_retryable(
 
 pub async fn put_runtime_quota_protection(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
     Json(body): Json<openproxy_types::config::QuotaProtectionConfig>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     {
@@ -146,7 +141,6 @@ pub async fn put_runtime_quota_protection(
 
 pub async fn get_maintenance_config(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cfg = s.maintenance_config();
     let status = s.vacuum_status();
@@ -160,7 +154,6 @@ pub async fn get_maintenance_config(
 
 pub async fn put_maintenance_config(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut cfg = s.maintenance_config();
@@ -189,14 +182,12 @@ pub async fn put_maintenance_config(
 
 pub async fn get_vacuum_status(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
 ) -> Result<Json<crate::state::VacuumStatus>, ApiError> {
     Ok(Json(s.vacuum_status()))
 }
 
 pub async fn get_recording_ttl(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(serde_json::json!({
         "recording_ttl_secs": s.recording_ttl_secs(),
@@ -205,7 +196,6 @@ pub async fn get_recording_ttl(
 
 pub async fn put_recording_ttl(
     State(s): State<AppState>,
-    _auth: crate::extractors::AdminAuth,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let ttl_secs = body
