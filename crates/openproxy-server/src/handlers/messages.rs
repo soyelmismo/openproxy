@@ -14,7 +14,7 @@ use crate::{
 
 pub fn router(state: &AppState) -> axum::Router<AppState> {
     axum::Router::new().route(
-        "/",
+        "/messages",
         super::chat_endpoint(state, anthropic_messages),
     )
 }

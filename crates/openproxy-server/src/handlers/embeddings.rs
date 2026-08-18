@@ -15,7 +15,7 @@ use openproxy_types::{CoreError, embeddings::EmbeddingRequest};
 use crate::{error::ApiError, state::AppState};
 
 pub fn router() -> axum::Router<AppState> {
-    axum::Router::new().route("/", axum::routing::post(create_embeddings))
+    axum::Router::new().route("/embeddings", axum::routing::post(create_embeddings))
 }
 
 /// `POST /v1/embeddings`.

@@ -33,7 +33,7 @@ use openproxy_types::CoreError;
 use crate::{error::ApiError, state::AppState};
 
 pub fn router() -> axum::Router<AppState> {
-    axum::Router::new().route("/", axum::routing::get(list_models))
+    axum::Router::new().route("/models", axum::routing::get(list_models))
 }
 
 /// Default context length to report when neither the DB column nor

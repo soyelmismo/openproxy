@@ -62,11 +62,13 @@ where
 
 /// Assembles all public API sub-routers into the unified public API router under `/v1`.
 pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
-    axum::Router::new()
-        .nest("/v1/models", models::router())
-        .nest("/v1/chat", chat::router(state))
-        .nest("/v1/messages", messages::router(state))
-        .nest("/v1/audio", audio::router())
-        .nest("/v1/embeddings", embeddings::router())
-        .nest("/v1/images", images::router())
+    let v1_routes = axum::Router::new()
+        .merge(models::router())
+        .merge(messages::router(state))
+        .merge(embeddings::router())
+        .nest("/chat", chat::router(state))
+        .nest("/audio", audio::router())
+        .nest("/images", images::router());
+
+    axum::Router::new().nest("/v1", v1_routes)
 }
