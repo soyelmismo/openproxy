@@ -866,4 +866,93 @@ mod tests {
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].provider_id.as_str(), "p1");
     }
+
+    #[test]
+    fn test_core_error_from_code() {
+        use openproxy_types::CancelReason;
+
+        // String error mappings
+        assert!(matches!(
+            core_error_from_code("auth", "unauthorized"),
+            Some(CoreError::Auth(msg)) if msg == "unauthorized"
+        ));
+        assert!(matches!(
+            core_error_from_code("validation", "invalid param"),
+            Some(CoreError::Validation(msg)) if msg == "invalid param"
+        ));
+        assert!(matches!(
+            core_error_from_code("provider_not_found", "missing provider"),
+            Some(CoreError::ProviderNotFound(msg)) if msg == "missing provider"
+        ));
+        assert!(matches!(
+            core_error_from_code("upstream_connection", "conn reset"),
+            Some(CoreError::UpstreamConnection(msg)) if msg == "conn reset"
+        ));
+        assert!(matches!(
+            core_error_from_code("parse_error", "bad json"),
+            Some(CoreError::Parse(msg)) if msg == "bad json"
+        ));
+        assert!(matches!(
+            core_error_from_code("config", "bad cfg"),
+            Some(CoreError::Config(msg)) if msg == "bad cfg"
+        ));
+        assert!(matches!(
+            core_error_from_code("database", "sqlite lock"),
+            Some(CoreError::Internal(msg)) if msg == "sqlite lock"
+        ));
+        assert!(matches!(
+            core_error_from_code("migration", "mismatch"),
+            Some(CoreError::Internal(msg)) if msg == "mismatch"
+        ));
+        assert!(matches!(
+            core_error_from_code("internal", "panic"),
+            Some(CoreError::Internal(msg)) if msg == "panic"
+        ));
+
+        // ID error mappings
+        assert!(matches!(
+            core_error_from_code("account_not_found", "42"),
+            Some(CoreError::AccountNotFound(42))
+        ));
+        assert!(core_error_from_code("account_not_found", "invalid").is_none());
+        assert!(matches!(
+            core_error_from_code("combo_not_found", "100"),
+            Some(CoreError::ComboNotFound(100))
+        ));
+        assert!(core_error_from_code("combo_not_found", "not_an_id").is_none());
+        assert!(matches!(
+            core_error_from_code("no_healthy_targets", "5"),
+            Some(CoreError::NoHealthyTargets(5))
+        ));
+        assert!(core_error_from_code("no_healthy_targets", "nan").is_none());
+
+        // Custom mappings
+        assert!(matches!(
+            core_error_from_code("model_not_found", "gpt-4"),
+            Some(CoreError::ModelNotFound { model, .. }) if model == "gpt-4"
+        ));
+        assert!(matches!(
+            core_error_from_code("upstream_timeout", "timeout msg"),
+            Some(CoreError::UpstreamTimeout { .. })
+        ));
+        assert!(matches!(
+            core_error_from_code("upstream_error", "server 500"),
+            Some(CoreError::UpstreamError { body, .. }) if body == "server 500"
+        ));
+        assert!(matches!(
+            core_error_from_code("rate_limited", "slow down"),
+            Some(CoreError::RateLimited { .. })
+        ));
+        assert!(matches!(
+            core_error_from_code("client_disconnected", "drop"),
+            Some(CoreError::Cancelled(CancelReason::ClientDisconnected))
+        ));
+        assert!(matches!(
+            core_error_from_code("race_lost", "lost"),
+            Some(CoreError::RaceLost)
+        ));
+
+        // Unknown code
+        assert!(core_error_from_code("unrecognized_code", "some error").is_none());
+    }
 }

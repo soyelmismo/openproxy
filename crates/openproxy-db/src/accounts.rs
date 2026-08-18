@@ -76,11 +76,9 @@ pub fn create(
 
 pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<Option<Account>> {
     let row = conn
-        .query_row(
-            account_select!("WHERE id = ?1"),
-            params![id.0],
-            |row| row_to_account(row, master_key),
-        )
+        .query_row(account_select!("WHERE id = ?1"), params![id.0], |row| {
+            row_to_account(row, master_key)
+        })
         .optional()
         .map_err(crate::error::map_db_error_ctx(format!(
             "get account {}",

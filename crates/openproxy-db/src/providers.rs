@@ -3,17 +3,6 @@ use openproxy_types::{
 };
 use rusqlite::{Connection, params};
 
-#[derive(Debug)]
-struct FromStrError(String);
-
-impl std::fmt::Display for FromStrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FromStr error: {}", self.0)
-    }
-}
-
-impl std::error::Error for FromStrError {}
-
 #[derive(Debug, Clone, Copy)]
 pub struct NewProvider<'a> {
     pub id: &'a ProviderId,
@@ -97,60 +86,22 @@ pub fn update_current_proxy(
 }
 
 fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
-    let id: String = row.get(0)?;
-    let name: String = row.get(1)?;
-    let base_url: String = row.get(2)?;
-    let auth_type_str: String = row.get(3)?;
-    let format_str: String = row.get(4)?;
-    let extra_headers_json: Option<String> = row.get(5)?;
-    let auto_activate_keyword: Option<String> = row.get(6)?;
-    let active_val: i64 = row.get(7)?;
-    let created_at: String = row.get(8)?;
-    let use_proxies_val: i64 = row.get(9)?;
-    let current_proxy_id: Option<String> = row.get(10)?;
-    let proxy_rotation_errors: String = row.get(11)?;
-    let rate_limit_scope_str: String = row.get(12)?;
-    let proxy_rotation_mode: String = row.get(13)?;
-    let favicon_base64: Option<String> = row.get(14)?;
-
-    let auth_type = AuthType::parse(&auth_type_str).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
-    let format = ProviderFormat::parse(&format_str).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            4,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
-    let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope_str).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            12,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
-
-    Ok(Provider {
-        id: ProviderId::new(id),
-        name,
-        base_url,
-        auth_type,
-        format,
-        extra_headers_json,
-        auto_activate_keyword,
-        active: active_val != 0,
-        created_at,
-        use_proxies: use_proxies_val != 0,
-        current_proxy_id,
-        proxy_rotation_errors,
-        rate_limit_scope,
-        proxy_rotation_mode,
-        favicon_base64,
+    crate::map_row_struct!(row, Provider {
+        id: @id_str(0, ProviderId),
+        name: 1,
+        base_url: 2,
+        auth_type: @enum_parse(3, AuthType),
+        format: @enum_parse(4, ProviderFormat),
+        extra_headers_json: 5,
+        auto_activate_keyword: 6,
+        active: @bool(7),
+        created_at: 8,
+        use_proxies: @bool(9),
+        current_proxy_id: 10,
+        proxy_rotation_errors: 11,
+        rate_limit_scope: @enum_parse(12, RateLimitScope),
+        proxy_rotation_mode: 13,
+        favicon_base64: 14,
     })
 }
 

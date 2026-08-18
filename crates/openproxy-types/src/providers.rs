@@ -54,6 +54,20 @@ impl_string_enum! {
     error: "provider format"
 }
 
+impl ProviderFormat {
+    /// Return the default target format for this provider format.
+    #[inline]
+    pub const fn default_target_format(&self) -> TargetFormat {
+        match self {
+            Self::Anthropic => TargetFormat::Anthropic,
+            Self::Gemini => TargetFormat::Gemini,
+            Self::Responses => TargetFormat::Responses,
+            Self::Atomesus => TargetFormat::Atomesus,
+            Self::Openai | Self::Mixed => TargetFormat::Openai,
+        }
+    }
+}
+
 impl_string_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
@@ -162,6 +176,34 @@ mod tests {
         assert_eq!(
             ProviderFormat::parse("invalid").unwrap_err(),
             "invalid provider format: invalid"
+        );
+    }
+
+    #[test]
+    fn test_provider_format_default_target_format() {
+        assert_eq!(
+            ProviderFormat::Openai.default_target_format(),
+            TargetFormat::Openai
+        );
+        assert_eq!(
+            ProviderFormat::Anthropic.default_target_format(),
+            TargetFormat::Anthropic
+        );
+        assert_eq!(
+            ProviderFormat::Gemini.default_target_format(),
+            TargetFormat::Gemini
+        );
+        assert_eq!(
+            ProviderFormat::Responses.default_target_format(),
+            TargetFormat::Responses
+        );
+        assert_eq!(
+            ProviderFormat::Atomesus.default_target_format(),
+            TargetFormat::Atomesus
+        );
+        assert_eq!(
+            ProviderFormat::Mixed.default_target_format(),
+            TargetFormat::Openai
         );
     }
 

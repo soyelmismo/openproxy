@@ -32,39 +32,32 @@ pub async fn notifications_unread_count(
     Ok(Json(serde_json::json!({ "count": count })))
 }
 
-pub async fn mark_notification_read(
-    DbWriter(w): DbWriter,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    openproxy_core::notifications::mark_read(&w, id)
-        .map_err(|e| CoreError::Internal(format!("core_notifications::mark_read: {e}")))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+macro_rules! notif_action_handler {
+    (by_id: $fn_name:ident, $core_fn:ident) => {
+        pub async fn $fn_name(
+            DbWriter(w): DbWriter,
+            Path(id): Path<i64>,
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            openproxy_core::notifications::$core_fn(&w, id)
+                .map_err(|e| CoreError::Internal(format!("core_notifications::{}: {e}", stringify!($core_fn))))?;
+            Ok(Json(serde_json::json!({ "ok": true })))
+        }
+    };
+    (all: $fn_name:ident, $core_fn:ident) => {
+        pub async fn $fn_name(
+            DbWriter(w): DbWriter,
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            let updated = openproxy_core::notifications::$core_fn(&w)
+                .map_err(|e| CoreError::Internal(format!("core_notifications::{}: {e}", stringify!($core_fn))))?;
+            Ok(Json(serde_json::json!({ "updated": updated })))
+        }
+    };
 }
 
-pub async fn mark_all_notifications_read(
-    DbWriter(w): DbWriter,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let updated = openproxy_core::notifications::mark_all_read(&w)
-        .map_err(|e| CoreError::Internal(format!("core_notifications::mark_all_read: {e}")))?;
-    Ok(Json(serde_json::json!({ "updated": updated })))
-}
-
-pub async fn archive_all_notifications(
-    DbWriter(w): DbWriter,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let updated = openproxy_core::notifications::archive_all(&w)
-        .map_err(|e| CoreError::Internal(format!("core_notifications::archive_all: {e}")))?;
-    Ok(Json(serde_json::json!({ "updated": updated })))
-}
-
-pub async fn archive_notification(
-    DbWriter(w): DbWriter,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    openproxy_core::notifications::archive(&w, id)
-        .map_err(|e| CoreError::Internal(format!("core_notifications::archive: {e}")))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
-}
+notif_action_handler!(by_id: mark_notification_read, mark_read);
+notif_action_handler!(all: mark_all_notifications_read, mark_all_read);
+notif_action_handler!(all: archive_all_notifications, archive_all);
+notif_action_handler!(by_id: archive_notification, archive);
 
 pub async fn delete_notification(
     DbWriter(w): DbWriter,

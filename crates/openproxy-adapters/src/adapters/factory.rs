@@ -20,7 +20,57 @@ impl AdapterFactory {
 
     /// Instantiate a built-in adapter by provider ID.
     pub fn create_builtin(&self, id: &ProviderId) -> Option<ProviderAdapterEnum> {
-        builtin_adapters().into_iter().find(|a| a.id() == id)
+        match id.as_str() {
+            "antigravity" => Some(ProviderAdapterEnum::Antigravity(
+                crate::adapters::antigravity::AntigravityAdapter::new(),
+            )),
+            "atomesus" => Some(ProviderAdapterEnum::Atomesus(
+                crate::adapters::atomesus::AtomesusAdapter::new(),
+            )),
+            "cline" => Some(ProviderAdapterEnum::Cline(
+                crate::adapters::cline::ClineAdapter::new(),
+            )),
+            "cloudflare-workers-ai" => Some(ProviderAdapterEnum::CloudflareWorkersAI(
+                crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter::new(),
+            )),
+            "codex" => Some(ProviderAdapterEnum::Codex(
+                crate::adapters::codex::CodexAdapter::new(),
+            )),
+            "gemini" => Some(ProviderAdapterEnum::Gemini(
+                crate::adapters::gemini::GeminiAdapter::new(),
+            )),
+            "horde" => Some(ProviderAdapterEnum::Horde(
+                crate::adapters::horde::HordeAdapter::new(),
+            )),
+            "kilocode" => Some(ProviderAdapterEnum::Kilocode(
+                crate::adapters::kilocode::KilocodeAdapter::new(),
+            )),
+            "kiro" => Some(ProviderAdapterEnum::Kiro(
+                crate::adapters::kiro_ai::KiroAdapter::new(),
+            )),
+            "minimax" => Some(ProviderAdapterEnum::MiniMax(
+                crate::adapters::minimax::MiniMaxAdapter::new(),
+            )),
+            "nous-research" => Some(ProviderAdapterEnum::NousResearch(
+                crate::adapters::nous_research::NousResearchAdapter::new(),
+            )),
+            "nvidia-nim" => Some(ProviderAdapterEnum::NvidiaNim(
+                crate::adapters::nvidia_nim::NvidiaNimAdapter::new(),
+            )),
+            "ollama-cloud" => Some(ProviderAdapterEnum::OllamaCloud(
+                crate::adapters::ollama_cloud::OllamaCloudAdapter::new(),
+            )),
+            "opencode-go" => Some(ProviderAdapterEnum::OpenCodeGo(
+                crate::adapters::opencode_go::OpenCodeGoAdapter::new(),
+            )),
+            "opencode-zen" => Some(ProviderAdapterEnum::OpenCodeZen(
+                crate::adapters::opencode_zen::OpenCodeZenAdapter::new(),
+            )),
+            "openrouter" => Some(ProviderAdapterEnum::OpenRouter(
+                crate::adapters::openrouter::OpenRouterAdapter::new(),
+            )),
+            _ => None,
+        }
     }
 
     /// Instantiate an adapter dynamically based on static configuration.
@@ -47,6 +97,12 @@ mod tests {
 
         let nonexistent = factory.create_builtin(&ProviderId::new("nonexistent"));
         assert!(nonexistent.is_none());
+
+        for builtin in factory.create_all() {
+            let created = factory.create_builtin(builtin.id());
+            assert!(created.is_some(), "missing builtin for {}", builtin.id());
+            assert_eq!(created.unwrap().id(), builtin.id());
+        }
     }
 
     #[test]

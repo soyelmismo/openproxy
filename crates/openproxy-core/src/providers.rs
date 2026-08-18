@@ -196,7 +196,10 @@ pub fn extract_domain(base_url: &str) -> Option<String> {
         .or_else(|| trimmed.strip_prefix("http://"))
         .unwrap_or(trimmed);
     let host_part = stripped.split_once('/').map_or(stripped, |(h, _)| h);
-    let host = host_part.split_once(':').map_or(host_part, |(h, _)| h).trim();
+    let host = host_part
+        .split_once(':')
+        .map_or(host_part, |(h, _)| h)
+        .trim();
     if host.is_empty() {
         None
     } else {

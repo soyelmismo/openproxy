@@ -167,13 +167,8 @@ fn handle_streaming_response(
     done_tx: tokio::sync::oneshot::Sender<()>,
     rx: tokio::sync::mpsc::Receiver<Bytes>,
 ) -> axum::response::Response {
-    let merged = PipelineRunner::spawn_streaming_bridge(
-        pipeline,
-        req,
-        done_tx,
-        rx,
-        TargetFormat::Openai,
-    );
+    let merged =
+        PipelineRunner::spawn_streaming_bridge(pipeline, req, done_tx, rx, TargetFormat::Openai);
 
     let sse_stream = SseBytesStream {
         inner: merged,

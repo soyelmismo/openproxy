@@ -45,102 +45,122 @@ pub async fn get_runtime_config(
     }))
 }
 
-pub async fn put_runtime_timeouts(
-    State(s): State<AppState>,
-    Json(body): Json<TimeoutsConfig>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    // 1. Persist to DB first. The UPSERT is atomic in SQLite.
-    //    We let the application timestamp it (rather than relying
-    //    on `strftime('%s','now')`) so the value matches what
-    //    `load_timeouts_override_from_db` expects on the next
-    //    boot: an `i64` unix seconds.
-    {
-        let w = s.db_pool().writer();
-        let now = chrono::Utc::now().timestamp();
-        core_db::app_config::save_timeouts_to_db(&w, &body, now)?;
-    }
-    // 2. Update the in-memory slot. Readers see the new value
-    //    as soon as this returns. Note: requests already in
-    //    flight captured a `Copy` of the old value into their
-    //    PipelineConfig and are unaffected.
-    s.set_timeouts(body);
-    Ok(Json(serde_json::json!({
-        "connect_ms": body.connect_ms,
-        "request_send_ms": body.request_send_ms,
-        "ttft_ms": body.ttft_ms,
-        "idle_chunk_ms": body.idle_chunk_ms,
-        "total_ms": body.total_ms,
-        "applies_to": "next_requests",
-    })))
+macro_rules! runtime_config_put {
+    (
+        $fn_name:ident($body:ident: $body_ty:ty) {
+            save: $save_fn:path,
+            state: $set_fn:ident,
+            $(log: $log_expr:expr,)?
+            response: $resp:expr $(,)?
+        }
+    ) => {
+        pub async fn $fn_name(
+            State(s): State<AppState>,
+            Json($body): Json<$body_ty>,
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            {
+                let w = s.db_pool().writer();
+                let now = chrono::Utc::now().timestamp();
+                $save_fn(&w, &$body, now)?;
+            }
+            $($log_expr;)?
+            let resp = $resp;
+            s.$set_fn($body);
+            Ok(Json(resp))
+        }
+    };
+    (
+        $fn_name:ident(Json($body:ident)) -> $val:ident {
+            extract: $extract:expr,
+            save: $save_fn:path,
+            state: $set_fn:ident,
+            $(log: $log_expr:expr,)?
+            response: $resp:expr $(,)?
+        }
+    ) => {
+        pub async fn $fn_name(
+            State(s): State<AppState>,
+            Json($body): Json<serde_json::Value>,
+        ) -> Result<Json<serde_json::Value>, ApiError> {
+            let $val = $extract;
+            {
+                let w = s.db_pool().writer();
+                let now = chrono::Utc::now().timestamp();
+                $save_fn(&w, $val, now)?;
+            }
+            $($log_expr;)?
+            let resp = $resp;
+            s.$set_fn($val);
+            Ok(Json(resp))
+        }
+    };
 }
 
-pub async fn put_runtime_compression(
-    State(s): State<AppState>,
-    Json(body): Json<openproxy_compression::CompressionMode>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    {
-        let w = s.db_pool().writer();
-        let now = chrono::Utc::now().timestamp();
-        core_db::app_config::save_compression_to_db(&w, &body, now)?;
+runtime_config_put!(
+    put_runtime_timeouts(body: TimeoutsConfig) {
+        save: core_db::app_config::save_timeouts_to_db,
+        state: set_timeouts,
+        response: serde_json::json!({
+            "connect_ms": body.connect_ms,
+            "request_send_ms": body.request_send_ms,
+            "ttft_ms": body.ttft_ms,
+            "idle_chunk_ms": body.idle_chunk_ms,
+            "total_ms": body.total_ms,
+            "applies_to": "next_requests",
+        }),
     }
-    s.set_compression_mode(body);
-    Ok(Json(serde_json::json!({
-        "mode": body,
-        "applies_to": "next_requests",
-    })))
-}
+);
 
-pub async fn put_idle_chunk_retryable(
-    State(s): State<AppState>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let val = body
-        .get("idle_chunk_retryable")
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| {
-            ApiError(CoreError::Validation(
-                "idle_chunk_retryable must be a boolean".into(),
-            ))
-        })?;
-    {
-        let w = s.db_pool().writer();
-        let now = chrono::Utc::now().timestamp();
-        core_db::app_config::save_idle_chunk_retryable_to_db(&w, val, now)?;
+runtime_config_put!(
+    put_runtime_compression(body: openproxy_compression::CompressionMode) {
+        save: core_db::app_config::save_compression_to_db,
+        state: set_compression_mode,
+        response: serde_json::json!({
+            "mode": body,
+            "applies_to": "next_requests",
+        }),
     }
-    s.set_idle_chunk_retryable(val);
-    tracing::info!(
-        idle_chunk_retryable = val,
-        "updated idle_chunk_retryable via admin API"
-    );
-    Ok(Json(serde_json::json!({
-        "idle_chunk_retryable": val,
-        "applies_to": "next_requests",
-    })))
-}
+);
 
-pub async fn put_runtime_quota_protection(
-    State(s): State<AppState>,
-    Json(body): Json<openproxy_types::config::QuotaProtectionConfig>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    {
-        let w = s.db_pool().writer();
-        let now = chrono::Utc::now().timestamp();
-        openproxy_db::app_config::save_quota_protection_to_db(&w, &body, now)?;
+runtime_config_put!(
+    put_idle_chunk_retryable(Json(body)) -> val {
+        extract: body
+            .get("idle_chunk_retryable")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "idle_chunk_retryable must be a boolean".into(),
+                ))
+            })?,
+        save: core_db::app_config::save_idle_chunk_retryable_to_db,
+        state: set_idle_chunk_retryable,
+        log: tracing::info!(
+            idle_chunk_retryable = val,
+            "updated idle_chunk_retryable via admin API"
+        ),
+        response: serde_json::json!({
+            "idle_chunk_retryable": val,
+            "applies_to": "next_requests",
+        }),
     }
-    let enabled = body.enabled;
-    let threshold_percentage = body.threshold_percentage;
-    s.set_quota_protection(body);
-    tracing::info!(
-        enabled,
-        threshold_percentage,
-        "updated quota_protection via admin API"
-    );
-    Ok(Json(serde_json::json!({
-        "enabled": enabled,
-        "threshold_percentage": threshold_percentage,
-        "applies_to": "next_requests",
-    })))
-}
+);
+
+runtime_config_put!(
+    put_runtime_quota_protection(body: openproxy_types::config::QuotaProtectionConfig) {
+        save: core_db::app_config::save_quota_protection_to_db,
+        state: set_quota_protection,
+        log: tracing::info!(
+            enabled = body.enabled,
+            threshold_percentage = body.threshold_percentage,
+            "updated quota_protection via admin API"
+        ),
+        response: serde_json::json!({
+            "enabled": body.enabled,
+            "threshold_percentage": body.threshold_percentage,
+            "applies_to": "next_requests",
+        }),
+    }
+);
 
 pub async fn get_maintenance_config(
     State(s): State<AppState>,
@@ -203,27 +223,25 @@ pub async fn get_recording_ttl(
     })))
 }
 
-pub async fn put_recording_ttl(
-    State(s): State<AppState>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let ttl_secs = body
-        .get("recording_ttl_secs")
-        .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| CoreError::Validation("missing 'recording_ttl_secs' integer".into()))?;
-    if ttl_secs < 0 {
-        return Err(
-            CoreError::Validation("'recording_ttl_secs' must be non-negative".into()).into(),
-        );
+runtime_config_put!(
+    put_recording_ttl(Json(body)) -> ttl_secs {
+        extract: {
+            let ttl = body
+                .get("recording_ttl_secs")
+                .and_then(serde_json::Value::as_i64)
+                .ok_or_else(|| CoreError::Validation("missing 'recording_ttl_secs' integer".into()))?;
+            if ttl < 0 {
+                return Err(
+                    CoreError::Validation("'recording_ttl_secs' must be non-negative".into()).into(),
+                );
+            }
+            ttl
+        },
+        save: core_db::app_config::save_recording_ttl_to_db,
+        state: set_recording_ttl_secs,
+        response: serde_json::json!({
+            "recording_ttl_secs": ttl_secs,
+            "applies_to": "next_prune_tick",
+        }),
     }
-    {
-        let w = s.db_pool().writer();
-        let now = chrono::Utc::now().timestamp();
-        core_db::app_config::save_recording_ttl_to_db(&w, ttl_secs, now)?;
-    }
-    s.set_recording_ttl_secs(ttl_secs);
-    Ok(Json(serde_json::json!({
-        "recording_ttl_secs": ttl_secs,
-        "applies_to": "next_prune_tick",
-    })))
-}
+);

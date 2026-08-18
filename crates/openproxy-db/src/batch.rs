@@ -255,7 +255,7 @@ where
 /// Macro for convenient batch inserts into SQLite.
 #[macro_export]
 macro_rules! sqlite_batch_insert {
-    ($conn:expr, $table:expr, [$($col:expr),+ $(,)?], $items:expr, |$item:ident, $params:ident| $body:block) => {
+    ($conn:expr, $table:expr, [$($col:expr),+ $(,)?], $items:expr, |$item:pat, $params:ident| $body:block) => {
         $crate::batch::batch_insert(
             $conn,
             "INSERT INTO",
@@ -266,7 +266,7 @@ macro_rules! sqlite_batch_insert {
             |$item, $params| $body,
         )
     };
-    ($conn:expr, prefix: $prefix:expr, table: $table:expr, cols: [$($col:expr),+ $(,)?], items: $items:expr, suffix: $suffix:expr, |$item:ident, $params:ident| $body:block) => {
+    ($conn:expr, prefix: $prefix:expr, table: $table:expr, cols: [$($col:expr),+ $(,)?], items: $items:expr, suffix: $suffix:expr, |$item:pat, $params:ident| $body:block) => {
         $crate::batch::batch_insert(
             $conn,
             $prefix,
@@ -277,7 +277,7 @@ macro_rules! sqlite_batch_insert {
             |$item, $params| $body,
         )
     };
-    ($conn:expr, $prefix:expr, $table:expr, [$($col:expr),+ $(,)?], $items:expr, |$item:ident, $params:ident| $body:block) => {
+    ($conn:expr, $prefix:expr, $table:expr, [$($col:expr),+ $(,)?], $items:expr, |$item:pat, $params:ident| $body:block) => {
         $crate::batch::batch_insert(
             $conn,
             $prefix,
@@ -392,6 +392,70 @@ mod tests {
 
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn test_sqlite_batch_insert_macro() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE records (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, score INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        // 1. Basic form
+        let data1 = vec![("user1", 100), ("user2", 200)];
+        let count1 = sqlite_batch_insert!(
+            &conn,
+            "records",
+            ["name", "score"],
+            &data1,
+            |&(n, s), params| {
+                params.push(n.to_string().into());
+                params.push(s.into());
+            }
+        )
+        .unwrap();
+        assert_eq!(count1, 2);
+
+        // 2. Custom prefix form
+        let data2 = vec![("user2", 250), ("user3", 300)];
+        let count2 = sqlite_batch_insert!(
+            &conn,
+            "INSERT OR IGNORE INTO",
+            "records",
+            ["name", "score"],
+            &data2,
+            |&(n, s), params| {
+                params.push(n.to_string().into());
+                params.push(s.into());
+            }
+        )
+        .unwrap();
+        // user2 is ignored, user3 is inserted
+        assert_eq!(count2, 1);
+
+        // 3. Named fields form with suffix
+        let data3 = vec![("user4", 400)];
+        let count3 = sqlite_batch_insert!(
+            &conn,
+            prefix: "INSERT INTO",
+            table: "records",
+            cols: ["name", "score"],
+            items: &data3,
+            suffix: Some("ON CONFLICT(name) DO UPDATE SET score = excluded.score"),
+            |&(n, s), params| {
+                params.push(n.to_string().into());
+                params.push(s.into());
+            }
+        )
+        .unwrap();
+        assert_eq!(count3, 1);
+
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM records", [], |r| r.get(0))
             .unwrap();
         assert_eq!(total, 4);
     }

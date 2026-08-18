@@ -26,17 +26,7 @@ pub async fn transcribe(
     let api_key_id = authenticate_and_authorize_model(&state, &headers, &parsed_body.model_name)?;
 
     // 3. Delegate resolution, multi-target dispatch, and usage recording to core::audio.
-    let response = execute_transcribe(
-        state.db_pool().as_ref(),
-        state.adapters().as_slice(),
-        state.upstream_client(),
-        &state.circuit_breaker(),
-        state.master_key().as_ref(),
-        parsed_body,
-        api_key_id,
-    )
-    .await
-    .map_err(ApiError)?;
+    let response = call_unary_executor!(execute_transcribe, state, parsed_body, api_key_id);
 
     Ok(build_audio_response(
         response.status_code,

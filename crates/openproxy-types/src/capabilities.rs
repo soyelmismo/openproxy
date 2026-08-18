@@ -216,6 +216,14 @@ pub fn infer_default_output_modalities() -> Vec<&'static str> {
     vec!["text"]
 }
 
+/// Finds the first entry in `table` where `haystack` contains the pattern key.
+#[inline]
+pub fn find_substring_match<T: Copy>(haystack: &str, table: &[(&str, T)]) -> Option<T> {
+    table
+        .iter()
+        .find_map(|&(k, v)| if haystack.contains(k) { Some(v) } else { None })
+}
+
 pub fn infer_context_length(model_id: &str) -> Option<i64> {
     const KNOWN: &[(&str, i64)] = &[
         ("claude-3", 200_000),
@@ -244,13 +252,7 @@ pub fn infer_context_length(model_id: &str) -> Option<i64> {
     ];
 
     let lower = model_id.to_lowercase();
-
-    for (k, v) in KNOWN {
-        if lower.contains(k) {
-            return Some(*v);
-        }
-    }
-    None
+    find_substring_match(&lower, KNOWN)
 }
 
 pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
@@ -266,13 +268,7 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
     ];
 
     let lower = model_id.to_lowercase();
-
-    for (k, v) in KNOWN {
-        if lower.contains(k) {
-            return Some(*v);
-        }
-    }
-    None
+    find_substring_match(&lower, KNOWN)
 }
 
 pub const RERANK_KEYWORDS: &[&str] = &["rerank"];
@@ -681,5 +677,13 @@ mod tests {
     #[test]
     fn infer_max_output_tokens_unknown() {
         assert_eq!(infer_max_output_tokens("unknown/some-model"), None);
+    }
+
+    #[test]
+    fn test_find_substring_match() {
+        const TABLE: &[(&str, u32)] = &[("alpha", 1), ("beta", 2), ("gamma", 3)];
+        assert_eq!(find_substring_match("contains-beta-here", TABLE), Some(2));
+        assert_eq!(find_substring_match("contains-alpha-here", TABLE), Some(1));
+        assert_eq!(find_substring_match("contains-none", TABLE), None);
     }
 }

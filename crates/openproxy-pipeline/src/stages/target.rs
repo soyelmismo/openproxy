@@ -6,6 +6,58 @@ use crate::timeouts::ModelTimeoutOverrides;
 use crate::{FailureContext, PipelineResult};
 use openproxy_types::error::CoreError;
 
+macro_rules! fail_stage {
+    ($ctx:expr, $target:expr, $err:expr, $model:expr) => {
+        fail_stage!($ctx, $target, $err, $model, 0)
+    };
+    ($ctx:expr, $target:expr, $err:expr, $model:expr, $status:expr) => {{
+        let combo = $ctx
+            .combo
+            .as_ref()
+            .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
+        let fail_ctx = FailureContext {
+            proxy_url: None,
+            proxy_status: None,
+            attempt: $ctx.current_target_attempt,
+            race_size: $ctx.race_size,
+            err: $err,
+            started: $ctx.started.unwrap_or_else(std::time::Instant::now),
+            model: $model,
+            connect_ms: None,
+            ttft_ms: None,
+            status_code: $status,
+        };
+        Ok($ctx
+            .pipeline
+            .record_and_fail($ctx.req.clone(), combo, $target, fail_ctx))
+    }};
+    (with_trace; $ctx:expr, $target:expr, $err:expr, $model:expr, $status:expr) => {{
+        let combo = $ctx
+            .combo
+            .as_ref()
+            .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
+        let fail_ctx = FailureContext {
+            proxy_url: None,
+            proxy_status: None,
+            attempt: $ctx.current_target_attempt,
+            race_size: $ctx.race_size,
+            err: $err,
+            started: $ctx.started.unwrap_or_else(std::time::Instant::now),
+            model: $model,
+            connect_ms: None,
+            ttft_ms: None,
+            status_code: $status,
+        };
+        Ok($ctx.pipeline.record_and_fail_with_trace_id(
+            $ctx.req.clone(),
+            combo,
+            $target,
+            fail_ctx,
+            $ctx.trace_id.clone(),
+        ))
+    }};
+}
+
 #[derive(Clone, Copy)]
 pub struct OAuthRefreshStage;
 
@@ -69,35 +121,11 @@ impl PipelineStage for TimeoutResolutionStage {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
         let model = &current.model;
-        let attempt = ctx.current_target_attempt;
-        let race_size = ctx.race_size;
-        let started = ctx.started.unwrap_or_else(std::time::Instant::now);
 
         let model_overrides =
             match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
                 Ok(o) => o,
-                Err(e) => {
-                    let combo = ctx.combo.as_ref().ok_or_else(|| {
-                        CoreError::Internal("missing combo in pipeline context".into())
-                    })?;
-                    return Ok(ctx.pipeline.record_and_fail(
-                        ctx.req.clone(),
-                        combo,
-                        &current.target,
-                        FailureContext {
-                            proxy_url: None,
-                            proxy_status: None,
-                            attempt,
-                            race_size,
-                            err: &e,
-                            started,
-                            model: Some(model),
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: 0,
-                        },
-                    ));
-                }
+                Err(e) => return fail_stage!(ctx, &current.target, &e, Some(model)),
             };
 
         let resolved_timeouts =
@@ -136,27 +164,7 @@ impl PipelineStage for FormattingStage {
             .find(|a| a.id() == &current.target.provider_id)
         else {
             let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
-            let combo = ctx
-                .combo
-                .as_ref()
-                .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
-            return Ok(ctx.pipeline.record_and_fail(
-                ctx.req.clone(),
-                combo,
-                &current.target,
-                FailureContext {
-                    proxy_url: None,
-                    proxy_status: None,
-                    attempt: ctx.current_target_attempt,
-                    race_size: ctx.race_size,
-                    err: &err,
-                    started: ctx.started.unwrap_or_else(std::time::Instant::now),
-                    model: None,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-                },
-            ));
+            return fail_stage!(ctx, &current.target, &err, None);
         };
 
         let target_format = match adapter.format() {
@@ -214,28 +222,7 @@ impl PipelineStage for FormattingStage {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             }) {
             Ok(b) => b,
-            Err(e) => {
-                let combo = ctx.combo.as_ref().ok_or_else(|| {
-                    CoreError::Internal("missing combo in pipeline context".into())
-                })?;
-                return Ok(ctx.pipeline.record_and_fail(
-                    ctx.req.clone(),
-                    combo,
-                    &current.target,
-                    FailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
-                        attempt: ctx.current_target_attempt,
-                        race_size: ctx.race_size,
-                        err: &e,
-                        started: ctx.started.unwrap_or_else(std::time::Instant::now),
-                        model: Some(&current.model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ));
-            }
+            Err(e) => return fail_stage!(ctx, &current.target, &e, Some(&current.model)),
         };
 
         ctx.target_format = Some(target_format);
@@ -275,46 +262,20 @@ impl PipelineStage for DispatchStage {
             .find(|a| a.id() == &target.provider_id)
         else {
             let err = CoreError::ProviderNotFound(target.provider_id.to_string());
-            return Ok(ctx.pipeline.record_and_fail(
-                ctx.req.clone(),
-                combo,
-                target,
-                FailureContext {
-                    proxy_url: None,
-                    proxy_status: None,
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-                },
-            ));
+            return fail_stage!(ctx, target, &err, Some(model));
         };
 
         if let Some(cancel) = &ctx.race_cancel
             && cancel.is_cancelled()
         {
-            return Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                ctx.req.clone(),
-                combo,
+            return fail_stage!(
+                with_trace;
+                ctx,
                 target,
-                FailureContext {
-                    proxy_url: None,
-                    proxy_status: None,
-                    attempt,
-                    race_size,
-                    err: &CoreError::RaceLost,
-                    started,
-                    model: Some(model),
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: CoreError::RaceLost.http_status(),
-                },
-                trace_id,
-            ));
+                &CoreError::RaceLost,
+                Some(model),
+                CoreError::RaceLost.http_status()
+            );
         }
 
         if target.provider_id.as_str() == "antigravity"
@@ -498,28 +459,7 @@ impl PipelineStage for CustomAdapterStage {
             .find(|a| a.id() == &target.provider_id)
         else {
             let err = CoreError::ProviderNotFound(target.provider_id.to_string());
-            let combo = ctx
-                .combo
-                .as_ref()
-                .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
-            return Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                ctx.req.clone(),
-                combo,
-                target,
-                FailureContext {
-                    proxy_url: None,
-                    proxy_status: None,
-                    attempt: ctx.current_target_attempt,
-                    race_size: ctx.race_size,
-                    err: &err,
-                    started: ctx.started.unwrap_or_else(std::time::Instant::now),
-                    model: Some(&current.model),
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-                },
-                ctx.trace_id.clone(),
-            ));
+            return fail_stage!(with_trace; ctx, target, &err, Some(&current.model), 0);
         };
 
         next.execute(ctx).await

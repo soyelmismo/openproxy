@@ -21,33 +21,13 @@ impl EmbeddingInput {
     }
 }
 
-impl From<String> for EmbeddingInput {
-    fn from(s: String) -> Self {
-        Self::Single(s)
-    }
-}
-
-impl From<&str> for EmbeddingInput {
-    fn from(s: &str) -> Self {
-        Self::Single(s.to_string())
-    }
-}
-
-impl From<Vec<String>> for EmbeddingInput {
-    fn from(v: Vec<String>) -> Self {
-        Self::Array(v)
-    }
-}
-
-impl From<Vec<u32>> for EmbeddingInput {
-    fn from(v: Vec<u32>) -> Self {
-        Self::Tokens(v)
-    }
-}
-
-impl From<Vec<Vec<u32>>> for EmbeddingInput {
-    fn from(v: Vec<Vec<u32>>) -> Self {
-        Self::TokenArrays(v)
+impl_enum_from! {
+    EmbeddingInput {
+        Single(String),
+        Single(&str => ToString::to_string),
+        Array(Vec<String>),
+        Tokens(Vec<u32>),
+        TokenArrays(Vec<Vec<u32>>),
     }
 }
 
@@ -72,21 +52,11 @@ pub enum EmbeddingVector {
     Base64(String),
 }
 
-impl From<Vec<f32>> for EmbeddingVector {
-    fn from(v: Vec<f32>) -> Self {
-        Self::Floats(v)
-    }
-}
-
-impl From<String> for EmbeddingVector {
-    fn from(s: String) -> Self {
-        Self::Base64(s)
-    }
-}
-
-impl From<&str> for EmbeddingVector {
-    fn from(s: &str) -> Self {
-        Self::Base64(s.to_string())
+impl_enum_from! {
+    EmbeddingVector {
+        Floats(Vec<f32>),
+        Base64(String),
+        Base64(&str => ToString::to_string),
     }
 }
 

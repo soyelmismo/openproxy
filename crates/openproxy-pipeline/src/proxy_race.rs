@@ -68,9 +68,7 @@ pub async fn run_proxy_race(
 
         set.spawn(async move {
             if token.is_cancelled() {
-                if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    all_done.notify_one();
-                }
+                crate::racing::notify_worker_done!(running, all_done);
                 return;
             }
 
@@ -100,9 +98,7 @@ pub async fn run_proxy_race(
                 *last_err.lock() = Some(e.clone_for_result());
             }
 
-            if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                all_done.notify_one();
-            }
+            crate::racing::notify_worker_done!(running, all_done);
         });
     }
 
@@ -126,16 +122,7 @@ pub async fn run_proxy_race(
                         "incremental proxy race won: updated provider current_proxy_id"
                     );
                 }
-                let grace =
-                    std::time::Duration::from_millis(pipeline.config.racing.abort_grace_ms.max(50));
-                let mut set = set;
-                tokio::spawn(async move {
-                    let _ = tokio::time::timeout(grace, async {
-                        while set.join_next().await.is_some() {}
-                    })
-                    .await;
-                    set.abort_all();
-                });
+                crate::racing::spawn_graceful_drain(set, pipeline.config.racing.abort_grace_ms);
                 return result;
             }
         }

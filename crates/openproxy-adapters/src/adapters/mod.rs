@@ -283,13 +283,7 @@ pub trait ProviderAdapter: Send + Sync {
             let url = self
                 .models_url()
                 .ok_or_else(|| CoreError::Internal(format!("{}: models_url is None", self.id())))?;
-            let target_format = match self.format() {
-                AdapterFormat::Anthropic => TargetFormat::Anthropic,
-                AdapterFormat::Gemini => TargetFormat::Gemini,
-                AdapterFormat::Responses => TargetFormat::Responses,
-                AdapterFormat::Atomesus => TargetFormat::Atomesus,
-                AdapterFormat::Openai | AdapterFormat::Mixed => TargetFormat::Openai,
-            };
+            let target_format = self.format().default_target_format();
             fetch_openai_models(
                 &url,
                 upstream_client,
@@ -722,9 +716,7 @@ macro_rules! define_provider_adapter {
 }
 
 pub fn is_anonymous_fallback(provider_id: &str) -> bool {
-    builtin_adapters()
-        .iter()
-        .any(|a| a.config().id.0 == provider_id && a.config().anonymous_fallback)
+    matches!(provider_id, "horde" | "opencode-go" | "opencode-zen")
 }
 
 define_provider_adapter! {
@@ -987,18 +979,17 @@ pub(crate) async fn upstream_get_json(
 /// for every call.
 pub(crate) fn header_name(name: &str) -> Option<http::header::HeaderName> {
     use http::header;
-    if name.eq_ignore_ascii_case("authorization") {
-        Some(header::AUTHORIZATION)
-    } else if name.eq_ignore_ascii_case("content-type") {
-        Some(header::CONTENT_TYPE)
-    } else if name.eq_ignore_ascii_case("user-agent") {
-        Some(header::USER_AGENT)
-    } else if name.eq_ignore_ascii_case("x-api-key") {
-        Some(http::HeaderName::from_static("x-api-key"))
-    } else if name.eq_ignore_ascii_case("x-goog-api-key") {
-        Some(http::HeaderName::from_static("x-goog-api-key"))
-    } else {
-        None
+    match name.len() {
+        9 if name.eq_ignore_ascii_case("x-api-key") => {
+            Some(http::HeaderName::from_static("x-api-key"))
+        }
+        10 if name.eq_ignore_ascii_case("user-agent") => Some(header::USER_AGENT),
+        12 if name.eq_ignore_ascii_case("content-type") => Some(header::CONTENT_TYPE),
+        13 if name.eq_ignore_ascii_case("authorization") => Some(header::AUTHORIZATION),
+        14 if name.eq_ignore_ascii_case("x-goog-api-key") => {
+            Some(http::HeaderName::from_static("x-goog-api-key"))
+        }
+        _ => None,
     }
 }
 
@@ -1910,5 +1901,54 @@ mod tests {
         assert_eq!(m2.context_length, None);
         assert_eq!(m2.max_output_tokens, None);
         assert!(m2.capabilities.is_some());
+    }
+
+    #[test]
+    fn test_header_name_mapping() {
+        assert_eq!(
+            header_name("Authorization"),
+            Some(http::header::AUTHORIZATION)
+        );
+        assert_eq!(
+            header_name("authorization"),
+            Some(http::header::AUTHORIZATION)
+        );
+        assert_eq!(
+            header_name("Content-Type"),
+            Some(http::header::CONTENT_TYPE)
+        );
+        assert_eq!(
+            header_name("content-type"),
+            Some(http::header::CONTENT_TYPE)
+        );
+        assert_eq!(header_name("User-Agent"), Some(http::header::USER_AGENT));
+        assert_eq!(header_name("user-agent"), Some(http::header::USER_AGENT));
+        assert_eq!(
+            header_name("X-Api-Key"),
+            Some(http::HeaderName::from_static("x-api-key"))
+        );
+        assert_eq!(
+            header_name("x-api-key"),
+            Some(http::HeaderName::from_static("x-api-key"))
+        );
+        assert_eq!(
+            header_name("X-Goog-Api-Key"),
+            Some(http::HeaderName::from_static("x-goog-api-key"))
+        );
+        assert_eq!(
+            header_name("x-goog-api-key"),
+            Some(http::HeaderName::from_static("x-goog-api-key"))
+        );
+        assert_eq!(header_name("unknown-header"), None);
+    }
+
+    #[test]
+    fn test_is_anonymous_fallback() {
+        assert!(is_anonymous_fallback("horde"));
+        assert!(is_anonymous_fallback("opencode-go"));
+        assert!(is_anonymous_fallback("opencode-zen"));
+        assert!(!is_anonymous_fallback("openrouter"));
+        assert!(!is_anonymous_fallback("gemini"));
+        assert!(!is_anonymous_fallback("nonexistent"));
     }
 }

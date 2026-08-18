@@ -40,17 +40,7 @@ pub async fn create_embeddings(
         )));
     }
 
-    let response = execute_embeddings(
-        state.db_pool().as_ref(),
-        state.adapters().as_slice(),
-        state.upstream_client(),
-        &state.circuit_breaker(),
-        state.master_key().as_ref(),
-        req,
-        api_key_id,
-    )
-    .await
-    .map_err(ApiError)?;
+    let response = call_unary_executor!(execute_embeddings, state, req, api_key_id);
 
     Ok(Json(response).into_response())
 }

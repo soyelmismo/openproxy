@@ -40,17 +40,7 @@ pub async fn generate_images(
     let api_key_id =
         crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, &req.model)?;
 
-    let response = execute_image_generation(
-        state.db_pool().as_ref(),
-        state.adapters().as_slice(),
-        state.upstream_client(),
-        &state.circuit_breaker(),
-        state.master_key().as_ref(),
-        req,
-        api_key_id,
-    )
-    .await
-    .map_err(ApiError)?;
+    let response = call_unary_executor!(execute_image_generation, state, req, api_key_id);
 
     Ok(Json(response).into_response())
 }
@@ -89,17 +79,7 @@ pub async fn edit_images(
         &parsed_body.model_name,
     )?;
 
-    let response = execute_image_edit(
-        state.db_pool().as_ref(),
-        state.adapters().as_slice(),
-        state.upstream_client(),
-        &state.circuit_breaker(),
-        state.master_key().as_ref(),
-        parsed_body,
-        api_key_id,
-    )
-    .await
-    .map_err(ApiError)?;
+    let response = call_unary_executor!(execute_image_edit, state, parsed_body, api_key_id);
 
     Ok(Json(response).into_response())
 }
@@ -128,17 +108,7 @@ pub async fn create_image_variation(
         &parsed_body.model_name,
     )?;
 
-    let response = execute_image_variation(
-        state.db_pool().as_ref(),
-        state.adapters().as_slice(),
-        state.upstream_client(),
-        &state.circuit_breaker(),
-        state.master_key().as_ref(),
-        parsed_body,
-        api_key_id,
-    )
-    .await
-    .map_err(ApiError)?;
+    let response = call_unary_executor!(execute_image_variation, state, parsed_body, api_key_id);
 
     Ok(Json(response).into_response())
 }

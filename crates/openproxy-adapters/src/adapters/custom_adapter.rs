@@ -1,6 +1,6 @@
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, OpenAIModelEntry,
-    ProviderAdapter, ProviderAdapterConfig, ProviderMetadata, Result, TargetFormat, UpstreamClient,
+    AdapterAuthType, Arc, CoreError, DiscoveredModel, OpenAIModelEntry, ProviderAdapter,
+    ProviderAdapterConfig, ProviderMetadata, Result, TargetFormat, UpstreamClient,
     build_discovered_model_full, build_discovered_model_with, upstream_get_json,
 };
 
@@ -121,16 +121,7 @@ impl ProviderAdapter for CustomAdapter {
 
         // Try OpenAI format first: {"data": [{"id": "...", ...}]}
         if let Some(arr) = body.get("data").and_then(|v| v.as_array()) {
-            let target_format = match self.config.format {
-                AdapterFormat::Anthropic => TargetFormat::Anthropic,
-                AdapterFormat::Gemini => TargetFormat::Gemini,
-                AdapterFormat::Responses => TargetFormat::Responses,
-                AdapterFormat::Atomesus => TargetFormat::Atomesus,
-                // For Mixed providers, default to Openai; the model's
-                // stored target_format in the DB will be used at routing
-                // time.
-                AdapterFormat::Openai | AdapterFormat::Mixed => TargetFormat::Openai,
-            };
+            let target_format = self.config.format.default_target_format();
 
             let models: Vec<DiscoveredModel> = arr
                 .iter()
@@ -180,6 +171,7 @@ impl ProviderAdapter for CustomAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::AdapterFormat;
     use openproxy_types::{ModelId, ProviderId};
 
     #[test]

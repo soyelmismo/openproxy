@@ -53,44 +53,41 @@ pub fn normalize_model_id(id: &str) -> String {
     normalize_family(cur).into_owned()
 }
 
-fn strip_date_suffix(s: &str) -> Option<&str> {
-    if s.len() <= 11 {
+fn strip_fixed_suffix<'a, F>(s: &'a str, suffix_len: usize, predicate: F) -> Option<&'a str>
+where
+    F: FnOnce(&'a str) -> bool,
+{
+    if s.len() <= suffix_len {
         return None;
     }
-    let idx = s.len() - 11;
+    let idx = s.len() - suffix_len;
     if !s.is_char_boundary(idx) {
         return None;
     }
-    let suffix = &s[idx..];
-    let bytes = suffix.as_bytes();
-    if bytes[0] == b'-'
-        && bytes[1..5].iter().all(u8::is_ascii_digit)
-        && bytes[5] == b'-'
-        && bytes[6..8].iter().all(u8::is_ascii_digit)
-        && bytes[8] == b'-'
-        && bytes[9..11].iter().all(u8::is_ascii_digit)
-    {
+    if predicate(&s[idx..]) {
         Some(&s[..idx])
     } else {
         None
     }
 }
 
+fn strip_date_suffix(s: &str) -> Option<&str> {
+    strip_fixed_suffix(s, 11, |suffix| {
+        let bytes = suffix.as_bytes();
+        bytes[0] == b'-'
+            && bytes[1..5].iter().all(u8::is_ascii_digit)
+            && bytes[5] == b'-'
+            && bytes[6..8].iter().all(u8::is_ascii_digit)
+            && bytes[8] == b'-'
+            && bytes[9..11].iter().all(u8::is_ascii_digit)
+    })
+}
+
 fn strip_4digit_suffix(s: &str) -> Option<&str> {
-    if s.len() <= 5 {
-        return None;
-    }
-    let idx = s.len() - 5;
-    if !s.is_char_boundary(idx) {
-        return None;
-    }
-    let suffix = &s[idx..];
-    let bytes = suffix.as_bytes();
-    if bytes[0] == b'-' && bytes[1..5].iter().all(u8::is_ascii_digit) {
-        Some(&s[..idx])
-    } else {
-        None
-    }
+    strip_fixed_suffix(s, 5, |suffix| {
+        let bytes = suffix.as_bytes();
+        bytes[0] == b'-' && bytes[1..5].iter().all(u8::is_ascii_digit)
+    })
 }
 
 fn strip_version_suffix(s: &str) -> Option<&str> {
@@ -103,26 +100,17 @@ fn strip_version_suffix(s: &str) -> Option<&str> {
 }
 
 fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
-    if s.len() <= 9 {
-        return None;
-    }
-    let idx = s.len() - 9;
-    if !s.is_char_boundary(idx) {
-        return None;
-    }
-    let suffix = &s[idx..];
-    if !suffix.starts_with('-') {
-        return None;
-    }
-    let digits = &suffix[1..];
-    if digits.len() != 8 || !digits.as_bytes().iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    let year = &digits[..4];
-    if !(year.starts_with("19") || year.starts_with("20")) {
-        return None;
-    }
-    Some(&s[..idx])
+    strip_fixed_suffix(s, 9, |suffix| {
+        if !suffix.starts_with('-') {
+            return false;
+        }
+        let digits = &suffix[1..];
+        if digits.len() != 8 || !digits.as_bytes().iter().all(u8::is_ascii_digit) {
+            return false;
+        }
+        let year = &digits[..4];
+        year.starts_with("19") || year.starts_with("20")
+    })
 }
 
 fn normalize_family(s: &str) -> std::borrow::Cow<'_, str> {
@@ -284,5 +272,18 @@ mod tests {
         assert_eq!(normalize_model_id("🤖-20241022"), "🤖");
         assert_eq!(normalize_model_id("modèle-2024-01-01"), "modèle");
         assert_eq!(normalize_model_id("🦀-v1"), "🦀");
+    }
+
+    #[test]
+    fn test_strip_fixed_suffix() {
+        assert_eq!(
+            strip_fixed_suffix("hello-world", 6, |s| s == "-world"),
+            Some("hello")
+        );
+        assert_eq!(
+            strip_fixed_suffix("hello-world", 6, |s| s == "-other"),
+            None
+        );
+        assert_eq!(strip_fixed_suffix("short", 10, |_| true), None);
     }
 }

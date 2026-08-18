@@ -12,79 +12,26 @@ use crate::conn::DbPool;
 use crate::error::{map_db_error, map_db_error_ctx};
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
-    let target_format_str: String = row.get("target_format")?;
-    let target_format = match target_format_str.as_str() {
-        "openai" => TargetFormat::Openai,
-        "anthropic" => TargetFormat::Anthropic,
-        "gemini" => TargetFormat::Gemini,
-        "responses" => TargetFormat::Responses,
-        "atomesus" => TargetFormat::Atomesus,
-        other => {
-            return Err(rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("invalid target_format in db: {other}"),
-                )),
-            ));
-        }
-    };
-
-    let active_bit: i64 = row.get("active")?;
-    let active = match active_bit {
-        0 => false,
-        1 => true,
-        other => {
-            return Err(rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Integer,
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("invalid active bit in db: {other}"),
-                )),
-            ));
-        }
-    };
-
-    let custom_bit: i64 = row.get("custom")?;
-    let custom = match custom_bit {
-        0 => false,
-        1 => true,
-        other => {
-            return Err(rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Integer,
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("invalid custom bit in db: {other}"),
-                )),
-            ));
-        }
-    };
-
-    Ok(Model {
-        row_id: ModelRowId(row.get::<_, i64>("id")?),
-        provider_id: ProviderId::new(row.get::<_, String>("provider_id")?),
-        model_id: ModelId::new(row.get::<_, String>("model_id")?),
-        display_name: row.get::<_, Option<String>>("display_name")?,
-        target_format,
-        discovered_at: row.get::<_, String>("discovered_at")?,
-        expires_at: row.get::<_, Option<String>>("expires_at")?,
-        timeout_overrides_json: row.get::<_, Option<String>>("timeout_overrides_json")?,
-        active,
-        last_test_status: row.get::<_, Option<i32>>("last_test_status")?,
-        last_test_at: row.get::<_, Option<String>>("last_test_at")?,
-        custom,
-        context_length: row.get::<_, Option<i64>>("context_length")?,
-        max_output_tokens: row.get::<_, Option<i64>>("max_output_tokens")?,
-        capabilities_json: row.get::<_, Option<String>>("capabilities_json")?,
-        family: row.get::<_, Option<String>>("family")?,
-        model_type: row
-            .get::<_, Option<String>>("model_type")?
-            .unwrap_or_else(|| "chat".to_string()),
-        input_modalities_json: row.get::<_, Option<String>>("input_modalities_json")?,
-        output_modalities_json: row.get::<_, Option<String>>("output_modalities_json")?,
+    crate::map_row_struct!(row, Model {
+        row_id: @id(0, ModelRowId),
+        provider_id: @id_str(1, ProviderId),
+        model_id: @id_str(2, ModelId),
+        display_name: 3,
+        target_format: @enum_parse(4, TargetFormat),
+        discovered_at: 5,
+        expires_at: 6,
+        timeout_overrides_json: 7,
+        active: @bool(8),
+        last_test_status: 9,
+        last_test_at: 10,
+        custom: @bool(11),
+        context_length: 12,
+        max_output_tokens: 13,
+        capabilities_json: 14,
+        family: 15,
+        model_type: @opt_default(16, "chat".to_string()),
+        input_modalities_json: 17,
+        output_modalities_json: 18,
     })
 }
 

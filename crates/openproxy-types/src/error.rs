@@ -4,26 +4,14 @@ use crate::ids::{RequestId, TraceId};
 use std::fmt;
 use thiserror::Error;
 
-/// The reason why a request was cancelled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CancelReason {
-    ClientDisconnected,
-    WatchdogTimeout,
-}
-
-impl CancelReason {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            CancelReason::ClientDisconnected => "client_disconnected",
-            CancelReason::WatchdogTimeout => "watchdog_timeout",
-        }
+impl_string_enum! {
+    /// The reason why a request was cancelled.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CancelReason {
+        ClientDisconnected => "client_disconnected",
+        WatchdogTimeout => "watchdog_timeout",
     }
-}
-
-impl fmt::Display for CancelReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
+    error: "cancel reason"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

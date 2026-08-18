@@ -49,10 +49,6 @@ impl ProviderAdapter for AtomesusAdapter {
         &self.config
     }
 
-    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        format!("{}/chat/atomesus", self.config().base_url)
-    }
-
     fn wrap_request_body(
         &self,
         body: bytes::Bytes,
@@ -226,27 +222,34 @@ mod tests {
         let adapter = AtomesusAdapter::new();
         let target = dummy_resolved_target();
 
-        let body = bytes::Bytes::from(serde_json::json!({
-            "messages": [{"role": "user", "content": "Hello"}]
-        }).to_string());
+        let body = bytes::Bytes::from(
+            serde_json::json!({
+                "messages": [{"role": "user", "content": "Hello"}]
+            })
+            .to_string(),
+        );
 
-        let res = adapter.wrap_request_body(
-            body.clone(),
-            TargetFormat::Atomesus,
-            &ModelId::new("atomesus-1-5-fast"),
-            &target,
-        ).unwrap();
+        let res = adapter
+            .wrap_request_body(
+                body.clone(),
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .unwrap();
 
         let v: serde_json::Value = serde_json::from_slice(&res).unwrap();
         assert_eq!(v["model"], "atomesus-1-5");
         assert_eq!(v["mode"], "fast");
 
-        let res_thinking = adapter.wrap_request_body(
-            body,
-            TargetFormat::Atomesus,
-            &ModelId::new("cipher-thinking"),
-            &target,
-        ).unwrap();
+        let res_thinking = adapter
+            .wrap_request_body(
+                body,
+                TargetFormat::Atomesus,
+                &ModelId::new("cipher-thinking"),
+                &target,
+            )
+            .unwrap();
 
         let v_thinking: serde_json::Value = serde_json::from_slice(&res_thinking).unwrap();
         assert_eq!(v_thinking["model"], "cipher");

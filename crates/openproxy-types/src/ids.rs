@@ -59,6 +59,12 @@ macro_rules! impl_string_id {
             }
         }
 
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
+            }
+        }
+
         impl std::ops::Deref for $name {
             type Target = str;
 
@@ -177,5 +183,19 @@ mod tests {
         let acc: AccountId = 42.into();
         let val: i64 = acc.into();
         assert_eq!(val, 42);
+    }
+
+    #[test]
+    fn string_id_borrow_and_hashmap() {
+        use std::borrow::Borrow;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        let pid = ProviderId::new("openrouter");
+        map.insert(pid.clone(), 123);
+
+        assert_eq!(map.get("openrouter"), Some(&123));
+        let borrowed: &str = pid.borrow();
+        assert_eq!(borrowed, "openrouter");
     }
 }

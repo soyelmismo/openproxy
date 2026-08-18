@@ -73,25 +73,98 @@ fn rule_name(id: &'static str, suffix: &'static str) -> &'static str {
     leak_string(format!("{id}::{suffix}"))
 }
 
-/// Build a `CompiledFilter` skeleton with all `rule_*` names pre-computed
-/// from `id`. The caller fills in the actual filter logic fields.
-macro_rules! filter_skeleton {
-    ($id:expr, $strip_ansi:expr, $filter_stderr:expr, $replace:expr, $match_output:expr,
-     $strip_patterns:expr, $keep_patterns:expr, $collapse_patterns:expr,
-     $truncate_line_at:expr, $on_empty:expr, $truncate:expr) => {{
-        let id: &'static str = $id;
+macro_rules! compiled_filter {
+    (@set $b:ident, id, $v:literal) => { $b.id = $v; };
+    (@set $b:ident, strip_ansi, $v:expr) => { $b.strip_ansi = $v; };
+    (@set $b:ident, filter_stderr, $v:expr) => { $b.filter_stderr = $v; };
+    (@set $b:ident, replace, [$(($re:literal, $rep:literal)),* $(,)?]) => {
+        $b.replace = vec![$((compile_re($re), $rep)),*];
+    };
+    (@set $b:ident, match_output, [$({ re: $re:literal, msg: $msg:literal, unless: $unless:literal $(,)? }),* $(,)?]) => {
+        $b.match_output = vec![$(CompiledMatchOutputRule {
+            re: compile_re($re),
+            message: $msg,
+            unless: Some(compile_re($unless)),
+        }),*];
+    };
+    (@set $b:ident, match_output, [$({ re: $re:literal, msg: $msg:literal $(,)? }),* $(,)?]) => {
+        $b.match_output = vec![$(CompiledMatchOutputRule {
+            re: compile_re($re),
+            message: $msg,
+            unless: None,
+        }),*];
+    };
+    (@set $b:ident, strip, [$($p:literal),* $(,)?]) => {
+        $b.strip_patterns = vec![$(compile_re($p)),*];
+    };
+    (@set $b:ident, keep, [$($p:literal),* $(,)?]) => {
+        $b.keep_patterns = vec![$(compile_re($p)),*];
+    };
+    (@set $b:ident, collapse, [$($p:literal),* $(,)?]) => {
+        $b.collapse_patterns = vec![$(compile_re($p)),*];
+    };
+    (@set $b:ident, truncate_line_at, $v:literal) => { $b.truncate_line_at = $v; };
+    (@set $b:ident, on_empty, $v:literal) => { $b.on_empty = $v; };
+    (@set $b:ident, truncate, { max: $max:literal, head: $head:literal, tail: $tail:literal, priority: [$($pri:literal),* $(,)?] $(,)? }) => {
+        $b.truncate = Some(CompiledTruncateConfig {
+            max_lines: $max,
+            head_lines: $head,
+            tail_lines: $tail,
+            priority_patterns: vec![$(compile_re($pri)),*],
+        });
+    };
+    (@set $b:ident, truncate, { max: $max:literal, head: $head:literal, tail: $tail:literal $(,)? }) => {
+        $b.truncate = Some(CompiledTruncateConfig {
+            max_lines: $max,
+            head_lines: $head,
+            tail_lines: $tail,
+            priority_patterns: Vec::new(),
+        });
+    };
+
+    ($($field:ident : $val:tt),* $(,)?) => {{
+        struct Builder {
+            id: &'static str,
+            strip_ansi: bool,
+            filter_stderr: bool,
+            replace: Vec<(regex::Regex, &'static str)>,
+            match_output: Vec<CompiledMatchOutputRule>,
+            strip_patterns: Vec<regex::Regex>,
+            keep_patterns: Vec<regex::Regex>,
+            collapse_patterns: Vec<regex::Regex>,
+            truncate_line_at: usize,
+            on_empty: &'static str,
+            truncate: Option<CompiledTruncateConfig>,
+        }
+        let mut b = Builder {
+            id: "",
+            strip_ansi: true,
+            filter_stderr: false,
+            replace: Vec::new(),
+            match_output: Vec::new(),
+            strip_patterns: Vec::new(),
+            keep_patterns: Vec::new(),
+            collapse_patterns: Vec::new(),
+            truncate_line_at: 0,
+            on_empty: "",
+            truncate: None,
+        };
+        $(
+            compiled_filter!(@set b, $field, $val);
+        )*
+        let id = b.id;
         CompiledFilter {
             id,
-            strip_ansi: $strip_ansi,
-            filter_stderr: $filter_stderr,
-            replace: $replace,
-            match_output: $match_output,
-            strip_patterns: $strip_patterns,
-            keep_patterns: $keep_patterns,
-            collapse_patterns: $collapse_patterns,
-            truncate_line_at: $truncate_line_at,
-            on_empty: $on_empty,
-            truncate: $truncate,
+            strip_ansi: b.strip_ansi,
+            filter_stderr: b.filter_stderr,
+            replace: b.replace,
+            match_output: b.match_output,
+            strip_patterns: b.strip_patterns,
+            keep_patterns: b.keep_patterns,
+            collapse_patterns: b.collapse_patterns,
+            truncate_line_at: b.truncate_line_at,
+            on_empty: b.on_empty,
+            truncate: b.truncate,
             rule_strip_ansi: rule_name(id, "strip_ansi"),
             rule_filter_stderr: rule_name(id, "filter_stderr"),
             rule_replace: rule_name(id, "replace"),
@@ -166,241 +239,177 @@ pub fn get_generic_filter() -> Arc<CompiledFilter> {
 // match arms — any divergence is a bug.
 
 fn make_git_status_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "git-status",
-        /* strip_ansi */ true,
-        /* filter_stderr */ false,
-        /* replace */ vec![],
-        /* match_output */ vec![],
-        /* strip_patterns */ vec![compile_re(r"^\s*(\(use .*\))$"), compile_re(r"^\s*$"),],
-        /* keep_patterns */
-        vec![
-            compile_re(r"^On branch "),
-            compile_re(r"^Your branch "),
-            compile_re(r"^Changes "),
-            compile_re(r"^Untracked files:"),
-            compile_re(r"^\s*(modified|new file|deleted|renamed):"),
-            compile_re(r"^\s*[MADRCU?!]{1,2}\s+"),
-            compile_re(r"nothing (added|committed)"),
+    compiled_filter!(
+        id: "git-status",
+        strip: [r"^\s*(\(use .*\))$", r"^\s*$"],
+        keep: [
+            r"^On branch ",
+            r"^Your branch ",
+            r"^Changes ",
+            r"^Untracked files:",
+            r"^\s*(modified|new file|deleted|renamed):",
+            r"^\s*[MADRCU?!]{1,2}\s+",
+            r"nothing (added|committed)",
         ],
-        /* collapse_patterns */ vec![],
-        /* truncate_line_at */ 0,
-        /* on_empty */ "",
-        /* truncate */
-        Some(CompiledTruncateConfig {
-            max_lines: 60,
-            head_lines: 15,
-            tail_lines: 15,
-            priority_patterns: vec![compile_re(r"(?i)(modified|deleted|Untracked)")],
-        })
+        truncate: {
+            max: 60,
+            head: 15,
+            tail: 15,
+            priority: [r"(?i)(modified|deleted|Untracked)"],
+        },
     )
 }
 
 fn make_git_diff_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "git-diff",
-        true,
-        false,
-        vec![],
-        vec![],
-        vec![compile_re(r"^\s*$")],
-        vec![
-            compile_re(r"^diff --git "),
-            compile_re(r"^index "),
-            compile_re(r"^--- "),
-            compile_re(r"^\+\+\+ "),
-            compile_re(r"^@@ "),
-            compile_re(r"^[+-]"),
+    compiled_filter!(
+        id: "git-diff",
+        strip: [r"^\s*$"],
+        keep: [
+            r"^diff --git ",
+            r"^index ",
+            r"^--- ",
+            r"^\+\+\+ ",
+            r"^@@ ",
+            r"^[+-]",
         ],
-        vec![],
-        0,
-        "",
-        Some(CompiledTruncateConfig {
-            max_lines: 100,
-            head_lines: 25,
-            tail_lines: 25,
-            priority_patterns: vec![compile_re(r"^@@ ")],
-        })
+        truncate: {
+            max: 100,
+            head: 25,
+            tail: 25,
+            priority: [r"^@@ "],
+        },
     )
 }
 
 fn make_cargo_test_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "cargo-test",
-        true,
-        false,
-        vec![],
-        vec![CompiledMatchOutputRule {
-            re: compile_re(r"test result:.*ok\b"),
-            message: "✓ all tests passed",
-            unless: Some(compile_re(r"FAILED")),
+    compiled_filter!(
+        id: "cargo-test",
+        match_output: [{
+            re: r"test result:.*ok\b",
+            msg: "✓ all tests passed",
+            unless: r"FAILED",
         }],
-        vec![
-            compile_re(r"^\s*$"),
-            compile_re(r"^\s*(Compiling|Finished|warning:)"),
-            compile_re(r"^\s*(running \d+ tests?)"),
+        strip: [
+            r"^\s*$",
+            r"^\s*(Compiling|Finished|warning:)",
+            r"^\s*(running \d+ tests?)",
         ],
-        vec![
-            compile_re(r"^test .* FAILED"),
-            compile_re(r"^test result:"),
-            compile_re(r"^failures:"),
-            compile_re(r"^\s+-->"),
-            compile_re(r"^error\["),
+        keep: [
+            r"^test .* FAILED",
+            r"^test result:",
+            r"^failures:",
+            r"^\s+-->",
+            r"^error\[",
         ],
-        vec![],
-        0,
-        "✓ all tests passed",
-        Some(CompiledTruncateConfig {
-            max_lines: 60,
-            head_lines: 5,
-            tail_lines: 10,
-            priority_patterns: vec![compile_re(r"(?i)(FAILED|error|panic)")],
-        })
+        on_empty: "✓ all tests passed",
+        truncate: {
+            max: 60,
+            head: 5,
+            tail: 10,
+            priority: [r"(?i)(FAILED|error|panic)"],
+        },
     )
 }
 
 fn make_npm_test_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "npm-test",
-        true,
-        false,
-        vec![],
-        vec![CompiledMatchOutputRule {
-            re: compile_re(r"Tests:\s+\d+\s+passed"),
-            message: "✓ tests passed",
-            unless: Some(compile_re(r"failed")),
+    compiled_filter!(
+        id: "npm-test",
+        match_output: [{
+            re: r"Tests:\s+\d+\s+passed",
+            msg: "✓ tests passed",
+            unless: r"failed",
         }],
-        vec![compile_re(r"^\s*$"), compile_re(r"^\s*(PASS|FAIL)\s+"),],
-        vec![
-            compile_re(r"FAIL\s+"),
-            compile_re(r"✖\s+"),
-            compile_re(r"×\s+"),
-            compile_re(r"❯\s+"),
-            compile_re(r"✓\s+"),
+        strip: [r"^\s*$", r"^\s*(PASS|FAIL)\s+"],
+        keep: [
+            r"FAIL\s+",
+            r"✖\s+",
+            r"×\s+",
+            r"❯\s+",
+            r"✓\s+",
         ],
-        vec![],
-        0,
-        "✓ tests passed",
-        Some(CompiledTruncateConfig {
-            max_lines: 60,
-            head_lines: 5,
-            tail_lines: 10,
-            priority_patterns: vec![compile_re(r"(?i)(FAIL|error|✖)")],
-        })
+        on_empty: "✓ tests passed",
+        truncate: {
+            max: 60,
+            head: 5,
+            tail: 10,
+            priority: [r"(?i)(FAIL|error|✖)"],
+        },
     )
 }
 
 fn make_docker_ps_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "docker-ps",
-        true,
-        false,
-        vec![],
-        vec![],
-        vec![],
-        vec![compile_re(r"^CONTAINER ID"), compile_re(r"^[0-9a-f]{12}"),],
-        vec![],
-        0,
-        "(no containers)",
-        Some(CompiledTruncateConfig {
-            max_lines: 50,
-            head_lines: 10,
-            tail_lines: 5,
-            priority_patterns: vec![],
-        })
+    compiled_filter!(
+        id: "docker-ps",
+        keep: [r"^CONTAINER ID", r"^[0-9a-f]{12}"],
+        on_empty: "(no containers)",
+        truncate: {
+            max: 50,
+            head: 10,
+            tail: 5,
+        },
     )
 }
 
 fn make_error_stacktrace_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "error-stacktrace",
-        true,
-        false,
-        vec![],
-        vec![],
-        vec![],
-        vec![
-            compile_re(r"^(thread|panicked|Error|error)"),
-            compile_re(r"^\s+at "),
-            compile_re(r"^\s+\d+:"),
-            compile_re(r"^\s+\["),
-            compile_re(r"^Caused by:"),
-            compile_re(r"^  .*: "),
+    compiled_filter!(
+        id: "error-stacktrace",
+        keep: [
+            r"^(thread|panicked|Error|error)",
+            r"^\s+at ",
+            r"^\s+\d+:",
+            r"^\s+\[",
+            r"^Caused by:",
+            r"^  .*: ",
         ],
-        vec![compile_re(r"^\s+at ")],
-        200,
-        "",
-        Some(CompiledTruncateConfig {
-            max_lines: 50,
-            head_lines: 5,
-            tail_lines: 5,
-            priority_patterns: vec![compile_re(r"(?i)(panicked|fatal|Error)")],
-        })
+        collapse: [r"^\s+at "],
+        truncate_line_at: 200,
+        truncate: {
+            max: 50,
+            head: 5,
+            tail: 5,
+            priority: [r"(?i)(panicked|fatal|Error)"],
+        },
     )
 }
 
 fn make_shell_ls_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "shell-ls",
-        true,
-        false,
-        vec![(compile_re(r"^total \d+"), "")],
-        vec![],
-        vec![compile_re(r"^\s*$")],
-        vec![],
-        vec![],
-        0,
-        "(empty directory)",
-        Some(CompiledTruncateConfig {
-            max_lines: 80,
-            head_lines: 20,
-            tail_lines: 10,
-            priority_patterns: vec![],
-        })
+    compiled_filter!(
+        id: "shell-ls",
+        replace: [(r"^total \d+", "")],
+        strip: [r"^\s*$"],
+        on_empty: "(empty directory)",
+        truncate: {
+            max: 80,
+            head: 20,
+            tail: 10,
+        },
     )
 }
 
 fn make_generic_error_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "generic-error",
-        true,
-        false,
-        vec![],
-        vec![],
-        vec![],
-        vec![compile_re(
-            r"(?i)(error|failed|exception|traceback|panic|FAIL)"
-        )],
-        vec![],
-        0,
-        "",
-        Some(CompiledTruncateConfig {
-            max_lines: 30,
-            head_lines: 5,
-            tail_lines: 5,
-            priority_patterns: vec![compile_re(r"(?i)(error|failed)")],
-        })
+    compiled_filter!(
+        id: "generic-error",
+        keep: [r"(?i)(error|failed|exception|traceback|panic|FAIL)"],
+        truncate: {
+            max: 30,
+            head: 5,
+            tail: 5,
+            priority: [r"(?i)(error|failed)"],
+        },
     )
 }
 
 fn make_generic_filter() -> CompiledFilter {
-    filter_skeleton!(
-        "generic",
-        true,
-        true,
-        vec![],
-        vec![],
-        vec![compile_re(r"^\s*$"), compile_re(r"^\s*(warning:)"),],
-        vec![],
-        vec![],
-        0,
-        "",
-        Some(CompiledTruncateConfig {
-            max_lines: 120,
-            head_lines: 15,
-            tail_lines: 10,
-            priority_patterns: vec![compile_re(r"(?i)(error|failed|warning)")],
-        })
+    compiled_filter!(
+        id: "generic",
+        filter_stderr: true,
+        strip: [r"^\s*$", r"^\s*(warning:)"],
+        truncate: {
+            max: 120,
+            head: 15,
+            tail: 10,
+            priority: [r"(?i)(error|failed|warning)"],
+        },
     )
 }
 

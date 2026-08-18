@@ -75,76 +75,67 @@ fn save_config_val<T: serde::Serialize>(
     Ok(())
 }
 
-/// Read the persisted `compression` override, if any.
-pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<CompressionMode>> {
-    load_config_val(conn, COMPRESSION_KEY)
+macro_rules! app_config_kv {
+    (
+        $(
+            $(#[$meta:meta])*
+            $load_fn:ident, $save_fn:ident, $key:expr, &$ty:ty;
+        )*
+    ) => {
+        $(
+            $(#[$meta])*
+            pub fn $load_fn(conn: &Connection) -> Result<Option<$ty>> {
+                load_config_val(conn, $key)
+            }
+
+            $(#[$meta])*
+            pub fn $save_fn(
+                conn: &Connection,
+                val: &$ty,
+                now_unix_secs: i64,
+            ) -> Result<()> {
+                save_config_val(conn, $key, val, now_unix_secs)
+            }
+        )*
+    };
+    (
+        $(
+            $(#[$meta:meta])*
+            $load_fn:ident, $save_fn:ident, $key:expr, $ty:ty;
+        )*
+    ) => {
+        $(
+            $(#[$meta])*
+            pub fn $load_fn(conn: &Connection) -> Result<Option<$ty>> {
+                load_config_val(conn, $key)
+            }
+
+            $(#[$meta])*
+            pub fn $save_fn(
+                conn: &Connection,
+                val: $ty,
+                now_unix_secs: i64,
+            ) -> Result<()> {
+                save_config_val(conn, $key, &val, now_unix_secs)
+            }
+        )*
+    };
 }
 
-/// UPSERT the `compression` row.
-pub fn save_compression_to_db(
-    conn: &Connection,
-    mode: &CompressionMode,
-    now_unix_secs: i64,
-) -> Result<()> {
-    save_config_val(conn, COMPRESSION_KEY, mode, now_unix_secs)
+app_config_kv! {
+    /// Compression mode override.
+    load_compression_override_from_db, save_compression_to_db, COMPRESSION_KEY, &CompressionMode;
+    /// Timeouts override.
+    load_timeouts_override_from_db, save_timeouts_to_db, TIMEOUTS_KEY, &TimeoutsConfig;
+    /// Quota protection override.
+    load_quota_protection_override_from_db, save_quota_protection_to_db, QUOTA_PROTECTION_KEY, &QuotaProtectionConfig;
 }
 
-/// Read the persisted `idle_chunk_retryable` flag, if any.
-pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<bool>> {
-    load_config_val(conn, IDLE_CHUNK_RETRYABLE_KEY)
-}
-
-/// UPSERT the `idle_chunk_retryable` row.
-pub fn save_idle_chunk_retryable_to_db(
-    conn: &Connection,
-    val: bool,
-    now_unix_secs: i64,
-) -> Result<()> {
-    save_config_val(conn, IDLE_CHUNK_RETRYABLE_KEY, &val, now_unix_secs)
-}
-
-/// Read the persisted `timeouts` override, if any.
-pub fn load_timeouts_override_from_db(conn: &Connection) -> Result<Option<TimeoutsConfig>> {
-    load_config_val(conn, TIMEOUTS_KEY)
-}
-
-/// UPSERT the `timeouts` row.
-pub fn save_timeouts_to_db(
-    conn: &Connection,
-    cfg: &TimeoutsConfig,
-    now_unix_secs: i64,
-) -> Result<()> {
-    save_config_val(conn, TIMEOUTS_KEY, cfg, now_unix_secs)
-}
-
-/// Read the persisted recording TTL, if any.
-pub fn load_recording_ttl_from_db(conn: &Connection) -> Result<Option<i64>> {
-    load_config_val(conn, RECORDING_TTL_KEY)
-}
-
-/// UPSERT the `recording_ttl_secs` row.
-pub fn save_recording_ttl_to_db(
-    conn: &Connection,
-    ttl_secs: i64,
-    now_unix_secs: i64,
-) -> Result<()> {
-    save_config_val(conn, RECORDING_TTL_KEY, &ttl_secs, now_unix_secs)
-}
-
-/// Read the persisted quota protection configuration, if any.
-pub fn load_quota_protection_override_from_db(
-    conn: &Connection,
-) -> Result<Option<QuotaProtectionConfig>> {
-    load_config_val(conn, QUOTA_PROTECTION_KEY)
-}
-
-/// UPSERT the `quota_protection` config.
-pub fn save_quota_protection_to_db(
-    conn: &Connection,
-    cfg: &QuotaProtectionConfig,
-    now_unix_secs: i64,
-) -> Result<()> {
-    save_config_val(conn, QUOTA_PROTECTION_KEY, cfg, now_unix_secs)
+app_config_kv! {
+    /// `idle_chunk_retryable` flag.
+    load_idle_chunk_retryable_from_db, save_idle_chunk_retryable_to_db, IDLE_CHUNK_RETRYABLE_KEY, bool;
+    /// Recording TTL in seconds.
+    load_recording_ttl_from_db, save_recording_ttl_to_db, RECORDING_TTL_KEY, i64;
 }
 
 pub fn load_proxy_test_url(conn: &Connection) -> Result<String> {

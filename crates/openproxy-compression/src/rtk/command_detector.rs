@@ -84,7 +84,10 @@ pub fn detect(text: &str) -> Detection {
     for detector in DETECTORS {
         if let Some(result) = detector(text, cmd_ref) {
             let (_id, conf) = &result;
-            if best.as_ref().is_none_or(|b: &(&'static str, f64)| *conf > b.1) {
+            if best
+                .as_ref()
+                .is_none_or(|b: &(&'static str, f64)| *conf > b.1)
+            {
                 best = Some(result);
             }
         }
@@ -106,215 +109,196 @@ pub fn detect(text: &str) -> Detection {
 
 // ─── Individual detectors ───────────────────────────────────────────────────
 
-fn detect_git_status(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("git status"));
-    let content_match = text.contains("On branch ")
+macro_rules! define_detector {
+    ($name:ident, $id:literal, cmds: [$($cmd:literal),+ $(,)?], conf: $conf:literal) => {
+        fn $name(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
+            let cmd_match = cmd.is_some_and(|c| $(c.starts_with($cmd))||+);
+            if cmd_match {
+                Some(($id, $conf))
+            } else {
+                None
+            }
+        }
+    };
+    ($name:ident, $id:literal, content: |$text:ident| $content_expr:expr, conf: $conf:literal) => {
+        fn $name($text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
+            if $content_expr {
+                Some(($id, $conf))
+            } else {
+                None
+            }
+        }
+    };
+    ($name:ident, $id:literal, cmds: [$($cmd:literal),+ $(,)?], content: |$text:ident| $content_expr:expr, both: $both:literal, content: $content_conf:literal $(, cmd_only: $cmd_conf:literal)?) => {
+        fn $name($text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
+            let cmd_match = cmd.is_some_and(|c| $(c.starts_with($cmd))||+);
+            let content_match = $content_expr;
+            if cmd_match && content_match {
+                Some(($id, $both))
+            } else if content_match {
+                Some(($id, $content_conf))
+            } $(
+            else if cmd_match {
+                Some(($id, $cmd_conf))
+            }
+            )?
+            else {
+                None
+            }
+        }
+    };
+}
+
+define_detector!(
+    detect_git_status,
+    "git-status",
+    cmds: ["git status"],
+    content: |text| text.contains("On branch ")
         || text.contains("Changes not staged for commit")
         || text.contains("Changes to be committed")
-        || text.contains("Untracked files:");
-    if cmd_match && content_match {
-        Some(("git-status", 0.95))
-    } else if content_match {
-        Some(("git-status", 0.75))
-    } else if cmd_match {
-        Some(("git-status", 0.50))
-    } else {
-        None
-    }
-}
+        || text.contains("Untracked files:"),
+    both: 0.95,
+    content: 0.75,
+    cmd_only: 0.50
+);
 
-fn detect_git_diff(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("git diff") || c.starts_with("git show"));
-    let content_match = text.contains("diff --git ") || text.contains("@@ -");
-    if cmd_match && content_match {
-        Some(("git-diff", 0.95))
-    } else if content_match {
-        Some(("git-diff", 0.70))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_git_diff,
+    "git-diff",
+    cmds: ["git diff", "git show"],
+    content: |text| text.contains("diff --git ") || text.contains("@@ -"),
+    both: 0.95,
+    content: 0.70
+);
 
-fn detect_git_log(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("git log"));
-    let content_match = text.contains('\n')
+define_detector!(
+    detect_git_log,
+    "git-log",
+    cmds: ["git log"],
+    content: |text| text.contains('\n')
         && text.lines().any(|l| {
             l.starts_with("commit ")
                 && l.len() > 40
                 && l[7..].bytes().all(|b| b.is_ascii_hexdigit())
-        });
-    if cmd_match && content_match {
-        Some(("git-log", 0.95))
-    } else if content_match {
-        Some(("git-log", 0.70))
-    } else {
-        None
-    }
-}
+        }),
+    both: 0.95,
+    content: 0.70
+);
 
-fn detect_git_branch(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("git branch") || c.starts_with("git checkout") || c.starts_with("git switch")
-    });
-    if cmd_match {
-        Some(("git-branch", 0.80))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_git_branch,
+    "git-branch",
+    cmds: ["git branch", "git checkout", "git switch"],
+    conf: 0.80
+);
 
-fn detect_cargo_test(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match =
-        cmd.is_some_and(|c| c.starts_with("cargo test") || c.starts_with("cargo nextest"));
-    let content_match = text.contains("running ") && text.contains(" tests")
+define_detector!(
+    detect_cargo_test,
+    "cargo-test",
+    cmds: ["cargo test", "cargo nextest"],
+    content: |text| text.contains("running ") && text.contains(" tests")
         || text
             .lines()
-            .any(|l| l.starts_with("test ") && l.contains("... ok"));
-    if cmd_match {
-        Some(("cargo-test", if content_match { 0.95 } else { 0.60 }))
-    } else if content_match {
-        Some(("cargo-test", 0.55))
-    } else {
-        None
-    }
-}
+            .any(|l| l.starts_with("test ") && l.contains("... ok")),
+    both: 0.95,
+    content: 0.55,
+    cmd_only: 0.60
+);
 
-fn detect_cargo_build(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("cargo build")
-            || c.starts_with("cargo check")
-            || c.starts_with("cargo clippy")
-    });
-    let content_match = text.contains("Compiling ")
+define_detector!(
+    detect_cargo_build,
+    "cargo-build",
+    cmds: ["cargo build", "cargo check", "cargo clippy"],
+    content: |text| text.contains("Compiling ")
         || text.contains("error[E")
         || text.contains("warning[")
-        || (text.contains("Finished ") && text.contains("profile"));
-    if cmd_match {
-        Some((
-            "cargo-build",
-            if content_match { 0.90 } else { 0.55 },
-        ))
-    } else if content_match {
-        Some(("cargo-build", 0.50))
-    } else {
-        None
-    }
-}
+        || (text.contains("Finished ") && text.contains("profile")),
+    both: 0.90,
+    content: 0.50,
+    cmd_only: 0.55
+);
 
-fn detect_npm_test(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("npm test")
-            || c.starts_with("npm run test")
-            || c.starts_with("npx vitest")
-            || c.starts_with("npx jest")
-    });
-    let content_match = text.contains("PASS ")
+define_detector!(
+    detect_npm_test,
+    "npm-test",
+    cmds: ["npm test", "npm run test", "npx vitest", "npx jest"],
+    content: |text| text.contains("PASS ")
         || text.contains("FAIL ")
         || text.contains("Test Suites:")
-        || text.contains("Tests:");
-    if cmd_match {
-        Some(("npm-test", if content_match { 0.95 } else { 0.55 }))
-    } else if content_match {
-        Some(("npm-test", 0.50))
-    } else {
-        None
-    }
-}
+        || text.contains("Tests:"),
+    both: 0.95,
+    content: 0.50,
+    cmd_only: 0.55
+);
 
-fn detect_npm_install(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("npm install")
-            || c.starts_with("npm add")
-            || c.starts_with("pnpm install")
-            || c.starts_with("yarn add")
-    });
-    let content_match = text.contains("added ") && text.contains(" packages")
-        || text.contains("audited ") && text.contains(" packages");
-    if cmd_match {
-        Some((
-            "npm-install",
-            if content_match { 0.90 } else { 0.55 },
-        ))
-    } else if content_match {
-        Some(("npm-install", 0.45))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_npm_install,
+    "npm-install",
+    cmds: ["npm install", "npm add", "pnpm install", "yarn add"],
+    content: |text| text.contains("added ") && text.contains(" packages")
+        || text.contains("audited ") && text.contains(" packages"),
+    both: 0.90,
+    content: 0.45,
+    cmd_only: 0.55
+);
 
-fn detect_docker_ps(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("docker ps"));
-    let content_match = text.contains("CONTAINER ID") && text.contains("IMAGE");
-    if cmd_match && content_match {
-        Some(("docker-ps", 0.95))
-    } else if content_match {
-        Some(("docker-ps", 0.70))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_docker_ps,
+    "docker-ps",
+    cmds: ["docker ps"],
+    content: |text| text.contains("CONTAINER ID") && text.contains("IMAGE"),
+    both: 0.95,
+    content: 0.70
+);
 
-fn detect_docker_logs(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match =
-        cmd.is_some_and(|c| c.starts_with("docker logs") || c.starts_with("docker compose logs"));
-    if cmd_match {
-        Some(("docker-logs", 0.80))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_docker_logs,
+    "docker-logs",
+    cmds: ["docker logs", "docker compose logs"],
+    conf: 0.80
+);
 
-fn detect_kubernetes(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("kubectl ") || c.starts_with("oc "));
-    let content_match = text.contains("NAMESPACE") && text.contains("STATUS")
-        || text.contains("Ready ") && text.contains("Running");
-    if cmd_match {
-        Some(("kubernetes", if content_match { 0.90 } else { 0.50 }))
-    } else if content_match {
-        Some(("kubernetes", 0.40))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_kubernetes,
+    "kubernetes",
+    cmds: ["kubectl ", "oc "],
+    content: |text| (text.contains("NAMESPACE") && text.contains("STATUS"))
+        || (text.contains("Ready ") && text.contains("Running")),
+    both: 0.90,
+    content: 0.40,
+    cmd_only: 0.50
+);
 
-fn detect_shell_ls(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("ls") || c.starts_with("find"));
-    if cmd_match {
-        Some(("shell-ls", 0.70))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_shell_ls,
+    "shell-ls",
+    cmds: ["ls", "find"],
+    conf: 0.70
+);
 
-fn detect_shell_grep(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    let cmd_match =
-        cmd.is_some_and(|c| c.starts_with("grep") || c.starts_with("rg ") || c.starts_with("ag "));
-    if cmd_match {
-        Some(("shell-grep", 0.70))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_shell_grep,
+    "shell-grep",
+    cmds: ["grep", "rg ", "ag "],
+    conf: 0.70
+);
 
-fn detect_error_stacktrace(text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    if text.contains("Traceback (most recent call last)")
+define_detector!(
+    detect_error_stacktrace,
+    "error-stacktrace",
+    content: |text| text.contains("Traceback (most recent call last)")
         || text.contains("panicked at")
-        || text.contains("thread '") && text.contains("panicked at")
-        || (text.contains("at ") && text.contains(".rs:"))
-    {
-        Some(("error-stacktrace", 0.80))
-    } else {
-        None
-    }
-}
+        || (text.contains("thread '") && text.contains("panicked at"))
+        || (text.contains("at ") && text.contains(".rs:")),
+    conf: 0.80
+);
 
-fn detect_generic_error(text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
-    if text.contains("Error:") || text.contains("error:") {
-        Some(("generic-error", 0.30))
-    } else {
-        None
-    }
-}
+define_detector!(
+    detect_generic_error,
+    "generic-error",
+    content: |text| text.contains("Error:") || text.contains("error:"),
+    conf: 0.30
+);
 
 #[cfg(test)]
 mod tests {

@@ -64,11 +64,7 @@ macro_rules! combo_select {
 
 pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
     let row = conn
-        .query_row(
-            combo_select!("WHERE id = ?1"),
-            params![id.0],
-            row_to_combo,
-        )
+        .query_row(combo_select!("WHERE id = ?1"), params![id.0], row_to_combo)
         .optional()
         .map_err(crate::error::map_db_error_ctx(format!(
             "get combo {}",
@@ -1124,158 +1120,77 @@ pub fn update_selection_window(
 /// - No target has a known `context_length`.
 /// - A cycle is detected among sub-combos.
 fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
-    let id: i64 = row.get(0)?;
-    let name: String = row.get(1)?;
-    let strategy_str: String = row.get(2)?;
-    let race_size: i64 = row.get(3)?;
-    let created_at: String = row.get(4)?;
-    // Column 5 is `context_window` (added by migration 000034). Older
-    // rows / older databases that haven't run the migration yet get
-    // NULL → `None` → auto-compute.
-    let context_window: Option<i64> = row.get(5).ok().flatten();
-    // Columns 6-12 (migration 000035): priority / cooldown knobs.
-    // All nullable; `NULL` reads back as the legacy default via the
-    // `from_db` helpers.
-    let priority_mode_str: Option<String> = row.get(6).ok().flatten();
-    let cooldown_mode_str: Option<String> = row.get(7).ok().flatten();
-    let cooldown_base_secs: Option<i64> = row.get(8).ok().flatten();
-    let cooldown_max_secs: Option<i64> = row.get(9).ok().flatten();
-    let cooldown_factor: Option<i64> = row.get(10).ok().flatten();
-    let lkgp_exploration_rate: Option<f64> = row.get(11).ok().flatten();
-    let selection_window_secs: Option<i64> = row.get(12).ok().flatten();
-
-    let strategy = Strategy::parse(&strategy_str).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            2,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
-
+    let race_size: u8 = crate::map_row_fields!(row, @u8(3));
     if !(1..=8).contains(&race_size) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Integer,
-            Box::new(FromStrError(format!("race_size out of range: {race_size}"))),
+            Box::from(format!("race_size out of range: {race_size}")),
         ));
     }
 
-    Ok(Combo {
-        id: ComboId(id),
-        name,
-        strategy,
-        race_size: race_size as u8,
-        created_at,
-        context_window,
-        priority_mode: PriorityMode::from_db(priority_mode_str.as_deref()),
-        cooldown_mode: CooldownMode::from_db(cooldown_mode_str.as_deref()),
-        cooldown_base_secs: cooldown_base_secs.map(|v| v as u64),
-        cooldown_max_secs: cooldown_max_secs.map(|v| v as u64),
-        cooldown_factor: cooldown_factor.map(|v| v as u32),
-        lkgp_exploration_rate,
-        selection_window_secs: selection_window_secs.map(|v| v as u64),
+    crate::map_row_struct!(row, Combo {
+        id: @id(0, ComboId),
+        name: 1,
+        strategy: @enum_parse(2, Strategy),
+        race_size: (3, u8),
+        created_at: 4,
+        context_window: 5,
+        priority_mode: @from_db(6, PriorityMode),
+        cooldown_mode: @from_db(7, CooldownMode),
+        cooldown_base_secs: @opt_u64(8),
+        cooldown_max_secs: @opt_u64(9),
+        cooldown_factor: @opt_u32(10),
+        lkgp_exploration_rate: 11,
+        selection_window_secs: @opt_u64(12),
     })
 }
 
 fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
-    let id: i64 = row.get(0)?;
-    let combo_id: i64 = row.get(1)?;
-    let provider_id: String = row.get(2)?;
-    let account_id: Option<i64> = row.get(3)?;
-    let model_row_id: Option<i64> = row.get(4)?;
-    let sub_combo_id: Option<i64> = row.get(5)?;
-    let priority_order: i32 = row.get(6)?;
-    let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
-    let rate_limit_scope: String = row.get(8)?;
-    let active: i64 = row.get::<_, Option<i64>>(9)?.unwrap_or(1);
-    let cooldown_mode_str: Option<String> = row.get(10).ok().flatten();
-    let cooldown_mode = cooldown_mode_str
-        .as_deref()
-        .and_then(|s| CooldownMode::parse(s).ok());
-    let cooldown_base_secs: Option<u64> = row.get::<_, Option<i64>>(11)?.map(|v| v as u64);
-    let cooldown_max_secs: Option<u64> = row.get::<_, Option<i64>>(12)?.map(|v| v as u64);
-    let cooldown_factor: Option<u32> = row.get::<_, Option<i64>>(13)?.map(|v| v as u32);
-
-    Ok(ComboTarget {
-        id: ComboTargetId(id),
-        combo_id: ComboId(combo_id),
-        provider_id: ProviderId::new(provider_id),
-        account_id: account_id.map(AccountId),
-        model_row_id: model_row_id.map(ModelRowId),
-        sub_combo_id: sub_combo_id.map(ComboId),
-        priority_order,
-        weight,
-        active: active != 0,
-        rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
-            .unwrap_or_default(),
-        cooldown_mode,
-        cooldown_base_secs,
-        cooldown_max_secs,
-        cooldown_factor,
+    crate::map_row_struct!(row, ComboTarget {
+        id: @id(0, ComboTargetId),
+        combo_id: @id(1, ComboId),
+        provider_id: @id_str(2, ProviderId),
+        account_id: @opt_id(3, AccountId),
+        model_row_id: @opt_id(4, ModelRowId),
+        sub_combo_id: @opt_id(5, ComboId),
+        priority_order: 6,
+        weight: @opt_default(7, i32, 1),
+        rate_limit_scope: @enum_parse(8, openproxy_types::RateLimitScope),
+        active: @opt_default(9, bool, true),
+        cooldown_mode: @opt_enum_parse(10, CooldownMode),
+        cooldown_base_secs: @opt_u64(11),
+        cooldown_max_secs: @opt_u64(12),
+        cooldown_factor: @opt_u32(13),
     })
 }
 
 fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithModel> {
-    let id: i64 = row.get(0)?;
-    let combo_id: i64 = row.get(1)?;
-    let provider_id: String = row.get(2)?;
-    let account_id: Option<i64> = row.get(3)?;
-    let model_row_id: Option<i64> = row.get(4)?;
-    let sub_combo_id: Option<i64> = row.get(5)?;
-    let sub_combo_name: Option<String> = row.get(6)?;
-    let model_id: String = row.get(7)?;
-    let model_display_name: Option<String> = row.get(8)?;
-    let priority_order: i32 = row.get(9)?;
-    let cooldown_until: Option<String> = row.get(10)?;
-    let in_cooldown: i64 = row.get(11)?;
-    let cooldown_reason: Option<String> = row.get(12)?;
-    let context_length: Option<i64> = row.get(13)?;
-    let max_output_tokens: Option<i64> = row.get(14)?;
-    let weight: i32 = row.get::<_, Option<i64>>(15)?.unwrap_or(1) as i32;
-    let provider_active: i64 = row.get(16)?;
-    let active: i64 = row.get::<_, Option<i64>>(17)?.unwrap_or(1);
-    let cooldown_mode_str: Option<String> = row.get(18).ok().flatten();
-    let cooldown_mode = cooldown_mode_str
-        .as_deref()
-        .and_then(|s| CooldownMode::parse(s).ok());
-    let cooldown_base_secs: Option<u64> = row.get::<_, Option<i64>>(19)?.map(|v| v as u64);
-    let cooldown_max_secs: Option<u64> = row.get::<_, Option<i64>>(20)?.map(|v| v as u64);
-    let cooldown_factor: Option<u32> = row.get::<_, Option<i64>>(21)?.map(|v| v as u32);
-
-    Ok(ComboTargetWithModel {
-        id: ComboTargetId(id),
-        combo_id: ComboId(combo_id),
-        provider_id: ProviderId::new(provider_id),
-        account_id: account_id.map(AccountId),
-        model_row_id: model_row_id.map(ModelRowId),
-        sub_combo_id: sub_combo_id.map(ComboId),
-        sub_combo_name,
-        model_id,
-        model_display_name,
-        priority_order,
-        weight,
-        active: active != 0,
-        in_cooldown: in_cooldown != 0,
-        cooldown_until,
-        cooldown_reason,
-        context_length,
-        max_output_tokens,
-        provider_active: provider_active != 0,
-        cooldown_mode,
-        cooldown_base_secs,
-        cooldown_max_secs,
-        cooldown_factor,
+    crate::map_row_struct!(row, ComboTargetWithModel {
+        id: @id(0, ComboTargetId),
+        combo_id: @id(1, ComboId),
+        provider_id: @id_str(2, ProviderId),
+        account_id: @opt_id(3, AccountId),
+        model_row_id: @opt_id(4, ModelRowId),
+        sub_combo_id: @opt_id(5, ComboId),
+        sub_combo_name: 6,
+        model_id: 7,
+        model_display_name: 8,
+        priority_order: 9,
+        weight: @opt_default(15, i32, 1),
+        in_cooldown: @bool(11),
+        cooldown_until: 10,
+        cooldown_reason: 12,
+        context_length: 13,
+        max_output_tokens: 14,
+        active: @opt_default(17, bool, true),
+        provider_active: @bool(16),
+        cooldown_mode: @opt_enum_parse(18, CooldownMode),
+        cooldown_base_secs: @opt_u64(19),
+        cooldown_max_secs: @opt_u64(20),
+        cooldown_factor: @opt_u32(21),
     })
 }
-
-#[derive(Debug)]
-pub struct FromStrError(String);
-impl std::fmt::Display for FromStrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::error::Error for FromStrError {}
 
 fn compute_effective_context_window_recursive(
     conn: &rusqlite::Connection,

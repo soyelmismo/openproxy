@@ -4,6 +4,24 @@ use openproxy_types::error::CoreError;
 use openproxy_types::ids::TraceId;
 use std::sync::Arc;
 
+macro_rules! notify_worker_done {
+    ($running:expr, $all_done:expr) => {
+        if $running.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+            $all_done.notify_one();
+        }
+    };
+}
+pub(crate) use notify_worker_done;
+
+pub(crate) fn spawn_graceful_drain(mut set: tokio::task::JoinSet<()>, abort_grace_ms: u64) {
+    let grace = std::time::Duration::from_millis(abort_grace_ms.max(50));
+    tokio::spawn(async move {
+        let _ =
+            tokio::time::timeout(grace, async { while set.join_next().await.is_some() {} }).await;
+        set.abort_all();
+    });
+}
+
 pub(crate) async fn run_race(
     pipeline: &crate::Pipeline,
     req: PipelineRequest,
@@ -80,17 +98,13 @@ pub(crate) async fn run_race(
                 .expect("run_race: worker must have race_cancel");
             loop {
                 if worker_token.is_cancelled() {
-                    if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                        all_done.notify_one();
-                    }
+                    notify_worker_done!(running, all_done);
                     return;
                 }
 
                 let target = queue.lock().pop_front();
                 let Some(target) = target else {
-                    if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                        all_done.notify_one();
-                    }
+                    notify_worker_done!(running, all_done);
                     return;
                 };
 
@@ -98,9 +112,7 @@ pub(crate) async fn run_race(
                 req.race_cancelled = true;
 
                 if worker_token.is_cancelled() {
-                    if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                        all_done.notify_one();
-                    }
+                    notify_worker_done!(running, all_done);
                     return;
                 }
 
@@ -121,9 +133,7 @@ pub(crate) async fn run_race(
                     if w.is_none() {
                         *w = Some(result);
                     }
-                    if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                        all_done.notify_one();
-                    }
+                    notify_worker_done!(running, all_done);
                     return;
                 }
 
@@ -141,16 +151,7 @@ pub(crate) async fn run_race(
                 for token in &worker_tokens {
                     token.cancel();
                 }
-                let grace =
-                    std::time::Duration::from_millis(pipeline.config.racing.abort_grace_ms.max(50));
-                let mut set = set;
-                tokio::spawn(async move {
-                    let _ = tokio::time::timeout(grace, async {
-                        while set.join_next().await.is_some() {}
-                    })
-                    .await;
-                    set.abort_all();
-                });
+                spawn_graceful_drain(set, pipeline.config.racing.abort_grace_ms);
                 return result;
             }
         }
