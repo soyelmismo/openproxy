@@ -103,10 +103,7 @@ mod tests {
         let json_str = r#"{"model":"text-embedding-3-small","input":"hello world"}"#;
         let req: EmbeddingRequest = serde_json::from_str(json_str).expect("deserialize");
         assert_eq!(req.model, "text-embedding-3-small");
-        assert_eq!(
-            req.input,
-            EmbeddingInput::Single("hello world".to_string())
-        );
+        assert_eq!(req.input, EmbeddingInput::Single("hello world".to_string()));
         assert!(!req.input.is_empty());
         assert_eq!(req.encoding_format, None);
         assert_eq!(req.dimensions, None);
@@ -142,7 +139,10 @@ mod tests {
         let json_str = r#"{"model":"text-embedding-3-small","input":[101, 2054, 2003, 102]}"#;
         let req: EmbeddingRequest = serde_json::from_str(json_str).expect("deserialize");
         assert_eq!(req.model, "text-embedding-3-small");
-        assert_eq!(req.input, EmbeddingInput::Tokens(vec![101, 2054, 2003, 102]));
+        assert_eq!(
+            req.input,
+            EmbeddingInput::Tokens(vec![101, 2054, 2003, 102])
+        );
         assert!(!req.input.is_empty());
 
         let serialized = serde_json::to_string(&req).expect("serialize");

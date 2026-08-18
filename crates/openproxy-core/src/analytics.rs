@@ -647,10 +647,7 @@ mod tests {
         );
         // tokens_per_sec has 5 samples (all 10.0).
         let p50_tps = r.p50_tokens_per_sec.expect("p50 tps present");
-        assert!(
-            (p50_tps - 10.0).abs() < 0.5,
-            "p50 tps ≈ 10, got {p50_tps}"
-        );
+        assert!((p50_tps - 10.0).abs() < 0.5, "p50 tps ≈ 10, got {p50_tps}");
     }
 
     // -----------------------------------------------------------------------

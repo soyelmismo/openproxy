@@ -245,7 +245,6 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
     Ok(total_updated)
 }
 
-
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     conn.execute(
         "UPDATE usage SET client_responded = 1 WHERE id = ?1",

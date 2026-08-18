@@ -1,4 +1,4 @@
-use super::{ApiError, CoreError, Arc};
+use super::{ApiError, Arc, CoreError};
 use crate::extractors::{DbReader, DbWriter};
 use axum::{Json, extract::Path};
 use openproxy_core::free_proxies::{

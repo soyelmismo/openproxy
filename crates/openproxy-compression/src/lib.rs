@@ -19,4 +19,3 @@ pub use token_estimate::{
     estimate_completion_tokens, estimate_prompt_tokens, message_content_to_text,
 };
 pub use visitor::mutate_message_text;
-

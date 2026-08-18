@@ -160,8 +160,7 @@ impl UsageTracker {
             proxy_status,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
-        let request_headers =
-            crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
+        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
@@ -380,8 +379,12 @@ impl<'a> UsageRecordBuilder<'a> {
         let (compression_savings_pct, compression_techniques) = {
             let guard = self.tracker.compression_stats_cell.read();
             (
-                guard.as_ref().and_then(openproxy_compression::CompressionStats::savings_pct_opt),
-                guard.as_ref().and_then(openproxy_compression::CompressionStats::techniques_csv),
+                guard
+                    .as_ref()
+                    .and_then(openproxy_compression::CompressionStats::savings_pct_opt),
+                guard
+                    .as_ref()
+                    .and_then(openproxy_compression::CompressionStats::techniques_csv),
             )
         };
 
@@ -433,7 +436,6 @@ impl<'a> UsageRecordBuilder<'a> {
                 }
             }
         };
-
 
         let input = UsageInput {
             request_id: self.req.request_id,

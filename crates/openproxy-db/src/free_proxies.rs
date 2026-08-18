@@ -100,10 +100,7 @@ pub fn get_or_assign_provider_proxy(
             .map_err(crate::error::map_db_error)?;
         let rows = stmt
             .query_map(
-                params![
-                    provider_id.as_str(),
-                    account_id.map_or(0, |id| id.0)
-                ],
+                params![provider_id.as_str(), account_id.map_or(0, |id| id.0)],
                 |row| row.get::<_, String>(0),
             )
             .map_err(crate::error::map_db_error)?;

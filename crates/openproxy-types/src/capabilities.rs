@@ -593,61 +593,46 @@ mod tests {
             infer_model_type("YoannDev90/diffusiongemma-26b-a4b-it:free"),
             "chat"
         );
-        assert_eq!(
-            infer_model_type("gemma-4-31b-sdft-heretic-rp"),
-            "chat"
-        );
-        assert_eq!(
-            infer_model_type("gpt-4o-audio-preview"),
-            "chat"
-        );
-        assert_eq!(
-            infer_model_type("gemini-2.0-flash-lite"),
-            "chat"
-        );
+        assert_eq!(infer_model_type("gemma-4-31b-sdft-heretic-rp"), "chat");
+        assert_eq!(infer_model_type("gpt-4o-audio-preview"), "chat");
+        assert_eq!(infer_model_type("gemini-2.0-flash-lite"), "chat");
         assert_eq!(
             infer_model_type("gemini-2.0-flash-lite-preview-02-05"),
             "chat"
         );
-        assert_eq!(
-            infer_model_type("gemini-1.5-flash-8b"),
-            "chat"
-        );
-        assert_eq!(
-            infer_model_type("gemini-2.5-flash"),
-            "chat"
-        );
+        assert_eq!(infer_model_type("gemini-1.5-flash-8b"), "chat");
+        assert_eq!(infer_model_type("gemini-2.5-flash"), "chat");
         assert_eq!(
             infer_model_type("gemini-2.0-flash-thinking-exp-01-21"),
             "chat"
         );
-        assert_eq!(
-            infer_model_type("imagen-3.0-generate-002"),
-            "image"
-        );
-        assert_eq!(
-            infer_model_type("google/imagen-3"),
-            "image"
-        );
+        assert_eq!(infer_model_type("imagen-3.0-generate-002"), "image");
+        assert_eq!(infer_model_type("google/imagen-3"), "image");
         // Audio models named flux (Deepgram Flux)
-        assert_eq!(
-            infer_model_type("deepgram-flux"),
-            "audio"
-        );
-        assert_eq!(
-            infer_model_type("@cf/deepgram/flux"),
-            "audio"
-        );
+        assert_eq!(infer_model_type("deepgram-flux"), "audio");
+        assert_eq!(infer_model_type("@cf/deepgram/flux"), "audio");
     }
 
     #[test]
     fn modality_inference_consistency() {
-        assert_eq!(infer_output_modalities("text-embedding-3-small"), vec!["embedding"]);
-        assert_eq!(infer_output_modalities("black-forest-labs/flux-1.1"), vec!["image"]);
+        assert_eq!(
+            infer_output_modalities("text-embedding-3-small"),
+            vec!["embedding"]
+        );
+        assert_eq!(
+            infer_output_modalities("black-forest-labs/flux-1.1"),
+            vec!["image"]
+        );
         assert_eq!(infer_output_modalities("whisper-1"), vec!["text"]);
-        assert_eq!(infer_input_modalities_for_model("whisper-1", &ModelCapabilities::empty()), vec!["audio"]);
+        assert_eq!(
+            infer_input_modalities_for_model("whisper-1", &ModelCapabilities::empty()),
+            vec!["audio"]
+        );
         assert_eq!(infer_output_modalities("tts-1"), vec!["audio"]);
-        assert_eq!(infer_input_modalities_for_model("tts-1", &ModelCapabilities::empty()), vec!["text"]);
+        assert_eq!(
+            infer_input_modalities_for_model("tts-1", &ModelCapabilities::empty()),
+            vec!["text"]
+        );
         assert_eq!(infer_output_modalities("gpt-4o"), vec!["text"]);
         assert_eq!(
             infer_output_modalities("gpt-4o-audio-preview"),

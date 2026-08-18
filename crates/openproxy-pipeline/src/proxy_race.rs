@@ -44,8 +44,7 @@ pub async fn run_proxy_race(
         }
     };
 
-    let (race_sink, worker_tokens) =
-        crate::race_sink::RaceSink::new(original_tx, num_workers);
+    let (race_sink, worker_tokens) = crate::race_sink::RaceSink::new(original_tx, num_workers);
 
     for (worker_idx, (proxy_id, proxy_url)) in candidate_proxies.into_iter().enumerate() {
         let mut req = req.clone();

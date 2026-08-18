@@ -48,7 +48,9 @@ impl RetryPolicy {
         err: &openproxy_types::error::CoreError,
         idle_chunk_retryable: bool,
     ) -> bool {
-        use openproxy_types::error::CoreError::{UpstreamTimeout, UpstreamConnection, RateLimited, UpstreamError, Cancelled, RaceLost};
+        use openproxy_types::error::CoreError::{
+            Cancelled, RaceLost, RateLimited, UpstreamConnection, UpstreamError, UpstreamTimeout,
+        };
         match err {
             UpstreamTimeout { phase, .. } => match phase.as_str() {
                 // idle_chunk is the ONLY switchable exception. It

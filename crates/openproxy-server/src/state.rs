@@ -442,7 +442,9 @@ impl AppState {
         Ok(())
     }
 
-    fn load_adapters(db_pool: &Arc<db::DbPool>) -> Result<Vec<adapters::ProviderAdapterEnum>, openproxy_types::CoreError> {
+    fn load_adapters(
+        db_pool: &Arc<db::DbPool>,
+    ) -> Result<Vec<adapters::ProviderAdapterEnum>, openproxy_types::CoreError> {
         let mut new_adapters: Vec<adapters::ProviderAdapterEnum> = adapters::builtin_adapters();
         let all_providers = {
             let w = db_pool.writer();
@@ -1086,8 +1088,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-state-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-state-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");

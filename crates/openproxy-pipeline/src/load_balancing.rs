@@ -276,14 +276,23 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
         registry.record_success(ComboTargetId(3));
         let res = resolve_lkgp(targets.clone(), &combo, &registry);
-        assert_eq!(res[0].id.0, 3, "Target 3 should be at head after latest success");
+        assert_eq!(
+            res[0].id.0, 3,
+            "Target 3 should be at head after latest success"
+        );
         assert_eq!(res[1].id.0, 2);
 
         // 4. Target 3 fails -> Target 3 drops its known-good state, Target 2 takes back #1
         registry.record_failure(ComboTargetId(3));
         let res = resolve_lkgp(targets, &combo, &registry);
-        assert_eq!(res[0].id.0, 2, "Target 2 should reclaim #1 after Target 3 fails");
-        assert_eq!(res[1].id.0, 1, "Target 1 (priority 1) beats failed Target 3 (priority 3)");
+        assert_eq!(
+            res[0].id.0, 2,
+            "Target 2 should reclaim #1 after Target 3 fails"
+        );
+        assert_eq!(
+            res[1].id.0, 1,
+            "Target 1 (priority 1) beats failed Target 3 (priority 3)"
+        );
         assert_eq!(res[2].id.0, 3);
     }
 }

@@ -47,7 +47,6 @@ pub async fn transcribe(
         parsed_body,
         api_key_id,
     )
-
     .await
     .map_err(ApiError)?;
 

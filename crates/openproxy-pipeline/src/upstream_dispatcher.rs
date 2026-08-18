@@ -139,7 +139,8 @@ impl UpstreamDispatcher {
                         Some(pid.clone())
                     } else if is_per_account {
                         if let Some(ref acc_id) = account_id {
-                            openproxy_db::accounts::get_current_proxy_id(&conn, *acc_id).unwrap_or(None)
+                            openproxy_db::accounts::get_current_proxy_id(&conn, *acc_id)
+                                .unwrap_or(None)
                         } else {
                             None
                         }
@@ -177,11 +178,17 @@ impl UpstreamDispatcher {
                     trigger = ?trigger,
                     "proxy rotation triggered: clearing binding and adding cooldown for provider"
                 );
-                let cooldown_duration = cooldown_ms.map_or_else(|| std::time::Duration::from_mins(15), std::time::Duration::from_millis);
+                let cooldown_duration = cooldown_ms.map_or_else(
+                    || std::time::Duration::from_mins(15),
+                    std::time::Duration::from_millis,
+                );
 
                 // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
                 // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
-                if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
+                if matches!(
+                    trigger,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError
+                ) {
                     let _ = repo.update_proxy_status(bad_proxy, "dead", None);
                 }
 
@@ -197,14 +204,16 @@ impl UpstreamDispatcher {
                         let _ = openproxy_db::accounts::clear_current_proxy_id(&conn, *acc_id);
                     }
                 } else {
-                    let _ = openproxy_db::providers::update_current_proxy(
-                        &conn,
-                        &provider_id,
-                        None,
-                    );
+                    let _ =
+                        openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
                 }
 
-                let has_candidates = openproxy_db::free_proxies::get_candidate_proxies_for_provider(&conn, &provider_id, 1)
+                let has_candidates =
+                    openproxy_db::free_proxies::get_candidate_proxies_for_provider(
+                        &conn,
+                        &provider_id,
+                        1,
+                    )
                     .is_ok_and(|c| !c.is_empty());
 
                 return has_candidates;
@@ -380,16 +389,24 @@ impl UpstreamDispatcher {
 
         let is_horde_vision = target.provider_id.as_str() == "horde"
             && (openproxy_adapters::HordeAdapter::is_vision_model(model.model_id.as_str())
-                || openproxy_adapters::HordeAdapter::extract_image_from_messages(&req.openai_request.messages).is_some());
+                || openproxy_adapters::HordeAdapter::extract_image_from_messages(
+                    &req.openai_request.messages,
+                )
+                .is_some());
 
         if is_horde_vision {
-            let Some(source_image) =
-                openproxy_adapters::HordeAdapter::extract_image_from_messages(&req.openai_request.messages)
-            else {
+            let Some(source_image) = openproxy_adapters::HordeAdapter::extract_image_from_messages(
+                &req.openai_request.messages,
+            ) else {
                 let err = CoreError::Validation(
                     "No image found in request messages for Horde vision interrogation".into(),
                 );
-                return self.record_and_fail(req, combo, target, dctx.fail_ctx_code(&err, None, None, 400));
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, None, None, 400),
+                );
             };
 
             let send_start = Instant::now();
@@ -716,9 +733,13 @@ impl UpstreamDispatcher {
                     dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
                 );
             }
-            Err(UpstreamError::Connection(msg) | UpstreamError::Tls(msg) |
-UpstreamError::Http(msg) | UpstreamError::Decode(msg) |
-UpstreamError::Invalid(msg)) => {
+            Err(
+                UpstreamError::Connection(msg)
+                | UpstreamError::Tls(msg)
+                | UpstreamError::Http(msg)
+                | UpstreamError::Decode(msg)
+                | UpstreamError::Invalid(msg),
+            ) => {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
@@ -1196,7 +1217,9 @@ UpstreamError::Invalid(msg)) => {
             }
             openproxy_types::TargetFormat::Gemini => {
                 let adapter = openproxy_adapters::GeminiAdapter::new();
-                match adapter.translate_non_streaming_response(target_format, response_body_raw.clone()) {
+                match adapter
+                    .translate_non_streaming_response(target_format, response_body_raw.clone())
+                {
                     Ok(r) => r,
                     Err(err) => {
                         return self.record_and_fail(
@@ -1779,9 +1802,13 @@ UpstreamError::Invalid(msg)) => {
                     dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
                 );
             }
-            Err(UpstreamError::Connection(msg) | UpstreamError::Tls(msg) |
-UpstreamError::Http(msg) | UpstreamError::Decode(msg) |
-UpstreamError::Invalid(msg)) => {
+            Err(
+                UpstreamError::Connection(msg)
+                | UpstreamError::Tls(msg)
+                | UpstreamError::Http(msg)
+                | UpstreamError::Decode(msg)
+                | UpstreamError::Invalid(msg),
+            ) => {
                 let is_proxy_rotated = self
                     .check_and_trigger_proxy_rotation(
                         &target.provider_id,
@@ -2117,7 +2144,10 @@ UpstreamError::Invalid(msg)) => {
         // We only do this if stop_reason is None, because an empty
         // stream with finish_reason="length" (max_tokens=1 cut it off)
         // is perfectly valid.
-        let is_empty_stream = acc.as_ref().is_some_and(super::sse_accumulator::ResponseAccumulator::is_empty) && stop_reason.is_none();
+        let is_empty_stream = acc
+            .as_ref()
+            .is_some_and(super::sse_accumulator::ResponseAccumulator::is_empty)
+            && stop_reason.is_none();
         if is_empty_stream {
             let err = CoreError::UpstreamConnection(
                 "streaming response was empty (no content, no reasoning, no tool_calls) — treating as error for retry".to_string(),

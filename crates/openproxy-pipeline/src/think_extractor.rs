@@ -164,9 +164,8 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
             })
             .map(|ct| ct.to_ascii_lowercase());
 
-        let after_tag_content = &after_open[after_open
-            .find('>')
-            .map_or(after_open.len(), |p| p + 1)..];
+        let after_tag_content =
+            &after_open[after_open.find('>').map_or(after_open.len(), |p| p + 1)..];
 
         let (think_text, rest) = match &close_tag {
             Some(ct) => {

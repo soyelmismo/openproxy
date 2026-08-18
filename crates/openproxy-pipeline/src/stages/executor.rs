@@ -82,7 +82,9 @@ impl PipelineStage for UpstreamExecutorStage {
 
             let (is_use_proxies, is_incremental_mode, proxy_rotation_errors) = {
                 let conn = ctx.pipeline.conn.lock();
-                if let Ok(Some(prov)) = openproxy_db::providers::get(&conn, &target.target.provider_id) {
+                if let Ok(Some(prov)) =
+                    openproxy_db::providers::get(&conn, &target.target.provider_id)
+                {
                     (
                         prov.use_proxies,
                         prov.proxy_rotation_mode == "incremental_race"
@@ -163,8 +165,8 @@ impl PipelineStage for UpstreamExecutorStage {
                             "triggering incremental proxy race"
                         );
                         overall_attempt = overall_attempt.saturating_add(1);
-                        target_local_retry_count = target_local_retry_count
-                            .saturating_add(candidate_proxies.len() as u8);
+                        target_local_retry_count =
+                            target_local_retry_count.saturating_add(candidate_proxies.len() as u8);
 
                         result = crate::proxy_race::run_proxy_race(
                             &ctx.pipeline,
@@ -343,12 +345,12 @@ pub(crate) fn matches_proxy_rotation_errors(err: &CoreError, rotation_errors_csv
             let sc_str = status.to_string();
             parts.iter().any(|&e| e == sc_str)
         }
-        CoreError::UpstreamConnection(_) => {
-            parts.iter().any(|&e| e == "connect_error" || e == "timeout")
-        }
-        CoreError::UpstreamTimeout { .. } => {
-            parts.iter().any(|&e| e == "timeout" || e == "connect_error")
-        }
+        CoreError::UpstreamConnection(_) => parts
+            .iter()
+            .any(|&e| e == "connect_error" || e == "timeout"),
+        CoreError::UpstreamTimeout { .. } => parts
+            .iter()
+            .any(|&e| e == "timeout" || e == "connect_error"),
         _ => false,
     }
 }

@@ -1,4 +1,6 @@
-use super::{AppState, ApiError, CoreError, AccountId, ProviderId, ProviderRefreshQuery, core_oauth};
+use super::{
+    AccountId, ApiError, AppState, CoreError, ProviderId, ProviderRefreshQuery, core_oauth,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},

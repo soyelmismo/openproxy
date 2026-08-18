@@ -394,8 +394,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-routing-test-{pid}-{nanos}-{n}"));
+        let dir = std::env::temp_dir().join(format!("openproxy-routing-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("routing.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -491,7 +490,8 @@ mod tests {
             combo_id: got_id,
             combo_name,
             ..
-        } = plan else {
+        } = plan
+        else {
             panic!("expected Combo, got {plan:?}");
         };
         assert_eq!(got_id, combo_id);
@@ -509,7 +509,8 @@ mod tests {
             combo_id: got_id,
             combo_name,
             ..
-        } = plan else {
+        } = plan
+        else {
             panic!("expected Combo, got {plan:?}");
         };
         assert_eq!(got_id, combo_id);

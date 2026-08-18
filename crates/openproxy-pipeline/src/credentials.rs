@@ -200,7 +200,9 @@ impl CredentialManager {
                     (key, label, custom_meta)
                 }
                 None => {
-                    let auth_type = providers_map.get(&t.provider_id.0).map(std::string::String::as_str);
+                    let auth_type = providers_map
+                        .get(&t.provider_id.0)
+                        .map(std::string::String::as_str);
                     if auth_type == Some("none")
                         || openproxy_adapters::adapters::is_anonymous_fallback(&t.provider_id.0)
                     {
