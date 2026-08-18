@@ -682,11 +682,8 @@ fn urlencoded(s: &str) -> String {
 }
 
 fn hex_digit(n: u8) -> char {
-    match n {
-        0..=9 => (b'0' + n) as char,
-        10..=15 => (b'A' + (n - 10)) as char,
-        _ => unreachable!(),
-    }
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    HEX.get(n as usize).map_or('0', |&b| b as char)
 }
 
 #[cfg(test)]

@@ -87,8 +87,9 @@ pub async fn run_proxy_race(
                 .await;
 
             if result.error.is_none() {
-                if winner.lock().is_none() {
-                    *winner.lock() = Some((result, proxy_id));
+                let mut w = winner.lock();
+                if w.is_none() {
+                    *w = Some((result, proxy_id));
                 }
                 running.fetch_sub(1, Ordering::AcqRel);
                 all_done.notify_one();

@@ -117,8 +117,9 @@ pub(crate) async fn run_race(
                     .await;
 
                 if result.error.is_none() {
-                    if winner.lock().is_none() {
-                        *winner.lock() = Some(result);
+                    let mut w = winner.lock();
+                    if w.is_none() {
+                        *w = Some(result);
                     }
                     if running.fetch_sub(1, Ordering::AcqRel) == 1 {
                         all_done.notify_one();

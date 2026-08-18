@@ -1061,7 +1061,10 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
             let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
             let tag_trimmed = tag_content.trim();
 
-            if tag_trimmed.len() >= 5 && tag_trimmed[..5].eq_ignore_ascii_case("lora:") {
+            if tag_trimmed
+                .get(..5)
+                .is_some_and(|p| p.eq_ignore_ascii_case("lora:"))
+            {
                 let lora_body = &tag_trimmed[5..];
                 let parts: Vec<&str> = lora_body.split(':').collect();
                 if !parts.is_empty() {
@@ -1087,10 +1090,17 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
                         });
                     }
                 }
-            } else if (tag_trimmed.len() >= 3 && tag_trimmed[..3].eq_ignore_ascii_case("ti:"))
-                || (tag_trimmed.len() >= 4 && tag_trimmed[..4].eq_ignore_ascii_case("emb:"))
+            } else if tag_trimmed
+                .get(..3)
+                .is_some_and(|p| p.eq_ignore_ascii_case("ti:"))
+                || tag_trimmed
+                    .get(..4)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("emb:"))
             {
-                let ti_body = if tag_trimmed[..3].eq_ignore_ascii_case("ti:") {
+                let ti_body = if tag_trimmed
+                    .get(..3)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("ti:"))
+                {
                     &tag_trimmed[3..]
                 } else {
                     &tag_trimmed[4..]
@@ -1968,6 +1978,18 @@ mod tests {
             "A mountain, highly detailed"
         );
         assert_eq!(clean_residual_prompt(", leading comma, "), "leading comma");
+    }
+
+    #[test]
+    fn test_parse_prompt_directives_multibyte_safe() {
+        let prompt = "A prompt with <🦀> and <🎨:1.0> and <lora:🦀_style:0.8> <ti:✨:0.5>";
+        let parsed = parse_prompt_directives(prompt);
+        assert_eq!(parsed.loras.len(), 1);
+        assert_eq!(parsed.loras[0].name, "🦀_style");
+        assert_eq!(parsed.tis.len(), 1);
+        assert_eq!(parsed.tis[0].name, "✨");
+        assert!(parsed.clean_prompt.contains("<🦀>"));
+        assert!(parsed.clean_prompt.contains("<🎨:1.0>"));
     }
 
     #[test]

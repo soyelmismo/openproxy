@@ -86,14 +86,7 @@ pub async fn create_provider(
     }
 
     if is_anonymous {
-        let pid_str = id.to_string();
-        tokio::spawn(async move {
-            let q = ProviderRefreshQuery {
-                account_id: None,
-                ttl_seconds: None,
-            };
-            let _ = run_provider_refresh(s, &pid_str, q).await;
-        });
+        spawn_background_provider_refresh(s, id.to_string(), None);
     }
 
     Ok(Json(serde_json::json!({ "id": id.as_str() })))
@@ -207,6 +200,20 @@ pub async fn update_provider(
         );
     }
     Ok(Json(serde_json::json!({ "id": id })))
+}
+
+pub(crate) fn spawn_background_provider_refresh(
+    s: AppState,
+    provider_id: String,
+    account_id: Option<i64>,
+) {
+    tokio::spawn(async move {
+        let q = ProviderRefreshQuery {
+            account_id,
+            ttl_seconds: None,
+        };
+        let _ = run_provider_refresh(s, &provider_id, q).await;
+    });
 }
 
 pub(crate) async fn run_provider_refresh(

@@ -348,7 +348,7 @@ pub async fn auth_middleware(
     }
     parsed.messages = valid_messages;
 
-    for (i, _) in (0..parsed.messages.len()).enumerate() {
+    for i in 0..parsed.messages.len() {
         if parsed.messages[i].role == "assistant" && parsed.messages[i].tool_calls.is_some() {
             let (left, right) = parsed.messages.split_at_mut(i + 1);
             if let Some(msg) = left.last_mut()

@@ -5,6 +5,34 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3600;
 
+macro_rules! account_select {
+    ($tail:expr) => {
+        concat!(
+            "SELECT id, provider_id, label, priority, extra_config_json, \
+                    health_status, rate_limited_until, \
+                    quota_session_used, quota_session_limit, quota_session_reset_at, \
+                    quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
+                    quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+                    quota_model_details, \
+                    auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
+                    created_at, current_proxy_id \
+             FROM accounts ",
+            $tail
+        )
+    };
+    () => {
+        "SELECT id, provider_id, label, priority, extra_config_json, \
+                health_status, rate_limited_until, \
+                quota_session_used, quota_session_limit, quota_session_reset_at, \
+                quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
+                quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+                quota_model_details, \
+                auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
+                created_at, current_proxy_id \
+         FROM accounts"
+    };
+}
+
 pub fn create(
     conn: &Connection,
     provider_id: &ProviderId,
@@ -14,11 +42,7 @@ pub fn create(
     priority: i32,
     extra_config_json: Option<&str>,
 ) -> Result<AccountId> {
-    let blob = if let Some(key) = api_key {
-        Some(master_key.encrypt(key)?)
-    } else {
-        None
-    };
+    let blob = api_key.map(|key| master_key.encrypt(key)).transpose()?;
 
     let result = conn.execute(
         "INSERT INTO accounts(provider_id, api_key_encrypted, label, priority, extra_config_json) \
@@ -53,15 +77,7 @@ pub fn create(
 pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<Option<Account>> {
     let row = conn
         .query_row(
-            "SELECT id, provider_id, label, priority, extra_config_json, \
-                    health_status, rate_limited_until, \
-                    quota_session_used, quota_session_limit, quota_session_reset_at, \
-                    quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
-                    quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
-                    quota_model_details, \
-                    auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at, current_proxy_id \
-             FROM accounts WHERE id = ?1",
+            account_select!("WHERE id = ?1"),
             params![id.0],
             |row| row_to_account(row, master_key),
         )
@@ -79,48 +95,22 @@ pub fn list(
     master_key: &MasterKey,
 ) -> Result<Vec<Account>> {
     let sql = match provider {
-        Some(_) => {
-            "SELECT id, provider_id, label, priority, extra_config_json, \
-                    health_status, rate_limited_until, \
-                    quota_session_used, quota_session_limit, quota_session_reset_at, \
-                    quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
-                    quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
-                    quota_model_details, \
-                    auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at, current_proxy_id \
-             FROM accounts WHERE provider_id = ?1 \
-             ORDER BY priority ASC, id ASC"
-        }
-        None => {
-            "SELECT id, provider_id, label, priority, extra_config_json, \
-                    health_status, rate_limited_until, \
-                    quota_session_used, quota_session_limit, quota_session_reset_at, \
-                    quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
-                    quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
-                    quota_model_details, \
-                    auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at, current_proxy_id \
-             FROM accounts \
-             ORDER BY priority ASC, id ASC"
-        }
+        Some(_) => account_select!("WHERE provider_id = ?1 ORDER BY priority ASC, id ASC"),
+        None => account_select!("ORDER BY priority ASC, id ASC"),
     };
 
     let mut stmt = conn
         .prepare(sql)
         .map_err(crate::error::map_db_error_ctx("list accounts prepare"))?;
 
-    let accounts: Vec<Account> = match provider {
-        Some(p) => stmt
-            .query_map(params![p.as_str()], |row| row_to_account(row, master_key))
-            .map_err(crate::error::map_db_error)?
-            .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
-            .collect::<Result<Vec<Account>>>()?,
-        None => stmt
-            .query_map(params![], |row| row_to_account(row, master_key))
-            .map_err(crate::error::map_db_error)?
-            .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
-            .collect::<Result<Vec<Account>>>()?,
-    };
+    let accounts: Vec<Account> = stmt
+        .query_map(
+            rusqlite::params_from_iter(provider.map(|p| p.as_str())),
+            |row| row_to_account(row, master_key),
+        )
+        .map_err(crate::error::map_db_error)?
+        .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
+        .collect::<Result<Vec<Account>>>()?;
     Ok(accounts)
 }
 
@@ -454,21 +444,12 @@ pub fn list_expiring_oauth_accounts(
         .to_string();
 
     let mut stmt = conn
-        .prepare(
-            "SELECT id, provider_id, label, priority, extra_config_json, \
-                    health_status, rate_limited_until, \
-                    quota_session_used, quota_session_limit, quota_session_reset_at, \
-                    quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
-                    quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
-                    quota_model_details, \
-                    auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at, current_proxy_id \
-             FROM accounts \
-             WHERE auth_type = 'oauth' \
+        .prepare(account_select!(
+            "WHERE auth_type = 'oauth' \
                AND expires_at IS NOT NULL \
                AND expires_at <= ?1 \
-             ORDER BY priority ASC, id ASC",
-        )
+             ORDER BY priority ASC, id ASC"
+        ))
         .map_err(crate::error::map_db_error)?;
 
     let rows = stmt

@@ -13,7 +13,7 @@ pub struct Detection {
     pub command: Option<String>,
 }
 
-type DetectorFn = fn(&str, Option<&str>) -> Option<(String, f64)>;
+type DetectorFn = fn(&str, Option<&str>) -> Option<(&'static str, f64)>;
 
 /// Lista de detectores registrados. Cada detector recibe el texto completo
 /// y el comando detectado (si se pudo extraer), y retorna `(id, confidence)` si matchea.
@@ -80,11 +80,11 @@ pub fn detect(text: &str) -> Detection {
     let command = extract_command(text);
     let cmd_ref = command.as_deref();
 
-    let mut best: Option<(String, f64)> = None;
+    let mut best: Option<(&'static str, f64)> = None;
     for detector in DETECTORS {
         if let Some(result) = detector(text, cmd_ref) {
             let (_id, conf) = &result;
-            if best.as_ref().is_none_or(|b: &(String, f64)| *conf > b.1) {
+            if best.as_ref().is_none_or(|b: &(&'static str, f64)| *conf > b.1) {
                 best = Some(result);
             }
         }
@@ -92,7 +92,7 @@ pub fn detect(text: &str) -> Detection {
 
     match best {
         Some((id, conf)) => Detection {
-            id,
+            id: id.to_string(),
             confidence: conf,
             command,
         },
@@ -106,36 +106,36 @@ pub fn detect(text: &str) -> Detection {
 
 // ─── Individual detectors ───────────────────────────────────────────────────
 
-fn detect_git_status(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_git_status(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("git status"));
     let content_match = text.contains("On branch ")
         || text.contains("Changes not staged for commit")
         || text.contains("Changes to be committed")
         || text.contains("Untracked files:");
     if cmd_match && content_match {
-        Some(("git-status".into(), 0.95))
+        Some(("git-status", 0.95))
     } else if content_match {
-        Some(("git-status".into(), 0.75))
+        Some(("git-status", 0.75))
     } else if cmd_match {
-        Some(("git-status".into(), 0.50))
+        Some(("git-status", 0.50))
     } else {
         None
     }
 }
 
-fn detect_git_diff(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_git_diff(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("git diff") || c.starts_with("git show"));
     let content_match = text.contains("diff --git ") || text.contains("@@ -");
     if cmd_match && content_match {
-        Some(("git-diff".into(), 0.95))
+        Some(("git-diff", 0.95))
     } else if content_match {
-        Some(("git-diff".into(), 0.70))
+        Some(("git-diff", 0.70))
     } else {
         None
     }
 }
 
-fn detect_git_log(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_git_log(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("git log"));
     let content_match = text.contains('\n')
         && text.lines().any(|l| {
@@ -144,26 +144,26 @@ fn detect_git_log(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
                 && l[7..].bytes().all(|b| b.is_ascii_hexdigit())
         });
     if cmd_match && content_match {
-        Some(("git-log".into(), 0.95))
+        Some(("git-log", 0.95))
     } else if content_match {
-        Some(("git-log".into(), 0.70))
+        Some(("git-log", 0.70))
     } else {
         None
     }
 }
 
-fn detect_git_branch(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_git_branch(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
         c.starts_with("git branch") || c.starts_with("git checkout") || c.starts_with("git switch")
     });
     if cmd_match {
-        Some(("git-branch".into(), 0.80))
+        Some(("git-branch", 0.80))
     } else {
         None
     }
 }
 
-fn detect_cargo_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_cargo_test(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match =
         cmd.is_some_and(|c| c.starts_with("cargo test") || c.starts_with("cargo nextest"));
     let content_match = text.contains("running ") && text.contains(" tests")
@@ -171,15 +171,15 @@ fn detect_cargo_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
             .lines()
             .any(|l| l.starts_with("test ") && l.contains("... ok"));
     if cmd_match {
-        Some(("cargo-test".into(), if content_match { 0.95 } else { 0.60 }))
+        Some(("cargo-test", if content_match { 0.95 } else { 0.60 }))
     } else if content_match {
-        Some(("cargo-test".into(), 0.55))
+        Some(("cargo-test", 0.55))
     } else {
         None
     }
 }
 
-fn detect_cargo_build(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_cargo_build(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
         c.starts_with("cargo build")
             || c.starts_with("cargo check")
@@ -191,17 +191,17 @@ fn detect_cargo_build(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
         || (text.contains("Finished ") && text.contains("profile"));
     if cmd_match {
         Some((
-            "cargo-build".into(),
+            "cargo-build",
             if content_match { 0.90 } else { 0.55 },
         ))
     } else if content_match {
-        Some(("cargo-build".into(), 0.50))
+        Some(("cargo-build", 0.50))
     } else {
         None
     }
 }
 
-fn detect_npm_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_npm_test(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
         c.starts_with("npm test")
             || c.starts_with("npm run test")
@@ -213,15 +213,15 @@ fn detect_npm_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
         || text.contains("Test Suites:")
         || text.contains("Tests:");
     if cmd_match {
-        Some(("npm-test".into(), if content_match { 0.95 } else { 0.55 }))
+        Some(("npm-test", if content_match { 0.95 } else { 0.55 }))
     } else if content_match {
-        Some(("npm-test".into(), 0.50))
+        Some(("npm-test", 0.50))
     } else {
         None
     }
 }
 
-fn detect_npm_install(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_npm_install(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
         c.starts_with("npm install")
             || c.starts_with("npm add")
@@ -232,85 +232,85 @@ fn detect_npm_install(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
         || text.contains("audited ") && text.contains(" packages");
     if cmd_match {
         Some((
-            "npm-install".into(),
+            "npm-install",
             if content_match { 0.90 } else { 0.55 },
         ))
     } else if content_match {
-        Some(("npm-install".into(), 0.45))
+        Some(("npm-install", 0.45))
     } else {
         None
     }
 }
 
-fn detect_docker_ps(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_docker_ps(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("docker ps"));
     let content_match = text.contains("CONTAINER ID") && text.contains("IMAGE");
     if cmd_match && content_match {
-        Some(("docker-ps".into(), 0.95))
+        Some(("docker-ps", 0.95))
     } else if content_match {
-        Some(("docker-ps".into(), 0.70))
+        Some(("docker-ps", 0.70))
     } else {
         None
     }
 }
 
-fn detect_docker_logs(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_docker_logs(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match =
         cmd.is_some_and(|c| c.starts_with("docker logs") || c.starts_with("docker compose logs"));
     if cmd_match {
-        Some(("docker-logs".into(), 0.80))
+        Some(("docker-logs", 0.80))
     } else {
         None
     }
 }
 
-fn detect_kubernetes(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_kubernetes(text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("kubectl ") || c.starts_with("oc "));
     let content_match = text.contains("NAMESPACE") && text.contains("STATUS")
         || text.contains("Ready ") && text.contains("Running");
     if cmd_match {
-        Some(("kubernetes".into(), if content_match { 0.90 } else { 0.50 }))
+        Some(("kubernetes", if content_match { 0.90 } else { 0.50 }))
     } else if content_match {
-        Some(("kubernetes".into(), 0.40))
+        Some(("kubernetes", 0.40))
     } else {
         None
     }
 }
 
-fn detect_shell_ls(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_shell_ls(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("ls") || c.starts_with("find"));
     if cmd_match {
-        Some(("shell-ls".into(), 0.70))
+        Some(("shell-ls", 0.70))
     } else {
         None
     }
 }
 
-fn detect_shell_grep(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_shell_grep(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
     let cmd_match =
         cmd.is_some_and(|c| c.starts_with("grep") || c.starts_with("rg ") || c.starts_with("ag "));
     if cmd_match {
-        Some(("shell-grep".into(), 0.70))
+        Some(("shell-grep", 0.70))
     } else {
         None
     }
 }
 
-fn detect_error_stacktrace(text: &str, _cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_error_stacktrace(text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
     if text.contains("Traceback (most recent call last)")
         || text.contains("panicked at")
         || text.contains("thread '") && text.contains("panicked at")
         || (text.contains("at ") && text.contains(".rs:"))
     {
-        Some(("error-stacktrace".into(), 0.80))
+        Some(("error-stacktrace", 0.80))
     } else {
         None
     }
 }
 
-fn detect_generic_error(text: &str, _cmd: Option<&str>) -> Option<(String, f64)> {
+fn detect_generic_error(text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
     if text.contains("Error:") || text.contains("error:") {
-        Some(("generic-error".into(), 0.30))
+        Some(("generic-error", 0.30))
     } else {
         None
     }

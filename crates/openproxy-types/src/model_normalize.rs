@@ -30,8 +30,12 @@ pub fn normalize_model_id(id: &str) -> String {
         s = s.trim_end_matches(suffix);
     }
 
-    let replaced = s.replace(':', "-");
-    let mut cur = replaced.as_str();
+    let replaced: std::borrow::Cow<'_, str> = if s.contains(':') {
+        std::borrow::Cow::Owned(s.replace(':', "-"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    };
+    let mut cur = replaced.as_ref();
 
     if let Some(stripped) = strip_date_suffix(cur) {
         cur = stripped;
@@ -46,7 +50,7 @@ pub fn normalize_model_id(id: &str) -> String {
         cur = stripped;
     }
 
-    normalize_family(cur)
+    normalize_family(cur).into_owned()
 }
 
 fn strip_date_suffix(s: &str) -> Option<&str> {
@@ -91,7 +95,7 @@ fn strip_4digit_suffix(s: &str) -> Option<&str> {
 
 fn strip_version_suffix(s: &str) -> Option<&str> {
     let (prefix, rest) = s.rsplit_once("-v")?;
-    if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+    if !rest.is_empty() && rest.as_bytes().iter().all(u8::is_ascii_digit) {
         Some(prefix)
     } else {
         None
@@ -111,7 +115,7 @@ fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
         return None;
     }
     let digits = &suffix[1..];
-    if digits.len() != 8 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    if digits.len() != 8 || !digits.as_bytes().iter().all(u8::is_ascii_digit) {
         return None;
     }
     let year = &digits[..4];
@@ -121,11 +125,12 @@ fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
     Some(&s[..idx])
 }
 
-fn normalize_family(s: &str) -> String {
-    if s.starts_with("gemini-") {
-        return s.replace('_', ".");
+fn normalize_family(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.starts_with("gemini-") && s.contains('_') {
+        std::borrow::Cow::Owned(s.replace('_', "."))
+    } else {
+        std::borrow::Cow::Borrowed(s)
     }
-    s.to_string()
 }
 
 #[cfg(test)]

@@ -1,6 +1,4 @@
-use super::{
-    AccountId, ApiError, AppState, CoreError, ProviderId, ProviderRefreshQuery, core_oauth,
-};
+use super::{AccountId, ApiError, AppState, CoreError, ProviderId, core_oauth};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -153,15 +151,11 @@ pub async fn oauth_exchange(
             );
         }
 
-        let s_clone = s.clone();
-        let p_clone = provider.clone();
-        tokio::spawn(async move {
-            let q = ProviderRefreshQuery {
-                account_id: Some(account_id.0),
-                ttl_seconds: None,
-            };
-            let _ = super::providers::run_provider_refresh(s_clone, &p_clone, q).await;
-        });
+        super::providers::spawn_background_provider_refresh(
+            s,
+            provider.clone(),
+            Some(account_id.0),
+        );
 
         Ok(Json(serde_json::json!({
             "account_id": account_id.0,
@@ -370,15 +364,11 @@ pub async fn oauth_device_poll(
                     );
                 }
 
-                let s_clone = s.clone();
-                let p_clone = provider.clone();
-                tokio::spawn(async move {
-                    let q = ProviderRefreshQuery {
-                        account_id: Some(account_id.0),
-                        ttl_seconds: None,
-                    };
-                    let _ = super::providers::run_provider_refresh(s_clone, &p_clone, q).await;
-                });
+                super::providers::spawn_background_provider_refresh(
+                    s.clone(),
+                    provider.clone(),
+                    Some(account_id.0),
+                );
 
                 Ok(Json(serde_json::json!({
                     "status": "ok",

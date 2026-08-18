@@ -50,6 +50,17 @@ impl ModelCapabilities {
     }
 }
 
+pub const STT_KEYWORDS: &[&str] = &[
+    "whisper",
+    "asr",
+    "conformer",
+    "sensevoice",
+    "speechmatics",
+    "transcription",
+    "stt",
+    "audio-transcription",
+];
+
 pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
     const VISION_KW: &[&str] = &[
         "gpt-4o",
@@ -146,13 +157,7 @@ pub fn infer_input_modalities_for_model(
             }
         }
         "audio" => {
-            if lower.contains("whisper")
-                || lower.contains("asr")
-                || lower.contains("conformer")
-                || lower.contains("sensevoice")
-                || lower.contains("speechmatics")
-                || lower.contains("transcription")
-            {
+            if STT_KEYWORDS.iter().any(|k| lower.contains(k)) {
                 vec!["audio"]
             } else {
                 vec!["text"]
@@ -186,13 +191,7 @@ pub fn infer_output_modalities(model_id: &str) -> Vec<&'static str> {
         "embedding" => vec!["embedding"],
         "image" => vec!["image"],
         "audio" => {
-            if lower.contains("whisper")
-                || lower.contains("asr")
-                || lower.contains("conformer")
-                || lower.contains("sensevoice")
-                || lower.contains("speechmatics")
-                || lower.contains("transcription")
-            {
+            if STT_KEYWORDS.iter().any(|k| lower.contains(k)) {
                 vec!["text"]
             } else {
                 vec!["audio"]
@@ -450,27 +449,24 @@ pub fn infer_model_type(model_id: &str) -> &'static str {
     "chat"
 }
 
+fn serialize_modalities(mods: &[&str]) -> String {
+    serde_json::to_string(mods).unwrap_or_else(|_| r#"["text"]"#.to_string())
+}
+
 pub fn infer_input_modalities_json(model_id: &str) -> String {
     let caps = infer_capabilities(model_id);
     let mods = infer_input_modalities_for_model(model_id, &caps);
-    serde_json::to_string(&mods).unwrap_or_else(|_| r#"["text"]"#.to_string())
+    serialize_modalities(&mods)
 }
 
 pub fn infer_output_modalities_json(model_id: &str) -> String {
     let mods = infer_output_modalities(model_id);
-    serde_json::to_string(&mods).unwrap_or_else(|_| r#"["text"]"#.to_string())
+    serialize_modalities(&mods)
 }
 
 pub fn is_stt_model(model_id: &str) -> bool {
     let lower = model_id.to_lowercase();
-    lower.contains("whisper")
-        || lower.contains("asr")
-        || lower.contains("conformer")
-        || lower.contains("sensevoice")
-        || lower.contains("speechmatics")
-        || lower.contains("transcription")
-        || lower.contains("stt")
-        || lower.contains("audio-transcription")
+    STT_KEYWORDS.iter().any(|k| lower.contains(k))
 }
 
 pub fn infer_family(model_id: &str) -> Option<String> {

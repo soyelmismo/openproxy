@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 /// Pre-compiled truncation configuration.
 ///
 /// Built ONCE at startup (alongside its owning `CompiledFilter`) and shared
@@ -67,9 +69,7 @@ pub fn smart_truncate(text: &str, config: &CompiledTruncateConfig) -> (String, b
     if !first {
         out.push('\n');
     }
-    out.push_str("[rtk:truncated ");
-    out.push_str(&dropped.to_string());
-    out.push_str(" lines]");
+    let _ = write!(out, "[rtk:truncated {dropped} lines]");
 
     // Priority lines from the middle (skip any that already appear in head
     // or tail — preserves original dedup behavior).

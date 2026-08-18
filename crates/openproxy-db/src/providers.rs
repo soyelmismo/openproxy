@@ -173,7 +173,7 @@ pub fn get_auth_types(
         "SELECT id, auth_type FROM providers WHERE id IN ({})",
         provider_ids,
         crate::batch::DEFAULT_CHUNK_SIZE,
-        |id| id.as_str().to_string(),
+        |id| id.as_str(),
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
     .map_err(crate::error::map_db_error_ctx(

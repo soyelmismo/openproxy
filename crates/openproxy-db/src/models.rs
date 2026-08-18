@@ -286,34 +286,32 @@ pub fn create_custom(
     ttl_seconds: i64,
     model_type: Option<&str>,
 ) -> Result<ModelRowId> {
-    let expires_expr = if ttl_seconds <= 0 {
-        "NULL".to_string()
-    } else {
-        format!("datetime('now', '+' || {ttl_seconds} || ' seconds')")
-    };
-
     let normalized = normalize_model_id(model_id.as_str());
     let effective_type = model_type.unwrap_or("chat");
-    let sql = format!(
-        "INSERT INTO models \
-            (provider_id, model_id, display_name, target_format, \
-             discovered_at, expires_at, active, custom, model_id_normalized, model_type) \
-         VALUES (?1, ?2, ?3, ?4, datetime('now'), {expires_expr}, 1, 1, ?5, ?6) \
-         ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-            display_name = excluded.display_name, \
-            target_format = excluded.target_format, \
-            discovered_at = datetime('now'), \
-            expires_at = {expires_expr}, \
-            active = 1, \
-            custom = 1, \
-            model_type = excluded.model_type, \
-            model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized) \
-         RETURNING id",
-    );
+    let ttl_param = if ttl_seconds > 0 {
+        Some(ttl_seconds)
+    } else {
+        None
+    };
 
     let row_id: i64 = conn
         .query_row(
-            &sql,
+            "INSERT INTO models \
+                (provider_id, model_id, display_name, target_format, \
+                 discovered_at, expires_at, active, custom, model_id_normalized, model_type) \
+             VALUES (?1, ?2, ?3, ?4, datetime('now'), \
+                     CASE WHEN ?7 IS NOT NULL THEN datetime('now', '+' || ?7 || ' seconds') ELSE NULL END, \
+                     1, 1, ?5, ?6) \
+             ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+                display_name = excluded.display_name, \
+                target_format = excluded.target_format, \
+                discovered_at = datetime('now'), \
+                expires_at = excluded.expires_at, \
+                active = 1, \
+                custom = 1, \
+                model_type = excluded.model_type, \
+                model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized) \
+             RETURNING id",
             params![
                 provider_id.as_str(),
                 model_id.as_str(),
@@ -321,6 +319,7 @@ pub fn create_custom(
                 target_format.as_str(),
                 &normalized,
                 effective_type,
+                ttl_param,
             ],
             |r| r.get(0),
         )

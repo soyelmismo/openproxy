@@ -25,7 +25,6 @@ parking_lot = { workspace = true }
 bytes = "1"
 http = "1"
 tracing = { workspace = true }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 ahash = "0.8.12"

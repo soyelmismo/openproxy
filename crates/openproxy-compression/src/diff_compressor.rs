@@ -33,7 +33,7 @@ const MIN_DIFF_LINES: usize = 30;
 pub const TECHNIQUE: &str = "lite::diff_compressor";
 
 /// Strict hunk header regex (for detection): `^@@ -\d+,\d+ \+\d+,\d+ @@`.
-static HUNK_HEADER_RE: LazyLock<Regex> =
+pub(crate) static HUNK_HEADER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
 
 /// Lenient hunk header regex (for parsing): allows optional counts

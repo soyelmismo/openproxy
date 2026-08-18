@@ -43,7 +43,7 @@
 //!   `cost::redact_error_msg` regex is available to apply here too.
 
 use std::collections::VecDeque;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -92,7 +92,8 @@ pub struct DebugLogEntry {
 
 /// The global ring buffer. Initialized once via [`init`] (called from
 /// `telemetry::init`); accessed via [`snapshot`] and [`snapshot_since`].
-static DEBUG_LOG_BUFFER: OnceLock<Mutex<DebugLogBuffer>> = OnceLock::new();
+static DEBUG_LOG_BUFFER: LazyLock<Mutex<DebugLogBuffer>> =
+    LazyLock::new(|| Mutex::new(DebugLogBuffer::new()));
 static FILE_LOG_SENDER: OnceLock<mpsc::Sender<DebugLogEntry>> = OnceLock::new();
 
 /// Internal struct holding the VecDeque + the monotonic seq counter.
@@ -123,7 +124,7 @@ impl DebugLogBuffer {
 /// (from `telemetry::init`) before any [`DebugLogLayer`] is installed.
 /// Idempotent: subsequent calls are no-ops.
 pub fn init() {
-    let _ = DEBUG_LOG_BUFFER.get_or_init(|| Mutex::new(DebugLogBuffer::new()));
+    let _ = &*DEBUG_LOG_BUFFER;
     let _ = FILE_LOG_SENDER.get_or_init(|| {
         let (tx, mut rx) = mpsc::channel::<DebugLogEntry>(FILE_LOG_CAPACITY);
 
@@ -190,20 +191,14 @@ pub fn init() {
 /// Snapshot ALL entries currently in the buffer, in insertion order
 /// (oldest first). Used by the dashboard's initial fetch.
 pub fn snapshot() -> Vec<DebugLogEntry> {
-    let Some(buf) = DEBUG_LOG_BUFFER.get() else {
-        return Vec::new();
-    };
-    let guard = buf.lock();
+    let guard = DEBUG_LOG_BUFFER.lock();
     guard.entries.iter().cloned().collect()
 }
 
 /// Snapshot entries with `seq > since`, in insertion order. Used by
 /// the dashboard's polling fetch.
 pub fn snapshot_since(since: u64) -> Vec<DebugLogEntry> {
-    let Some(buf) = DEBUG_LOG_BUFFER.get() else {
-        return Vec::new();
-    };
-    let guard = buf.lock();
+    let guard = DEBUG_LOG_BUFFER.lock();
     guard
         .entries
         .iter()
@@ -215,21 +210,16 @@ pub fn snapshot_since(since: u64) -> Vec<DebugLogEntry> {
 /// The highest `seq` currently in the buffer. The frontend uses this
 /// to know what `since` value to pass on the next poll.
 pub fn latest_seq() -> u64 {
-    let Some(buf) = DEBUG_LOG_BUFFER.get() else {
-        return 0;
-    };
-    let guard = buf.lock();
+    let guard = DEBUG_LOG_BUFFER.lock();
     guard.entries.back().map_or(0, |e| e.seq)
 }
 
 /// Clear all entries from the buffer. Used by `POST /admin/debug/clear`
 /// for "reproduce then capture" workflows.
 pub fn clear() {
-    if let Some(buf) = DEBUG_LOG_BUFFER.get() {
-        let mut guard = buf.lock();
-        guard.entries.clear();
-        guard.next_seq = 1;
-    }
+    let mut guard = DEBUG_LOG_BUFFER.lock();
+    guard.entries.clear();
+    guard.next_seq = 1;
 }
 
 /// A `tracing_subscriber::Layer` that captures every event into the
@@ -298,13 +288,11 @@ where
         };
 
         // Push into the global buffer.
-        let file_entry = if let Some(buf) = DEBUG_LOG_BUFFER.get() {
-            let mut guard = buf.lock();
+        let file_entry = {
+            let mut guard = DEBUG_LOG_BUFFER.lock();
             let to_send = entry.clone();
             guard.push(entry);
             to_send
-        } else {
-            entry
         };
 
         // Push to the file log task.
@@ -432,9 +420,8 @@ mod tests {
         // BUFFER_CAPACITY are kept. The snapshot is taken INSIDE
         // the same lock to avoid races with other tests that share
         // the global buffer.
-        let buf = DEBUG_LOG_BUFFER.get().expect("init");
         let snap = {
-            let mut guard = buf.lock();
+            let mut guard = DEBUG_LOG_BUFFER.lock();
             guard.entries.clear();
             guard.next_seq = 1;
             for i in 0..(BUFFER_CAPACITY + 10) {
@@ -466,9 +453,8 @@ mod tests {
     async fn snapshot_since_filters_by_seq() {
         let _test_lock = TEST_MUTEX.lock().unwrap();
         init();
-        let buf = DEBUG_LOG_BUFFER.get().expect("init");
         let snap = {
-            let mut guard = buf.lock();
+            let mut guard = DEBUG_LOG_BUFFER.lock();
             guard.entries.clear();
             guard.next_seq = 1;
             for i in 0..5 {
@@ -520,8 +506,7 @@ mod tests {
         // Reset the buffer to a known-empty state inside the lock
         // so we don't see entries from other tests that ran first.
         {
-            let buf = DEBUG_LOG_BUFFER.get().expect("init");
-            let mut guard = buf.lock();
+            let mut guard = DEBUG_LOG_BUFFER.lock();
             guard.entries.clear();
             guard.next_seq = 1;
         }

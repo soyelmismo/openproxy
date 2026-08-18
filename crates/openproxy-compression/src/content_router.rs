@@ -43,6 +43,7 @@
 //!
 //! [`GitDiff`]: ContentType::GitDiff
 
+use crate::diff_compressor::HUNK_HEADER_RE;
 use crate::visitor::mutate_message_text;
 use crate::{diff_compressor, log_compressor, smart_crusher};
 use openproxy_types::OpenAIMessage;
@@ -74,10 +75,6 @@ pub enum ContentType {
 // All regexes are compiled once via `std::sync::LazyLock` and reused across
 // calls. `^`-anchored patterns are applied per-line (the line is the whole
 // search string), so they don't need the `(?m)` flag.
-
-/// Strict hunk header: `^@@ -\d+,\d+ \+\d+,\d+ @@`.
-static HUNK_HEADER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
 
 /// `^path:line:` pattern from grep / ripgrep output.
 static SEARCH_RESULT_RE: LazyLock<Regex> =
