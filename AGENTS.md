@@ -61,12 +61,16 @@ openproxy/
 
 ### 3.3 Técnicas de Deduplicación Zero-Cost
 1. **Extension Traits (Blanket Implementations):** Para transformaciones comunes sin envolver tipos en nuevos structs (`pub trait ResponseExt`).
-2. **Macros Declarativas (`macro_rules!`):** Para deduplicar implementaciones de adapters o dispatchers.
+2. **Macros Declarativas & Jump-Maps ($O(1)$ en Compile-Time):**
+   - Para deduplicar implementaciones de adapters, enrutadores de proveedores o dispatchers.
+   - Todo mapeo clave-valor, catálogo o conversión de protocolos estáticos debe usar tablas de saltos generadas por macro con verificación exhaustiva de variantes en tiempo de compilación.
 3. **Traits con Métodos por Defecto:** Para endpoints base y URLs de upstream APIs.
 4. **Copy-on-Write y Zero-Alloc:**
    - Usar `std::borrow::Cow<'a, T>` para transformaciones que raramente requieren mutar la entrada.
    - Usar `Arc::unwrap_or_clone(arc)` para evitar clonar el contenido si el `Arc` es el único dueño.
    - Usar `write!(buf, ...)` con buffer reutilizado en hot paths para evitar allocaciones de formato intermedias.
+   - **Zero-Alloc Hashing para Claves Compuestas:** Usar `u64` (`DefaultHasher` / `Hasher`) en tablas hash de trackers, firmas o cooldowns en lugar de formatear e instanciar `String`s intermedios en memoria.
+   - **Streaming SSE Byte-Safe:** Acumulación en `Vec<u8>` sobre chunks TCP crudos, extrayendo líneas en `b'\n'` y decodificando con `std::str::from_utf8` para blindar los límites de caracteres UTF-8 multibyte y deserializar chunks con `#[serde(borrow)]`.
 
 ---
 
@@ -128,6 +132,10 @@ openproxy/
    - Credenciales upstream, tokens OAuth y API keys privadas deben sellarse con **AES-256-GCM** mediante la master key configurada en `OPENPROXY_MASTER_KEY`.
 3. **Cascadas de Borrado (`ON DELETE CASCADE`):**
    - Asegurar relaciones relacionales con claves foráneas para que la eliminación de entidades padre limpie sus tablas hijas (cooldowns, targets, etc.) automáticamente.
+4. **Mapeo Tipado de Filas (`map_row_fields!`):**
+   - Usar macros declarativas para mapeo de `rusqlite::Row` con calificadores tipados `@bool(idx)`, `@u16(idx)`, `@json(idx)` y `@enum(idx, Type)` para eliminar casts y conversiones intermedias manuales.
+5. **Nombres de Tablas Fuertemente Tipados:**
+   - Prohibido hardcodear nombres de tablas SQLite como strings libres en operaciones críticas de purga o mantenimiento; usar enums exhaustivos de tablas de base de datos.
 
 ---
 
