@@ -46,14 +46,44 @@ pub fn resolve_image_targets(
     api_key_id: Option<ApiKeyId>,
     started: Instant,
 ) -> Result<Vec<ImageTargets>> {
-    resolve_unary_targets(
+    let targets = resolve_unary_targets(
         db_pool,
         routing_plan,
         req_model,
         EndpointKind::Image,
         api_key_id,
         started,
-    )
+    )?;
+    Ok(consolidate_image_targets(targets))
+}
+
+pub fn consolidate_image_targets(targets: Vec<ImageTargets>) -> Vec<ImageTargets> {
+    let mut consolidated: Vec<ImageTargets> = Vec::new();
+    for target in targets {
+        if target.provider.as_str() == "horde"
+            && let Some(existing) = consolidated.iter_mut().find(|t| {
+                t.provider.as_str() == "horde" && t.account_id == target.account_id
+            })
+        {
+            let already_present = existing
+                .upstream_model
+                .split(',')
+                .map(str::trim)
+                .any(|m| m == target.upstream_model.as_str());
+
+            if !already_present {
+                if existing.upstream_model.is_empty() {
+                    existing.upstream_model = target.upstream_model;
+                } else {
+                    existing.upstream_model.push(',');
+                    existing.upstream_model.push_str(&target.upstream_model);
+                }
+            }
+            continue;
+        }
+        consolidated.push(target);
+    }
+    consolidated
 }
 
 struct HordePollContext<'a> {
@@ -1715,5 +1745,53 @@ mod tests {
     fn test_extract_png_alpha_mask_invalid_input() {
         assert!(extract_png_alpha_mask(b"").is_none());
         assert!(extract_png_alpha_mask(b"not a png image").is_none());
+    }
+
+    #[test]
+    fn test_consolidate_image_targets_merges_horde_same_account() {
+        let targets = vec![
+            ImageTargets {
+                provider: ProviderId::new("horde"),
+                account_id: None,
+                model_row_id: None,
+                combo_target_id: None,
+                upstream_model: "AlbedoBase XL 3.1".to_string(),
+                combo_id: None,
+            },
+            ImageTargets {
+                provider: ProviderId::new("horde"),
+                account_id: None,
+                model_row_id: None,
+                combo_target_id: None,
+                upstream_model: "SDXL 1.0".to_string(),
+                combo_id: None,
+            },
+            ImageTargets {
+                provider: ProviderId::new("horde"),
+                account_id: None,
+                model_row_id: None,
+                combo_target_id: None,
+                upstream_model: "AlbedoBase XL 3.1".to_string(), // duplicate model
+                combo_id: None,
+            },
+            ImageTargets {
+                provider: ProviderId::new("openai"),
+                account_id: None,
+                model_row_id: None,
+                combo_target_id: None,
+                upstream_model: "dall-e-3".to_string(),
+                combo_id: None,
+            },
+        ];
+
+        let consolidated = consolidate_image_targets(targets);
+        assert_eq!(consolidated.len(), 2);
+        assert_eq!(consolidated[0].provider.as_str(), "horde");
+        assert_eq!(
+            consolidated[0].upstream_model,
+            "AlbedoBase XL 3.1,SDXL 1.0"
+        );
+        assert_eq!(consolidated[1].provider.as_str(), "openai");
+        assert_eq!(consolidated[1].upstream_model, "dall-e-3");
     }
 }

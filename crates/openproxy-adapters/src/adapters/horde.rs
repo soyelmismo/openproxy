@@ -199,19 +199,23 @@ impl ProviderAdapter for HordeAdapter {
                     let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
                     let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-                    if count < 1 || eta > 120 {
-                        return None;
-                    }
-
                     let family = openproxy_types::capabilities::infer_family(&name)
                         .or_else(|| Some("instruct".into()));
+
+                    let display_name = if count > 0 && eta != u64::MAX {
+                        Some(format!("{name} ({count}w, ~{eta}s)"))
+                    } else if count > 0 {
+                        Some(format!("{name} ({count}w)"))
+                    } else {
+                        Some(name.clone())
+                    };
 
                     Some((
                         count,
                         eta,
                         DiscoveredModel {
-                            model_id: ModelId::new(name.clone()),
-                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
+                            model_id: ModelId::new(name),
+                            display_name,
                             target_format: TargetFormat::Openai,
                             context_length: None,
                             max_output_tokens: None,
@@ -242,17 +246,21 @@ impl ProviderAdapter for HordeAdapter {
                     let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
                     let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-                    if count < 1 || eta > 120 {
-                        return None;
-                    }
-
                     let family = infer_horde_family(&name);
+                    let display_name = if count > 0 && eta != u64::MAX {
+                        Some(format!("{name} ({count}w, ~{eta}s)"))
+                    } else if count > 0 {
+                        Some(format!("{name} ({count}w)"))
+                    } else {
+                        Some(name.clone())
+                    };
+
                     Some((
                         count,
                         eta,
                         DiscoveredModel {
-                            model_id: ModelId::new(name.clone()),
-                            display_name: Some(format!("{name} ({count}w, ~{eta}s)")),
+                            model_id: ModelId::new(name),
+                            display_name,
                             target_format: TargetFormat::Openai,
                             context_length: None,
                             max_output_tokens: None,
