@@ -106,6 +106,10 @@ impl OAuthProvider for AntigravityOAuthProvider {
         refresh_token
     );
 
+    fn aliases(&self) -> &'static [&'static str] {
+        &["antigravity-cli"]
+    }
+
     async fn post_exchange(
         &self,
         account_id: AccountId,
@@ -295,6 +299,7 @@ mod tests {
     fn name_and_flow() {
         let p = AntigravityOAuthProvider::new();
         assert_eq!(p.name(), "antigravity");
+        assert_eq!(p.aliases(), &["antigravity-cli"]);
         assert_eq!(p.flow(), OAuthFlow::AuthorizationCodePkce);
     }
 

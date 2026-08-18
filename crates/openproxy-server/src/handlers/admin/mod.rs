@@ -23,6 +23,34 @@ pub(crate) use oauth::refresh_oauth_if_needed;
 pub(crate) use openproxy_db::combos as core_combos;
 pub(crate) use openproxy_types::combos as types_combos;
 
+/// Assemble all modular admin sub-routers into the unified admin REST router.
+pub fn admin_api_routes() -> axum::Router<AppState> {
+    axum::Router::new()
+        .nest("/config", runtime::router())
+        .nest("/providers", providers::router())
+        .nest("/accounts", accounts::router())
+        .nest("/combos", combos::router())
+        .nest("/usage", usage::router())
+        .nest("/debug", debug::router())
+        .route(
+            "/recording",
+            axum::routing::get(debug::get_recording).post(debug::set_recording),
+        )
+        .nest("/models", models::router())
+        .nest("/keys", api_keys::router())
+        .nest("/proxies", proxies::router())
+        .nest("/proxy-sources", proxy_sources::router())
+        .nest("/notifications", notifications::router())
+        .nest("/oauth", oauth::router())
+        .fallback(|| async {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                r#"{"error":{"code":"not_found","message":"endpoint not found"}}"#,
+            )
+        })
+}
+
 pub use accounts::AccountListQuery;
 pub use combos::ReorderComboTargetsInput;
 pub use debug::{DebugLogsQuery, DebugLogsResponse};

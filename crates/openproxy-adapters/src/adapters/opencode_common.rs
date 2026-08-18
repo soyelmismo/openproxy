@@ -89,7 +89,8 @@ macro_rules! define_opencode_adapter {
         $struct_name:ident,
         id: $id:literal,
         name: $name:literal,
-        base_url: $base_url:literal $(,)?
+        base_url: $base_url:literal
+        $(, models_dev_canonical_ids: $canon_ids:expr)? $(,)?
     ) => {
         $(#[$meta])*
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -120,6 +121,12 @@ macro_rules! define_opencode_adapter {
             fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
                 &self.config
             }
+
+            $(
+                fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+                    $canon_ids
+                }
+            )?
 
             fn build_headers(
                 &self,

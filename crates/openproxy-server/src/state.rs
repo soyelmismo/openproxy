@@ -124,6 +124,8 @@ pub struct AppState {
     vacuum_status: Arc<RwLock<VacuumStatus>>,
     /// Sender for background worker jobs (usage insertion, cooldowns)
     background_tx: tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob>,
+    /// Supervisor for managing background service lifecycles and graceful shutdown.
+    supervisor: Arc<crate::background::BackgroundSupervisor>,
 }
 
 /// VACUUM status reported to the dashboard. Updated by the background
@@ -188,8 +190,9 @@ impl AppState {
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
         let upstream_client = UpstreamClient::new();
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
+        let supervisor = Arc::new(crate::background::BackgroundSupervisor::new());
 
-        spawn_background_tasks(SpawnBackgroundTasksArgs {
+        spawn_background_tasks(&supervisor, SpawnBackgroundTasksArgs {
             db_pool: Arc::clone(&db_pool),
             config: config.clone(),
             recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
@@ -221,7 +224,7 @@ impl AppState {
             ..Default::default()
         };
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
-        spawn_rate_limiter_cleanup(Arc::clone(&rate_limiter));
+        spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
         let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
@@ -230,7 +233,7 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        spawn_memory_cleanup(Arc::clone(&selection_registry), circuit_breaker.clone());
+        spawn_memory_cleanup(&supervisor, Arc::clone(&selection_registry), circuit_breaker.clone());
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
         let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(
@@ -268,6 +271,7 @@ impl AppState {
             maintenance_cell,
             vacuum_status,
             background_tx,
+            supervisor,
         };
 
         Ok(state)
@@ -301,8 +305,9 @@ impl AppState {
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
         let upstream_client = UpstreamClient::new();
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
+        let supervisor = Arc::new(crate::background::BackgroundSupervisor::new());
 
-        spawn_background_tasks(SpawnBackgroundTasksArgs {
+        spawn_background_tasks(&supervisor, SpawnBackgroundTasksArgs {
             db_pool: Arc::clone(&db_pool),
             config: config.clone(),
             recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
@@ -331,7 +336,7 @@ impl AppState {
             ..Default::default()
         };
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
-        spawn_rate_limiter_cleanup(Arc::clone(&rate_limiter));
+        spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
         let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
@@ -340,7 +345,7 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        spawn_memory_cleanup(Arc::clone(&selection_registry), circuit_breaker.clone());
+        spawn_memory_cleanup(&supervisor, Arc::clone(&selection_registry), circuit_breaker.clone());
 
         openproxy_core::notifications::init_broadcast();
 
@@ -375,6 +380,7 @@ impl AppState {
             maintenance_cell,
             vacuum_status,
             background_tx,
+            supervisor,
         }
     }
 
@@ -483,6 +489,11 @@ impl AppState {
     /// internally `Arc`-backed).
     pub fn oauth_provider_registry(&self) -> Arc<oauth::OAuthProviderRegistry> {
         Arc::clone(&self.oauth_provider_registry)
+    }
+
+    /// Borrow the background services supervisor.
+    pub fn supervisor(&self) -> &Arc<crate::background::BackgroundSupervisor> {
+        &self.supervisor
     }
 
     /// Borrow the background discovery scheduler handle.
@@ -808,7 +819,10 @@ struct SpawnBackgroundTasksArgs {
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
 
-fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
+fn spawn_background_tasks(
+    supervisor: &crate::background::BackgroundSupervisor,
+    args: SpawnBackgroundTasksArgs,
+) {
     let SpawnBackgroundTasksArgs {
         db_pool,
         config,
@@ -820,49 +834,25 @@ fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         upstream_client,
         oauth_provider_registry,
     } = args;
-    let prune_pool = Arc::clone(&db_pool);
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
-        tick.tick().await;
-        loop {
-            tick.tick().await;
-            let w = prune_pool.writer();
-            let _ = openproxy_pipeline::repository::prune_expired_cooldowns(&w);
-        }
+
+    supervisor.spawn(crate::background::CooldownPrunerService {
+        db_pool: Arc::clone(&db_pool),
+        interval: std::time::Duration::from_mins(1),
     });
 
-    let recording_ttl_pool = Arc::clone(&db_pool);
-    let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
-        tick.tick().await;
-        loop {
-            tick.tick().await;
-            let ttl = *recording_ttl_cell.read();
-            let _ = openproxy_core::usage::prune_expired_recording_bodies(
-                &recording_ttl_pool.writer(),
-                ttl,
-            );
-        }
+    supervisor.spawn(crate::background::RecordingTtlPrunerService {
+        db_pool: Arc::clone(&db_pool),
+        recording_ttl_secs_cell,
+        interval: std::time::Duration::from_mins(1),
     });
 
-    let refresh_pool = Arc::clone(&db_pool);
-    let refresh_key = Arc::clone(&master_key);
-    let refresh_upstream = Arc::clone(&upstream_client);
-    let scheduler_registry = Arc::clone(&oauth_provider_registry);
-    tokio::spawn(async move {
-        openproxy_core::oauth::start_refresh_scheduler(
-            refresh_pool,
-            refresh_key,
-            refresh_upstream,
-            scheduler_registry,
-            60,
-        )
-        .await;
+    supervisor.spawn(crate::background::OAuthRefreshService {
+        db_pool: Arc::clone(&db_pool),
+        master_key: Arc::clone(&master_key),
+        upstream_client: Arc::clone(&upstream_client),
+        oauth_provider_registry: Arc::clone(&oauth_provider_registry),
     });
 
-    let sync_pool = Arc::clone(&db_pool);
-    let sync_upstream = Arc::clone(&upstream_client);
     let models_dev_enabled =
         std::env::var("MODELS_DEV_SYNC_ENABLED").is_ok_and(|v| v == "1" || v == "true");
     if models_dev_enabled {
@@ -870,141 +860,31 @@ fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(86_400);
-        tokio::spawn(async move {
-            openproxy_core::models_dev_sync::start_sync_scheduler(
-                sync_pool,
-                sync_upstream,
-                interval_secs,
-            )
-            .await;
+        supervisor.spawn(crate::background::ModelsDevSyncService {
+            db_pool: Arc::clone(&db_pool),
+            upstream_client: Arc::clone(&upstream_client),
+            interval_secs,
         });
     }
 
-    let qs_pool = Arc::clone(&db_pool);
-    let qs_config = config;
-    let qs_upstream = Arc::clone(&upstream_client);
-    let qs_key = Arc::clone(&master_key);
-    let qs_adapters = Arc::clone(&adapters);
-    let qs_registry = Arc::clone(&oauth_provider_registry);
     openproxy_core::quota_sync::start_quota_sync_scheduler(
-        qs_pool,
-        qs_config,
-        qs_upstream,
-        qs_key,
-        qs_adapters,
-        qs_registry,
+        Arc::clone(&db_pool),
+        config,
+        Arc::clone(&upstream_client),
+        Arc::clone(&master_key),
+        Arc::clone(&adapters),
+        Arc::clone(&oauth_provider_registry),
     );
 
-    let proxy_sync_pool = Arc::clone(&db_pool);
-    tokio::spawn(async move {
-        let interval_hours: u64 = std::env::var("OPENPROXY_PROXIES_SYNC_INTERVAL_HOURS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(6)
-            .max(1);
-
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-
-        loop {
-            tracing::info!("running scheduled background proxy sync");
-            let mut next_sleep = interval_hours * 3600;
-
-            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&proxy_sync_pool))
-                .await
-            {
-                Ok(summary) => {
-                    tracing::info!(added = summary.added, "background proxy sync completed");
-                    if summary.fetched == 0 {
-                        tracing::warn!("0 proxies fetched, retrying in 5 minutes");
-                        next_sleep = 300;
-                    } else {
-                        // Iniciar pruebas en segundo plano de inmediato tras el sync
-                        openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(
-                            &proxy_sync_pool,
-                        ));
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("background proxy sync failed: {}", e);
-                    next_sleep = 300;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(next_sleep)).await;
-        }
+    supervisor.spawn(crate::background::FreeProxiesSyncService {
+        db_pool: Arc::clone(&db_pool),
     });
 
-    let prune_pool = Arc::clone(&db_pool);
-    let maint_cell = Arc::clone(&maintenance_cell);
-    let vac_status = Arc::clone(&vacuum_status);
-    tokio::spawn(async move {
-        let mut prune_tick = tokio::time::interval(std::time::Duration::from_hours(1));
-        let mut vacuum_counter: u32 = 0;
-        loop {
-            prune_tick.tick().await;
-            let (auto_vacuum, interval_hours, retention_days) = {
-                let m = maint_cell.read();
-                (
-                    m.auto_vacuum,
-                    (m.interval_secs / 3600) as u32,
-                    m.usage_retention_days,
-                )
-            };
-            prune_usage_and_dead_proxies(&prune_pool, retention_days);
-            let interval_ticks = interval_hours.max(1);
-            vacuum_counter = vacuum_counter.wrapping_add(1);
-            if auto_vacuum && vacuum_counter >= interval_ticks {
-                vacuum_counter = 0;
-                execute_vacuum_cycle(&prune_pool, &vac_status, interval_hours, auto_vacuum);
-            }
-        }
+    supervisor.spawn(crate::background::MaintenanceVacuumService {
+        db_pool,
+        maintenance_cell,
+        vacuum_status,
     });
-}
-
-fn prune_usage_and_dead_proxies(prune_pool: &openproxy_db::DbPool, retention_days: u32) {
-    let retention_secs: i64 = i64::from(retention_days) * 24 * 3600;
-    if retention_secs > 0 {
-        let _ =
-            openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
-    }
-    let _ = openproxy_core::free_proxies::prune_dead_proxies(&prune_pool.writer());
-}
-
-fn execute_vacuum_cycle(
-    prune_pool: &openproxy_db::DbPool,
-    vac_status: &RwLock<crate::state::VacuumStatus>,
-    interval_hours: u32,
-    auto_vacuum: bool,
-) {
-    {
-        let mut st = vac_status.write();
-        st.in_progress = true;
-    }
-    let vacuum_result = {
-        let w = prune_pool.writer();
-        let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-        let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
-        match inc_result {
-            Ok(()) => Ok(()),
-            Err(_) => w.execute_batch("VACUUM;"),
-        }
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let result_str = match vacuum_result {
-        Ok(()) => "ok".to_string(),
-        Err(e) => e.to_string(),
-    };
-    {
-        let mut st = vac_status.write();
-        st.in_progress = false;
-        st.last_run = Some(now);
-        st.last_result = Some(result_str);
-        if auto_vacuum {
-            let next = chrono::Utc::now() + chrono::Duration::hours(i64::from(interval_hours));
-            st.next_scheduled = Some(next.to_rfc3339());
-        } else {
-            st.next_scheduled = None;
-        }
-    }
 }
 
 fn start_discovery_scheduler(
@@ -1023,36 +903,24 @@ fn start_discovery_scheduler(
     )
 }
 
-fn spawn_rate_limiter_cleanup(rate_limiter: Arc<crate::rate_limit::RateLimiter>) {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_mins(5));
-        tick.tick().await;
-        loop {
-            tick.tick().await;
-            rate_limiter.cleanup();
-        }
+fn spawn_rate_limiter_cleanup(
+    supervisor: &crate::background::BackgroundSupervisor,
+    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+) {
+    supervisor.spawn(crate::background::RateLimiterCleanupService {
+        rate_limiter,
+        interval: std::time::Duration::from_mins(5),
     });
 }
 
 fn spawn_memory_cleanup(
+    supervisor: &crate::background::BackgroundSupervisor,
     selection_registry: Arc<openproxy_types::SelectionRegistry>,
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
 ) {
-    tokio::spawn(async move {
-        let mut fast_tick = tokio::time::interval(std::time::Duration::from_mins(1));
-        let mut slow_counter: u32 = 0;
-        fast_tick.tick().await;
-        loop {
-            fast_tick.tick().await;
-            unsafe {
-                libmimalloc_sys::mi_collect(true);
-            }
-            slow_counter = slow_counter.wrapping_add(1);
-            if slow_counter.is_multiple_of(10) {
-                let _ = selection_registry.prune_stale(std::time::Duration::from_hours(1));
-                let _ = circuit_breaker.prune_idle(std::time::Duration::from_hours(1));
-            }
-        }
+    supervisor.spawn(crate::background::MemoryCleanupService {
+        selection_registry,
+        circuit_breaker,
     });
 }
 

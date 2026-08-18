@@ -7,6 +7,8 @@ pub mod command_detector;
 pub mod line_filter;
 pub mod smart_truncate;
 
+pub use line_filter::{RTK_RULES, RtkCommandRule};
+
 use crate::visitor::mutate_message_text;
 use line_filter::{apply_line_filter, get_builtin_filter, get_generic_filter};
 use openproxy_types::OpenAIMessage;

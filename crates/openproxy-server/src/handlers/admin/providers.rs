@@ -34,6 +34,19 @@ pub struct ProviderRefreshQuery {
     pub account_id: Option<i64>,
 }
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_providers).post(create_provider))
+        .route("/{id}/refresh", axum::routing::post(refresh_provider_models))
+        .route("/{id}/active", axum::routing::post(set_provider_active))
+        .route(
+            "/{id}",
+            axum::routing::get(get_provider)
+                .delete(delete_provider)
+                .patch(update_provider),
+        )
+}
+
 pub async fn list_providers(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<ProviderWithOAuth>>, ApiError> {

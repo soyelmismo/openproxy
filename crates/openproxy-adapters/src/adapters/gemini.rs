@@ -43,6 +43,10 @@ impl ProviderAdapter for GeminiAdapter {
         &self.config
     }
 
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        &["google"]
+    }
+
     fn build_chat_url(&self, _target_format: TargetFormat, model: &ModelId) -> String {
         // Gemini puts the model in the URL path.
         // Since openproxy always uses streaming to the upstream (dispatch_upstream

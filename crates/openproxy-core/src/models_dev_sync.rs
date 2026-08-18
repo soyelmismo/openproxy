@@ -24,18 +24,17 @@ use openproxy_adapters::upstream::{
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// models.dev API source URL.
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
 /// Provider mapping: models.dev provider id → our internal IDs.
 ///
-/// When a model's own provider is not listed here (e.g. `nous-research`,
-/// `ollama-cloud`, `kilocode`, `antigravity`), the cross-provider fallback
-/// in `enrich_models_from_sync()` and `pricing::lookup_with_db()` will
-/// still find pricing/context by matching on model_id alone.
-const PROVIDER_MAP: &[(&str, &[&str])] = &[
+/// Static fallback/supplemental table for mapping models.dev provider IDs to
+/// internal OpenProxy provider IDs when adapters are not directly registered
+/// or for aliases (e.g. `minimax-cn`).
+pub const PROVIDER_MAP: &[(&str, &[&str])] = &[
     ("openai", &["openrouter"]),
     ("anthropic", &["openrouter"]),
     ("google", &["gemini"]),
@@ -56,6 +55,41 @@ const PROVIDER_MAP: &[(&str, &[&str])] = &[
     ("deepinfra", &["openrouter"]),
     ("xai", &["openrouter"]),
 ];
+
+/// Builds the mapping of canonical models.dev provider ID -> OpenProxy internal provider IDs.
+/// Leverages `models_dev_canonical_ids` metadata from registered built-in adapters,
+/// with static `PROVIDER_MAP` fallback and alias augmentation.
+pub fn build_provider_mapping() -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+
+    // 1. Ingest metadata from built-in adapters
+    for adapter in openproxy_adapters::adapters::builtin_adapters() {
+        let internal_id = adapter.id().as_str().to_string();
+        for &canon_id in adapter.models_dev_canonical_ids() {
+            let entry = map.entry(canon_id.to_string()).or_default();
+            if !entry.contains(&internal_id) {
+                entry.push(internal_id.clone());
+            }
+        }
+    }
+
+    // 2. Fallback / supplement with static PROVIDER_MAP (e.g. secondary aliases like minimax-cn)
+    for &(canon_id, internal_ids) in PROVIDER_MAP {
+        let entry = map.entry(canon_id.to_string()).or_default();
+        for &id in internal_ids {
+            let id_str = id.to_string();
+            if !entry.contains(&id_str) {
+                entry.push(id_str);
+            }
+        }
+    }
+
+    map
+}
+
+/// Pre-indexed provider map built from adapter metadata + static fallback table.
+pub static RESOLVED_PROVIDER_MAP: LazyLock<HashMap<String, Vec<String>>> =
+    LazyLock::new(build_provider_mapping);
 
 // ── API Response shapes ─────────────────────────────────────────────
 //
@@ -143,14 +177,18 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
 
         for (ext_id, provider_val) in &root {
             let ext_id_str: &str = ext_id.as_str();
-            let mapped_ids: &[&str] = PROVIDER_MAP
-                .iter()
-                .find(|(ext, _)| *ext == ext_id_str)
-                .map_or(&[], |(_, ids)| *ids);
+            let mapped_ids = RESOLVED_PROVIDER_MAP
+                .get(ext_id_str)
+                .map_or(&[][..], |v| v.as_slice());
 
             let mut all_ids: Vec<&str> = Vec::with_capacity(1 + mapped_ids.len());
             all_ids.push(ext_id_str);
-            all_ids.extend_from_slice(mapped_ids);
+            for id in mapped_ids {
+                let id_str = id.as_str();
+                if !all_ids.contains(&id_str) {
+                    all_ids.push(id_str);
+                }
+            }
 
             let Some(models_obj) = provider_val.get("models").and_then(|v| v.as_object()) else {
                 continue;
@@ -1502,5 +1540,41 @@ mod tests {
             rows.map(|r| r.unwrap()).collect()
         };
         assert_eq!(orders2, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_resolved_provider_map_uses_adapter_metadata() {
+        let map = &*RESOLVED_PROVIDER_MAP;
+
+        // Gemini adapter provides canonical id "google"
+        let google_mapped = map.get("google").expect("google must be mapped");
+        assert!(google_mapped.contains(&"gemini".to_string()));
+
+        // MiniMax adapter provides canonical id "minimax"
+        let minimax_mapped = map.get("minimax").expect("minimax must be mapped");
+        assert!(minimax_mapped.contains(&"minimax".to_string()));
+        assert!(minimax_mapped.contains(&"minimax-cn".to_string()));
+
+        // OpenRouter adapter provides canonical ids "openai", "anthropic", "meta"
+        let openai_mapped = map.get("openai").expect("openai must be mapped");
+        assert!(openai_mapped.contains(&"openrouter".to_string()));
+
+        let anthropic_mapped = map.get("anthropic").expect("anthropic must be mapped");
+        assert!(anthropic_mapped.contains(&"openrouter".to_string()));
+
+        let meta_mapped = map.get("meta").expect("meta must be mapped");
+        assert!(meta_mapped.contains(&"openrouter".to_string()));
+
+        // NVIDIA NIM adapter provides canonical id "nvidia"
+        let nvidia_mapped = map.get("nvidia").expect("nvidia must be mapped");
+        assert!(nvidia_mapped.contains(&"nvidia-nim".to_string()));
+
+        // OpenCode Zen adapter provides canonical id "opencode"
+        let opencode_mapped = map.get("opencode").expect("opencode must be mapped");
+        assert!(opencode_mapped.contains(&"opencode-zen".to_string()));
+
+        // OpenCode Go adapter provides canonical id "opencode-go"
+        let opencode_go_mapped = map.get("opencode-go").expect("opencode-go must be mapped");
+        assert!(opencode_go_mapped.contains(&"opencode-go".to_string()));
     }
 }

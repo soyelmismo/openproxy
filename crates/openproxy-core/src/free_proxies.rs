@@ -1006,6 +1006,97 @@ async fn sync_gproxynet() -> crate::error::Result<Vec<ScrapedProxy>> {
     Ok(list)
 }
 
+pub struct BuiltinProxySourceDef {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    pub scraped_sources: &'static [&'static str],
+    pub sync_fn: fn() -> futures::future::BoxFuture<'static, crate::error::Result<Vec<ScrapedProxy>>>,
+}
+
+impl BuiltinProxySourceDef {
+    pub fn find_by_id(id: &str) -> Option<&'static BuiltinProxySourceDef> {
+        BUILTIN_PROXY_SOURCES.iter().find(|s| s.id == id)
+    }
+}
+
+pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
+    BuiltinProxySourceDef {
+        id: "builtin_proxifly",
+        name: "Proxifly (Built-in)",
+        url: "",
+        scraped_sources: &["proxifly"],
+        sync_fn: || Box::pin(sync_proxifly()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_github",
+        name: "GitHub Lists (Built-in)",
+        url: "",
+        scraped_sources: &[
+            "iplocate",
+            "hideip",
+            "r00tee",
+            "hookzof",
+            "anonymouswork",
+            "komutan234",
+            "yuceltoluyag",
+        ],
+        sync_fn: || Box::pin(sync_github_lists()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_oneproxy",
+        name: "1proxy (Built-in)",
+        url: "",
+        scraped_sources: &["1proxy"],
+        sync_fn: || Box::pin(sync_oneproxy()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_proxyscrape",
+        name: "ProxyScrape (Built-in)",
+        url: "",
+        scraped_sources: &["proxyscrape_cdn"],
+        sync_fn: || Box::pin(sync_proxyscrape_cdn()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_geonode",
+        name: "Geonode (Built-in)",
+        url: "",
+        scraped_sources: &["geonode"],
+        sync_fn: || Box::pin(sync_geonode()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_clearproxy",
+        name: "ClearProxy (Built-in)",
+        url: "",
+        scraped_sources: &["clearproxy"],
+        sync_fn: || Box::pin(sync_clearproxy()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_vakhov",
+        name: "Vakhov (Built-in)",
+        url: "",
+        scraped_sources: &["vakhov"],
+        sync_fn: || Box::pin(sync_vakhov()),
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_gproxynet",
+        name: "GProxyNet (Built-in)",
+        url: "",
+        scraped_sources: &["gproxynet"],
+        sync_fn: || Box::pin(sync_gproxynet()),
+    },
+];
+
+fn resolve_scraped_sources<'a>(is_builtin: bool, id: &str, name: &'a str) -> Vec<&'a str> {
+    if is_builtin
+        && let Some(def) = BuiltinProxySourceDef::find_by_id(id)
+    {
+        return def.scraped_sources.to_vec();
+    }
+    vec![name]
+}
+
+
 pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySource>> {
     let mut stmt = conn
         .prepare("SELECT id, name, url, priority, active, is_builtin, created_at, updated_at FROM proxy_sources ORDER BY priority DESC, name ASC")
@@ -1068,29 +1159,8 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-        let sources = if r.is_builtin {
-            match r.id.as_str() {
-                "builtin_proxifly" => vec!["proxifly"],
-                "builtin_github" => vec![
-                    "iplocate",
-                    "hideip",
-                    "r00tee",
-                    "hookzof",
-                    "anonymouswork",
-                    "komutan234",
-                    "yuceltoluyag",
-                ],
-                "builtin_oneproxy" => vec!["1proxy"],
-                "builtin_proxyscrape" => vec!["proxyscrape_cdn"],
-                "builtin_geonode" => vec!["geonode"],
-                "builtin_clearproxy" => vec!["clearproxy"],
-                "builtin_vakhov" => vec!["vakhov"],
-                "builtin_gproxynet" => vec!["gproxynet"],
-                _ => vec![r.name.as_str()],
-            }
-        } else {
-            vec![r.name.as_str()]
-        };
+        let sources = resolve_scraped_sources(r.is_builtin, &r.id, &r.name);
+
 
         for s in sources {
             if let Some(st) = stats.get(s) {
@@ -1164,31 +1234,10 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
                     .push((row.1, row.2));
             }
 
-            let sources = if source.is_builtin {
-                match source.id.as_str() {
-                    "builtin_proxifly" => vec!["proxifly"],
-                    "builtin_github" => vec![
-                        "iplocate",
-                        "hideip",
-                        "r00tee",
-                        "hookzof",
-                        "anonymouswork",
-                        "komutan234",
-                        "yuceltoluyag",
-                    ],
-                    "builtin_oneproxy" => vec!["1proxy"],
-                    "builtin_proxyscrape" => vec!["proxyscrape_cdn"],
-                    "builtin_geonode" => vec!["geonode"],
-                    "builtin_clearproxy" => vec!["clearproxy"],
-                    "builtin_vakhov" => vec!["vakhov"],
-                    "builtin_gproxynet" => vec!["gproxynet"],
-                    _ => vec![source.name.as_str()],
-                }
-            } else {
-                vec![source.name.as_str()]
-            };
+            let sources = resolve_scraped_sources(source.is_builtin, &source.id, &source.name);
 
             for s in sources {
+
                 if let Some(st) = stats.get(s) {
                     for (status, count) in st {
                         source.proxies_total += count;
@@ -1360,20 +1409,10 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
     let sources_res = tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
         let w = pool_for_sources.open_connection().map_err(openproxy_db::error::map_db_error)?;
         // Ensure built-in sources exist
-        let builtins = vec![
-            ("builtin_proxifly", "Proxifly (Built-in)", ""),
-            ("builtin_github", "GitHub Lists (Built-in)", ""),
-            ("builtin_oneproxy", "1proxy (Built-in)", ""),
-            ("builtin_proxyscrape", "ProxyScrape (Built-in)", ""),
-            ("builtin_geonode", "Geonode (Built-in)", ""),
-            ("builtin_clearproxy", "ClearProxy (Built-in)", ""),
-            ("builtin_vakhov", "Vakhov (Built-in)", ""),
-            ("builtin_gproxynet", "GProxyNet (Built-in)", ""),
-        ];
-        for (id, name, url) in builtins {
+        for def in BUILTIN_PROXY_SOURCES {
             let _ = w.execute(
                 "INSERT OR IGNORE INTO proxy_sources (id, name, url, active, is_builtin) VALUES (?1, ?2, ?3, 1, 1)",
-                rusqlite::params![id, name, url],
+                rusqlite::params![def.id, def.name, def.url],
             );
         }
         list_proxy_sources(&w)
@@ -1386,59 +1425,16 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
                 continue;
             }
             if src.is_builtin {
-                match src.id.as_str() {
-                    "builtin_proxifly" => {
-                        if let Ok(mut list) = sync_proxifly().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_github" => {
-                        if let Ok(mut list) = sync_github_lists().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_oneproxy" => {
-                        if let Ok(mut list) = sync_oneproxy().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_proxyscrape" => {
-                        if let Ok(mut list) = sync_proxyscrape_cdn().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_geonode" => {
-                        if let Ok(mut list) = sync_geonode().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_clearproxy" => {
-                        if let Ok(mut list) = sync_clearproxy().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_vakhov" => {
-                        if let Ok(mut list) = sync_vakhov().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    "builtin_gproxynet" => {
-                        if let Ok(mut list) = sync_gproxynet().await {
-                            scraped.append(&mut list);
-                            fetched += list.len();
-                        }
-                    }
-                    _ => {}
+                if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id)
+                    && let Ok(mut list) = (def.sync_fn)().await
+                {
+                    scraped.append(&mut list);
+                    fetched += list.len();
                 }
                 continue;
             }
+
+
 
             match fetch_custom_proxy_source(&src.name, &src.url, src.priority).await {
                 Ok(mut list) => {

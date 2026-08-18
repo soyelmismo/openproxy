@@ -4,6 +4,20 @@ use axum::{
     extract::{Path, State},
 };
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_api_keys).post(create_api_key))
+        .route(
+            "/{id}",
+            axum::routing::get(get_api_key)
+                .patch(update_api_key)
+                .delete(delete_api_key),
+        )
+        .route("/{id}/revoke", axum::routing::post(revoke_api_key))
+        .route("/{id}/regenerate", axum::routing::post(regenerate_api_key))
+        .route("/{id}/usage", axum::routing::get(api_key_usage))
+}
+
 pub async fn list_api_keys(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<core_api_keys::ApiKey>>, ApiError> {

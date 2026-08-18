@@ -22,6 +22,14 @@ pub struct DebugLogsResponse {
     pub total_in_buffer: usize,
 }
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/logs", axum::routing::get(debug_logs))
+        .route("/clear", axum::routing::post(debug_logs_clear))
+        .route("/vacuum", axum::routing::post(debug_vacuum))
+        .route("/recover", axum::routing::post(debug_recover))
+}
+
 pub async fn debug_logs(
     State(_s): State<AppState>,
     Query(q): Query<DebugLogsQuery>,

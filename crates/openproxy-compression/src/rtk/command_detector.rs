@@ -13,14 +13,12 @@ pub struct Detection {
     pub command: Option<String>,
 }
 
-type DetectorFn = fn(&str, Option<&str>) -> Option<(&'static str, f64)>;
+pub type DetectorFn = fn(&str, Option<&str>) -> Option<(&'static str, f64)>;
 
-/// Lista de detectores registrados. Cada detector recibe el texto completo
-/// y el comando detectado (si se pudo extraer), y retorna `(id, confidence)` si matchea.
-///
-/// `const` slice — zero allocation per `detect()` call. (Previously this
-/// was a `Vec<DetectorFn>` rebuilt on every call.)
-const DETECTORS: &[DetectorFn] = &[
+pub use super::line_filter::{RTK_RULES, RtkCommandRule};
+
+/// Lista de detectores registrados.
+pub const DETECTORS: &[DetectorFn] = &[
     detect_git_status,
     detect_git_diff,
     detect_git_log,
@@ -81,8 +79,8 @@ pub fn detect(text: &str) -> Detection {
     let cmd_ref = command.as_deref();
 
     let mut best: Option<(&'static str, f64)> = None;
-    for detector in DETECTORS {
-        if let Some(result) = detector(text, cmd_ref) {
+    for rule in RTK_RULES {
+        if let Some(result) = (rule.detector)(text, cmd_ref) {
             let (_id, conf) = &result;
             if best
                 .as_ref()
@@ -111,7 +109,7 @@ pub fn detect(text: &str) -> Detection {
 
 macro_rules! define_detector {
     ($name:ident, $id:literal, cmds: [$($cmd:literal),+ $(,)?], conf: $conf:literal) => {
-        fn $name(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
+        pub fn $name(_text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
             let cmd_match = cmd.is_some_and(|c| $(c.starts_with($cmd))||+);
             if cmd_match {
                 Some(($id, $conf))
@@ -121,7 +119,7 @@ macro_rules! define_detector {
         }
     };
     ($name:ident, $id:literal, content: |$text:ident| $content_expr:expr, conf: $conf:literal) => {
-        fn $name($text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
+        pub fn $name($text: &str, _cmd: Option<&str>) -> Option<(&'static str, f64)> {
             if $content_expr {
                 Some(($id, $conf))
             } else {
@@ -130,7 +128,7 @@ macro_rules! define_detector {
         }
     };
     ($name:ident, $id:literal, cmds: [$($cmd:literal),+ $(,)?], content: |$text:ident| $content_expr:expr, both: $both:literal, content: $content_conf:literal $(, cmd_only: $cmd_conf:literal)?) => {
-        fn $name($text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
+        pub fn $name($text: &str, cmd: Option<&str>) -> Option<(&'static str, f64)> {
             let cmd_match = cmd.is_some_and(|c| $(c.starts_with($cmd))||+);
             let content_match = $content_expr;
             if cmd_match && content_match {

@@ -9,6 +9,26 @@ use axum::{
 
 use openproxy_core::admin as core_admin;
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_models_admin))
+        .route("/custom", axum::routing::post(create_custom_model))
+        .route("/bulk-toggle", axum::routing::post(bulk_toggle_models))
+        .route("/sync-models-dev", axum::routing::post(sync_models_dev))
+        .route("/{id}/refresh", axum::routing::post(refresh_models))
+        .route("/{id}/toggle", axum::routing::post(toggle_model))
+        .route(
+            "/{id}/test",
+            axum::routing::post(test_model).route_layer(axum::middleware::from_fn(
+                crate::disconnect::client_disconnect_middleware,
+            )),
+        )
+        .route(
+            "/{id}",
+            axum::routing::delete(delete_model).patch(update_model),
+        )
+}
+
 pub async fn toggle_model(
     State(s): State<AppState>,
     Path(id): Path<i64>,

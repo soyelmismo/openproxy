@@ -45,6 +45,10 @@ impl ProviderAdapter for MiniMaxAdapter {
         &self.config
     }
 
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        &["minimax"]
+    }
+
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata::custom_default();
         meta.built_in = true;

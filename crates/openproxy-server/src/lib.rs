@@ -13,6 +13,7 @@
 /// WebSocket lives at `/admin/ws` — neither is served from this
 /// module.
 pub mod admin_ui;
+pub mod background;
 /// In-memory ring buffer of recent `tracing` events, exposed to the
 /// dashboard via `GET /admin/debug/logs`. See `debug_log.rs` for the
 /// full design rationale.
@@ -28,3 +29,5 @@ pub mod router;
 pub mod services;
 pub mod state;
 pub mod telemetry;
+
+pub use background::{BackgroundService, BackgroundSupervisor};

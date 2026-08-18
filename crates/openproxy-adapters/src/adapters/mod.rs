@@ -85,6 +85,14 @@ pub trait ProviderAdapter: Send + Sync {
         }
     }
 
+    /// Canonical provider IDs in models.dev that map to this adapter.
+    ///
+    /// Used by models.dev sync to auto-map upstream models from models.dev
+    /// (e.g. `google` -> `gemini`, `openai` / `anthropic` / `meta` -> `openrouter`).
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Shortcut for `self.config().auth_type`.
     fn auth_type(&self) -> AdapterAuthType {
         self.config().auth_type
@@ -447,6 +455,9 @@ macro_rules! define_provider_adapter {
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 delegate_adapter_dispatch!(self, metadata())
             }
+            pub fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+                delegate_adapter_dispatch!(self, models_dev_canonical_ids())
+            }
             pub fn wrap_request_body(
                 &self,
                 body: bytes::Bytes,
@@ -737,7 +748,8 @@ macro_rules! declare_openai_adapter {
         $(, rate_limit_scope: $rl_scope:expr)?
         $(, anonymous_fallback: $anon:expr)?
         $(, extra_headers: $extra_headers:expr)?
-        $(, models_url: $models_url:expr)?,
+        $(, models_url: $models_url:expr)?
+        $(, models_dev_canonical_ids: $canon_ids:expr)?,
         custom_impl: {
             $($custom_items:tt)*
         }
@@ -794,6 +806,12 @@ macro_rules! declare_openai_adapter {
                 }
             )?
 
+            $(
+                fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+                    $canon_ids
+                }
+            )?
+
             $($custom_items)*
         }
     };
@@ -808,6 +826,7 @@ macro_rules! declare_openai_adapter {
         $(, anonymous_fallback: $anon:expr)?
         $(, extra_headers: $extra_headers:expr)?
         $(, models_url: $models_url:expr)?
+        $(, models_dev_canonical_ids: $canon_ids:expr)?
     ) => {
         $crate::declare_openai_adapter!(
             $(#[$meta])*
@@ -818,7 +837,8 @@ macro_rules! declare_openai_adapter {
             $(, rate_limit_scope: $rl_scope)?
             $(, anonymous_fallback: $anon)?
             $(, extra_headers: $extra_headers)?
-            $(, models_url: $models_url)?,
+            $(, models_url: $models_url)?
+            $(, models_dev_canonical_ids: $canon_ids)?,
             custom_impl: {}
         );
     };
@@ -1918,5 +1938,28 @@ mod tests {
         assert!(!is_anonymous_fallback("openrouter"));
         assert!(!is_anonymous_fallback("gemini"));
         assert!(!is_anonymous_fallback("nonexistent"));
+    }
+
+    #[test]
+    fn test_models_dev_canonical_ids() {
+        let gemini = ProviderAdapterEnum::from_provider_id("gemini").unwrap();
+        assert_eq!(gemini.models_dev_canonical_ids(), &["google"]);
+
+        let minimax = ProviderAdapterEnum::from_provider_id("minimax").unwrap();
+        assert_eq!(minimax.models_dev_canonical_ids(), &["minimax"]);
+
+        let openrouter = ProviderAdapterEnum::from_provider_id("openrouter").unwrap();
+        assert!(openrouter.models_dev_canonical_ids().contains(&"openai"));
+        assert!(openrouter.models_dev_canonical_ids().contains(&"anthropic"));
+        assert!(openrouter.models_dev_canonical_ids().contains(&"meta"));
+
+        let nvidia = ProviderAdapterEnum::from_provider_id("nvidia-nim").unwrap();
+        assert_eq!(nvidia.models_dev_canonical_ids(), &["nvidia"]);
+
+        let opencode_zen = ProviderAdapterEnum::from_provider_id("opencode-zen").unwrap();
+        assert_eq!(opencode_zen.models_dev_canonical_ids(), &["opencode"]);
+
+        let opencode_go = ProviderAdapterEnum::from_provider_id("opencode-go").unwrap();
+        assert_eq!(opencode_go.models_dev_canonical_ids(), &["opencode-go"]);
     }
 }

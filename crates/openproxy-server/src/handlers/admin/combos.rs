@@ -9,6 +9,43 @@ use axum::{
 
 use openproxy_core::admin as core_admin;
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_combos).post(create_combo))
+        .route(
+            "/{id}",
+            axum::routing::get(get_combo)
+                .delete(delete_combo)
+                .patch(update_combo),
+        )
+        .route(
+            "/{id}/test-all",
+            axum::routing::post(test_combo_targets).route_layer(axum::middleware::from_fn(
+                crate::disconnect::client_disconnect_middleware,
+            )),
+        )
+        .route(
+            "/{id}/targets",
+            axum::routing::get(list_combo_targets).post(add_target),
+        )
+        .route(
+            "/{id}/targets/valid-sub-combos",
+            axum::routing::get(list_valid_sub_combos),
+        )
+        .route(
+            "/{id}/targets/reorder",
+            axum::routing::post(reorder_combo_targets),
+        )
+        .route(
+            "/{id}/targets/{target_id}/clear-cooldown",
+            axum::routing::post(clear_combo_target_cooldown),
+        )
+        .route(
+            "/{id}/targets/{target_id}",
+            axum::routing::patch(update_combo_target).delete(delete_combo_target),
+        )
+}
+
 pub async fn list_combos(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<types_combos::Combo>>, ApiError> {

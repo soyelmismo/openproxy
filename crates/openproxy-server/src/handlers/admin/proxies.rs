@@ -26,6 +26,20 @@ pub struct CreateCustomProxyInput {
     pub password: Option<String>,
 }
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_proxies).post(create_custom_proxy))
+        .route("/summary", axum::routing::get(get_proxy_summary))
+        .route("/sync", axum::routing::post(sync_proxies))
+        .route("/test-all", axum::routing::post(test_all_proxies))
+        .route(
+            "/test-url",
+            axum::routing::get(get_proxy_test_url).put(update_proxy_test_url),
+        )
+        .route("/{id}/test", axum::routing::post(test_proxy))
+        .route("/{id}", axum::routing::delete(delete_proxy))
+}
+
 pub async fn list_proxies(
     DbReader(r): DbReader,
     Query(query): Query<ListProxiesQuery>,

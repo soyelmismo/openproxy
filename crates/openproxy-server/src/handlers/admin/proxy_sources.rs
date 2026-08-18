@@ -7,6 +7,18 @@ use openproxy_core::free_proxies::{
     update_proxy_source,
 };
 
+pub fn router() -> axum::Router<crate::state::AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_sources).post(create_source))
+        .route("/test", axum::routing::post(test_source_url))
+        .route("/reorder", axum::routing::post(reorder_proxy_sources))
+        .route("/{id}/test", axum::routing::post(test_source_by_id))
+        .route(
+            "/{id}",
+            axum::routing::put(update_source).delete(delete_source),
+        )
+}
+
 pub async fn list_sources(DbReader(r): DbReader) -> Result<Json<Vec<ProxySource>>, ApiError> {
     let list = list_proxy_sources(&r)?;
     Ok(Json(list))

@@ -7,6 +7,20 @@ use axum::{
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::oauth::OAuthProvider;
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/{provider}/authorize", axum::routing::get(oauth_authorize))
+        .route("/{provider}/exchange", axum::routing::post(oauth_exchange))
+        .route(
+            "/{provider}/device-code",
+            axum::routing::post(oauth_device_code),
+        )
+        .route(
+            "/{provider}/device-poll",
+            axum::routing::post(oauth_device_poll),
+        )
+}
+
 pub async fn oauth_authorize(
     State(s): State<AppState>,
     Path(provider): Path<String>,

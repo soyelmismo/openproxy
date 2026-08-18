@@ -12,4 +12,5 @@ crate::define_opencode_adapter!(
     id: "opencode-zen",
     name: "OpenCode Zen",
     base_url: "https://opencode.ai/zen/v1",
+    models_dev_canonical_ids: &["opencode"],
 );

@@ -157,6 +157,11 @@ pub trait OAuthProvider: Send + Sync {
     /// Human-readable name for logging (e.g. "antigravity").
     fn name(&self) -> &str;
 
+    /// Provider aliases (e.g. `["antigravity-cli"]`).
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// The OAuth flow this provider uses.
     fn flow(&self) -> OAuthFlow;
 
@@ -322,6 +327,12 @@ macro_rules! define_oauth_provider {
                     $( Self::$c_variant(inner) => inner.name(), )+
                 }
             }
+            fn aliases(&self) -> &'static [&'static str] {
+                match self {
+                    $( Self::$b_variant(inner) => inner.aliases(), )+
+                    $( Self::$c_variant(inner) => inner.aliases(), )+
+                }
+            }
             fn flow(&self) -> OAuthFlow {
                 match self {
                     $( Self::$b_variant(inner) => inner.flow(), )+
@@ -442,13 +453,11 @@ impl OAuthProviderRegistry {
         let reg = Self::new();
 
         for provider in OAuthProviderEnum::builtin_providers() {
-            // Register under its default name
-            reg.register_arc(OAuthProviderEnum::clone(&provider));
-
-            // Antigravity (Cloud Code) — also register under `antigravity-cli` alias
-            if provider.name() == "antigravity" {
-                reg.register_arc_with_name("antigravity-cli", provider);
+            for alias in provider.aliases() {
+                reg.register_arc_with_name(alias, OAuthProviderEnum::clone(&provider));
             }
+
+            reg.register_arc(provider);
         }
 
         reg
@@ -1298,6 +1307,17 @@ mod tests {
             .to_string();
         let account = dummy_account(Some(&expires_at));
         assert!(!oauth_expires_soon(&account, "antigravity"));
+    }
+
+    #[test]
+    fn builtin_registry_registers_aliases() {
+        let reg = OAuthProviderRegistry::builtin();
+        assert!(reg.get("antigravity").is_some());
+        assert!(reg.get("antigravity-cli").is_some());
+        assert_eq!(
+            reg.get("antigravity-cli").unwrap().name(),
+            reg.get("antigravity").unwrap().name()
+        );
     }
 
     fn dummy_account(expires_at: Option<&str>) -> Account {

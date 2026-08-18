@@ -6,4 +6,5 @@ crate::define_opencode_adapter!(
     id: "opencode-go",
     name: "OpenCode Go",
     base_url: "https://opencode.ai/zen/go/v1",
+    models_dev_canonical_ids: &["opencode-go"],
 );

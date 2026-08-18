@@ -192,6 +192,53 @@ fn filter_stderr_prefixes(text: &str) -> String {
     STDERR_RE.replace_all(text, "").into_owned()
 }
 
+// ─── Unified RTK Rules & Filter Registry ────────────────────────────────────
+
+/// A unified RTK rule binding a command identifier, its detector function, and its optional compiled filter builder.
+#[derive(Clone, Copy)]
+pub struct RtkCommandRule {
+    pub id: &'static str,
+    pub detector: super::command_detector::DetectorFn,
+    pub filter_builder: Option<fn() -> CompiledFilter>,
+}
+
+#[macro_export]
+macro_rules! define_rtk_rule {
+    ($id:literal, detector: $detector:expr, filter: $filter:expr) => {
+        $crate::rtk::line_filter::RtkCommandRule {
+            id: $id,
+            detector: $detector,
+            filter_builder: Some($filter),
+        }
+    };
+    ($id:literal, detector: $detector:expr) => {
+        $crate::rtk::line_filter::RtkCommandRule {
+            id: $id,
+            detector: $detector,
+            filter_builder: None,
+        }
+    };
+}
+
+/// Unified registry of all RTK command rules pairing detectors with their filters.
+pub static RTK_RULES: &[RtkCommandRule] = &[
+    define_rtk_rule!("git-status", detector: super::command_detector::detect_git_status, filter: make_git_status_filter),
+    define_rtk_rule!("git-diff", detector: super::command_detector::detect_git_diff, filter: make_git_diff_filter),
+    define_rtk_rule!("git-log", detector: super::command_detector::detect_git_log),
+    define_rtk_rule!("git-branch", detector: super::command_detector::detect_git_branch),
+    define_rtk_rule!("cargo-test", detector: super::command_detector::detect_cargo_test, filter: make_cargo_test_filter),
+    define_rtk_rule!("cargo-build", detector: super::command_detector::detect_cargo_build),
+    define_rtk_rule!("npm-test", detector: super::command_detector::detect_npm_test, filter: make_npm_test_filter),
+    define_rtk_rule!("npm-install", detector: super::command_detector::detect_npm_install),
+    define_rtk_rule!("docker-ps", detector: super::command_detector::detect_docker_ps, filter: make_docker_ps_filter),
+    define_rtk_rule!("docker-logs", detector: super::command_detector::detect_docker_logs),
+    define_rtk_rule!("kubernetes", detector: super::command_detector::detect_kubernetes),
+    define_rtk_rule!("shell-ls", detector: super::command_detector::detect_shell_ls, filter: make_shell_ls_filter),
+    define_rtk_rule!("shell-grep", detector: super::command_detector::detect_shell_grep),
+    define_rtk_rule!("error-stacktrace", detector: super::command_detector::detect_error_stacktrace, filter: make_error_stacktrace_filter),
+    define_rtk_rule!("generic-error", detector: super::command_detector::detect_generic_error, filter: make_generic_error_filter),
+];
+
 // ─── Static filter registry ──────────────────────────────────────────────────
 //
 // Built once on first access; shared via `Arc<CompiledFilter>` thereafter.
@@ -200,15 +247,12 @@ fn filter_stderr_prefixes(text: &str) -> String {
 
 pub static BUILTIN_FILTERS: LazyLock<HashMap<&'static str, Arc<CompiledFilter>>> =
     LazyLock::new(|| {
-        let mut m = HashMap::with_capacity(8);
-        m.insert("git-status", Arc::new(make_git_status_filter()));
-        m.insert("git-diff", Arc::new(make_git_diff_filter()));
-        m.insert("cargo-test", Arc::new(make_cargo_test_filter()));
-        m.insert("npm-test", Arc::new(make_npm_test_filter()));
-        m.insert("docker-ps", Arc::new(make_docker_ps_filter()));
-        m.insert("error-stacktrace", Arc::new(make_error_stacktrace_filter()));
-        m.insert("shell-ls", Arc::new(make_shell_ls_filter()));
-        m.insert("generic-error", Arc::new(make_generic_error_filter()));
+        let mut m = HashMap::with_capacity(RTK_RULES.len());
+        for rule in RTK_RULES {
+            if let Some(builder) = rule.filter_builder {
+                m.insert(rule.id, Arc::new(builder()));
+            }
+        }
         m
     });
 
@@ -778,5 +822,17 @@ mod tests {
         assert!(matches!(truncate_unicode_safe(s, 10), Cow::Borrowed(_)));
         let long = "longer string here";
         assert!(matches!(truncate_unicode_safe(long, 6), Cow::Owned(_)));
+    }
+
+    #[test]
+    fn test_rtk_rules_unified() {
+        assert_eq!(RTK_RULES.len(), 15);
+        for rule in RTK_RULES {
+            assert!(!rule.id.is_empty());
+            if let Some(builder) = rule.filter_builder {
+                let compiled = builder();
+                assert_eq!(compiled.id, rule.id);
+            }
+        }
     }
 }

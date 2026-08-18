@@ -22,6 +22,30 @@ pub struct RuntimeConfigResponse {
     pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
 }
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(get_runtime_config))
+        .route("/timeouts", axum::routing::put(put_runtime_timeouts))
+        .route(
+            "/recording-ttl",
+            axum::routing::get(get_recording_ttl).put(put_recording_ttl),
+        )
+        .route("/compression", axum::routing::put(put_runtime_compression))
+        .route(
+            "/idle-chunk-retryable",
+            axum::routing::put(put_idle_chunk_retryable),
+        )
+        .route(
+            "/quota-protection",
+            axum::routing::put(put_runtime_quota_protection),
+        )
+        .route(
+            "/maintenance",
+            axum::routing::get(get_maintenance_config).put(put_maintenance_config),
+        )
+        .route("/vacuum-status", axum::routing::get(get_vacuum_status))
+}
+
 pub async fn admin_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",

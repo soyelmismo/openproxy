@@ -52,6 +52,26 @@ pub struct UsageDetailResponse {
     pub row: core_usage::UsageDetailRow,
 }
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/summary", axum::routing::get(usage_summary))
+        .route("/by-model", axum::routing::get(usage_by_model))
+        .route("/by-provider", axum::routing::get(usage_by_provider))
+        .route(
+            "/monthly-by-provider",
+            axum::routing::get(usage_monthly_by_provider),
+        )
+        .route("/by-day", axum::routing::get(usage_by_day))
+        .route("/by-account", axum::routing::get(usage_by_account))
+        .route("/by-status", axum::routing::get(usage_by_status))
+        .route("/errors", axum::routing::get(usage_errors))
+        .route("/latency", axum::routing::get(usage_latency))
+        .route("/races", axum::routing::get(usage_races))
+        .route("/recent", axum::routing::get(usage_recent))
+        .route("/detail", axum::routing::get(usage_detail))
+        .route("/recompute-costs", axum::routing::post(recompute_usage_costs))
+}
+
 macro_rules! analytics_handler {
     ($fn_name:ident, $tag:literal, $core_fn:path, $res_ty:ty) => {
         pub async fn $fn_name(

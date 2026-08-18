@@ -17,6 +17,26 @@ pub struct AccountListQuery {
     pub provider_id: Option<String>,
 }
 
+pub fn router() -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/", axum::routing::get(list_accounts).post(create_account))
+        .route("/{id}", axum::routing::delete(delete_account))
+        .route("/{id}/health", axum::routing::post(set_account_health))
+        .route(
+            "/{id}/api-key",
+            axum::routing::get(get_account_api_key).put(update_account_api_key),
+        )
+        .route("/{id}/label", axum::routing::patch(update_account_label))
+        .route(
+            "/{id}/refresh-quota",
+            axum::routing::post(refresh_account_quota),
+        )
+        .route(
+            "/{id}/apply-local-cli",
+            axum::routing::post(apply_account_local_cli),
+        )
+}
+
 pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,

@@ -45,6 +45,25 @@ impl ProviderAdapter for OpenRouterAdapter {
         &self.config
     }
 
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        &[
+            "openai",
+            "anthropic",
+            "meta",
+            "mistral",
+            "deepseek",
+            "qwen",
+            "amazon",
+            "cohere",
+            "perplexity",
+            "groq",
+            "together",
+            "fireworks",
+            "deepinfra",
+            "xai",
+        ]
+    }
+
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata::custom_default();
         meta.built_in = true;

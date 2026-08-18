@@ -10,5 +10,6 @@ declare_openai_adapter!(
     NvidiaNimAdapter,
     id: "nvidia-nim",
     name: "NVIDIA NIM",
-    base_url: "https://integrate.api.nvidia.com/v1"
+    base_url: "https://integrate.api.nvidia.com/v1",
+    models_dev_canonical_ids: &["nvidia"]
 );
