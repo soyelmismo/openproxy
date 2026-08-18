@@ -6,7 +6,6 @@ use openproxy_pipeline::translation::{
 use openproxy_types::TargetFormat;
 use openproxy_types::ids::ApiKeyId;
 use std::sync::Arc;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     disconnect::CancelWatch, error::ApiError, middleware::auth::ParsedChatRequest,
@@ -57,23 +56,13 @@ pub async fn anthropic_messages(
     let request_id = prepared.req.request_id;
 
     if is_stream {
-        let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
-        let done_tx = prepared.done_tx;
-        let req = prepared.req;
-        tokio::spawn(async move {
-            let result = pipeline.run(req).await;
-            let _ = done_tx.send(());
-            if let Some(err) = result.error {
-                let frame = ApiError(err).to_sse_error_frame(TargetFormat::Anthropic);
-                let _ = error_tx.send(frame).await;
-            }
-        });
-
-        let main_stream = ReceiverStream::new(prepared.stream_rx);
-        let error_stream = ReceiverStream::new(error_rx);
-        let mut merged = futures::stream::SelectAll::new();
-        merged.push(main_stream);
-        merged.push(error_stream);
+        let merged = PipelineRunner::spawn_streaming_bridge(
+            pipeline,
+            prepared.req,
+            prepared.done_tx,
+            prepared.stream_rx,
+            TargetFormat::Anthropic,
+        );
 
         let sse_stream =
             OpenAIToAnthropicSseStream::new(merged, format!("msg_{request_id}"), model);

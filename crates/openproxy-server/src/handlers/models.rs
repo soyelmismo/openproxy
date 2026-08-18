@@ -151,8 +151,6 @@ fn authenticate_chat_or_anonymous(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<openproxy_core::api_keys::ApiKey>, ApiError> {
-    use openproxy_core::api_keys;
-
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -178,43 +176,7 @@ fn authenticate_chat_or_anonymous(
         return Err(ApiError(CoreError::Auth("missing api key".into())));
     }
 
-    let key_hash = api_keys::hash_key(token);
-    // Auth is a SELECT by hash — use the READER so the /v1/models path
-    // doesn't serialize through the writer mutex (same fix as the
-    // admin and chat auth paths).
-    let r = state.db_pool().reader();
-    let key = api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)?;
-    let key = key.ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
-
-    if !key.is_active {
-        return Err(ApiError(CoreError::Auth(
-            "api key revoked or inactive".into(),
-        )));
-    }
-
-    if let Some(exp) = &key.expires_at
-        && openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now())
-            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
-    {
-        return Err(ApiError(CoreError::Auth("api key expired".into())));
-    }
-
-    if !key.scopes.iter().any(|s| s == "chat") {
-        return Err(ApiError(CoreError::Auth(
-            "api key lacks required scope".into(),
-        )));
-    }
-
-    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
-    // The /v1/models path no longer blocks on acquiring the writer
-    // mutex; `touch_last_used` already throttles itself to 5-minute
-    // writes (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`).
-    let pool = std::sync::Arc::clone(state.db_pool());
-    let key_id = key.id;
-    tokio::task::spawn_blocking(move || {
-        let w = pool.writer();
-        let _ = api_keys::touch_last_used(&w, key_id);
-    });
+    let key = crate::middleware::auth::verify_key_credentials(state, token, "chat")?;
     Ok(Some(key))
 }
 

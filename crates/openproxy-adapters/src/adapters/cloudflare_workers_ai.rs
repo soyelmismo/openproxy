@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    fetch_models_with_auth,
+    build_discovered_model_full, fetch_models_with_auth,
 };
 
 // =====================================================================
@@ -145,28 +145,16 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             "cloudflare",
             |raw| {
                 let name = raw.get("name")?.as_str()?;
-                let m_type = openproxy_types::capabilities::infer_model_type(name);
-                let caps = openproxy_types::capabilities::infer_capabilities(name);
-                let in_mods =
-                    openproxy_types::capabilities::infer_input_modalities_for_model(name, &caps);
-                let out_mods = openproxy_types::capabilities::infer_output_modalities(name);
-                let family = openproxy_types::capabilities::infer_family(name);
-                Some(DiscoveredModel {
-                    model_id: ModelId::new(name),
-                    display_name: Some(name.to_string()),
-                    target_format: TargetFormat::Openai,
-                    context_length: raw
-                        .get("max_total_tokens")
-                        .and_then(serde_json::Value::as_i64),
-                    max_output_tokens: raw
-                        .get("max_total_tokens")
-                        .and_then(serde_json::Value::as_i64),
-                    input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                    output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                    model_type: Some(m_type.to_string()),
-                    family,
-                    capabilities: Some(caps),
-                })
+                let max_tokens = raw
+                    .get("max_total_tokens")
+                    .and_then(serde_json::Value::as_i64);
+                Some(build_discovered_model_full(
+                    name.to_string(),
+                    Some(name.to_string()),
+                    TargetFormat::Openai,
+                    max_tokens,
+                    max_tokens,
+                ))
             },
         )
         .await

@@ -167,23 +167,13 @@ fn handle_streaming_response(
     done_tx: tokio::sync::oneshot::Sender<()>,
     rx: tokio::sync::mpsc::Receiver<Bytes>,
 ) -> axum::response::Response {
-    let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
-
-    tokio::spawn(async move {
-        let result = pipeline.run(req).await;
-        let _ = done_tx.send(());
-
-        if let Some(err) = result.error {
-            let frame = ApiError(err).to_sse_error_frame(TargetFormat::Openai);
-            let _ = error_tx.send(frame).await;
-        }
-    });
-
-    let main_stream = ReceiverStream::new(rx);
-    let error_stream = ReceiverStream::new(error_rx);
-    let mut merged = futures::stream::SelectAll::new();
-    merged.push(main_stream);
-    merged.push(error_stream);
+    let merged = PipelineRunner::spawn_streaming_bridge(
+        pipeline,
+        req,
+        done_tx,
+        rx,
+        TargetFormat::Openai,
+    );
 
     let sse_stream = SseBytesStream {
         inner: merged,

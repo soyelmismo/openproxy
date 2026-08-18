@@ -1,4 +1,4 @@
-use super::{ApiError, AppState, Arc, CoreError, HeaderMap, IntoResponse, core_api_keys};
+use super::{ApiError, AppState, CoreError, HeaderMap, IntoResponse};
 
 pub(crate) fn authenticate_admin_ws(
     state: &AppState,
@@ -49,59 +49,7 @@ pub(crate) fn authenticate_admin_ws(
         return Err(ApiError(CoreError::Auth("invalid token".into())));
     }
 
-    let key_hash = core_api_keys::hash_key(t);
-    // Auth is a SELECT by hash — use the READER so admin requests don't
-    // serialize through the writer mutex. The reader has its own
-    // `Mutex<Connection>` (see `db::conn::DbPool`), so auth no longer
-    // contends with `cost::record` writes or admin mutations.
-    let key = {
-        let r = state.db_pool().reader();
-        match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
-            Some(k) => k,
-            None => return Err(ApiError(CoreError::Auth("invalid api key".into()))),
-        }
-    };
-
-    if !key.is_active {
-        return Err(ApiError(CoreError::Auth(
-            "api key revoked or inactive".into(),
-        )));
-    }
-
-    if let Some(exp) = &key.expires_at {
-        // LOW fix (#15): previously a lexicographic string
-        // comparison against `now.format("%Y-%m-%d %H:%M:%S")`. The
-        // stored value uses `%Y-%m-%dT%H:%M:%SZ` (RFC3339-ish), so
-        // the `T` (ASCII 84) sorted AFTER the space (ASCII 32) and
-        // every key with `expires_at` was effectively never-expiring.
-        // The helper parses both sides through `chrono` so the
-        // check now means what it says.
-        if core_api_keys::is_expired(Some(exp), chrono::Utc::now())
-            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
-        {
-            return Err(ApiError(CoreError::Auth("api key expired".into())));
-        }
-    }
-
-    if !key.scopes.iter().any(|s| s == "manage") {
-        return Err(ApiError(CoreError::Auth(
-            "api key lacks required scope".into(),
-        )));
-    }
-
-    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
-    // The auth path no longer blocks on acquiring the writer mutex,
-    // and `touch_last_used` already throttles itself to 5-minute
-    // writes (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`), so the
-    // extra writer acquisition here only happens once per key per
-    // five minutes under steady load.
-    let pool = Arc::clone(state.db_pool());
-    let key_id = key.id;
-    tokio::task::spawn_blocking(move || {
-        let w = pool.writer();
-        let _ = core_api_keys::touch_last_used(&w, key_id);
-    });
-
+    crate::middleware::auth::verify_key_credentials(state, t, "manage")?;
     Ok(())
 }
 

@@ -44,13 +44,28 @@ pub fn create_combo(
     Ok(ComboId(conn.last_insert_rowid()))
 }
 
-pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
-    let row = conn
-        .query_row(
+macro_rules! combo_select {
+    ($tail:expr) => {
+        concat!(
             "SELECT id, name, strategy, race_size, created_at, context_window, \
                     priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
                     cooldown_factor, lkgp_exploration_rate, selection_window_secs \
-             FROM combos WHERE id = ?1",
+             FROM combos ",
+            $tail
+        )
+    };
+    () => {
+        "SELECT id, name, strategy, race_size, created_at, context_window, \
+                priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
+                cooldown_factor, lkgp_exploration_rate, selection_window_secs \
+         FROM combos"
+    };
+}
+
+pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
+    let row = conn
+        .query_row(
+            combo_select!("WHERE id = ?1"),
             params![id.0],
             row_to_combo,
         )
@@ -64,12 +79,7 @@ pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
 
 pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, strategy, race_size, created_at, context_window, \
-                   priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
-                   cooldown_factor, lkgp_exploration_rate, selection_window_secs \
-             FROM combos ORDER BY id",
-        )
+        .prepare(combo_select!("ORDER BY id"))
         .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map([], row_to_combo)
@@ -87,12 +97,7 @@ pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
 /// in the admin / `/v1/models` endpoints.
 pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, strategy, race_size, created_at, context_window, \
-                   priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
-                   cooldown_factor, lkgp_exploration_rate, selection_window_secs \
-             FROM combos WHERE name = ?1",
-        )
+        .prepare(combo_select!("WHERE name = ?1"))
         .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query_map(params![name], row_to_combo)

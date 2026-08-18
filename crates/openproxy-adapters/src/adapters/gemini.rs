@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    fetch_models_with_auth,
+    build_discovered_model_full, fetch_models_with_auth,
 };
 
 // =====================================================================
@@ -87,29 +87,18 @@ impl ProviderAdapter for GeminiAdapter {
                 let display_name = m
                     .get("displayName")
                     .and_then(|v| v.as_str())
-                    .map_or_else(|| id.to_string(), std::string::ToString::to_string);
-                let m_type = openproxy_types::capabilities::infer_model_type(id);
-                let caps = openproxy_types::capabilities::infer_capabilities(id);
-                let in_mods =
-                    openproxy_types::capabilities::infer_input_modalities_for_model(id, &caps);
-                let out_mods = openproxy_types::capabilities::infer_output_modalities(id);
-                let family = openproxy_types::capabilities::infer_family(id);
+                    .map(ToString::to_string);
                 let ctx = m.get("inputTokenLimit").and_then(serde_json::Value::as_i64);
                 let out = m
                     .get("outputTokenLimit")
                     .and_then(serde_json::Value::as_i64);
-                Some(DiscoveredModel {
-                    model_id: ModelId::new(id.to_string()),
-                    display_name: Some(display_name),
-                    target_format: TargetFormat::Gemini,
-                    context_length: ctx,
-                    max_output_tokens: out,
-                    input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                    output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                    model_type: Some(m_type.to_string()),
-                    family,
-                    capabilities: Some(caps),
-                })
+                Some(build_discovered_model_full(
+                    id.to_string(),
+                    display_name,
+                    TargetFormat::Gemini,
+                    ctx,
+                    out,
+                ))
             },
         )
         .await

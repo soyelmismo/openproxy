@@ -1,7 +1,7 @@
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, OpenAIModelEntry,
+    AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, OpenAIModelEntry,
     ProviderAdapter, ProviderAdapterConfig, ProviderMetadata, Result, TargetFormat, UpstreamClient,
-    upstream_get_json,
+    build_discovered_model_full, build_discovered_model_with, upstream_get_json,
 };
 
 // =====================================================================
@@ -136,25 +136,7 @@ impl ProviderAdapter for CustomAdapter {
                 .iter()
                 .filter_map(|raw| {
                     let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-                    let id = entry.id;
-                    let m_type = openproxy_types::capabilities::infer_model_type(&id);
-                    let caps = openproxy_types::capabilities::infer_capabilities(&id);
-                    let in_mods =
-                        openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
-                    let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
-                    let family = openproxy_types::capabilities::infer_family(&id);
-                    Some(DiscoveredModel {
-                        display_name: Some(id.clone()),
-                        model_id: ModelId::new(id),
-                        target_format,
-                        context_length: None,
-                        max_output_tokens: None,
-                        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                        model_type: Some(m_type.to_string()),
-                        family,
-                        capabilities: Some(caps),
-                    })
+                    Some(build_discovered_model_with(entry.id, target_format))
                 })
                 .collect();
             return Ok(models);
@@ -170,25 +152,14 @@ impl ProviderAdapter for CustomAdapter {
                     let display_name = m
                         .get("displayName")
                         .and_then(|v| v.as_str())
-                        .map_or_else(|| id.to_string(), std::string::ToString::to_string);
-                    let m_type = openproxy_types::capabilities::infer_model_type(id);
-                    let caps = openproxy_types::capabilities::infer_capabilities(id);
-                    let in_mods =
-                        openproxy_types::capabilities::infer_input_modalities_for_model(id, &caps);
-                    let out_mods = openproxy_types::capabilities::infer_output_modalities(id);
-                    let family = openproxy_types::capabilities::infer_family(id);
-                    Some(DiscoveredModel {
-                        model_id: ModelId::new(id.to_string()),
-                        display_name: Some(display_name),
-                        target_format: TargetFormat::Gemini,
-                        context_length: None,
-                        max_output_tokens: None,
-                        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                        model_type: Some(m_type.to_string()),
-                        family,
-                        capabilities: Some(caps),
-                    })
+                        .map(ToString::to_string);
+                    Some(build_discovered_model_full(
+                        id.to_string(),
+                        display_name,
+                        TargetFormat::Gemini,
+                        None,
+                        None,
+                    ))
                 })
                 .collect();
             return Ok(models);
@@ -209,7 +180,7 @@ impl ProviderAdapter for CustomAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_types::ProviderId;
+    use openproxy_types::{ModelId, ProviderId};
 
     #[test]
     fn test_build_chat_url() {

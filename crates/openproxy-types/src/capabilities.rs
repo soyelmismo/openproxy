@@ -275,36 +275,154 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
     None
 }
 
+pub const RERANK_KEYWORDS: &[&str] = &["rerank"];
+
+pub const EMBEDDING_KEYWORDS: &[&str] = &[
+    "text-embedding",
+    "embedding",
+    "embeddings",
+    "embedder",
+    "model2vec",
+    "bge-",
+    "/bge-",
+    "bge_",
+    "bge.",
+    "embed-qa",
+    "embedcode",
+    "pplx-embed",
+    "mistral-embed",
+    "codestral-embed",
+    "arctic-embed",
+    "nomic-embed",
+    "voyage-embed",
+    "nv-embed",
+    "gte-",
+    "e5-",
+    "embed-v",
+];
+
+pub const CHAT_GUARD_KEYWORDS: &[&str] = &[
+    "gemini",
+    "gpt-4",
+    "gpt-3",
+    "o1",
+    "o3",
+    "o4",
+    "claude",
+    "deepseek",
+    "qwen",
+    "llama",
+    "mistral",
+    "mixtral",
+    "gemma",
+    "phi-",
+    "kimi",
+    "glm-",
+    "stepaudio",
+];
+
+pub const AUDIO_KEYWORDS: &[&str] = &[
+    "deepgram",
+    "whisper",
+    "speechify",
+    "melotts",
+    "melo-tts",
+    "kokoro",
+    "fish-audio",
+    "fish-speech",
+    "chattts",
+    "cosyvoice",
+    "openvoice",
+    "parler-tts",
+    "speechmatics",
+    "tts-1",
+    "inworld-tts",
+    "elevenlabs",
+    "eleven-labs",
+    "eleven_multilingual",
+    "stable-audio",
+    "musicgen",
+    "audioldm",
+    "seamless-m4t",
+    "sensevoice",
+    "voxtral-mini-tts",
+    "xai-tts",
+    "-tts-",
+    "_tts_",
+    "/tts-",
+    "preview-tts",
+    "-tts-preview",
+    "-asr",
+];
+
+pub const IMAGE_KEYWORDS: &[&str] = &[
+    "dall-e",
+    "dalle",
+    "midjourney",
+    "ideogram",
+    "recraft",
+    "flux",
+    "sdxl",
+    "stable-diffusion",
+    "stable_diffusion",
+    "stablediffusion",
+    "stable-image",
+    "sd-turbo",
+    "sdxl-turbo",
+    "sd-1.5",
+    "sd-2.1",
+    "sd-3",
+    "sd-3.5",
+    "sd3",
+    "sd3.5",
+    "imagen-",
+    "imagen/",
+    "dreamshaper",
+    "pony",
+    "animagine",
+    "zavychroma",
+    "novafast",
+    "albedobase",
+    "edge of realism",
+    "zeipher female",
+    "mhxl",
+    "rag illustrious",
+    "mistoon anime",
+    "bb95 furry",
+    "camelliamix",
+    "anything v3",
+    "anything v5",
+    "perfect world",
+    "abyss orangemix",
+    "stable cascade",
+    "playbookxl",
+    "rundiffusion",
+    "playground-v2",
+    "kandinsky",
+    "kolors",
+    "auraflow",
+    "lumina-image",
+    "hunyuan-dit",
+    "pixart",
+    "cogview",
+    "gameart",
+    "art of mtg",
+    "duchaiten",
+    "duc haiten",
+    "nai-diffusion",
+    "diffusion",
+];
+
 pub fn infer_model_type(model_id: &str) -> &'static str {
     let lower = model_id.to_lowercase();
 
     // 1. Rerank models (highest priority unambiguous keyword)
-    if lower.contains("rerank") {
+    if RERANK_KEYWORDS.iter().any(|k| lower.contains(k)) {
         return "rerank";
     }
 
     // 2. Embedding models
-    if lower.contains("text-embedding")
-        || lower.contains("embedding")
-        || lower.contains("embeddings")
-        || lower.contains("embedder")
-        || lower.contains("model2vec")
-        || lower.contains("bge-")
-        || lower.contains("/bge-")
-        || lower.contains("bge_")
-        || lower.contains("bge.")
-        || lower.contains("embed-qa")
-        || lower.contains("embedcode")
-        || lower.contains("pplx-embed")
-        || lower.contains("mistral-embed")
-        || lower.contains("codestral-embed")
-        || lower.contains("arctic-embed")
-        || lower.contains("nomic-embed")
-        || lower.contains("voyage-embed")
-        || lower.contains("nv-embed")
-        || lower.contains("gte-")
-        || lower.contains("e5-")
-        || lower.contains("embed-v")
+    if EMBEDDING_KEYWORDS.iter().any(|k| lower.contains(k))
         || (lower.contains("embed")
             && !lower.contains("embedded-")
             && !lower.contains("embed_chat")
@@ -314,24 +432,7 @@ pub fn infer_model_type(model_id: &str) -> &'static str {
     }
 
     // 3. Multimodal Conversational LLMs Guard (prevents Gemini Flash, GPT-4o, Claude, etc. from matching audio/image)
-    if lower.contains("gemini")
-        || lower.contains("gpt-4")
-        || lower.contains("gpt-3")
-        || lower.contains("o1")
-        || lower.contains("o3")
-        || lower.contains("o4")
-        || lower.contains("claude")
-        || lower.contains("deepseek")
-        || lower.contains("qwen")
-        || lower.contains("llama")
-        || lower.contains("mistral")
-        || lower.contains("mixtral")
-        || lower.contains("gemma")
-        || lower.contains("phi-")
-        || lower.contains("kimi")
-        || lower.contains("glm-")
-        || lower.contains("stepaudio")
-    {
+    if CHAT_GUARD_KEYWORDS.iter().any(|k| lower.contains(k)) {
         if lower.contains("imagen-") || lower.contains("imagen/") || lower == "imagen" {
             return "image";
         }
@@ -339,43 +440,11 @@ pub fn infer_model_type(model_id: &str) -> &'static str {
     }
 
     // 4. Dedicated Audio models (TTS, STT, Music, Speech)
-    if lower.contains("deepgram")
-        || lower.contains("whisper")
-        || lower.contains("speechify")
-        || lower.contains("melotts")
-        || lower.contains("melo-tts")
-        || lower.contains("kokoro")
-        || lower.contains("fish-audio")
-        || lower.contains("fish-speech")
-        || lower.contains("chattts")
-        || lower.contains("cosyvoice")
-        || lower.contains("openvoice")
-        || lower.contains("parler-tts")
-        || lower.contains("speechmatics")
-        || lower.contains("tts-1")
-        || lower.contains("inworld-tts")
-        || lower.contains("elevenlabs")
-        || lower.contains("eleven-labs")
-        || lower.contains("eleven_multilingual")
-        || lower.contains("stable-audio")
-        || lower.contains("musicgen")
-        || lower.contains("audioldm")
-        || lower.contains("seamless-m4t")
-        || lower.contains("sensevoice")
-        || lower.contains("voxtral-mini-tts")
-        || lower.contains("xai-tts")
-        || (lower.contains("telnyx-") && lower.contains("tts"))
+    if AUDIO_KEYWORDS.iter().any(|k| lower.contains(k))
         || lower.ends_with("-tts")
         || lower.ends_with("_tts")
         || lower.ends_with("/tts")
-        || lower.contains("-tts-")
-        || lower.contains("_tts_")
-        || lower.contains("/tts-")
-        || lower.contains("preview-tts")
-        || lower.contains("-tts-preview")
-        || lower.ends_with("-asr")
-        || lower.contains("-asr-")
-        || lower.contains("-asr")
+        || (lower.contains("telnyx-") && lower.contains("tts"))
     {
         return "audio";
     }
@@ -385,64 +454,7 @@ pub fn infer_model_type(model_id: &str) -> &'static str {
         return "chat";
     }
 
-    if lower.contains("dall-e")
-        || lower.contains("dalle")
-        || lower.contains("midjourney")
-        || lower.contains("ideogram")
-        || lower.contains("recraft")
-        || lower.contains("flux")
-        || lower.contains("sdxl")
-        || lower.contains("stable-diffusion")
-        || lower.contains("stable_diffusion")
-        || lower.contains("stablediffusion")
-        || lower.contains("stable-image")
-        || lower.contains("sd-turbo")
-        || lower.contains("sdxl-turbo")
-        || lower.contains("sd-1.5")
-        || lower.contains("sd-2.1")
-        || lower.contains("sd-3")
-        || lower.contains("sd-3.5")
-        || lower.contains("sd3")
-        || lower.contains("sd3.5")
-        || lower.contains("imagen-")
-        || lower.contains("imagen/")
-        || lower.starts_with("imagen-")
-        || lower == "imagen"
-        || lower.contains("dreamshaper")
-        || lower.contains("pony")
-        || lower.contains("animagine")
-        || lower.contains("zavychroma")
-        || lower.contains("novafast")
-        || lower.contains("albedobase")
-        || lower.contains("edge of realism")
-        || lower.contains("zeipher female")
-        || lower.contains("mhxl")
-        || lower.contains("rag illustrious")
-        || lower.contains("mistoon anime")
-        || lower.contains("bb95 furry")
-        || lower.contains("camelliamix")
-        || lower.contains("anything v3")
-        || lower.contains("anything v5")
-        || lower.contains("perfect world")
-        || lower.contains("abyss orangemix")
-        || lower.contains("stable cascade")
-        || lower.contains("playbookxl")
-        || lower.contains("rundiffusion")
-        || lower.contains("playground-v2")
-        || lower.contains("kandinsky")
-        || lower.contains("kolors")
-        || lower.contains("auraflow")
-        || lower.contains("lumina-image")
-        || lower.contains("hunyuan-dit")
-        || lower.contains("pixart")
-        || lower.contains("cogview")
-        || lower.contains("gameart")
-        || lower.contains("art of mtg")
-        || lower.contains("duchaiten")
-        || lower.contains("duc haiten")
-        || lower.contains("nai-diffusion")
-        || lower.contains("diffusion")
-    {
+    if IMAGE_KEYWORDS.iter().any(|k| lower.contains(k)) || lower == "imagen" {
         return "image";
     }
 

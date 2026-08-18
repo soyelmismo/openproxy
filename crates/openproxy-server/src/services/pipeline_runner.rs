@@ -11,11 +11,12 @@ use openproxy_pipeline::redact::redact_sensitive_headers;
 use openproxy_pipeline::{Pipeline, PipelineConfig, PipelineRequest, StreamSink};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::ids::{ApiKeyId, ComboId, RequestId, TraceId};
-use openproxy_types::{CancelReason, EndpointKind, OpenAIRequest};
+use openproxy_types::{CancelReason, EndpointKind, OpenAIRequest, TargetFormat};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{disconnect::CancelWatch, state::AppState};
+use crate::{disconnect::CancelWatch, error::ApiError, state::AppState};
 
 pub struct PreparedPipelineRequest {
     pub req: PipelineRequest,
@@ -166,5 +167,33 @@ impl PipelineRunner {
             done_tx,
             stream_rx: rx,
         }
+    }
+
+    /// Spawn the pipeline execution in background and merge the output stream with an error frame channel.
+    pub fn spawn_streaming_bridge(
+        pipeline: Pipeline,
+        req: PipelineRequest,
+        done_tx: oneshot::Sender<()>,
+        stream_rx: mpsc::Receiver<Bytes>,
+        target_format: TargetFormat,
+    ) -> futures::stream::SelectAll<ReceiverStream<Bytes>> {
+        let (error_tx, error_rx) = mpsc::channel::<Bytes>(1);
+
+        tokio::spawn(async move {
+            let result = pipeline.run(req).await;
+            let _ = done_tx.send(());
+
+            if let Some(err) = result.error {
+                let frame = ApiError(err).to_sse_error_frame(target_format);
+                let _ = error_tx.send(frame).await;
+            }
+        });
+
+        let main_stream = ReceiverStream::new(stream_rx);
+        let error_stream = ReceiverStream::new(error_rx);
+        let mut merged = futures::stream::SelectAll::new();
+        merged.push(main_stream);
+        merged.push(error_stream);
+        merged
     }
 }

@@ -1018,25 +1018,36 @@ pub(crate) struct OpenAIModelEntry {
 // Shared OpenAI model-list fetcher-list fetcher
 // =====================================================================
 
-/// Helper to construct a [`DiscoveredModel`] with standard capability inferences.
-pub fn build_discovered_model_with(id: String, target_format: TargetFormat) -> DiscoveredModel {
+/// Helper to construct a [`DiscoveredModel`] with full parameters and standard capability inferences.
+pub fn build_discovered_model_full(
+    id: String,
+    display_name: Option<String>,
+    target_format: TargetFormat,
+    context_length: Option<i64>,
+    max_output_tokens: Option<i64>,
+) -> DiscoveredModel {
     let m_type = openproxy_types::capabilities::infer_model_type(&id);
     let caps = openproxy_types::capabilities::infer_capabilities(&id);
     let in_mods = openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
     let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
     let family = openproxy_types::capabilities::infer_family(&id);
     DiscoveredModel {
-        display_name: Some(id.clone()),
+        display_name: display_name.or_else(|| Some(id.clone())),
         model_id: ModelId::new(id),
         target_format,
-        context_length: None,
-        max_output_tokens: None,
+        context_length,
+        max_output_tokens,
         input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
         output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
         model_type: Some(m_type.to_string()),
         family,
         capabilities: Some(caps),
     }
+}
+
+/// Helper to construct a [`DiscoveredModel`] with standard capability inferences.
+pub fn build_discovered_model_with(id: String, target_format: TargetFormat) -> DiscoveredModel {
+    build_discovered_model_full(id, None, target_format, None, None)
 }
 
 /// Fetch and parse an OpenAI-shaped `GET /models` response.
@@ -1874,5 +1885,30 @@ mod tests {
         assert_eq!(val["aspect_ratio"], "16:9");
         assert_eq!(val["seed"], 12345);
         assert_eq!(val["negative_prompt"], "blurry");
+    }
+
+    #[test]
+    fn test_build_discovered_model_helpers() {
+        let m1 = build_discovered_model_full(
+            "gemini-1.5-pro".to_string(),
+            Some("Gemini 1.5 Pro".to_string()),
+            TargetFormat::Gemini,
+            Some(2_000_000),
+            Some(8192),
+        );
+        assert_eq!(m1.model_id.as_str(), "gemini-1.5-pro");
+        assert_eq!(m1.display_name.as_deref(), Some("Gemini 1.5 Pro"));
+        assert_eq!(m1.target_format, TargetFormat::Gemini);
+        assert_eq!(m1.context_length, Some(2_000_000));
+        assert_eq!(m1.max_output_tokens, Some(8192));
+        assert!(m1.capabilities.is_some());
+
+        let m2 = build_discovered_model_with("gpt-4o".to_string(), TargetFormat::Openai);
+        assert_eq!(m2.model_id.as_str(), "gpt-4o");
+        assert_eq!(m2.display_name.as_deref(), Some("gpt-4o"));
+        assert_eq!(m2.target_format, TargetFormat::Openai);
+        assert_eq!(m2.context_length, None);
+        assert_eq!(m2.max_output_tokens, None);
+        assert!(m2.capabilities.is_some());
     }
 }

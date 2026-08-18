@@ -189,53 +189,13 @@ pub(crate) fn authenticate(
         return Err(ApiError(CoreError::Auth("missing api key".into())));
     }
 
-    let key_hash = core_api_keys::hash_key(token);
-    // Auth is a SELECT by hash — use the READER so chat requests don't
-    // serialize through the writer mutex (same fix as the admin path).
-    let r = state.db_pool().reader();
-    let Some(key) = core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? else {
-        return Err(ApiError(CoreError::Auth("invalid api key".into())));
-    };
-
-    if !key.is_active {
-        return Err(ApiError(CoreError::Auth(
-            "api key revoked or inactive".into(),
-        )));
-    }
-
-    if let Some(exp) = &key.expires_at {
-        // LOW fix (#15): same parser-based check as in admin.rs —
-        // see api_keys.rs::is_expired for the rationale.
-        if core_api_keys::is_expired(Some(exp), chrono::Utc::now())
-            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
-        {
-            return Err(ApiError(CoreError::Auth("api key expired".into())));
-        }
-    }
-
-    if !key.scopes.iter().any(|s| s == "chat") {
-        return Err(ApiError(CoreError::Auth(
-            "api key lacks required scope".into(),
-        )));
-    }
+    let key = verify_key_credentials(state, token, "chat")?;
 
     if !key.is_model_allowed(requested_model, None) {
         return Err(ApiError(CoreError::Auth(format!(
             "model '{requested_model}' not allowed or blacklisted for this key"
         ))));
     }
-
-    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
-    // The chat hot path no longer blocks on acquiring the writer mutex.
-    // `touch_last_used` already throttles itself to 5-minute writes
-    // (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`), so the extra
-    // writer acquisition only happens once per key per five minutes.
-    let pool = Arc::clone(state.db_pool());
-    let key_id = key.id;
-    tokio::task::spawn_blocking(move || {
-        let w = pool.writer();
-        let _ = core_api_keys::touch_last_used(&w, key_id);
-    });
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
@@ -244,6 +204,60 @@ pub(crate) fn authenticate(
         blacklisted_providers: key.blacklisted_providers,
         blacklisted_models: key.blacklisted_models,
     }))
+}
+
+/// Validate an API key credential against active keys, verifying:
+/// 1. Hash matching
+/// 2. Active status
+/// 3. Expiration date
+/// 4. Required scope presence
+///
+/// If valid, touches `last_used_at` asynchronously on a blocking thread
+/// and returns the [`openproxy_core::api_keys::ApiKey`].
+pub(crate) fn verify_key_credentials(
+    state: &AppState,
+    token: &str,
+    required_scope: &str,
+) -> Result<core_api_keys::ApiKey, ApiError> {
+    let key_hash = core_api_keys::hash_key(token);
+    // Auth is a SELECT by hash — use the READER so requests don't
+    // serialize through the writer mutex.
+    let r = state.db_pool().reader();
+    let key = core_api_keys::get_by_hash(&r, &key_hash)
+        .map_err(ApiError)?
+        .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
+
+    if !key.is_active {
+        return Err(ApiError(CoreError::Auth(
+            "api key revoked or inactive".into(),
+        )));
+    }
+
+    if let Some(exp) = &key.expires_at
+        && core_api_keys::is_expired(Some(exp), chrono::Utc::now())
+            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
+    {
+        return Err(ApiError(CoreError::Auth("api key expired".into())));
+    }
+
+    if !key.scopes.iter().any(|s| s == required_scope) {
+        return Err(ApiError(CoreError::Auth(
+            "api key lacks required scope".into(),
+        )));
+    }
+
+    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
+    // The hot path no longer blocks on acquiring the writer mutex.
+    // `touch_last_used` already throttles itself to 5-minute writes
+    // (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`).
+    let pool = Arc::clone(state.db_pool());
+    let key_id = key.id;
+    tokio::task::spawn_blocking(move || {
+        let w = pool.writer();
+        let _ = core_api_keys::touch_last_used(&w, key_id);
+    });
+
+    Ok(key)
 }
 
 /// Authenticate the request against active API keys and verify model/combo authorization.
