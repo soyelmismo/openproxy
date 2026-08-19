@@ -264,8 +264,9 @@ export function logout(): void {
 
 export function loadSidebarCollapsedFromStorage(): void {
   const s = mutableState();
-  if (s.ui && typeof s.ui.sidebarCollapsed === "boolean") return;
   let stored: string | null = null;
   try { stored = localStorage.getItem(STORAGE_KEY); } catch (_e: unknown) { stored = null; }
-  s.ui = { ...(s.ui ?? {}), sidebarCollapsed: stored === "1" };
+  if (stored !== null) {
+    s.ui = { ...(s.ui ?? {}), sidebarCollapsed: stored === "1" };
+  }
 }
