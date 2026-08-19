@@ -80,6 +80,9 @@ pub async fn dispatch_audio_request(
 
     // form fields
     for (k, v) in &body.form_fields {
+        if v.trim().is_empty() {
+            continue;
+        }
         payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         payload.extend_from_slice(
             format!("Content-Disposition: form-data; name=\"{k}\"\r\n\r\n").as_bytes(),
@@ -220,12 +223,14 @@ pub async fn execute_transcribe(
         let code_u16 = status_code.as_u16();
         if code_u16 >= 400 {
             crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-            tracing::warn!(
-                "Audio target returned error status: provider={}, status={}",
-                target.provider,
-                status_code
-            );
             let err_text = String::from_utf8_lossy(&body_bytes);
+            tracing::warn!(
+                "Audio target returned error status: provider={}, model={}, status={}, body={}",
+                target.provider,
+                target.upstream_model,
+                status_code,
+                err_text
+            );
             let err = map_upstream_status_error(
                 code_u16,
                 target.provider.as_str(),
