@@ -18,11 +18,7 @@ crate::def_table_select!(
      created_at, current_proxy_id"
 );
 
-crate::def_table_select!(
-    account_api_key_select,
-    "accounts",
-    "api_key_encrypted"
-);
+crate::def_table_select!(account_api_key_select, "accounts", "api_key_encrypted");
 
 crate::def_table_select!(
     account_api_key_label_select,
@@ -60,11 +56,7 @@ crate::def_table_select!(
     "oauth_provider_specific"
 );
 
-crate::def_table_select!(
-    account_current_proxy_select,
-    "accounts",
-    "current_proxy_id"
-);
+crate::def_table_select!(account_current_proxy_select, "accounts", "current_proxy_id");
 
 pub fn create(
     conn: &Connection,
@@ -95,7 +87,9 @@ pub fn create(
             Ok(AccountId(rowid))
         }
         Err(e) => {
-            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::ForeignKeyViolation {
+            if crate::error::classify_sqlite_error(&e)
+                == crate::error::DbErrorKind::ForeignKeyViolation
+            {
                 Err(CoreError::Validation("unknown provider".into()))
             } else {
                 Err(crate::error::map_db_error_ctx(format!(

@@ -517,10 +517,7 @@ fn map_error_body(status: u16, bytes: &[u8]) -> ClientError {
         {
             return ClientError::Api(core_err);
         }
-        return ClientError::Status(
-            status,
-            format!("{}: {}", env.error.code, env.error.message),
-        );
+        return ClientError::Status(status, format!("{}: {}", env.error.code, env.error.message));
     }
 
     // Body no es JSON o no encaja en el sobre. Reportamos el cuerpo crudo

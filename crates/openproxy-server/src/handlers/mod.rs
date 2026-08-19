@@ -29,8 +29,8 @@ pub mod images;
 pub mod messages;
 pub mod models;
 
-use axum::routing::post;
 use crate::state::AppState;
+use axum::routing::post;
 
 /// Shared chat/messages endpoint wrapper with disconnect, rate limiting,
 /// routing, and auth middlewares.

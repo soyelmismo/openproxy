@@ -19,7 +19,6 @@ struct Migration {
 
 include!(concat!(env!("OUT_DIR"), "/migrations_generated.rs"));
 
-
 /// Apply pending migrations on `conn`.
 pub fn run(conn: &mut Connection) -> Result<()> {
     ensure_tracking_table(conn)?;

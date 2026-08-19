@@ -192,17 +192,20 @@ impl AppState {
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
         let supervisor = Arc::new(crate::background::BackgroundSupervisor::new());
 
-        spawn_background_tasks(&supervisor, SpawnBackgroundTasksArgs {
-            db_pool: Arc::clone(&db_pool),
-            config: config.clone(),
-            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
-            maintenance_cell: Arc::clone(&maintenance_cell),
-            vacuum_status: Arc::clone(&vacuum_status),
-            master_key: Arc::clone(&master_key),
-            adapters: Arc::clone(&adapters),
-            upstream_client: Arc::clone(&upstream_client),
-            oauth_provider_registry: Arc::clone(&oauth_provider_registry),
-        });
+        spawn_background_tasks(
+            &supervisor,
+            SpawnBackgroundTasksArgs {
+                db_pool: Arc::clone(&db_pool),
+                config: config.clone(),
+                recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
+                maintenance_cell: Arc::clone(&maintenance_cell),
+                vacuum_status: Arc::clone(&vacuum_status),
+                master_key: Arc::clone(&master_key),
+                adapters: Arc::clone(&adapters),
+                upstream_client: Arc::clone(&upstream_client),
+                oauth_provider_registry: Arc::clone(&oauth_provider_registry),
+            },
+        );
 
         let discovery_scheduler = Arc::new(start_discovery_scheduler(
             Arc::clone(&db_pool),
@@ -233,7 +236,11 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        spawn_memory_cleanup(&supervisor, Arc::clone(&selection_registry), circuit_breaker.clone());
+        spawn_memory_cleanup(
+            &supervisor,
+            Arc::clone(&selection_registry),
+            circuit_breaker.clone(),
+        );
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
         let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(
@@ -307,17 +314,20 @@ impl AppState {
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
         let supervisor = Arc::new(crate::background::BackgroundSupervisor::new());
 
-        spawn_background_tasks(&supervisor, SpawnBackgroundTasksArgs {
-            db_pool: Arc::clone(&db_pool),
-            config: config.clone(),
-            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
-            maintenance_cell: Arc::clone(&maintenance_cell),
-            vacuum_status: Arc::clone(&vacuum_status),
-            master_key: Arc::clone(&master_key),
-            adapters: Arc::clone(&adapters),
-            upstream_client: Arc::clone(&upstream_client),
-            oauth_provider_registry: Arc::clone(&oauth_provider_registry),
-        });
+        spawn_background_tasks(
+            &supervisor,
+            SpawnBackgroundTasksArgs {
+                db_pool: Arc::clone(&db_pool),
+                config: config.clone(),
+                recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
+                maintenance_cell: Arc::clone(&maintenance_cell),
+                vacuum_status: Arc::clone(&vacuum_status),
+                master_key: Arc::clone(&master_key),
+                adapters: Arc::clone(&adapters),
+                upstream_client: Arc::clone(&upstream_client),
+                oauth_provider_registry: Arc::clone(&oauth_provider_registry),
+            },
+        );
 
         let adapters_snapshot = Arc::clone(&adapters.read());
         let discovery_scheduler = discovery_scheduler::start(
@@ -345,7 +355,11 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        spawn_memory_cleanup(&supervisor, Arc::clone(&selection_registry), circuit_breaker.clone());
+        spawn_memory_cleanup(
+            &supervisor,
+            Arc::clone(&selection_registry),
+            circuit_breaker.clone(),
+        );
 
         openproxy_core::notifications::init_broadcast();
 

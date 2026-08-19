@@ -417,8 +417,7 @@ impl UpstreamDispatcher {
         ttft_ms: Option<u64>,
     ) -> PipelineResult {
         let retry_after_ms = retry_after_header.and_then(parse_retry_after_ms);
-        let is_rate_limited_status =
-            status_code == 429 || status_code == 408 || status_code == 503;
+        let is_rate_limited_status = status_code == 429 || status_code == 408 || status_code == 503;
         let retry_ms = retry_after_ms.unwrap_or(300_000);
 
         let is_proxy_rotated = if is_rate_limited_status {
@@ -869,14 +868,7 @@ impl UpstreamDispatcher {
             Ok(r) => r,
             Err(err) => {
                 return self
-                    .handle_upstream_error(
-                        err,
-                        req,
-                        combo,
-                        target,
-                        &dctx,
-                        connect_and_send_ms,
-                    )
+                    .handle_upstream_error(err, req, combo, target, &dctx, connect_and_send_ms)
                     .await;
             }
         };
@@ -1714,18 +1706,11 @@ impl UpstreamDispatcher {
         // doesn't have a "total" pre-migration mapping (it was
         // `phase: "total"` from legacy whole-request timeout),
         // so `Body` here maps to the same `"total"` label to keep
-            let response = match result {
+        let response = match result {
             Ok(r) => r,
             Err(err) => {
                 return self
-                    .handle_upstream_error(
-                        err,
-                        req,
-                        combo,
-                        target,
-                        &dctx,
-                        connect_and_send_ms,
-                    )
+                    .handle_upstream_error(err, req, combo, target, &dctx, connect_and_send_ms)
                     .await;
             }
         };

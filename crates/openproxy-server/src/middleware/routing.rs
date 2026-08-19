@@ -120,9 +120,14 @@ fn resolve_routing_plan(
                     continue;
                 }
                 if let Some(row_id) = target.model_row_id {
-                    let model = openproxy_core::models::get_by_row_id(&r, row_id).ok().flatten();
+                    let model = openproxy_core::models::get_by_row_id(&r, row_id)
+                        .ok()
+                        .flatten();
                     if let Some(m) = model
-                        && !auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str()))
+                        && !auth.is_model_allowed(
+                            m.model_id.as_str(),
+                            Some(target.provider_id.as_str()),
+                        )
                     {
                         continue;
                     }

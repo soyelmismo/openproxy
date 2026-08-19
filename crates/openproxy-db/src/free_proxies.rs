@@ -46,11 +46,7 @@ crate::def_table_select!(
     "host, port, type, username, password"
 );
 
-crate::def_table_select!(
-    proxy_status_select,
-    "free_proxies",
-    "status"
-);
+crate::def_table_select!(proxy_status_select, "free_proxies", "status");
 
 type ProxyRow = (String, String, i64, String, Option<String>, Option<String>);
 

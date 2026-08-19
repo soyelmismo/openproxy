@@ -65,6 +65,7 @@ pub use usage::{
     UsageDetailResponse, UsageStreamQuery, WS_OUTBOX_CAPACITY,
 };
 
+pub(crate) use crate::{error::ApiError, state::AppState};
 pub(crate) use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
@@ -90,7 +91,6 @@ pub(crate) use openproxy_types::{
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use serde_json::json;
 pub(crate) use std::sync::Arc;
-pub(crate) use crate::{error::ApiError, state::AppState};
 
 /// Macro declarativa para estandarizar handlers de acción/eliminación sobre entidades administrativas.
 #[macro_export]

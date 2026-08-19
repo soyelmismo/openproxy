@@ -1,9 +1,9 @@
 //! Background daemon supervision and unified lifecycle traits.
 
-use std::sync::Arc;
-use std::time::Duration;
 use openproxy_adapters::upstream::CancellationToken;
 use parking_lot::RwLock;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Unified trait for background daemons and services with graceful shutdown support.
 pub trait BackgroundService: Send + Sync + 'static {
@@ -230,14 +230,17 @@ impl BackgroundService for FreeProxiesSyncService {
             tracing::info!("running scheduled background proxy sync");
             let mut next_sleep = interval_hours * 3600;
 
-            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&self.db_pool)).await {
+            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&self.db_pool)).await
+            {
                 Ok(summary) => {
                     tracing::info!(added = summary.added, "background proxy sync completed");
                     if summary.fetched == 0 {
                         tracing::warn!("0 proxies fetched, retrying in 5 minutes");
                         next_sleep = 300;
                     } else {
-                        openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(&self.db_pool));
+                        openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(
+                            &self.db_pool,
+                        ));
                     }
                 }
                 Err(e) => {
@@ -403,4 +406,3 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), stopped_at);
     }
 }
-

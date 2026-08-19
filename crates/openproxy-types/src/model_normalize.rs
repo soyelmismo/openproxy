@@ -310,7 +310,8 @@ mod tests {
         let forms: Vec<&str> = candidate_normalized_forms("model-turbo:free").collect();
         assert_eq!(forms, vec!["model-turbo", "model"]);
 
-        let forms: Vec<&str> = candidate_normalized_forms("claude-3-5-sonnet-preset-free-trial").collect();
+        let forms: Vec<&str> =
+            candidate_normalized_forms("claude-3-5-sonnet-preset-free-trial").collect();
         assert_eq!(forms, vec!["claude-3-5-sonnet-preset", "claude-3-5-sonnet"]);
 
         assert_eq!(candidate_normalized_forms("gpt-4o").count(), 0);

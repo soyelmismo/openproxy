@@ -36,8 +36,14 @@ pub struct ProviderRefreshQuery {
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
-        .route("/", axum::routing::get(list_providers).post(create_provider))
-        .route("/{id}/refresh", axum::routing::post(refresh_provider_models))
+        .route(
+            "/",
+            axum::routing::get(list_providers).post(create_provider),
+        )
+        .route(
+            "/{id}/refresh",
+            axum::routing::post(refresh_provider_models),
+        )
         .route("/{id}/active", axum::routing::post(set_provider_active))
         .route(
             "/{id}",

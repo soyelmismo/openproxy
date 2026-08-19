@@ -153,9 +153,9 @@ impl std::error::Error for UpstreamError {}
 impl UpstreamError {
     pub fn to_core_error(&self, context: &str) -> openproxy_types::CoreError {
         match self {
-            UpstreamError::Cancel => {
-                openproxy_types::CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            }
+            UpstreamError::Cancel => openproxy_types::CoreError::Cancelled(
+                openproxy_types::CancelReason::ClientDisconnected,
+            ),
             UpstreamError::Timeout(phase) => openproxy_types::CoreError::UpstreamTimeout {
                 phase: format!("{phase:?}"),
                 ms: 0,

@@ -209,14 +209,8 @@ fn detect_format(lines: &[&str]) -> Option<LogFormat> {
     let generic_matches = head
         .iter()
         .filter(|l| {
-            const GENERIC_TOKENS: &[&str] = &[
-                "error",
-                "fail",
-                "warn",
-                "traceback",
-                "panic",
-                "exception",
-            ];
+            const GENERIC_TOKENS: &[&str] =
+                &["error", "fail", "warn", "traceback", "panic", "exception"];
             GENERIC_TOKENS
                 .iter()
                 .any(|t| contains_case_insensitive_ascii(l, t))
@@ -304,14 +298,7 @@ fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> bool {
 
 /// Check if a line contains an error token (case-insensitive substring match).
 fn contains_error_token(line: &str) -> bool {
-    const ERROR_TOKENS: &[&str] = &[
-        "error",
-        "fatal",
-        "panic",
-        "exception",
-        "traceback",
-        "fail",
-    ];
+    const ERROR_TOKENS: &[&str] = &["error", "fatal", "panic", "exception", "traceback", "fail"];
     ERROR_TOKENS
         .iter()
         .any(|t| contains_case_insensitive_ascii(line, t))

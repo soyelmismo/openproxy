@@ -45,44 +45,45 @@ macro_rules! pricing_catalog {
     }};
 }
 
-static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> = LazyLock::new(|| {
-    pricing_catalog! {
-        // OpenRouter
-        ("openrouter", "anthropic/claude-sonnet-4") => (3.0, 15.0),
-        ("openrouter", "anthropic/claude-3-5-sonnet") => (3.0, 15.0),
-        ("openrouter", "anthropic/claude-3-haiku") => (0.25, 1.25),
-        ("openrouter", "openai/gpt-4o") => (2.5, 10.0),
-        ("openrouter", "openai/gpt-4o-mini") => (0.15, 0.6),
-        ("openrouter", "openai/gpt-4.1") => (2.0, 8.0),
-        ("openrouter", "openai/gpt-4.1-mini") => (0.4, 1.6),
-        ("openrouter", "google/gemini-2.5-pro") => (1.25, 10.0),
-        ("openrouter", "google/gemini-2.5-flash") => (0.075, 0.30),
-        ("openrouter", "meta-llama/llama-3.3-70b-instruct") => (0.59, 0.79),
-        ("openrouter", "deepseek/deepseek-chat") => (0.14, 0.28),
-        ("openrouter", "deepseek/deepseek-r1") => (0.55, 2.19),
-        ("openrouter", "qwen/qwen-2.5-72b-instruct") => (0.23, 0.40),
-        ("openrouter", "mistralai/mistral-large") => (2.0, 6.0),
-        ("openrouter", "x-ai/grok-2") => (2.0, 10.0),
+static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> =
+    LazyLock::new(|| {
+        pricing_catalog! {
+            // OpenRouter
+            ("openrouter", "anthropic/claude-sonnet-4") => (3.0, 15.0),
+            ("openrouter", "anthropic/claude-3-5-sonnet") => (3.0, 15.0),
+            ("openrouter", "anthropic/claude-3-haiku") => (0.25, 1.25),
+            ("openrouter", "openai/gpt-4o") => (2.5, 10.0),
+            ("openrouter", "openai/gpt-4o-mini") => (0.15, 0.6),
+            ("openrouter", "openai/gpt-4.1") => (2.0, 8.0),
+            ("openrouter", "openai/gpt-4.1-mini") => (0.4, 1.6),
+            ("openrouter", "google/gemini-2.5-pro") => (1.25, 10.0),
+            ("openrouter", "google/gemini-2.5-flash") => (0.075, 0.30),
+            ("openrouter", "meta-llama/llama-3.3-70b-instruct") => (0.59, 0.79),
+            ("openrouter", "deepseek/deepseek-chat") => (0.14, 0.28),
+            ("openrouter", "deepseek/deepseek-r1") => (0.55, 2.19),
+            ("openrouter", "qwen/qwen-2.5-72b-instruct") => (0.23, 0.40),
+            ("openrouter", "mistralai/mistral-large") => (2.0, 6.0),
+            ("openrouter", "x-ai/grok-2") => (2.0, 10.0),
 
-        // MiniMax
-        ("minimax", "minimax-m2.1") => (0.2, 0.2),
-        ("minimax", "MiniMax-M2") => (0.2, 0.2),
-        ("minimax", "MiniMax-M3") => (1.0, 1.0),
-        ("nvidia-nim", "minimaxai/minimax-m3") => (1.0, 1.0),
-        ("tokenrouter", "MiniMax-M3") => (1.0, 1.0),
+            // MiniMax
+            ("minimax", "minimax-m2.1") => (0.2, 0.2),
+            ("minimax", "MiniMax-M2") => (0.2, 0.2),
+            ("minimax", "MiniMax-M3") => (1.0, 1.0),
+            ("nvidia-nim", "minimaxai/minimax-m3") => (1.0, 1.0),
+            ("tokenrouter", "MiniMax-M3") => (1.0, 1.0),
 
-        // NVIDIA NIM
-        ("nvidia-nim", "meta/llama-3.3-70b-instruct") => (0.77, 0.77),
-        ("nvidia-nim", "meta/llama-3.1-8b-instruct") => (0.18, 0.18),
-        ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b") => (0.77, 0.77),
-        ("nvidia-nim", "moonshotai/kimi-k2.6") => (0.60, 2.50),
-        ("nvidia-nim", "z-ai/glm-5.1") => (0.14, 0.28),
-        ("nvidia-nim", "z-ai/glm-4.6") => (0.14, 0.28),
+            // NVIDIA NIM
+            ("nvidia-nim", "meta/llama-3.3-70b-instruct") => (0.77, 0.77),
+            ("nvidia-nim", "meta/llama-3.1-8b-instruct") => (0.18, 0.18),
+            ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b") => (0.77, 0.77),
+            ("nvidia-nim", "moonshotai/kimi-k2.6") => (0.60, 2.50),
+            ("nvidia-nim", "z-ai/glm-5.1") => (0.14, 0.28),
+            ("nvidia-nim", "z-ai/glm-4.6") => (0.14, 0.28),
 
-        // z.ai GLM
-        ("zenmux", "z-ai/glm-5.2") => (0.14, 0.28),
-    }
-});
+            // z.ai GLM
+            ("zenmux", "z-ai/glm-5.2") => (0.14, 0.28),
+        }
+    });
 
 pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     if let Some(price) = PRICING_TABLE.get(&(provider, model)) {

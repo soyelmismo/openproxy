@@ -28,7 +28,8 @@ pub fn create_combo(
     match result {
         Ok(_) => {}
         Err(e) => {
-            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation {
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation
+            {
                 return Err(CoreError::Validation(format!(
                     "combo name already exists: {name}"
                 )));
@@ -84,35 +85,15 @@ crate::def_table_select!(
      ct.cooldown_factor"
 );
 
-crate::def_table_select!(
-    model_provider_id_select,
-    "models",
-    "provider_id"
-);
+crate::def_table_select!(model_provider_id_select, "models", "provider_id");
 
-crate::def_table_select!(
-    model_upstream_id_select,
-    "models",
-    "model_id"
-);
+crate::def_table_select!(model_upstream_id_select, "models", "model_id");
 
-crate::def_table_select!(
-    model_context_length_select,
-    "models",
-    "context_length"
-);
+crate::def_table_select!(model_context_length_select, "models", "context_length");
 
-crate::def_table_select!(
-    combo_context_window_select,
-    "combos",
-    "context_window"
-);
+crate::def_table_select!(combo_context_window_select, "combos", "context_window");
 
-crate::def_table_select!(
-    combo_target_ids_select,
-    "combo_targets",
-    "id"
-);
+crate::def_table_select!(combo_target_ids_select, "combo_targets", "id");
 
 crate::def_table_select!(
     combo_target_model_sub_select,
@@ -120,11 +101,7 @@ crate::def_table_select!(
     "ct.model_row_id, ct.sub_combo_id"
 );
 
-crate::def_table_select!(
-    account_healthy_ids_select,
-    "accounts",
-    "id"
-);
+crate::def_table_select!(account_healthy_ids_select, "accounts", "id");
 
 pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
     crate::db_query_one!(
@@ -379,22 +356,20 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
 
     match result {
         Ok(_) => {}
-        Err(e) => {
-            match crate::error::classify_sqlite_error(&e) {
-                crate::error::DbErrorKind::ForeignKeyViolation => {
-                    return Err(CoreError::Validation(format!(
-                        "provider_id or sub_combo_id does not exist: {provider_id}"
-                    )));
-                }
-                crate::error::DbErrorKind::UniqueViolation => {
-                    return Err(CoreError::Validation(format!(
-                        "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
-                        combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
-                    )));
-                }
-                _ => return Err(crate::error::map_db_error_ctx("insert combo_target")(e)),
+        Err(e) => match crate::error::classify_sqlite_error(&e) {
+            crate::error::DbErrorKind::ForeignKeyViolation => {
+                return Err(CoreError::Validation(format!(
+                    "provider_id or sub_combo_id does not exist: {provider_id}"
+                )));
             }
-        }
+            crate::error::DbErrorKind::UniqueViolation => {
+                return Err(CoreError::Validation(format!(
+                    "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
+                    combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
+                )));
+            }
+            _ => return Err(crate::error::map_db_error_ctx("insert combo_target")(e)),
+        },
     }
 
     Ok(ComboTargetId(conn.last_insert_rowid()))

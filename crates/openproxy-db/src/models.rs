@@ -46,11 +46,7 @@ crate::def_table_select!(
      output_modalities_json"
 );
 
-crate::def_table_select!(
-    model_auto_active_select,
-    "models",
-    "model_id, display_name"
-);
+crate::def_table_select!(model_auto_active_select, "models", "model_id, display_name");
 
 crate::def_table_select!(
     model_existing_select,
@@ -58,11 +54,7 @@ crate::def_table_select!(
     "model_id, id, display_name"
 );
 
-crate::def_table_select!(
-    model_inserted_select,
-    "models",
-    "id, model_id"
-);
+crate::def_table_select!(model_inserted_select, "models", "id, model_id");
 
 pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model>> {
     crate::db_query_all!(
@@ -85,13 +77,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
-    crate::db_query_all!(
-        conn,
-        model_select!(),
-        [],
-        map_row,
-        "list all models"
-    )
+    crate::db_query_all!(conn, model_select!(), [], map_row, "list all models")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

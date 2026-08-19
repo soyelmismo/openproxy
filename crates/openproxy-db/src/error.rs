@@ -109,10 +109,15 @@ mod tests {
     #[test]
     fn test_classify_unique_violation() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT UNIQUE)", [])
-            .unwrap();
+        conn.execute(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT UNIQUE)",
+            [],
+        )
+        .unwrap();
         conn.execute("INSERT INTO t VALUES (1, 'a')", []).unwrap();
-        let err = conn.execute("INSERT INTO t VALUES (2, 'a')", []).unwrap_err();
+        let err = conn
+            .execute("INSERT INTO t VALUES (2, 'a')", [])
+            .unwrap_err();
 
         assert_eq!(classify_sqlite_error(&err), DbErrorKind::UniqueViolation);
         let mapped = map_constraint_error(err, "fk error", "unique error");
@@ -134,9 +139,14 @@ mod tests {
         )
         .unwrap();
 
-        let err = conn.execute("INSERT INTO child VALUES (1, 999)", []).unwrap_err();
+        let err = conn
+            .execute("INSERT INTO child VALUES (1, 999)", [])
+            .unwrap_err();
 
-        assert_eq!(classify_sqlite_error(&err), DbErrorKind::ForeignKeyViolation);
+        assert_eq!(
+            classify_sqlite_error(&err),
+            DbErrorKind::ForeignKeyViolation
+        );
         let mapped = map_constraint_error(err, "fk error", "unique error");
         match mapped {
             CoreError::Validation(msg) => assert_eq!(msg, "fk error"),
@@ -162,7 +172,9 @@ mod tests {
     #[test]
     fn test_classify_other_error() {
         let conn = Connection::open_in_memory().unwrap();
-        let err = conn.execute("SELECT * FROM nonexistent_table", []).unwrap_err();
+        let err = conn
+            .execute("SELECT * FROM nonexistent_table", [])
+            .unwrap_err();
 
         assert_eq!(classify_sqlite_error(&err), DbErrorKind::Other);
         let mapped = map_constraint_error(err, "fk error", "unique error");

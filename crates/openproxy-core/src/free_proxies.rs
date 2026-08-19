@@ -1011,7 +1011,8 @@ pub struct BuiltinProxySourceDef {
     pub name: &'static str,
     pub url: &'static str,
     pub scraped_sources: &'static [&'static str],
-    pub sync_fn: fn() -> futures::future::BoxFuture<'static, crate::error::Result<Vec<ScrapedProxy>>>,
+    pub sync_fn:
+        fn() -> futures::future::BoxFuture<'static, crate::error::Result<Vec<ScrapedProxy>>>,
 }
 
 impl BuiltinProxySourceDef {
@@ -1088,14 +1089,11 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
 ];
 
 fn resolve_scraped_sources<'a>(is_builtin: bool, id: &str, name: &'a str) -> Vec<&'a str> {
-    if is_builtin
-        && let Some(def) = BuiltinProxySourceDef::find_by_id(id)
-    {
+    if is_builtin && let Some(def) = BuiltinProxySourceDef::find_by_id(id) {
         return def.scraped_sources.to_vec();
     }
     vec![name]
 }
-
 
 pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySource>> {
     let mut stmt = conn
@@ -1160,7 +1158,6 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
         })?;
 
         let sources = resolve_scraped_sources(r.is_builtin, &r.id, &r.name);
-
 
         for s in sources {
             if let Some(st) = stats.get(s) {
@@ -1237,7 +1234,6 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
             let sources = resolve_scraped_sources(source.is_builtin, &source.id, &source.name);
 
             for s in sources {
-
                 if let Some(st) = stats.get(s) {
                     for (status, count) in st {
                         source.proxies_total += count;
@@ -1433,8 +1429,6 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
                 }
                 continue;
             }
-
-
 
             match fetch_custom_proxy_source(&src.name, &src.url, src.priority).await {
                 Ok(mut list) => {

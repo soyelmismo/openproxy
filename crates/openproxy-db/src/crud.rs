@@ -97,7 +97,13 @@ macro_rules! db_exists {
     ($conn:expr, $table:literal, WHERE $col:ident = $val:expr, $ctx:expr $(,)?) => {
         $crate::crud::exists(
             $conn,
-            concat!("SELECT EXISTS(SELECT 1 FROM ", $table, " WHERE ", stringify!($col), " = ?1)"),
+            concat!(
+                "SELECT EXISTS(SELECT 1 FROM ",
+                $table,
+                " WHERE ",
+                stringify!($col),
+                " = ?1)"
+            ),
             ::rusqlite::params![$val],
             $ctx,
         )
@@ -295,7 +301,15 @@ macro_rules! db_update_field {
     ($conn:expr, $table:literal, $col:ident = $val:expr, WHERE $id_col:ident = $id_val:expr, $ctx:expr $(,)?) => {
         $crate::crud::execute(
             $conn,
-            concat!("UPDATE ", $table, " SET ", stringify!($col), " = ?1 WHERE ", stringify!($id_col), " = ?2"),
+            concat!(
+                "UPDATE ",
+                $table,
+                " SET ",
+                stringify!($col),
+                " = ?1 WHERE ",
+                stringify!($id_col),
+                " = ?2"
+            ),
             ::rusqlite::params![$val, $id_val],
             $ctx,
         )
@@ -303,7 +317,13 @@ macro_rules! db_update_field {
     ($conn:expr, $table:literal, $col:ident = $val:expr, WHERE id = $id_val:expr, $ctx:expr $(,)?) => {
         $crate::crud::execute(
             $conn,
-            concat!("UPDATE ", $table, " SET ", stringify!($col), " = ?1 WHERE id = ?2"),
+            concat!(
+                "UPDATE ",
+                $table,
+                " SET ",
+                stringify!($col),
+                " = ?1 WHERE id = ?2"
+            ),
             ::rusqlite::params![$val, $id_val],
             $ctx,
         )
@@ -311,7 +331,15 @@ macro_rules! db_update_field {
     ($conn:expr, $table:literal, $col:literal = $val:expr, WHERE $id_col:literal = $id_val:expr, $ctx:expr $(,)?) => {
         $crate::crud::execute(
             $conn,
-            concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE ", $id_col, " = ?2"),
+            concat!(
+                "UPDATE ",
+                $table,
+                " SET ",
+                $col,
+                " = ?1 WHERE ",
+                $id_col,
+                " = ?2"
+            ),
             ::rusqlite::params![$val, $id_val],
             $ctx,
         )
@@ -335,7 +363,15 @@ macro_rules! db_update_field {
     ($conn:expr, $table:literal, $col:literal, $val:expr, $id_col:literal, $id_val:expr, $ctx:expr $(,)?) => {
         $crate::crud::execute(
             $conn,
-            concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE ", $id_col, " = ?2"),
+            concat!(
+                "UPDATE ",
+                $table,
+                " SET ",
+                $col,
+                " = ?1 WHERE ",
+                $id_col,
+                " = ?2"
+            ),
             ::rusqlite::params![$val, $id_val],
             $ctx,
         )
@@ -809,16 +845,20 @@ mod tests {
 
         // map_row_tuple!
         let tuple_res: (i64, String) = conn
-            .query_row("SELECT id, name FROM users WHERE id = 2", [], |row| {
-                map_row_tuple!(row => (0, 1))
-            })
+            .query_row(
+                "SELECT id, name FROM users WHERE id = 2",
+                [],
+                |row| map_row_tuple!(row => (0, 1)),
+            )
             .unwrap();
         assert_eq!(tuple_res, (2, "Bob".to_string()));
 
         let typed_tuple: (i64, String) = conn
-            .query_row("SELECT id, name FROM users WHERE id = 2", [], |row| {
-                map_row_tuple!(row => ((0, i64), (1, String)))
-            })
+            .query_row(
+                "SELECT id, name FROM users WHERE id = 2",
+                [],
+                |row| map_row_tuple!(row => ((0, i64), (1, String))),
+            )
             .unwrap();
         assert_eq!(typed_tuple, (2, "Bob".to_string()));
     }

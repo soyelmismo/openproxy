@@ -23,17 +23,9 @@ crate::def_table_select!(
     "id, kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id"
 );
 
-crate::def_table_select!(
-    notification_id_select,
-    "notifications",
-    "id"
-);
+crate::def_table_select!(notification_id_select, "notifications", "id");
 
-crate::def_table_select!(
-    notification_dedup_select,
-    "notifications",
-    "id, dedup_key"
-);
+crate::def_table_select!(notification_dedup_select, "notifications", "id, dedup_key");
 
 crate::def_table_select!(
     notification_created_at_select,
@@ -187,18 +179,17 @@ pub fn insert_many(
                 .iter()
                 .map(|(_, dk)| dk.as_str())
                 .collect();
-            let missing_rows: Vec<(i64, String)> =
-                crate::batch::query_in_chunks_with_params(
-                    conn,
-                    notification_dedup_select!(
-                        "WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')"
-                    ),
-                    &[&kind as &dyn rusqlite::ToSql],
-                    &dedup_keys,
-                    crate::batch::DEFAULT_CHUNK_SIZE,
-                    |r| crate::map_row_tuple!(r => (0, 1)),
-                )
-                .map_err(crate::error::map_db_error)?;
+            let missing_rows: Vec<(i64, String)> = crate::batch::query_in_chunks_with_params(
+                conn,
+                notification_dedup_select!(
+                    "WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')"
+                ),
+                &[&kind as &dyn rusqlite::ToSql],
+                &dedup_keys,
+                crate::batch::DEFAULT_CHUNK_SIZE,
+                |r| crate::map_row_tuple!(r => (0, 1)),
+            )
+            .map_err(crate::error::map_db_error)?;
             for (id, dk) in missing_rows {
                 existing_ids.insert(dk, id);
             }
@@ -270,12 +261,7 @@ pub fn list(
         )
     };
 
-    crate::db_query_all!(
-        conn,
-        sql,
-        params![before_id, limit],
-        "list notifications"
-    )
+    crate::db_query_all!(conn, sql, params![before_id, limit], "list notifications")
 }
 
 /// Count unread, non-archived notifications.

@@ -28,5 +28,5 @@ pub mod maintenance;
 pub mod models;
 pub mod notifications;
 
-pub use error::{classify_sqlite_error, map_constraint_error, DbErrorKind};
+pub use error::{DbErrorKind, classify_sqlite_error, map_constraint_error};
 pub use maintenance::DbTable;

@@ -304,8 +304,14 @@ mod tests {
     fn test_encryption_key_source_enum() {
         assert_eq!(EncryptionKeySource::Env.as_str(), "env");
         assert_eq!(EncryptionKeySource::File.as_str(), "file");
-        assert_eq!(EncryptionKeySource::parse("env"), Ok(EncryptionKeySource::Env));
-        assert_eq!(EncryptionKeySource::parse("file"), Ok(EncryptionKeySource::File));
+        assert_eq!(
+            EncryptionKeySource::parse("env"),
+            Ok(EncryptionKeySource::Env)
+        );
+        assert_eq!(
+            EncryptionKeySource::parse("file"),
+            Ok(EncryptionKeySource::File)
+        );
         assert!(EncryptionKeySource::parse("invalid").is_err());
     }
 

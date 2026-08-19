@@ -28,7 +28,10 @@ pub struct CreateCustomProxyInput {
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
-        .route("/", axum::routing::get(list_proxies).post(create_custom_proxy))
+        .route(
+            "/",
+            axum::routing::get(list_proxies).post(create_custom_proxy),
+        )
         .route("/summary", axum::routing::get(get_proxy_summary))
         .route("/sync", axum::routing::post(sync_proxies))
         .route("/test-all", axum::routing::post(test_all_proxies))

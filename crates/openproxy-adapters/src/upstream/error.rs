@@ -50,9 +50,9 @@ impl UpstreamError {
     /// connection/protocol errors with contextual details (e.g. endpoint name or URL).
     pub fn to_core_error(&self, context: &str) -> openproxy_types::CoreError {
         match self {
-            UpstreamError::Cancel => {
-                openproxy_types::CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-            }
+            UpstreamError::Cancel => openproxy_types::CoreError::Cancelled(
+                openproxy_types::CancelReason::ClientDisconnected,
+            ),
             UpstreamError::Timeout(phase) => openproxy_types::CoreError::UpstreamTimeout {
                 phase: phase.to_string(),
                 ms: 0,

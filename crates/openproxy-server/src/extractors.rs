@@ -7,9 +7,7 @@ use axum::{
 use openproxy_db as db;
 use std::ops::{Deref, DerefMut};
 
-use crate::{
-    error::ApiError, middleware::auth::ValidatedApiToken, state::AppState,
-};
+use crate::{error::ApiError, middleware::auth::ValidatedApiToken, state::AppState};
 
 /// Axum extractor that acquires a read connection from [`AppState`].
 pub struct DbReader(pub db::ArcReaderGuard);

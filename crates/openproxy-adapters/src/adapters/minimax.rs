@@ -165,10 +165,7 @@ impl MiniMaxAdapter {
             )));
         }
 
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| e.to_core_error(url))?;
+        let body = response.collect().await.map_err(|e| e.to_core_error(url))?;
 
         let json: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;

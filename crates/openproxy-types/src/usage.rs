@@ -207,7 +207,8 @@ macro_rules! __set_stage_event_field {
         $event.timestamp = $crate::usage::IntoOptionString::into_option_string($val);
     };
     ($event:ident, endpoint_kind, $val:expr) => {
-        $event.endpoint_kind = $crate::usage::IntoOptionEndpointKind::into_option_endpoint_kind($val);
+        $event.endpoint_kind =
+            $crate::usage::IntoOptionEndpointKind::into_option_endpoint_kind($val);
     };
 }
 

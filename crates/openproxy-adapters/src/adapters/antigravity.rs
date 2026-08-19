@@ -637,7 +637,6 @@ impl AntigravityAdapter {
     }
 }
 
-
 fn parse_antigravity_models_response(
     body: &serde_json::Value,
 ) -> Result<openproxy_types::AccountQuota> {

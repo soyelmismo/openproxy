@@ -30,11 +30,8 @@ pub async fn create_embeddings(
         )));
     }
 
-    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
-        &state,
-        &headers,
-        &req.model,
-    )?;
+    let api_key_id =
+        crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, &req.model)?;
 
     let response = call_unary_executor!(execute_embeddings, state, req, api_key_id);
 

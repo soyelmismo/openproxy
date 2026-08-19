@@ -16,9 +16,18 @@ pub struct NotificationsQuery {
 pub fn router() -> axum::Router<super::AppState> {
     axum::Router::new()
         .route("/", axum::routing::get(list_notifications))
-        .route("/read-all", axum::routing::post(mark_all_notifications_read))
-        .route("/unread-count", axum::routing::get(notifications_unread_count))
-        .route("/archive-all", axum::routing::post(archive_all_notifications))
+        .route(
+            "/read-all",
+            axum::routing::post(mark_all_notifications_read),
+        )
+        .route(
+            "/unread-count",
+            axum::routing::get(notifications_unread_count),
+        )
+        .route(
+            "/archive-all",
+            axum::routing::post(archive_all_notifications),
+        )
         .route("/{id}/read", axum::routing::post(mark_notification_read))
         .route("/{id}/archive", axum::routing::post(archive_notification))
         .route("/{id}", axum::routing::delete(delete_notification))

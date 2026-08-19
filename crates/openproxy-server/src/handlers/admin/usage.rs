@@ -69,7 +69,10 @@ pub fn router() -> axum::Router<AppState> {
         .route("/races", axum::routing::get(usage_races))
         .route("/recent", axum::routing::get(usage_recent))
         .route("/detail", axum::routing::get(usage_detail))
-        .route("/recompute-costs", axum::routing::post(recompute_usage_costs))
+        .route(
+            "/recompute-costs",
+            axum::routing::post(recompute_usage_costs),
+        )
 }
 
 macro_rules! analytics_handler {
