@@ -218,8 +218,14 @@ mod tests {
 
     #[test]
     fn test_rate_limit_scope_parse() {
-        assert_eq!(RateLimitScope::parse("account").unwrap(), RateLimitScope::Account);
-        assert_eq!(RateLimitScope::parse("model").unwrap(), RateLimitScope::Model);
+        assert_eq!(
+            RateLimitScope::parse("account").unwrap(),
+            RateLimitScope::Account
+        );
+        assert_eq!(
+            RateLimitScope::parse("model").unwrap(),
+            RateLimitScope::Model
+        );
         assert!(RateLimitScope::parse("invalid").is_err());
     }
 
