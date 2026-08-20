@@ -1676,9 +1676,7 @@ fn collect_rows<T>(
     iter.map(|r| {
         // Bolt: Evaluate format! inside the closure so it only allocates on errors,
         // avoiding an expensive string allocation on every single successful database row read.
-        r.map_err(|e| {
-            openproxy_db::error::map_db_error_ctx(format!("read {query_name} row"))(e)
-        })
+        r.map_err(|e| openproxy_db::error::map_db_error_ctx(format!("read {query_name} row"))(e))
     })
     .collect()
 }
