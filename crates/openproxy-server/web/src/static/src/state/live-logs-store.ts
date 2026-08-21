@@ -36,6 +36,7 @@ export interface AttemptState {
   row: RecentUsageRow | null;
   detail?: Record<string, unknown> | null;
   source: "live" | "snapshot" | "db";
+  endpointKind: string | null;
 }
 
 export type LiveLogEnvelopeV2 =
@@ -63,6 +64,7 @@ export interface AttemptEventPayload {
   status_code?: number;
   provider_id?: string;
   upstream_model_id?: string;
+  endpoint_kind?: string;
 }
 
 // ----------------------------------------------------------------------------
@@ -254,6 +256,7 @@ class LiveLogsStore {
         rowId: raw.rowId ?? null,
         row: null,  // Server never sends row data in snapshot attempts
         source: "snapshot",
+        endpointKind: raw.endpointKind ?? ((raw as unknown as Record<string, unknown>)["endpoint_kind"] as string) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
       this.attemptsByKey.set(a.attemptKey, a);
@@ -305,6 +308,7 @@ class LiveLogsStore {
         rowId: null,
         row: null,
         source: "snapshot",
+        endpointKind: raw.endpointKind ?? ((raw as unknown as Record<string, unknown>)["endpoint_kind"] as string) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
       this.attemptsByKey.set(key, a);
@@ -314,12 +318,8 @@ class LiveLogsStore {
     // Remove stale inflight entries that the server no longer has
     for (const key of oldInflight) {
       if (!serverKeys.has(key)) {
-        const stale = this.attemptsByKey.get(key);
-        if (stale && !stale.terminal) {
-          stale.terminal = true;
-          stale.terminalKind = "completed";
-          stale.stage = "completed";
-        }
+        const a = this.attemptsByKey.get(key);
+        if (a) this.evictAttempt(a);
       }
     }
     this.enforceCapacity();
@@ -386,6 +386,7 @@ class LiveLogsStore {
       rowId: null,
       row: null,
       source: "live",
+      endpointKind: event.endpoint_kind ?? null,
     };
 
     // Merge into existing
@@ -403,6 +404,9 @@ class LiveLogsStore {
       if (event.error != null) a.error = event.error;
       if (event.provider_id) a.providerId = event.provider_id;
       if (event.upstream_model_id) a.upstreamModelId = event.upstream_model_id;
+      if (event.endpoint_kind) {
+        a.endpointKind = event.endpoint_kind;
+      }
     }
 
     if (!insertionOrder.has(a)) {
@@ -469,6 +473,7 @@ class LiveLogsStore {
         rowId: row.id,
         row,
         source: "db",
+        endpointKind: row.endpoint_kind || null,
       };
     } else {
       a.rowId = row.id;
@@ -481,6 +486,7 @@ class LiveLogsStore {
       a.updatedAtMs = a.startedAtMs + row.total_ms;
       a.elapsedMsAtEvent = row.total_ms;
       a.source = "db";
+      if (row.endpoint_kind) a.endpointKind = row.endpoint_kind;
       if (row.upstream_model_id !== undefined) a.upstreamModelId = row.upstream_model_id || "";
       if (row.provider_id !== undefined) a.providerId = row.provider_id || "";
       if (row.trace_id !== undefined) a.traceId = row.trace_id || "";

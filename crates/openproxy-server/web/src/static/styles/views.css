@@ -516,6 +516,7 @@
 /* Strict column footprints with flex: 0 0 <width> so rows never desynchronize */
 .log-row .log-time        { flex: 0 0 150px; width: 150px; color: var(--color-text-muted); }
 .log-row .log-phase       { flex: 0 0 145px; width: 145px; }
+.log-row .log-type        { flex: 0 0 82px;  width: 82px;  display: inline-flex; align-items: center; }
 .log-row .log-client      { flex: 0 0 36px;  width: 36px;  display: inline-flex; align-items: center; justify-content: center; }
 .log-row .log-status      { flex: 0 0 60px;  width: 60px;  font-weight: 600; }
 .log-row .log-provider    { flex: 0 0 130px; width: 130px; }
@@ -526,6 +527,45 @@
 .log-row .log-cache       { flex: 0 0 85px;  width: 85px; }
 .log-row .log-compression { flex: 0 0 80px;  width: 80px;  color: var(--color-success, #22c55e); font-size: 0.85em; }
 .log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
+
+.log-type-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.log-type-tag--chat {
+  background: rgba(59, 130, 246, 0.1);
+  color: #38bdf8;
+  border-color: rgba(59, 130, 246, 0.25);
+}
+.log-type-tag--audio {
+  background: rgba(234, 179, 8, 0.12);
+  color: #facc15;
+  border-color: rgba(234, 179, 8, 0.3);
+}
+.log-type-tag--image {
+  background: rgba(236, 72, 153, 0.12);
+  color: #f472b6;
+  border-color: rgba(236, 72, 153, 0.3);
+}
+.log-type-tag--embedding {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.3);
+}
+.log-type-tag--video {
+  background: rgba(249, 115, 22, 0.12);
+  color: #fb923c;
+  border-color: rgba(249, 115, 22, 0.3);
+}
 
 /* Client response indicator: checkmark (winner) vs dashed circle (internal) */
 .log-client--winner   { color: var(--color-success, #22c55e); }

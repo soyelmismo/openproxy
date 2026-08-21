@@ -50,6 +50,7 @@ impl_string_enum! {
         Gemini => "gemini",
         Responses => "responses",
         Atomesus => "atomesus",
+        Fx => "fx",
     }
     error: "provider format"
 }
@@ -63,6 +64,7 @@ impl ProviderFormat {
             Self::Gemini => TargetFormat::Gemini,
             Self::Responses => TargetFormat::Responses,
             Self::Atomesus => TargetFormat::Atomesus,
+            Self::Fx => TargetFormat::Fx,
             Self::Openai | Self::Mixed => TargetFormat::Openai,
         }
     }

@@ -1210,7 +1210,7 @@ impl UpstreamDispatcher {
                     }
                 }
             }
-            openproxy_types::TargetFormat::Atomesus => {
+            openproxy_types::TargetFormat::Atomesus | openproxy_types::TargetFormat::Fx => {
                 let text = response_body_raw
                     .get("choices")
                     .and_then(|c| c.get(0))

@@ -179,6 +179,7 @@ pub fn seed_provider_and_model(
                 TargetFormat::Gemini => ProviderFormat::Openai,
                 TargetFormat::Responses => ProviderFormat::Responses,
                 TargetFormat::Atomesus => ProviderFormat::Atomesus,
+                TargetFormat::Fx => ProviderFormat::Fx,
             },
             extra_headers_json: None,
             auto_activate_keyword: None,

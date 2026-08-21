@@ -505,6 +505,7 @@ pub(crate) async fn run_test_for_model(
         adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
         adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
         adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
+        adapters::AdapterFormat::Fx => openproxy_core::models::TargetFormat::Fx,
     };
     let inferred_type = openproxy_types::capabilities::infer_model_type(model.model_id.as_str());
     let is_audio = model.model_type == "audio" || inferred_type == "audio";
@@ -679,6 +680,56 @@ pub(crate) async fn run_test_for_model(
                 Ok(v) => (url, v, None),
                 Err(e) => {
                     let err = CoreError::Internal(format!("serialize responses req: {e}"));
+                    return (
+                        TestResult {
+                            row_id: model_row_id,
+                            status: 500,
+                            elapsed_ms: 0,
+                            error_msg: Some(
+                                openproxy_core::cost::redact_error_msg(&err.to_string()).0,
+                            ),
+                            skipped: true,
+                            skip_reason: Some(
+                                openproxy_core::cost::redact_error_msg(&err.to_string()).0,
+                            ),
+                        },
+                        None,
+                    );
+                }
+            },
+            Err(err) => {
+                return (
+                    TestResult {
+                        row_id: model_row_id,
+                        status: 500,
+                        elapsed_ms: 0,
+                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
+                        skipped: true,
+                        skip_reason: Some(
+                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
+                        ),
+                    },
+                    None,
+                );
+            }
+        }
+    } else if effective_target_format == openproxy_core::models::TargetFormat::Fx {
+        let url = adapter.build_chat_url_for_account(
+            openproxy_core::models::TargetFormat::Fx,
+            &model.model_id,
+            &account_label,
+        );
+        match adapter.format_request(
+            openproxy_core::models::TargetFormat::Fx,
+            &openai_req,
+            &model.model_id,
+            &openai_req.messages,
+            openai_req.stream,
+        ) {
+            Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
+                Ok(v) => (url, v, None),
+                Err(e) => {
+                    let err = CoreError::Internal(format!("serialize fx req: {e}"));
                     return (
                         TestResult {
                             row_id: model_row_id,

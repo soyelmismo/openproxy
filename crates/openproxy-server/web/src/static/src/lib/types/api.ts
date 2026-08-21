@@ -403,6 +403,7 @@ export interface StageEvent {
   compression_savings_pct: number | null;
   /** Compression techniques applied (CSV) or null when off. */
   compression_techniques: string | null;
+  endpoint_kind?: string;
 }
 
 /** Fila de la agregación `by_model`.
@@ -578,6 +579,7 @@ export interface RecentUsageRow {
   proxy_url: string | null;
   proxy_status: string | null;
   is_proxy_rotated: boolean;
+  endpoint_kind?: string;
   created_at: string;
 }
 

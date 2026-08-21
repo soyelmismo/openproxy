@@ -90,6 +90,28 @@ pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatte
         TargetFormat::Anthropic => &AnthropicFormatter,
         TargetFormat::Gemini => &GeminiFormatter,
         TargetFormat::Responses => &ResponsesFormatter,
+        TargetFormat::Fx => &FxFormatter,
+    }
+}
+
+pub struct FxFormatter;
+
+impl TargetFormatter for FxFormatter {
+    fn format_request(
+        &self,
+        req: &PipelineRequest,
+        model: &Model,
+        messages_ref: &[OpenAIMessage],
+        stream: bool,
+        adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
+    ) -> Result<bytes::Bytes, CoreError> {
+        adapter.format_request(
+            TargetFormat::Fx,
+            &req.openai_request,
+            &model.model_id,
+            messages_ref,
+            stream,
+        )
     }
 }
 

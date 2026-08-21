@@ -5712,6 +5712,39 @@ fn test_quota_routing_and_protection() {
     assert_eq!(resolved_sorting[0].target.account_id, Some(AccountId(7)));
     assert_eq!(resolved_sorting[1].target.account_id, Some(AccountId(5)));
     assert_eq!(resolved_sorting[2].target.account_id, Some(AccountId(8)));
+
+    // 6. Test apply_quota_routing - Preserves combo target priority_order when mixing anonymous & account targets
+    let mut target_anon_1 = make_target(1, 0);
+    target_anon_1.account_id = None;
+    target_anon_1.priority_order = 1;
+
+    let mut target_acc_2 = make_target(2, 7);
+    target_acc_2.account_id = Some(AccountId(7)); // priority 1, 50%
+    target_acc_2.priority_order = 2;
+
+    let mut target_anon_19 = make_target(19, 0);
+    target_anon_19.account_id = None;
+    target_anon_19.priority_order = 19;
+
+    let targets_mixed = vec![
+        to_resolved(target_anon_1),
+        to_resolved(target_acc_2),
+        to_resolved(target_anon_19),
+    ];
+
+    let resolved_mixed = crate::quotas::apply_quota_routing(
+        pipeline.config.quota_protection.enabled,
+        pipeline.config.quota_protection.threshold_percentage,
+        pipeline.repo().as_ref(),
+        &master_key,
+        targets_mixed,
+        "gemini-3-flash",
+    );
+
+    assert_eq!(resolved_mixed.len(), 3);
+    assert_eq!(resolved_mixed[0].target.priority_order, 1);
+    assert_eq!(resolved_mixed[1].target.priority_order, 2);
+    assert_eq!(resolved_mixed[2].target.priority_order, 19);
 }
 
 #[test]

@@ -25,6 +25,7 @@ describe("liveLogsStore detail management", () => {
       rowId: 42,
       row: null,
       source: "live",
+      endpointKind: null,
     });
 
     liveLogsStore.setDetail({ kind: "attempt", attemptKey: "attempt-1" }, { custom_field: "test" });

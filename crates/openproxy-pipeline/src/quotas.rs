@@ -171,23 +171,33 @@ pub(crate) fn apply_quota_routing(
     };
 
     final_targets.sort_by(|a, b| {
-        let pri_cmp = a.priority.cmp(&b.priority);
-        if pri_cmp != std::cmp::Ordering::Equal {
-            return pri_cmp;
-        }
-
-        let quota_cmp = b
-            .remaining_fraction
-            .partial_cmp(&a.remaining_fraction)
-            .unwrap_or(std::cmp::Ordering::Equal);
-        if quota_cmp != std::cmp::Ordering::Equal {
-            return quota_cmp;
-        }
-
-        a.resolved_target
+        let target_pri_cmp = a
+            .resolved_target
             .target
             .priority_order
-            .cmp(&b.resolved_target.target.priority_order)
+            .cmp(&b.resolved_target.target.priority_order);
+        if target_pri_cmp != std::cmp::Ordering::Equal {
+            return target_pri_cmp;
+        }
+
+        let target_id_cmp = a
+            .resolved_target
+            .target
+            .id
+            .0
+            .cmp(&b.resolved_target.target.id.0);
+        if target_id_cmp != std::cmp::Ordering::Equal {
+            return target_id_cmp;
+        }
+
+        let acc_pri_cmp = a.priority.cmp(&b.priority);
+        if acc_pri_cmp != std::cmp::Ordering::Equal {
+            return acc_pri_cmp;
+        }
+
+        b.remaining_fraction
+            .partial_cmp(&a.remaining_fraction)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     final_targets

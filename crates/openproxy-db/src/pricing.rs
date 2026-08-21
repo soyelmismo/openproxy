@@ -82,6 +82,16 @@ static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> =
 
             // z.ai GLM
             ("zenmux", "z-ai/glm-5.2") => (0.14, 0.28),
+
+            // Vercel AI Gateway & fx.sh
+            ("vercel-gateway", "zai/glm-5.2") => (0.0, 0.0),
+            ("vercel-gateway", "zai/glm-5.2-fast") => (0.0, 0.0),
+            ("fx", "zai/glm-5.2") => (0.0, 0.0),
+            ("fx", "zai/glm-5.2-fast") => (0.0, 0.0),
+            ("fx", "zai/glm-5.3") => (0.0, 0.0),
+            ("fx", "zai/glm-5-turbo") => (0.0, 0.0),
+            ("fx", "zai/glm-5v-turbo") => (0.0, 0.0),
+            ("fx", "zai/glm-4.7-flashx") => (0.0, 0.0),
         }
     });
 

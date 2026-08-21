@@ -143,6 +143,9 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 {
                     item.upstream_model_id = m.to_owned();
                 }
+                if event.endpoint_kind.is_some() {
+                    item.endpoint_kind = event.endpoint_kind;
+                }
             })
             .or_insert_with(|| openproxy_types::usage::InflightAttempt {
                 attempt_key: attempt_key.clone(),
@@ -168,6 +171,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 error: event.error.clone(),
                 row_id: None,
                 source: "live".into(),
+                endpoint_kind: event.endpoint_kind,
             });
     }
 

@@ -248,9 +248,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 16, "first call inserts all sixteen");
+        assert_eq!(n, 18, "first call inserts all eighteen");
 
-        // All sixteen are present and reachable by id.
+        // All eighteen are present and reachable by id.
         for id in [
             "atomesus",
             "openrouter",
@@ -268,6 +268,8 @@ mod tests {
             "kiro",
             "cloudflare-workers-ai",
             "cline",
+            "vercel-gateway",
+            "fx",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -281,14 +283,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 16);
+        assert_eq!(first, 18);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 16, "still exactly sixteen rows");
+        assert_eq!(count, 18, "still exactly eighteen rows");
     }
 
     #[test]
@@ -312,7 +314,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 15, "only the fifteen missing ones");
+        assert_eq!(n, 17, "only the seventeen missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -351,6 +353,13 @@ mod tests {
         assert_eq!(zen.auth_type, AuthType::Bearer);
         assert_eq!(zen.format, ProviderFormat::Mixed);
 
+        let vercel = providers::get(&conn, &ProviderId::new("vercel-gateway"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(vercel.auth_type, AuthType::Bearer);
+        assert_eq!(vercel.format, ProviderFormat::Openai);
+        assert_eq!(vercel.name, "Vercel Gateway");
+
         let ollama = providers::get(&conn, &ProviderId::new("ollama-cloud"))
             .expect("get")
             .unwrap();
@@ -382,9 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn builtin_provider_ids_lists_twelve() {
+    fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 16);
+        assert_eq!(ids.len(), 18);
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
@@ -400,6 +409,8 @@ mod tests {
         assert!(ids.iter().any(|s| s == "kiro"));
         assert!(ids.iter().any(|s| s == "cloudflare-workers-ai"));
         assert!(ids.iter().any(|s| s == "cline"));
+        assert!(ids.iter().any(|s| s == "vercel-gateway"));
+        assert!(ids.iter().any(|s| s == "fx"));
     }
 
     #[test]

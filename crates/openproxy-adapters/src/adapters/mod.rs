@@ -130,6 +130,7 @@ pub trait ProviderAdapter: Send + Sync {
             }
             AdapterFormat::Responses => format!("{}/responses", self.config().base_url),
             AdapterFormat::Atomesus => format!("{}/chat/atomesus", self.config().base_url),
+            AdapterFormat::Fx => self.config().base_url.clone(),
             AdapterFormat::Mixed => match target_format {
                 TargetFormat::Openai | TargetFormat::Gemini => {
                     format!("{}/chat/completions", self.config().base_url)
@@ -137,6 +138,7 @@ pub trait ProviderAdapter: Send + Sync {
                 TargetFormat::Anthropic => format!("{}/messages", self.config().base_url),
                 TargetFormat::Responses => format!("{}/responses", self.config().base_url),
                 TargetFormat::Atomesus => format!("{}/chat/atomesus", self.config().base_url),
+                TargetFormat::Fx => self.config().base_url.clone(),
             },
         }
     }
@@ -404,6 +406,8 @@ macro_rules! delegate_adapter_dispatch {
             Self::OpenCodeGo($inner) => $call,
             Self::OpenCodeZen($inner) => $call,
             Self::OpenRouter($inner) => $call,
+            Self::VercelGateway($inner) => $call,
+            Self::Fx($inner) => $call,
             Self::Custom($inner) => $call,
             #[cfg(any(test, feature = "test-utils"))]
             Self::Mock($inner) => $call,
@@ -730,6 +734,8 @@ define_provider_adapter! {
             "opencode-go" => OpenCodeGo(crate::adapters::opencode_go::OpenCodeGoAdapter),
             "opencode-zen" => OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter),
             "openrouter" => OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
+            "vercel-gateway" => VercelGateway(crate::adapters::vercel_gateway::VercelGatewayAdapter),
+            "fx" => Fx(crate::adapters::fx::FxAdapter),
         }
         custom {
             Custom(crate::adapters::custom_adapter::CustomAdapter),
@@ -879,6 +885,8 @@ pub mod opencode_common;
 pub mod opencode_go;
 pub mod opencode_zen;
 pub mod openrouter;
+pub mod vercel_gateway;
+pub mod fx;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;
@@ -901,6 +909,8 @@ pub use ollama_cloud::OllamaCloudAdapter;
 pub use opencode_go::OpenCodeGoAdapter;
 pub use opencode_zen::OpenCodeZenAdapter;
 pub use openrouter::OpenRouterAdapter;
+pub use vercel_gateway::VercelGatewayAdapter;
+pub use fx::FxAdapter;
 
 // =====================================================================
 // Shared upstream helpers
@@ -1325,9 +1335,9 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_sixteen() {
+    fn builtin_adapters_returns_all() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 16);
+        assert_eq!(v.len(), 18);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"atomesus"));
         assert!(ids.contains(&"cline"));
@@ -1345,6 +1355,8 @@ mod tests {
         assert!(ids.contains(&"antigravity"));
         assert!(ids.contains(&"codex"));
         assert!(ids.contains(&"kiro"));
+        assert!(ids.contains(&"vercel-gateway"));
+        assert!(ids.contains(&"fx"));
     }
 
     // ---- Cloudflare Workers AI ---------------------------------------

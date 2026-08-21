@@ -48,6 +48,21 @@ function buildLogRowCells(
   if (has("phase")) {
     cells.push(renderLogPhaseHtml(attempt));
   }
+
+  if (has("type")) {
+    const rawKind = (attempt.endpointKind || row?.endpoint_kind || "chat").toLowerCase();
+    const path = rawKind === "audio"
+      ? "/v1/audio/transcriptions"
+      : rawKind === "image"
+      ? "/v1/images/generations"
+      : rawKind === "embedding"
+      ? "/v1/embeddings"
+      : rawKind === "video"
+      ? "/v1/video/generations"
+      : "/v1/chat/completions";
+    const icon = rawKind === "audio" ? "🎙️" : rawKind === "image" ? "🎨" : rawKind === "embedding" ? "🧠" : rawKind === "video" ? "🎬" : "💬";
+    cells.push(html`<span class="log-type" title="Endpoint: POST ${path} (${rawKind})"><span class="log-type-tag log-type-tag--${rawKind}">${icon} ${rawKind}</span></span>`);
+  }
   
   if (has("client")) {
     const isWinner = row ? row.client_response : (attempt.terminal ? false : true); // Assume winner if inflight

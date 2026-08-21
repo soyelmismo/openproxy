@@ -51,6 +51,7 @@ interface LogDetailLog {
   // dot-notation access (the interface has no index signature,
   // so missing fields are a compile error under `noPropertyAccessFromIndexSignature`).
   trace_id?: string;
+  endpoint_kind?: string;
   request_headers?: Record<string, string> | null;
   response_headers?: Record<string, string> | null;
   // UsageDetailRow (detail endpoint) extras
@@ -1140,6 +1141,17 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     : null;
   const comboText: string = combo != null ? String(combo) : "—";
   const costText: string = costRaw != null ? String(costRaw) : "—";
+  const endpointKind: string = (log.endpoint_kind || (detail["endpoint_kind"] as string) || (meta["endpoint_kind"] as string) || "chat").toLowerCase();
+  const endpointPath: string = endpointKind === "audio"
+    ? "/v1/audio/transcriptions"
+    : endpointKind === "image"
+    ? "/v1/images/generations"
+    : endpointKind === "embedding"
+    ? "/v1/embeddings"
+    : endpointKind === "video"
+    ? "/v1/video/generations"
+    : "/v1/chat/completions";
+  const endpointIcon = endpointKind === "audio" ? "🎙️" : endpointKind === "image" ? "🎨" : endpointKind === "embedding" ? "🧠" : endpointKind === "video" ? "🎬" : "💬";
 
   return html`
     <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
@@ -1152,6 +1164,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
         <div class="modal-body">
           <div class="log-detail-summary">
             <div><strong>Status:</strong> <span class="status-pill ${statusClass}">${String(status)}</span></div>
+            <div><strong>Endpoint:</strong> <span title="HTTP Entry: POST ${endpointPath} (${endpointKind})"><code style="font-size:0.85em;padding:1px 4px;background:var(--color-surface-2);border-radius:3px;">POST ${endpointPath}</code> <span class="log-type-tag log-type-tag--${endpointKind}" style="font-size:0.75em;padding:1px 5px;margin-left:4px;">${endpointIcon} ${endpointKind}</span></span></div>
             <div><strong>Provider:</strong> ${String(provider)}</div>
             <div><strong>Account:</strong> ${String(account)}</div>
             <div><strong>Combo:</strong> ${comboText}</div>
@@ -1553,6 +1566,17 @@ export function buildDebugBundle(log: LogDetailLog): string {
   // Request metadata.
   lines.push("## Request Metadata");
   lines.push("");
+  const bundleEndpointKind: string = (log.endpoint_kind || (detail["endpoint_kind"] as string) || "chat").toLowerCase();
+  const bundleEndpointPath: string = bundleEndpointKind === "audio"
+    ? "/v1/audio/transcriptions"
+    : bundleEndpointKind === "image"
+    ? "/v1/images/generations"
+    : bundleEndpointKind === "embedding"
+    ? "/v1/embeddings"
+    : bundleEndpointKind === "video"
+    ? "/v1/video/generations"
+    : "/v1/chat/completions";
+  lines.push(`- **Endpoint:** POST ${bundleEndpointPath} (${bundleEndpointKind})`);
   lines.push(`- **Provider:** ${String(log.provider_id ?? "—")}`);
   lines.push(`- **Model:** ${String(log.upstream_model_id ?? "—")}`);
   lines.push(`- **Status:** ${String(log.status_code ?? "—")}`);

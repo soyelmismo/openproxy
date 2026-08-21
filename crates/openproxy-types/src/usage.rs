@@ -268,6 +268,8 @@ pub struct InflightAttempt {
     pub error: Option<String>,
     pub row_id: Option<i64>,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_kind: Option<EndpointKind>,
 }
 
 pub static STAGE_EVENT_PUBLISHER: std::sync::OnceLock<fn(StageEvent)> = std::sync::OnceLock::new();

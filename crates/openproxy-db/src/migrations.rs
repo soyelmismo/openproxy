@@ -54,7 +54,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
             })?;
 
         let mut insert_sql = String::with_capacity(1024);
-        insert_sql.push_str("INSERT INTO schema_migrations(version) VALUES ");
+        insert_sql.push_str("INSERT OR IGNORE INTO schema_migrations(version) VALUES ");
         let mut first = true;
 
         for m in &pending {
