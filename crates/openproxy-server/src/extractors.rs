@@ -27,6 +27,7 @@ where
 {
     type Rejection = ApiError;
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let r = app_state.db_pool().reader_guard();
@@ -58,6 +59,7 @@ where
 {
     type Rejection = ApiError;
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let w = app_state.db_pool().writer_guard();
@@ -75,6 +77,7 @@ where
 {
     type Rejection = std::convert::Infallible;
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(ValidatedToken(
             parts.extensions.get::<ValidatedApiToken>().cloned(),

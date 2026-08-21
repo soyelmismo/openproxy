@@ -69,6 +69,7 @@ impl Default for CodexOAuthProvider {
 impl OAuthProvider for CodexOAuthProvider {
     crate::delegate_oauth_to_generic!(name, flow);
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn build_auth_url(
         &self,
         _redirect_uri: &str,
@@ -78,6 +79,7 @@ impl OAuthProvider for CodexOAuthProvider {
         ))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn exchange_code(
         &self,
         _code: &str,
@@ -90,6 +92,7 @@ impl OAuthProvider for CodexOAuthProvider {
         ))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn request_device_code(
         &self,
         upstream_client: &Arc<UpstreamClient>,
@@ -169,6 +172,7 @@ impl OAuthProvider for CodexOAuthProvider {
         })
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn poll_device_token(
         &self,
         device_code: &str,

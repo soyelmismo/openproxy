@@ -33,6 +33,7 @@ impl OAuthProvider for ClineOAuthProvider {
         OAuthFlow::AuthorizationCode
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
         let authorize_url = "https://api.cline.bot/api/v1/auth/authorize";
 
@@ -53,6 +54,7 @@ impl OAuthProvider for ClineOAuthProvider {
         Ok((url, String::new(), String::new(), state))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn exchange_code(
         &self,
         code: &str,
@@ -120,6 +122,7 @@ impl OAuthProvider for ClineOAuthProvider {
         })
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn request_device_code(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
@@ -129,6 +132,7 @@ impl OAuthProvider for ClineOAuthProvider {
         ))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn poll_device_token(
         &self,
         _device_code: &str,

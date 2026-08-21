@@ -138,6 +138,7 @@ impl OAuthProvider for GenericOAuthProvider {
         self.spec.flow
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
         let authorize_url = self.spec.authorize_url.ok_or_else(|| {
             CoreError::Validation(format!(
@@ -199,6 +200,7 @@ impl OAuthProvider for GenericOAuthProvider {
         ))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn exchange_code(
         &self,
         code: &str,
@@ -224,6 +226,7 @@ impl OAuthProvider for GenericOAuthProvider {
             .await
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn request_device_code(
         &self,
         upstream_client: &Arc<UpstreamClient>,
@@ -273,6 +276,7 @@ impl OAuthProvider for GenericOAuthProvider {
             .map_err(|e| CoreError::Parse(format!("{} device response parse: {e}", self.spec.id)))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn poll_device_token(
         &self,
         device_code: &str,
@@ -342,7 +346,8 @@ macro_rules! delegate_oauth_to_generic {
         }
     };
     (build_auth_url) => {
-        async fn build_auth_url(
+        #[allow(unknown_lints, clippy::unused_async_trait_impl)]
+    async fn build_auth_url(
             &self,
             redirect_uri: &str,
         ) -> $crate::error::Result<(String, String, String, String)> {
@@ -350,7 +355,8 @@ macro_rules! delegate_oauth_to_generic {
         }
     };
     (exchange_code) => {
-        async fn exchange_code(
+        #[allow(unknown_lints, clippy::unused_async_trait_impl)]
+    async fn exchange_code(
             &self,
             code: &str,
             code_verifier: &str,
@@ -363,7 +369,8 @@ macro_rules! delegate_oauth_to_generic {
         }
     };
     (request_device_code) => {
-        async fn request_device_code(
+        #[allow(unknown_lints, clippy::unused_async_trait_impl)]
+    async fn request_device_code(
             &self,
             upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
         ) -> $crate::error::Result<$crate::oauth::DeviceAuthorizationResponse> {
@@ -371,7 +378,8 @@ macro_rules! delegate_oauth_to_generic {
         }
     };
     (poll_device_token) => {
-        async fn poll_device_token(
+        #[allow(unknown_lints, clippy::unused_async_trait_impl)]
+    async fn poll_device_token(
             &self,
             device_code: &str,
             upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
