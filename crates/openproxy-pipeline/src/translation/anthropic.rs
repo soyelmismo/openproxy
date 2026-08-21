@@ -744,3 +744,33 @@ fn translate_anthropic_tool_choice_to_openai(tc: serde_json::Value) -> serde_jso
     }
     tc
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_translate_anthropic_tool_choice_to_openai() {
+        let anthropic_tc = json!({
+            "type": "tool",
+            "name": "get_weather"
+        });
+
+        let openai_tc = translate_anthropic_tool_choice_to_openai(anthropic_tc);
+
+        assert_eq!(
+            openai_tc,
+            json!({
+                "type": "function",
+                "function": { "name": "get_weather" }
+            })
+        );
+
+        let fallback_tc = json!({"type": "any"});
+        assert_eq!(
+            translate_anthropic_tool_choice_to_openai(fallback_tc.clone()),
+            fallback_tc
+        );
+    }
+}
