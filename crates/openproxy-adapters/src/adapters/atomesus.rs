@@ -126,6 +126,7 @@ impl ProviderAdapter for AtomesusAdapter {
             .map_err(|e| CoreError::Internal(format!("failed to serialize atomesus body: {e}")))
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,

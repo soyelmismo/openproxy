@@ -278,6 +278,7 @@ impl ProviderAdapter for FxAdapter {
         })
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
