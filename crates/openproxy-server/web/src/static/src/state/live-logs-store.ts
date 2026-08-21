@@ -256,7 +256,7 @@ class LiveLogsStore {
         rowId: raw.rowId ?? null,
         row: null,  // Server never sends row data in snapshot attempts
         source: "snapshot",
-        endpointKind: raw.endpointKind ?? ((raw as unknown as Record<string, unknown>)["endpoint_kind"] as string) ?? null,
+        endpointKind: raw.endpointKind ?? (("endpoint_kind" in raw ? (raw as Record<string, unknown>)["endpoint_kind"] as string : null)) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
       this.attemptsByKey.set(a.attemptKey, a);
@@ -308,7 +308,7 @@ class LiveLogsStore {
         rowId: null,
         row: null,
         source: "snapshot",
-        endpointKind: raw.endpointKind ?? ((raw as unknown as Record<string, unknown>)["endpoint_kind"] as string) ?? null,
+        endpointKind: raw.endpointKind ?? (("endpoint_kind" in raw ? (raw as Record<string, unknown>)["endpoint_kind"] as string : null)) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
       this.attemptsByKey.set(key, a);
