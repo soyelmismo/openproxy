@@ -219,6 +219,25 @@ mod tests {
     }
 
     #[test]
+    fn test_rate_limit_scope_parse() {
+        assert_eq!(
+            RateLimitScope::parse("account").unwrap(),
+            RateLimitScope::Account
+        );
+        assert_eq!(
+            RateLimitScope::parse("model").unwrap(),
+            RateLimitScope::Model
+        );
+        assert!(RateLimitScope::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn test_rate_limit_scope_as_str() {
+        assert_eq!(RateLimitScope::Account.as_str(), "account");
+        assert_eq!(RateLimitScope::Model.as_str(), "model");
+    }
+
+    #[test]
     fn test_auth_type_parse() {
         assert_eq!(AuthType::parse("bearer").unwrap(), AuthType::Bearer);
         assert_eq!(AuthType::parse("x-api-key").unwrap(), AuthType::XApiKey);
