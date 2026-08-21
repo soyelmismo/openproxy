@@ -2072,9 +2072,9 @@ function parseMarkdownBlockquotes(text: string): string {
 
 // Global code block copy handler
 if (typeof window !== 'undefined') {
-  const win = window as unknown as Record<string, unknown>;
-  if (!win['__copyPlaygroundCode']) {
-    win['__copyPlaygroundCode'] = (btn: HTMLElement) => {
+  const win = window as Window & typeof globalThis & { __copyPlaygroundCode?: (btn: HTMLElement) => void };
+  if (!win.__copyPlaygroundCode) {
+    win.__copyPlaygroundCode = (btn: HTMLElement) => {
       const encoded = btn.getAttribute('data-code') || '';
       const code = decodeURIComponent(encoded);
       const onCopied = () => {
