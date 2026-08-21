@@ -67,6 +67,7 @@ impl ProviderAdapter for MockAdapter {
     fn models_url(&self) -> Option<String> {
         None
     }
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_models(
         &self,
         _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,

@@ -150,6 +150,7 @@ impl ProviderAdapter for CodexAdapter {
         None
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
@@ -158,6 +159,7 @@ impl ProviderAdapter for CodexAdapter {
         Ok(Self::hardcoded_models())
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_quota(
         &self,
         upstream_client: &Arc<UpstreamClient>,
