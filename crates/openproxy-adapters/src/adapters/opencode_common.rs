@@ -154,3 +154,36 @@ macro_rules! define_opencode_adapter {
         }
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_opencode_target_format() {
+        assert_eq!(
+            classify_opencode_target_format("claude-3-opus"),
+            TargetFormat::Anthropic
+        );
+        assert_eq!(
+            classify_opencode_target_format("minimax-abab6"),
+            TargetFormat::Anthropic
+        );
+        assert_eq!(
+            classify_opencode_target_format("CLAUDE-3-SONNET"),
+            TargetFormat::Anthropic
+        );
+        assert_eq!(
+            classify_opencode_target_format("gpt-4-turbo"),
+            TargetFormat::Openai
+        );
+        assert_eq!(
+            classify_opencode_target_format("gemini-pro"),
+            TargetFormat::Openai
+        );
+        assert_eq!(
+            classify_opencode_target_format("unknown-model"),
+            TargetFormat::Openai
+        );
+    }
+}
