@@ -74,6 +74,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_account_quota_is_empty() {
+        let mut quota = AccountQuota {
+            session_used: None,
+            session_limit: None,
+            session_reset_at: None,
+            weekly_used: None,
+            weekly_limit: None,
+            weekly_reset_at: None,
+            plan_name: None,
+            last_fetched_at: String::new(),
+            fetch_error: None,
+            model_details: None,
+        };
+
+        assert!(quota.is_empty());
+
+        quota.session_used = Some(10);
+        assert!(!quota.is_empty());
+        quota.session_used = None;
+
+        quota.weekly_used = Some(10);
+        assert!(!quota.is_empty());
+        quota.weekly_used = None;
+
+        quota.fetch_error = Some("error".to_string());
+        assert!(!quota.is_empty());
+    }
+
+    #[test]
     fn test_parse_reset_time() {
         assert_eq!(parse_reset_time("60"), Some(60));
         assert_eq!(parse_reset_time("60.5"), Some(61));
