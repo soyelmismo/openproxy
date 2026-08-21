@@ -13,8 +13,8 @@ const STORAGE_KEY = 'openproxy:logs:visibleColumns';
 
 // All 10 columns defined in lib/constants.ts. Order matches the
 // header rendering, so we can assert index-based positions.
-const ALL_COLUMNS: readonly string[] = ['time', 'phase', 'client', 'status', 'provider', 'model', 'tokens', 'latency', 'cost', 'cache', 'compression'];
-const HEADER_LABELS: readonly string[] = ['Time', 'Phase', 'Client', 'Status', 'Provider', 'Model', 'Tokens', 'Latency', 'Cost', 'API Cache', 'Compress'];
+const ALL_COLUMNS: readonly string[] = ['time', 'phase', 'type', 'client', 'status', 'provider', 'model', 'tokens', 'latency', 'cost', 'cache', 'compression'];
+const HEADER_LABELS: readonly string[] = ['Time', 'Phase', 'Endpoint', 'Client', 'Status', 'Provider', 'Model', 'Tokens', 'Latency', 'Cost', 'API Cache', 'Compress'];
 
 async function gotoLogs(page: Page): Promise<void> {
   await page.goto('http://localhost:8790/#/logs');
@@ -46,7 +46,7 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
   await gotoLogs(page);
   const header = page.locator('#logs .log-row').first();
   const headerCols = header.locator('[data-col]');
-  await expect(headerCols).toHaveCount(11);
+  await expect(headerCols).toHaveCount(12);
   for (let i = 0; i < ALL_COLUMNS.length; i++) {
     await expect(headerCols.nth(i)).toHaveAttribute('data-col', ALL_COLUMNS[i]!);
     await expect(headerCols.nth(i)).toHaveText(HEADER_LABELS[i]!);
@@ -69,7 +69,7 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
 
   // 4. 10 checkboxes, all checked.
   const checkboxes = menu.locator('input[type="checkbox"]');
-  await expect(checkboxes).toHaveCount(11);
+  await expect(checkboxes).toHaveCount(12);
   for (let i = 0; i < ALL_COLUMNS.length; i++) {
     await expect(checkboxes.nth(i)).toBeChecked();
     await expect(checkboxes.nth(i)).toHaveAttribute('data-arg1', ALL_COLUMNS[i]!);
@@ -85,7 +85,7 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
   await expect(header.locator('.log-cost')).toHaveCount(0);
   // localStorage now omits "cost".
   const stored = await page.evaluate((k: string) => JSON.parse(localStorage.getItem(k) || '[]'), STORAGE_KEY);
-  expect(stored).toEqual(['time', 'phase', 'client', 'status', 'provider', 'model', 'tokens', 'latency', 'cache', 'compression']);
+  expect(stored).toEqual(['time', 'phase', 'type', 'client', 'status', 'provider', 'model', 'tokens', 'latency', 'cache', 'compression']);
   expect(stored).not.toContain('cost');
 
   // 6. Reload → Cost stays hidden, the menu's checkbox for "cost"
@@ -93,7 +93,7 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
   await page.reload();
   await gotoLogs(page);
   const header2 = page.locator('#logs .log-row').first();
-  await expect(header2.locator('[data-col]')).toHaveCount(10);
+  await expect(header2.locator('[data-col]')).toHaveCount(11);
   await expect(header2.locator('.log-cost')).toHaveCount(0);
   // Re-open menu and confirm cost is unchecked.
   await page.locator('#logs-columns-toggle').click();
@@ -105,7 +105,7 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
   await expect(page.locator('#logs .log-row').first().locator('.log-cost')).toHaveCount(1);
   const storedAfter = await page.evaluate((k: string) => JSON.parse(localStorage.getItem(k) || '[]'), STORAGE_KEY);
   expect(storedAfter).toContain('cost');
-  expect(storedAfter).toHaveLength(11);
+  expect(storedAfter).toHaveLength(12);
 
   // 8. Guard: can't hide the last visible column. Hide all except
   // one by clicking each remaining checkbox. The last click is a
@@ -115,7 +115,7 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
   await expect(page.locator('.columns-menu')).not.toHaveClass(/open/);
   // Re-open and hide everything except "time".
   await page.locator('#logs-columns-toggle').click();
-  for (const key of ['phase', 'client', 'status', 'provider', 'model', 'tokens', 'latency', 'cost', 'cache', 'compression']) {
+  for (const key of ['phase', 'type', 'client', 'status', 'provider', 'model', 'tokens', 'latency', 'cost', 'cache', 'compression']) {
     await page.locator(`.columns-menu input[data-arg1="${key}"]`).click();
   }
   // Now only "time" is visible. Try to hide it — must be a no-op.

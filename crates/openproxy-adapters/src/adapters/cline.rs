@@ -81,6 +81,7 @@ impl ProviderAdapter for ClineAdapter {
         Some("https://api.cline.bot/api/v1/ai/cline/recommended-models".into())
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_models(
         &self,
         upstream_client: &Arc<UpstreamClient>,
@@ -141,6 +142,7 @@ impl ProviderAdapter for ClineAdapter {
         Ok(discovered)
     }
 
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     async fn fetch_quota(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
