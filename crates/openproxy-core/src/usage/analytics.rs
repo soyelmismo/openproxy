@@ -1673,13 +1673,12 @@ fn collect_rows<T>(
     iter: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
     query_name: &'static str,
 ) -> Result<Vec<T>> {
-    let mut out = Vec::new();
-    for r in iter {
-        out.push(r.map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "read {query_name} row"
-        )))?);
-    }
-    Ok(out)
+    iter.map(|r| {
+        // Bolt: Evaluate format! inside the closure so it only allocates on errors,
+        // avoiding an expensive string allocation on every single successful database row read.
+        r.map_err(|e| openproxy_db::error::map_db_error_ctx(format!("read {query_name} row"))(e))
+    })
+    .collect()
 }
 
 /// Coerce a non-negative `i64` (from `COUNT(*)` etc.) to `u64`, panicking on
