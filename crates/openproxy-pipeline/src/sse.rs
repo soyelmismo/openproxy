@@ -3025,7 +3025,8 @@ mod atomesus_sse_tests {
 
     #[test]
     fn fx_sse_parses_text_and_reasoning_and_finish() {
-        let line_reasoning = r#"data: {"type":"reasoning-delta","id":"reasoning-0","delta":"pensando"}"#;
+        let line_reasoning =
+            r#"data: {"type":"reasoning-delta","id":"reasoning-0","delta":"pensando"}"#;
         let chunk_r = parse_fx_sse_line(line_reasoning, "cmpl_1", 100, "zai/glm-5.2")
             .unwrap()
             .unwrap();
@@ -3060,7 +3061,10 @@ mod atomesus_sse_tests {
         assert!(chunk_tc.has_content);
         assert_eq!(chunk_tc.delta_tool_calls.len(), 1);
         assert_eq!(chunk_tc.delta_tool_calls[0]["id"], "call_123");
-        assert_eq!(chunk_tc.delta_tool_calls[0]["function"]["name"], "read_file");
+        assert_eq!(
+            chunk_tc.delta_tool_calls[0]["function"]["name"],
+            "read_file"
+        );
         assert_eq!(
             chunk_tc.delta_tool_calls[0]["function"]["arguments"],
             r#"{"path":"/etc/hosts"}"#

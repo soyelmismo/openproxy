@@ -871,6 +871,7 @@ pub mod cloudflare_workers_ai;
 pub mod codex;
 pub mod custom_adapter;
 pub mod factory;
+pub mod fx;
 pub mod gemini;
 pub mod horde;
 pub mod kilocode;
@@ -886,7 +887,6 @@ pub mod opencode_go;
 pub mod opencode_zen;
 pub mod openrouter;
 pub mod vercel_gateway;
-pub mod fx;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;
@@ -898,6 +898,7 @@ pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
 pub use codex::CodexAdapter;
 pub use custom_adapter::CustomAdapter;
 pub use factory::AdapterFactory;
+pub use fx::FxAdapter;
 pub use gemini::GeminiAdapter;
 pub use horde::HordeAdapter;
 pub use kilocode::KilocodeAdapter;
@@ -910,7 +911,6 @@ pub use opencode_go::OpenCodeGoAdapter;
 pub use opencode_zen::OpenCodeZenAdapter;
 pub use openrouter::OpenRouterAdapter;
 pub use vercel_gateway::VercelGatewayAdapter;
-pub use fx::FxAdapter;
 
 // =====================================================================
 // Shared upstream helpers

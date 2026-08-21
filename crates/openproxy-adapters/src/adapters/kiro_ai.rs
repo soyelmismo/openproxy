@@ -780,7 +780,10 @@ mod tests {
 
         let current_msg = current.unwrap();
         assert_eq!(current_msg.role, "user");
-        assert_eq!(current_msg.content.as_ref().unwrap(), &json!("how are you?"));
+        assert_eq!(
+            current_msg.content.as_ref().unwrap(),
+            &json!("how are you?")
+        );
     }
 
     #[test]
