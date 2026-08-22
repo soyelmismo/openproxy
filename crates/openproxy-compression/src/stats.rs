@@ -99,3 +99,63 @@ impl CompressionStats {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compression_stats_new_with_tokens() {
+        let stats = CompressionStats::new(100, 50, 20, 10, vec!["tech1".to_string()]);
+        assert_eq!(stats.original_chars, 100);
+        assert_eq!(stats.compressed_chars, 50);
+        assert_eq!(stats.original_tokens, 20);
+        assert_eq!(stats.compressed_tokens, 10);
+        assert_eq!(stats.savings_pct, 50.0);
+        assert_eq!(stats.savings_pct_chars, 50.0);
+        assert_eq!(stats.techniques, vec!["tech1".to_string()]);
+    }
+
+    #[test]
+    fn test_compression_stats_new_without_tokens() {
+        let stats = CompressionStats::new(100, 25, 0, 0, vec!["tech1".to_string()]);
+        assert_eq!(stats.savings_pct, 75.0);
+        assert_eq!(stats.savings_pct_chars, 75.0);
+    }
+
+    #[test]
+    fn test_compression_stats_empty() {
+        let stats = CompressionStats::empty();
+        assert_eq!(stats.original_chars, 0);
+        assert_eq!(stats.compressed_chars, 0);
+        assert_eq!(stats.original_tokens, 0);
+        assert_eq!(stats.compressed_tokens, 0);
+        assert_eq!(stats.savings_pct, 0.0);
+        assert_eq!(stats.savings_pct_chars, 0.0);
+        assert!(stats.techniques.is_empty());
+    }
+
+    #[test]
+    fn test_compression_stats_techniques_csv() {
+        let stats = CompressionStats::new(
+            100,
+            50,
+            10,
+            5,
+            vec!["tech1".to_string(), "tech2".to_string(), "tech1".to_string()],
+        );
+        assert_eq!(stats.techniques_csv().unwrap(), "tech1,tech2");
+
+        let stats_empty = CompressionStats::empty();
+        assert_eq!(stats_empty.techniques_csv(), None);
+    }
+
+    #[test]
+    fn test_compression_stats_savings_pct_opt() {
+        let stats = CompressionStats::new(100, 50, 10, 5, vec![]);
+        assert_eq!(stats.savings_pct_opt(), Some(50.0));
+
+        let stats_zero = CompressionStats::new(100, 100, 10, 10, vec![]);
+        assert_eq!(stats_zero.savings_pct_opt(), None);
+    }
+}
