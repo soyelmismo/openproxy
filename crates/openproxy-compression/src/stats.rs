@@ -142,7 +142,11 @@ mod tests {
             50,
             10,
             5,
-            vec!["tech1".to_string(), "tech2".to_string(), "tech1".to_string()],
+            vec![
+                "tech1".to_string(),
+                "tech2".to_string(),
+                "tech1".to_string(),
+            ],
         );
         assert_eq!(stats.techniques_csv().unwrap(), "tech1,tech2");
 
