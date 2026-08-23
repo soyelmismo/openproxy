@@ -182,6 +182,37 @@ fn bench_compression(c: &mut Criterion) {
         });
     });
 
+    let stats = openproxy_compression::CompressionStats::new(
+        1000,
+        500,
+        100,
+        50,
+        vec![
+            "strip_ansi".to_string(),
+            "normalize_whitespace".to_string(),
+            "compact_json".to_string(),
+            "strip_ansi".to_string(),
+            "dedup_system".to_string(),
+            "normalize_whitespace".to_string(),
+            "filter_logs".to_string(),
+            "smart_crusher".to_string(),
+            "strip_ansi".to_string(),
+            "compact_json".to_string(),
+            "diff_compressor".to_string(),
+            "truncate".to_string(),
+            "strip_ansi".to_string(),
+            "normalize_whitespace".to_string(),
+            "filter_logs".to_string(),
+            "smart_crusher".to_string(),
+        ],
+    );
+
+    group.bench_function("techniques_csv", |b| {
+        b.iter(|| {
+            black_box(stats.techniques_csv());
+        });
+    });
+
     group.finish();
 }
 
