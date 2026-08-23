@@ -1864,50 +1864,25 @@ export async function copyDebugBundle(): Promise<void> {
   try {
     // Try the modern Clipboard API first. Requires a secure context
     // (HTTPS or localhost). If unavailable or it throws, fall back
-    // to the deprecated execCommand approach.
+    // to showing the bundle in a modal.
     if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
       await navigator.clipboard.writeText(bundle);
       showToast("Debug bundle copied to clipboard.", "success");
       return;
     }
   } catch (err) {
-    // Fall through to the execCommand fallback. Log the Clipboard
-    // API error for debugging but don't surface it to the user yet
-    // — the fallback might still work.
-    console.warn("[openproxy] navigator.clipboard.writeText failed, falling back to execCommand:", err);
+    // Log the Clipboard API error for debugging.
+    console.warn("[openproxy] navigator.clipboard.writeText failed, falling back to modal:", err);
   }
-  // Fallback: hidden textarea + execCommand("copy"). Deprecated but
-  // works in non-secure contexts and older browsers.
-  try {
-    const textarea: HTMLTextAreaElement = document.createElement("textarea");
-    textarea.value = bundle;
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    textarea.style.top = "0";
-    textarea.setAttribute("readonly", "");
-    document.body.appendChild(textarea);
-    textarea.select();
-    const ok: boolean = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    if (ok) {
-      showToast("Debug bundle copied to clipboard.", "success");
-    } else {
-      // execCommand returned false — copy failed. Show the bundle in
-      // a modal so the user can manually select+copy.
-      showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
-      showToast("Copy failed — bundle shown in a window for manual copy.", "warning");
-    }
-  } catch (err) {
-    console.error("[openproxy] execCommand copy also failed:", err);
-    showBundleInModal(bundle, `Copy failed: ${String(err)} — select the text below and press Ctrl+C`);
-    showToast(`Copy failed — bundle shown in a window for manual copy.`, "warning");
-  }
+
+  // Fallback: Show the bundle in a modal so the user can manually select+copy.
+  showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
+  showToast("Copy unavailable — bundle shown in a window for manual copy.", "warning");
 }
 
 /** Last-resort fallback: show the bundle in a modal window so the
- *  user can manually select and copy the text. Used when both
- *  `navigator.clipboard` and `document.execCommand("copy")` fail
- *  (e.g., very old browsers or strict permission policies).
+ *  user can manually select and copy the text. Used when
+ *  `navigator.clipboard` is unavailable or fails.
  *
  *  Built with lit-html `render()` instead of `innerHTML` so the
  *  bundle text is properly escaped (no XSS risk from a body that
