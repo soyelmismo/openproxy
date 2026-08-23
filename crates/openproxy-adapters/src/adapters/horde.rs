@@ -1055,6 +1055,73 @@ pub fn parse_dimensions(size: Option<&str>, aspect_ratio: Option<&str>) -> (u32,
     }
 }
 
+fn parse_lora_tag(tag_trimmed: &str) -> Option<HordeLora> {
+    if !tag_trimmed
+        .get(..5)
+        .is_some_and(|p| p.eq_ignore_ascii_case("lora:"))
+    {
+        return None;
+    }
+    let lora_body = &tag_trimmed[5..];
+    let parts: Vec<&str> = lora_body.split(':').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let name = parts[0].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let (model, clip) = match parts.len() {
+        1 => (1.0, 1.0),
+        2 => {
+            let w = parts[1].trim().parse::<f32>().unwrap_or(1.0);
+            (w, w)
+        }
+        _ => {
+            let m = parts[1].trim().parse::<f32>().unwrap_or(1.0);
+            let c = parts[2].trim().parse::<f32>().unwrap_or(m);
+            (m, c)
+        }
+    };
+    Some(HordeLora {
+        name,
+        model,
+        clip,
+        inject_trigger: None,
+    })
+}
+
+fn parse_ti_tag(tag_trimmed: &str) -> Option<HordeTi> {
+    let is_ti = tag_trimmed
+        .get(..3)
+        .is_some_and(|p| p.eq_ignore_ascii_case("ti:"));
+    let is_emb = tag_trimmed
+        .get(..4)
+        .is_some_and(|p| p.eq_ignore_ascii_case("emb:"));
+    if !is_ti && !is_emb {
+        return None;
+    }
+    let ti_body = if is_ti {
+        &tag_trimmed[3..]
+    } else {
+        &tag_trimmed[4..]
+    };
+    let parts: Vec<&str> = ti_body.split(':').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let name = parts[0].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let strength = if parts.len() >= 2 {
+        parts[1].trim().parse::<f32>().unwrap_or(1.0)
+    } else {
+        1.0
+    };
+    Some(HordeTi { name, strength })
+}
+
 /// Extract AI Horde prompt directives (<lora:...>, <ti:...>, --sampler, --steps, etc.) from a prompt.
 pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
     let mut loras = Vec::new();
@@ -1070,62 +1137,10 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
             let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
             let tag_trimmed = tag_content.trim();
 
-            if tag_trimmed
-                .get(..5)
-                .is_some_and(|p| p.eq_ignore_ascii_case("lora:"))
-            {
-                let lora_body = &tag_trimmed[5..];
-                let parts: Vec<&str> = lora_body.split(':').collect();
-                if !parts.is_empty() {
-                    let name = parts[0].trim().to_string();
-                    if !name.is_empty() {
-                        let (model, clip) = match parts.len() {
-                            1 => (1.0, 1.0),
-                            2 => {
-                                let w = parts[1].trim().parse::<f32>().unwrap_or(1.0);
-                                (w, w)
-                            }
-                            _ => {
-                                let m = parts[1].trim().parse::<f32>().unwrap_or(1.0);
-                                let c = parts[2].trim().parse::<f32>().unwrap_or(m);
-                                (m, c)
-                            }
-                        };
-                        loras.push(HordeLora {
-                            name,
-                            model,
-                            clip,
-                            inject_trigger: None,
-                        });
-                    }
-                }
-            } else if tag_trimmed
-                .get(..3)
-                .is_some_and(|p| p.eq_ignore_ascii_case("ti:"))
-                || tag_trimmed
-                    .get(..4)
-                    .is_some_and(|p| p.eq_ignore_ascii_case("emb:"))
-            {
-                let ti_body = if tag_trimmed
-                    .get(..3)
-                    .is_some_and(|p| p.eq_ignore_ascii_case("ti:"))
-                {
-                    &tag_trimmed[3..]
-                } else {
-                    &tag_trimmed[4..]
-                };
-                let parts: Vec<&str> = ti_body.split(':').collect();
-                if !parts.is_empty() {
-                    let name = parts[0].trim().to_string();
-                    if !name.is_empty() {
-                        let strength = if parts.len() >= 2 {
-                            parts[1].trim().parse::<f32>().unwrap_or(1.0)
-                        } else {
-                            1.0
-                        };
-                        tis.push(HordeTi { name, strength });
-                    }
-                }
+            if let Some(lora) = parse_lora_tag(tag_trimmed) {
+                loras.push(lora);
+            } else if let Some(ti) = parse_ti_tag(tag_trimmed) {
+                tis.push(ti);
             } else {
                 without_tags.push_str(&raw_prompt[absolute_start..=absolute_end]);
             }
