@@ -937,8 +937,8 @@ async fn quota_refresh_supported_matrix() {
         "antigravity must support quota refresh"
     );
     assert!(
-        supported.contains(&"openrouter".to_string()),
-        "openrouter must support quota refresh"
+        !supported.contains(&"openrouter".to_string()),
+        "openrouter must NOT support quota refresh"
     );
     assert!(
         supported.contains(&"kiro".to_string()),

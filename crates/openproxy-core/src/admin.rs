@@ -1067,7 +1067,6 @@ mod tests {
             "agy",
             "codex",
             "kiro",
-            "openrouter",
             "horde",
         ];
         let providers_with_fetcher = [
@@ -1077,7 +1076,6 @@ mod tests {
             "agy",
             "codex",
             "kiro",
-            "openrouter",
             "horde",
         ];
         for adapter in adapters {

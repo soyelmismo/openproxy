@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{OAuthFlow, OAuthProvider};
+use crate::oauth::{DbRef, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -102,9 +102,37 @@ impl OAuthProvider for AntigravityOAuthProvider {
         build_auth_url,
         exchange_code,
         request_device_code,
-        poll_device_token,
-        refresh_token
+        poll_device_token
     );
+
+    async fn refresh_token(
+        &self,
+        refresh_token: &str,
+        upstream_client: &Arc<UpstreamClient>,
+        account_id: AccountId,
+        db: DbRef<'_>,
+    ) -> Result<TokenResponse> {
+        match self
+            .generic
+            .refresh_token(refresh_token, upstream_client, account_id, db)
+            .await
+        {
+            Ok(token) => Ok(token),
+            Err(e) => {
+                if e.to_string().contains("invalid_grant") {
+                    tracing::warn!(
+                        "Antigravity OAuth received invalid_grant on refresh; backing off 500ms before retrying once..."
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    self.generic
+                        .refresh_token(refresh_token, upstream_client, account_id, db)
+                        .await
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
 
     fn aliases(&self) -> &'static [&'static str] {
         &["antigravity-cli"]

@@ -113,3 +113,7 @@ lto = true
 opt-level = 3
 codegen-units = 1
 strip = true
+
+# Reduce debug info en dev para evitar inflado de target/ (backtraces siguen funcionando)
+[profile.dev]
+debug = "line-tables-only"

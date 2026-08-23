@@ -5,6 +5,25 @@ use crate::translation::types::{
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::{Value, json};
 
+pub const CLAUDE_AGENT_SDK_IDENTITY: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+pub const CLAUDE_CODE_CLI_IDENTITY: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// Normalize the standalone identity block injected by Claude Agent SDK clients.
+///
+/// Antigravity's upstream classifies this SDK identity differently from Claude Code's
+/// CLI identity and can reject an otherwise identical request with RESOURCE_EXHAUSTED.
+/// Keep the match exact so user-authored text that merely mentions the SDK identity is
+/// not rewritten.
+pub fn normalize_claude_client_identity(text: &str) -> &str {
+    if text == CLAUDE_AGENT_SDK_IDENTITY {
+        CLAUDE_CODE_CLI_IDENTITY
+    } else {
+        text
+    }
+}
+
 pub fn openai_to_anthropic(
     req: &OpenAIRequest,
     override_model: &str,
@@ -73,7 +92,10 @@ pub fn openai_to_anthropic(
         }
 
         match role {
-            "system" => system_parts.push(m.extract_text()),
+            "system" => {
+                let text = m.extract_text();
+                system_parts.push(normalize_claude_client_identity(&text).to_string());
+            }
             "assistant" => {
                 if let Some(tool_calls) = m.tool_calls.as_ref() {
                     // Assistant message with tool_calls. First flush
@@ -381,10 +403,11 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
     let mut messages = Vec::with_capacity(req.messages.len() + usize::from(req.system.is_some()));
     if let Some(sys) = req.system {
         let sys_str = if let Some(s) = sys.as_str() {
-            s.to_string()
+            normalize_claude_client_identity(s).to_string()
         } else if let Some(arr) = sys.as_array() {
             arr.iter()
                 .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+                .map(normalize_claude_client_identity)
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
@@ -771,6 +794,19 @@ mod tests {
         assert_eq!(
             translate_anthropic_tool_choice_to_openai(fallback_tc.clone()),
             fallback_tc
+        );
+    }
+
+    #[test]
+    fn test_normalize_claude_client_identity() {
+        assert_eq!(
+            normalize_claude_client_identity(CLAUDE_AGENT_SDK_IDENTITY),
+            CLAUDE_CODE_CLI_IDENTITY
+        );
+        let custom_prompt = "You are a specialized coding agent.";
+        assert_eq!(
+            normalize_claude_client_identity(custom_prompt),
+            custom_prompt
         );
     }
 }

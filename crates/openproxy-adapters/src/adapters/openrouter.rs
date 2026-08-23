@@ -1,7 +1,6 @@
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, CancellationToken, Deserialize, DiscoveredModel, ModelId,
-    ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
-    UpstreamClient, UpstreamRequest, upstream_get_json,
+    AdapterAuthType, AdapterFormat, Arc, Deserialize, DiscoveredModel, ModelId, ProviderAdapter,
+    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient, upstream_get_json,
 };
 
 // =====================================================================
@@ -68,8 +67,8 @@ impl ProviderAdapter for OpenRouterAdapter {
         let mut meta = openproxy_types::ProviderMetadata::custom_default();
         meta.built_in = true;
         meta.deletable = false;
-        meta.supports_quota = true;
-        meta.quota_refresh_supported = true;
+        meta.supports_quota = false;
+        meta.quota_refresh_supported = false;
         meta
     }
 
@@ -159,193 +158,6 @@ impl ProviderAdapter for OpenRouterAdapter {
 
         Ok(models)
     }
-
-    async fn fetch_quota(
-        &self,
-        upstream_client: &Arc<UpstreamClient>,
-        api_key: &str,
-        _: Option<&str>,
-        _: Option<&str>,
-    ) -> Option<Result<openproxy_types::AccountQuota>> {
-        // OpenRouter's fetcher catches its own errors and maps them to AccountQuota fields.
-        // It never actually returns an `Err(CoreError)`.
-        Some(
-            self.fetch_openrouter_quota_local(upstream_client, api_key)
-                .await,
-        )
-    }
-}
-
-impl OpenRouterAdapter {
-    async fn fetch_openrouter_quota_local(
-        &self,
-        upstream: &Arc<UpstreamClient>,
-        api_key: &str,
-    ) -> Result<openproxy_types::AccountQuota> {
-        let url = "https://openrouter.ai/api/v1/key";
-
-        let mut req = UpstreamRequest::get(url);
-        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
-            req.headers.insert(http::header::AUTHORIZATION, v);
-        }
-
-        let cancel = CancellationToken::new();
-        let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: openproxy_types::now_unix_secs_str(),
-                    fetch_error: Some(format!("network: {e}")),
-                    model_details: None,
-                });
-            }
-        };
-
-        if !response.status.is_success() {
-            let status = response.status.as_u16();
-            let body = response.collect().await.unwrap_or_default();
-            let snippet = String::from_utf8_lossy(&body)
-                .chars()
-                .take(200)
-                .collect::<String>();
-            return Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some(format!("HTTP {status}: {snippet}")),
-                model_details: None,
-            });
-        }
-
-        let body = match response.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: openproxy_types::now_unix_secs_str(),
-                    fetch_error: Some(format!("collect: {e}")),
-                    model_details: None,
-                });
-            }
-        };
-
-        let json: serde_json::Value = match serde_json::from_slice(&body) {
-            Ok(b) => b,
-            Err(e) => {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: openproxy_types::now_unix_secs_str(),
-                    fetch_error: Some(format!("parse: {e}")),
-                    model_details: None,
-                });
-            }
-        };
-
-        Ok(parse_openrouter_quota(
-            &json,
-            &openproxy_types::now_unix_secs_str(),
-        ))
-    }
-}
-
-fn parse_openrouter_quota(
-    body: &serde_json::Value,
-    last_fetched_at: &str,
-) -> openproxy_types::AccountQuota {
-    let data = body.get("data");
-
-    let raw_usage = data
-        .and_then(|d| d.get("usage"))
-        .and_then(serde_json::Value::as_f64);
-    let raw_limit = data
-        .and_then(|d| d.get("limit"))
-        .and_then(serde_json::Value::as_f64);
-    let is_free = data
-        .and_then(|d| d.get("is_free_tier"))
-        .and_then(serde_json::Value::as_bool)
-        .is_some_and(|b| b);
-    let rate_limit = data.and_then(|d| d.get("rate_limit"));
-
-    let session_used = raw_usage.filter(|u| *u >= 0.0).map(|u| (u * 100.0) as i64);
-    let session_limit = raw_limit.filter(|l| *l > 0.0).map(|l| (l * 100.0) as i64);
-
-    let plan_name = if is_free {
-        "OpenRouter (free tier)".to_string()
-    } else {
-        "OpenRouter".to_string()
-    };
-
-    let rate_limit_text = rate_limit.and_then(format_rate_limit_suffix);
-
-    let plan_name = match rate_limit_text {
-        Some(rl) => format!("{plan_name} · {rl}"),
-        None => plan_name,
-    };
-
-    let no_numeric_data = session_used.is_none() && session_limit.is_none();
-    let fetch_error = if data.is_none() {
-        Some("missing 'data' in response".to_string())
-    } else if no_numeric_data {
-        Some("usage not configured".to_string())
-    } else {
-        None
-    };
-
-    openproxy_types::AccountQuota {
-        session_used,
-        session_limit,
-        session_reset_at: None,
-        weekly_used: None,
-        weekly_limit: None,
-        weekly_reset_at: None,
-        plan_name: Some(plan_name),
-        last_fetched_at: last_fetched_at.to_string(),
-        fetch_error,
-        model_details: None,
-    }
-}
-
-fn format_rate_limit_suffix(rl: &serde_json::Value) -> Option<String> {
-    let reqs = rl.get("requests").and_then(serde_json::Value::as_i64)?;
-    let interval = rl.get("interval").and_then(|v| v.as_str())?;
-
-    if reqs < 0 {
-        return None;
-    }
-
-    let unit = match interval.chars().last() {
-        Some('s') => "sec",
-        Some('m') => "min",
-        Some('h') => "hr",
-        Some('d') => "day",
-        _ => return None,
-    };
-
-    Some(format!("{reqs} req/{unit}"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -478,40 +290,4 @@ fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchite
 fn derive_family_from_id(id: &str) -> Option<String> {
     let name = id.rsplit_once('/').map_or(id, |(_, tail)| tail);
     openproxy_types::capabilities::infer_family(name)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_format_rate_limit_suffix() {
-        assert_eq!(
-            format_rate_limit_suffix(&json!({"requests": 10, "interval": "1s"})),
-            Some("10 req/sec".to_string())
-        );
-        assert_eq!(
-            format_rate_limit_suffix(&json!({"requests": 100, "interval": "1m"})),
-            Some("100 req/min".to_string())
-        );
-        assert_eq!(
-            format_rate_limit_suffix(&json!({"requests": 1000, "interval": "1h"})),
-            Some("1000 req/hr".to_string())
-        );
-        assert_eq!(
-            format_rate_limit_suffix(&json!({"requests": 10000, "interval": "1d"})),
-            Some("10000 req/day".to_string())
-        );
-        assert_eq!(
-            format_rate_limit_suffix(&json!({"requests": -1, "interval": "1d"})),
-            None
-        );
-        assert_eq!(
-            format_rate_limit_suffix(&json!({"requests": 10, "interval": "1w"})),
-            None
-        );
-        assert_eq!(format_rate_limit_suffix(&json!({"interval": "1s"})), None);
-        assert_eq!(format_rate_limit_suffix(&json!({"requests": 10})), None);
-    }
 }

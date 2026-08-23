@@ -231,19 +231,84 @@ pub struct GeminiUsageMetadata {
     pub cached_content_token_count: Option<u32>,
 }
 
-pub fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<GeminiInlineData> {
-    let obj = part.as_object()?;
-    if obj.get("type").and_then(|v| v.as_str())? != "image_url" {
-        return None;
+pub fn normalize_audio_mime(format: &str) -> String {
+    match format.to_lowercase().trim_start_matches('.') {
+        "wav" | "x-wav" | "wave" => "audio/wav".to_string(),
+        "mp3" | "mpeg" => "audio/mp3".to_string(),
+        "m4a" | "aac" => "audio/m4a".to_string(),
+        "ogg" | "opus" => "audio/ogg".to_string(),
+        "flac" | "x-flac" => "audio/flac".to_string(),
+        "aiff" | "x-aiff" => "audio/aiff".to_string(),
+        "pcm" => "audio/pcm".to_string(),
+        s if s.starts_with("audio/") => s.to_string(),
+        _ => "audio/mp3".to_string(),
     }
-    let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
-    let stripped = url.strip_prefix("data:")?;
-    let (mime_type, rest) = stripped.split_once(';')?;
-    let (_, data) = rest.split_once(',')?;
-    Some(GeminiInlineData {
-        mime_type: mime_type.to_string(),
-        data: data.to_string(),
-    })
+}
+
+pub fn parse_media_part_to_inline_data(part: &serde_json::Value) -> Option<GeminiInlineData> {
+    let obj = part.as_object()?;
+    let typ = obj.get("type").and_then(|v| v.as_str())?;
+    match typ {
+        "image_url" => {
+            let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
+            let stripped = url.strip_prefix("data:")?;
+            let (mime_type, rest) = stripped.split_once(';')?;
+            let (_, data) = rest.split_once(',')?;
+            Some(GeminiInlineData {
+                mime_type: mime_type.to_string(),
+                data: data.to_string(),
+            })
+        }
+        "audio_url" => {
+            let audio_obj = obj.get("audio_url")?.as_object()?;
+            let url = audio_obj.get("url")?.as_str()?;
+            if let Some(stripped) = url.strip_prefix("data:") {
+                let (mime_type, rest) = stripped.split_once(';')?;
+                let (_, data) = rest.split_once(',')?;
+                Some(GeminiInlineData {
+                    mime_type: mime_type.to_string(),
+                    data: data.to_string(),
+                })
+            } else {
+                let mime = audio_obj
+                    .get("mime_type")
+                    .or_else(|| audio_obj.get("mimeType"))
+                    .or_else(|| audio_obj.get("format"))
+                    .and_then(|v| v.as_str())
+                    .map_or_else(|| "audio/mp3".to_string(), normalize_audio_mime);
+                Some(GeminiInlineData {
+                    mime_type: mime,
+                    data: url.to_string(),
+                })
+            }
+        }
+        "input_audio" | "audio" => {
+            let audio_obj = obj.get("input_audio").or_else(|| obj.get("audio"))?.as_object()?;
+            let data_raw = audio_obj.get("data")?.as_str()?;
+            let format_raw = audio_obj
+                .get("format")
+                .or_else(|| audio_obj.get("mime_type"))
+                .or_else(|| audio_obj.get("mimeType"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("mp3");
+            let mime_type = normalize_audio_mime(format_raw);
+            let data = if let Some(stripped) = data_raw.strip_prefix("data:") {
+                let (_, rest) = stripped.split_once(',')?;
+                rest.to_string()
+            } else {
+                data_raw.to_string()
+            };
+            Some(GeminiInlineData {
+                mime_type,
+                data,
+            })
+        }
+        _ => None,
+    }
+}
+
+pub fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<GeminiInlineData> {
+    parse_media_part_to_inline_data(part)
 }
 
 fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<GeminiPart> {
@@ -251,7 +316,7 @@ fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<G
         Some(serde_json::Value::Array(parts)) => parts
             .iter()
             .map(|part| {
-                if let Some(inline_data) = parse_image_url_to_inline_data(part) {
+                if let Some(inline_data) = parse_media_part_to_inline_data(part) {
                     return GeminiPart {
                         inline_data: Some(inline_data),
                         ..Default::default()
@@ -442,6 +507,33 @@ mod tests {
         let result = parse_image_url_to_inline_data(&part).unwrap();
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.data, "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn test_parse_audio_parts_to_inline_data() {
+        let input_audio = json!({
+            "type": "input_audio",
+            "input_audio": {
+                "data": "UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=",
+                "format": "wav"
+            }
+        });
+        let result = parse_media_part_to_inline_data(&input_audio).unwrap();
+        assert_eq!(result.mime_type, "audio/wav");
+        assert_eq!(
+            result.data,
+            "UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
+        );
+
+        let audio_url = json!({
+            "type": "audio_url",
+            "audio_url": {
+                "url": "data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAA=="
+            }
+        });
+        let result = parse_media_part_to_inline_data(&audio_url).unwrap();
+        assert_eq!(result.mime_type, "audio/mp3");
+        assert_eq!(result.data, "//uQZAAAAAAAAAAAAAAAAAAAAAA==");
     }
 
     #[test]

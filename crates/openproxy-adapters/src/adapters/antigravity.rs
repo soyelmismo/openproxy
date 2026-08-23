@@ -241,7 +241,7 @@ impl ProviderAdapter for AntigravityAdapter {
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> Result<bytes::Bytes> {
         if target_format == TargetFormat::Gemini {
-            let json = serde_json::from_slice::<serde_json::Value>(&body)
+            let mut json = serde_json::from_slice::<serde_json::Value>(&body)
                 .map_err(|e| CoreError::Parse(format!("failed to parse gemini request: {e}")))?;
             let project = resolved_target
                 .custom_meta
@@ -249,6 +249,10 @@ impl ProviderAdapter for AntigravityAdapter {
                 .and_then(|m| m.antigravity_project.as_deref())
                 .unwrap_or_default();
             let physical_model = map_antigravity_physical_model(model.as_str());
+
+            if let Some(contents) = json.get_mut("contents") {
+                inject_sentinel_thought_signatures(contents, physical_model);
+            }
 
             let wrapped = serde_json::json!({
                 "project": project,
@@ -963,10 +967,71 @@ pub async fn onboard_user(
     Ok(project_id)
 }
 
+fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &str) {
+    let model_lc = model.to_lowercase();
+    let is_flash_or_agent = (model_lc.contains("gemini") && model_lc.contains("flash"))
+        || model_lc.contains("gemini-pro-agent")
+        || model_lc.contains("gemini-3-flash-agent");
+    if !is_flash_or_agent {
+        return;
+    }
+    if let Some(arr) = contents.as_array_mut() {
+        for msg in arr {
+            if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts {
+                    let has_fc = part.get("functionCall").is_some() || part.get("function_call").is_some();
+                    if has_fc
+                        && part.get("thoughtSignature").is_none()
+                        && part.get("thought_signature").is_none()
+                        && let Some(obj) = part.as_object_mut()
+                    {
+                        obj.insert(
+                            "thoughtSignature".to_string(),
+                            serde_json::json!("skip_thought_signature_validator"),
+                        );
+                        obj.insert(
+                            "thought_signature".to_string(),
+                            serde_json::json!("skip_thought_signature_validator"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod user_quota_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_inject_sentinel_thought_signatures_flash() {
+        let mut contents = json!([
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {}
+                        }
+                    }
+                ]
+            }
+        ]);
+
+        inject_sentinel_thought_signatures(&mut contents, "gemini-3.7-flash-high");
+        let fc_part = &contents[0]["parts"][0];
+        assert_eq!(
+            fc_part["thoughtSignature"],
+            "skip_thought_signature_validator"
+        );
+        assert_eq!(
+            fc_part["thought_signature"],
+            "skip_thought_signature_validator"
+        );
+    }
 
     #[test]
     fn test_parse_antigravity_user_quota_summary_missing_groups() {

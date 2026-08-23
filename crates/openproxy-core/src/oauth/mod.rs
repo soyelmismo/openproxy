@@ -53,6 +53,7 @@ pub mod kiro;
 pub mod tickets;
 
 /// A reference to either a `DbPool` or a locked/lockable database `Connection`.
+#[derive(Clone, Copy)]
 pub enum DbRef<'a> {
     Pool(&'a openproxy_db::DbPool),
     Connection(&'a parking_lot::Mutex<rusqlite::Connection>),
