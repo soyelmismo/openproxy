@@ -283,7 +283,10 @@ pub fn parse_media_part_to_inline_data(part: &serde_json::Value) -> Option<Gemin
             }
         }
         "input_audio" | "audio" => {
-            let audio_obj = obj.get("input_audio").or_else(|| obj.get("audio"))?.as_object()?;
+            let audio_obj = obj
+                .get("input_audio")
+                .or_else(|| obj.get("audio"))?
+                .as_object()?;
             let data_raw = audio_obj.get("data")?.as_str()?;
             let format_raw = audio_obj
                 .get("format")
@@ -298,10 +301,7 @@ pub fn parse_media_part_to_inline_data(part: &serde_json::Value) -> Option<Gemin
             } else {
                 data_raw.to_string()
             };
-            Some(GeminiInlineData {
-                mime_type,
-                data,
-            })
+            Some(GeminiInlineData { mime_type, data })
         }
         _ => None,
     }

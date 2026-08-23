@@ -979,7 +979,8 @@ fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &
         for msg in arr {
             if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
                 for part in parts {
-                    let has_fc = part.get("functionCall").is_some() || part.get("function_call").is_some();
+                    let has_fc =
+                        part.get("functionCall").is_some() || part.get("function_call").is_some();
                     if has_fc
                         && part.get("thoughtSignature").is_none()
                         && part.get("thought_signature").is_none()
