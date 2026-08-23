@@ -249,15 +249,17 @@ pub fn reorder_proxy_sources(conn: &Connection, ids: &[String]) -> Result<()> {
         .unchecked_transaction()
         .map_err(crate::error::map_db_error)?;
 
+    let mut stmt = tx
+        .prepare_cached("UPDATE proxy_sources SET priority = ?1 WHERE id = ?2")
+        .map_err(crate::error::map_db_error)?;
+
     let n = ids.len();
     for (i, id) in ids.iter().enumerate() {
         let p = ((n - i) * 10) as i32;
-        tx.execute(
-            "UPDATE proxy_sources SET priority = ?1 WHERE id = ?2",
-            params![p, id],
-        )
-        .map_err(crate::error::map_db_error)?;
+        stmt.execute(params![p, id])
+            .map_err(crate::error::map_db_error)?;
     }
+    drop(stmt);
     tx.commit().map_err(crate::error::map_db_error)?;
 
     Ok(())
@@ -291,5 +293,44 @@ mod tests {
             format_proxy_url("SOCKS5", "proxy.org", 1080, Some("user"), Some("pass")),
             "socks5://user:pass@proxy.org:1080"
         );
+    }
+
+    #[test]
+    fn test_reorder_proxy_sources() -> Result<()> {
+        let mut conn = Connection::open_in_memory().map_err(crate::error::map_db_error)?;
+        crate::migrations::run(&mut conn).map_err(crate::error::map_db_error)?;
+
+        conn.execute(
+            "INSERT INTO proxy_sources (id, name, url, priority) VALUES ('src1', 'Source 1', 'http://a.com', 0)",
+            [],
+        ).map_err(crate::error::map_db_error)?;
+
+        conn.execute(
+            "INSERT INTO proxy_sources (id, name, url, priority) VALUES ('src2', 'Source 2', 'http://b.com', 0)",
+            [],
+        ).map_err(crate::error::map_db_error)?;
+
+        let ids = vec!["src1".to_string(), "src2".to_string()];
+        reorder_proxy_sources(&conn, &ids)?;
+
+        let p1: i32 = conn
+            .query_row(
+                "SELECT priority FROM proxy_sources WHERE id = 'src1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(crate::error::map_db_error)?;
+        let p2: i32 = conn
+            .query_row(
+                "SELECT priority FROM proxy_sources WHERE id = 'src2'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(crate::error::map_db_error)?;
+
+        assert_eq!(p1, 20);
+        assert_eq!(p2, 10);
+
+        Ok(())
     }
 }
