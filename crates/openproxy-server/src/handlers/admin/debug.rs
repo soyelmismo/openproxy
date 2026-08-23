@@ -375,8 +375,32 @@ pub async fn set_recording(
 
 pub(crate) fn json_text(value: &serde_json::Value) -> Result<String, ApiError> {
     serde_json::to_string(value).map_err(|e| {
-        ApiError(CoreError::Internal(format!(
-            "serialize websocket message: {e}"
-        )))
+        tracing::error!(error = %e, "serialize websocket message failed");
+        ApiError(CoreError::Internal(
+            "failed to serialize websocket message".into(),
+        ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_text_success() {
+        let val = serde_json::json!({ "hello": "world" });
+        let res = json_text(&val);
+        assert_eq!(res.unwrap(), r#"{"hello":"world"}"#);
+    }
+
+    #[test]
+    fn test_json_text_error_redaction() {
+        // Verify that ApiError for internal json_text failure uses generic message
+        let err = ApiError(CoreError::Internal(
+            "failed to serialize websocket message".into(),
+        ));
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("failed to serialize websocket message"));
+        assert!(!err_msg.contains("serialize websocket message:"));
+    }
 }
