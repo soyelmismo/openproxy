@@ -2017,7 +2017,7 @@ mod tests {
             std::hint::black_box(res);
         }
         let elapsed = start.elapsed();
-        println!("Elapsed for 10000 iterations: {:?}", elapsed);
+        println!("Elapsed for 10000 iterations: {elapsed:?}");
     }
 
     #[test]
