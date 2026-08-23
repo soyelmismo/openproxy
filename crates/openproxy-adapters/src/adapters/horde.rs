@@ -1343,23 +1343,41 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
 
 /// Clean up stray punctuation, multiple spaces, and dangling commas left after extracting directives.
 pub fn clean_residual_prompt(s: &str) -> String {
-    let mut result = s.trim().to_string();
-    while result.contains("  ") {
-        result = result.replace("  ", " ");
+    let mut result = String::with_capacity(s.len());
+    let mut in_sep = false;
+    let mut has_comma = false;
+    let mut has_trailing_space = false;
+
+    for c in s.chars() {
+        if c == ',' || c.is_whitespace() {
+            in_sep = true;
+            if c == ',' {
+                has_comma = true;
+                has_trailing_space = false;
+            } else {
+                has_trailing_space = true;
+            }
+        } else {
+            if in_sep {
+                if !result.is_empty() {
+                    if has_comma {
+                        result.push(',');
+                        if has_trailing_space {
+                            result.push(' ');
+                        }
+                    } else {
+                        result.push(' ');
+                    }
+                }
+                in_sep = false;
+                has_comma = false;
+                has_trailing_space = false;
+            }
+            result.push(c);
+        }
     }
-    while result.contains(" ,") {
-        result = result.replace(" ,", ",");
-    }
-    while result.contains(",,") {
-        result = result.replace(",,", ",");
-    }
-    while result.contains(", ,") {
-        result = result.replace(", ,", ",");
-    }
+
     result
-        .trim_matches(|c: char| c == ',' || c.is_whitespace())
-        .trim()
-        .to_string()
 }
 
 pub fn parse_horde_quota(
@@ -1987,6 +2005,19 @@ mod tests {
             "A mountain, highly detailed"
         );
         assert_eq!(clean_residual_prompt(", leading comma, "), "leading comma");
+    }
+
+    #[test]
+    fn bench_clean_residual_prompt_baseline() {
+        let sample =
+            "  A  cat , , on a tree , , highly detailed, , , masterpiece , , high resolution, , ";
+        let start = std::time::Instant::now();
+        for _ in 0..10_000 {
+            let res = clean_residual_prompt(sample);
+            std::hint::black_box(res);
+        }
+        let elapsed = start.elapsed();
+        println!("Elapsed for 10000 iterations: {:?}", elapsed);
     }
 
     #[test]
