@@ -305,8 +305,10 @@ fn clean_unions_and_hints(map: &mut serde_json::Map<String, Value>, depth: usize
                         .as_array_mut()
                         && let Value::Array(source_req) = v
                     {
+                        let mut seen: std::collections::HashSet<Value> =
+                            target_req.iter().cloned().collect();
                         for rv in source_req {
-                            if !target_req.contains(&rv) {
+                            if seen.insert(rv.clone()) {
                                 target_req.push(rv);
                             }
                         }
