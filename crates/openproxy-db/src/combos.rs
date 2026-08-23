@@ -164,6 +164,117 @@ pub struct AddTargetInput {
     pub priority_order: i32,
 }
 
+fn validate_flat_target(
+    conn: &Connection,
+    model_row_id: ModelRowId,
+    provider_id: &ProviderId,
+) -> Result<()> {
+    let model_exists = crate::db_exists!(
+        conn,
+        "models",
+        WHERE id = model_row_id.0,
+        format!("check model {} exists", model_row_id.0)
+    )?;
+    if !model_exists {
+        return Err(CoreError::Validation(format!(
+            "model_row_id does not exist: {}",
+            model_row_id.0
+        )));
+    }
+
+    let model_provider: String = conn
+        .query_row(
+            model_provider_id_select!("WHERE id = ?1"),
+            params![model_row_id.0],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!("read model {} provider_id", model_row_id.0))(e)
+        })?;
+
+    if model_provider != provider_id.as_str() {
+        return Err(CoreError::Validation(format!(
+            "model {} belongs to provider '{}', not '{}'",
+            model_row_id.0, model_provider, provider_id
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_sub_combo_target(conn: &Connection, combo_id: ComboId, sub_id: ComboId) -> Result<()> {
+    if sub_id == combo_id {
+        return Err(CoreError::Validation("combo cannot contain itself".into()));
+    }
+    let sub_exists = crate::db_exists!(
+        conn,
+        "combos",
+        WHERE id = sub_id.0,
+        format!("check sub-combo {} exists", sub_id.0)
+    )?;
+    if !sub_exists {
+        return Err(CoreError::Validation(format!(
+            "sub_combo_id does not exist: {}",
+            sub_id.0
+        )));
+    }
+    if combo_in_chain(conn, combo_id, sub_id, MAX_SUB_COMBO_DEPTH)? {
+        return Err(CoreError::Validation(format!(
+            "adding sub-combo {} to combo {} would create a cycle",
+            sub_id.0, combo_id.0
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_account(
+    conn: &Connection,
+    account_id: Option<AccountId>,
+    model_row_id: Option<ModelRowId>,
+) -> Result<()> {
+    if let Some(aid) = account_id {
+        if model_row_id.is_none() {
+            return Err(CoreError::Validation(
+                "account_id is only valid on flat (model) targets".into(),
+            ));
+        }
+        let account_exists = crate::db_exists!(
+            conn,
+            "accounts",
+            WHERE id = aid.0,
+            format!("check account {} exists", aid.0)
+        )?;
+        if !account_exists {
+            return Err(CoreError::AccountNotFound(aid.0));
+        }
+    }
+
+    Ok(())
+}
+
+fn fetch_upstream_model_id(
+    conn: &Connection,
+    model_row_id: Option<ModelRowId>,
+) -> Result<Option<String>> {
+    if let Some(mrid) = model_row_id {
+        let upstream_id: String = conn
+            .query_row(
+                model_upstream_id_select!("WHERE id = ?1"),
+                params![mrid.0],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|e| {
+                crate::error::map_db_error_ctx(format!("read model {} upstream model_id", mrid.0))(
+                    e,
+                )
+            })?;
+        Ok(Some(upstream_id))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTargetId> {
     let AddTargetInput {
         combo_id,
@@ -197,119 +308,25 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     // Flat-target validations: model row exists and is owned by
     // the requested provider.
     if let Some(model_row_id) = model_row_id {
-        let model_exists = crate::db_exists!(
-            conn,
-            "models",
-            WHERE id = model_row_id.0,
-            format!("check model {} exists", model_row_id.0)
-        )?;
-        if !model_exists {
-            return Err(CoreError::Validation(format!(
-                "model_row_id does not exist: {}",
-                model_row_id.0
-            )));
-        }
-
-        // The model row must actually belong to the requested
-        // provider. A model that's owned by `p1` cannot be added to
-        // a target whose `provider_id` is `p2` — the routing layer
-        // would otherwise try to dispatch a chat call to `p2` while
-        // asking it for `p1`'s model, which is meaningless. Defense
-        // in depth on top of the FK on `combo_targets.provider_id`.
-        let model_provider: String = conn
-            .query_row(
-                model_provider_id_select!("WHERE id = ?1"),
-                params![model_row_id.0],
-                |r| r.get::<_, String>(0),
-            )
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "read model {} provider_id",
-                model_row_id.0
-            )))?;
-        if model_provider != provider_id.as_str() {
-            return Err(CoreError::Validation(format!(
-                "model {} belongs to provider '{}', not '{}'",
-                model_row_id.0, model_provider, provider_id
-            )));
-        }
+        validate_flat_target(conn, model_row_id, &provider_id)?;
     }
 
     // Sub-combo validations: target combo is not the parent (no
     // self-loop), the sub-combo exists, and adding it does not
     // introduce a cycle in the sub-combo graph.
     if let Some(sub_id) = sub_combo_id {
-        if sub_id == combo_id {
-            return Err(CoreError::Validation("combo cannot contain itself".into()));
-        }
-        let sub_exists = crate::db_exists!(
-            conn,
-            "combos",
-            WHERE id = sub_id.0,
-            format!("check sub-combo {} exists", sub_id.0)
-        )?;
-        if !sub_exists {
-            return Err(CoreError::Validation(format!(
-                "sub_combo_id does not exist: {}",
-                sub_id.0
-            )));
-        }
-        // Cycle detection: walking down from `sub_id` (the new
-        // sub-combo), is `combo_id` (the parent) already reachable?
-        // If yes, the new edge would close a cycle. The probe
-        // descends the sub-combo graph starting at `sub_id` and
-        // uses the same `MAX_SUB_COMBO_DEPTH` cap as the runtime
-        // resolver.
-        if combo_in_chain(conn, combo_id, sub_id, MAX_SUB_COMBO_DEPTH)? {
-            return Err(CoreError::Validation(format!(
-                "adding sub-combo {} to combo {} would create a cycle",
-                sub_id.0, combo_id.0
-            )));
-        }
+        validate_sub_combo_target(conn, combo_id, sub_id)?;
     }
 
     // If account_id is provided, validate the account exists. (Only
     // meaningful for flat targets — sub-combo targets never carry a
     // pinned account; they expand at runtime by flattening the
     // sub-combo's children.)
-    if let Some(aid) = account_id {
-        if model_row_id.is_none() {
-            return Err(CoreError::Validation(
-                "account_id is only valid on flat (model) targets".into(),
-            ));
-        }
-        let account_exists = crate::db_exists!(
-            conn,
-            "accounts",
-            WHERE id = aid.0,
-            format!("check account {} exists", aid.0)
-        )?;
-        if !account_exists {
-            return Err(CoreError::AccountNotFound(aid.0));
-        }
-    }
+    validate_account(conn, account_id, model_row_id)?;
 
     // Look up the upstream `model_id` from the `models` table so we
     // can stamp it onto `combo_targets.upstream_model_id` (Gate F1).
-    // Sub-combo targets have no associated `models` row and get
-    // `NULL` (they reference a combo, not a model). This is the
-    // bookkeeping the reconnect path in [`models::upsert_many`]
-    // uses to re-bind an orphan target when its upstream model
-    // reappears after a transient absence (Gate B → Gate D cascade).
-    let upstream_model_id: Option<String> = if let Some(mrid) = model_row_id {
-        Some(
-            conn.query_row(
-                model_upstream_id_select!("WHERE id = ?1"),
-                params![mrid.0],
-                |r| r.get::<_, String>(0),
-            )
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "read model {} upstream model_id",
-                mrid.0
-            )))?,
-        )
-    } else {
-        None
-    };
+    let upstream_model_id = fetch_upstream_model_id(conn, model_row_id)?;
 
     // Programmatic duplicate check to prevent duplicate targets (since SQLite's UNIQUE
     // constraint does not prevent duplicates when account_id is NULL).
