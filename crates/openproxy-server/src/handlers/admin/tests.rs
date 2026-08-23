@@ -229,6 +229,33 @@ async fn put_runtime_timeouts_malformed_body_returns_400() {
 // set-var → authenticate → restore-var sequence is atomic.
 static AUTH_BYPASS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Safe RAII guard for temporarily setting an environment variable in test context.
+/// Ensures environment variable changes are cleaned up on drop (even during panics)
+/// and forces callers to hold `AUTH_BYPASS_TEST_LOCK` to avoid concurrent mutations.
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(_lock: &std::sync::MutexGuard<'_, ()>, key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: caller holds `AUTH_BYPASS_TEST_LOCK`, serializing env var mutations.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            // SAFETY: caller holds `AUTH_BYPASS_TEST_LOCK` while guard is in scope.
+            Some(v) => unsafe { std::env::set_var(self.key, v) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
 #[tokio::test]
 async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
     // When OPENPROXY_DASHBOARD_AUTH_BYPASS=*** is set AND no API key
@@ -244,19 +271,11 @@ async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
         w.execute("DELETE FROM api_keys", []).expect("delete keys");
     }
     let headers = HeaderMap::new();
-    // SAFETY: the AUTH_BYPASS_TEST_LOCK mutex serializes all tests
-    // that touch this env var, so the set-var → read → restore-var
-    // sequence is atomic with respect to other tests in this module.
-    let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
-    let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
-    unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", "1") };
+    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+    let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         authenticate_admin_ws(&state, &headers, None)
     }));
-    match prev {
-        Some(v) => unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", v) },
-        None => unsafe { std::env::remove_var("OPENPROXY_DASHBOARD_AUTH_BYPASS") },
-    }
     let result = result.expect("authenticate_admin_ws should not panic");
     assert!(
         result.is_ok(),
@@ -281,17 +300,11 @@ async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
     }
     for sentinel in ["false", "yes", "0", "true", "TRUE", "legacy-token", " "] {
         let headers = HeaderMap::new();
-        // SAFETY: serialized by AUTH_BYPASS_TEST_LOCK.
-        let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
-        let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
-        unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel) };
+        let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+        let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             authenticate_admin_ws(&state, &headers, None)
         }));
-        match prev {
-            Some(v) => unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", v) },
-            None => unsafe { std::env::remove_var("OPENPROXY_DASHBOARD_AUTH_BYPASS") },
-        }
         let result = result.expect("authenticate_admin_ws should not panic");
         assert!(
             result.is_err(),
