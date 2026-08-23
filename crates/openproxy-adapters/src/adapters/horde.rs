@@ -13,6 +13,7 @@ use super::{
 use bytes::Bytes;
 use openproxy_types::ImageGenerationRequest;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HordeAdapter {
@@ -464,15 +465,17 @@ impl HordeAdapter {
         let parsed = parse_prompt_directives(&req.prompt);
 
         let mut all_negatives = Vec::new();
+        let mut seen_negatives = HashSet::new();
         if let Some(ref neg) = req.negative_prompt {
             let clean_neg = clean_residual_prompt(neg);
             if !clean_neg.is_empty() {
+                seen_negatives.insert(clean_neg.clone());
                 all_negatives.push(clean_neg);
             }
         }
         for n in &parsed.negative_prompts {
             let clean_n = clean_residual_prompt(n);
-            if !clean_n.is_empty() && !all_negatives.contains(&clean_n) {
+            if !clean_n.is_empty() && seen_negatives.insert(clean_n.clone()) {
                 all_negatives.push(clean_n);
             }
         }
@@ -2054,5 +2057,34 @@ mod tests {
 
         assert_eq!(v["slow_workers"], false);
         assert_eq!(v["trusted_workers"], true);
+    }
+
+    #[test]
+    fn test_build_horde_payload_negative_prompt_deduplication() {
+        let adapter = HordeAdapter::new();
+        let req = ImageGenerationRequest {
+            prompt:
+                "A beautiful landscape --no blurry --no dark --no blurry --no low_quality --no dark"
+                    .into(),
+            model: "SDXL 1.0".into(),
+            n: None,
+            quality: None,
+            response_format: None,
+            size: None,
+            style: None,
+            user: None,
+            aspect_ratio: None,
+            seed: None,
+            negative_prompt: Some("blurry".into()),
+            post_processing: None,
+        };
+
+        let body = adapter.format_image_request(&req, "SDXL 1.0").unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            v["prompt"],
+            "A beautiful landscape ### blurry, dark, low_quality"
+        );
     }
 }
