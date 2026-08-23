@@ -809,6 +809,51 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn test_parse_models_response_valid() {
+        let body = json!({
+            "models": {
+                "gemini-1.5-pro": {
+                    "displayName": "Gemini 1.5 Pro",
+                    "maxTokens": 1000000,
+                    "maxOutputTokens": 8192,
+                    "supportsThinking": true,
+                    "supportsImages": true,
+                    "supportsCodeGeneration": true
+                },
+                "gemini-1.5-flash": {
+                    "displayName": "Gemini 1.5 Flash",
+                    "contextLength": 200000,
+                    "supportsThinking": false
+                }
+            }
+        });
+
+        let models = AntigravityAdapter::parse_models_response(&body).expect("should parse");
+        assert_eq!(models.len(), 2);
+
+        let pro_model = models.iter().find(|m| m.model_id.as_str() == "gemini-1.5-pro").unwrap();
+        assert_eq!(pro_model.display_name.as_deref(), Some("Gemini 1.5 Pro"));
+        assert_eq!(pro_model.context_length, Some(1000000));
+        assert_eq!(pro_model.max_output_tokens, Some(8192));
+        let caps = pro_model.capabilities.as_ref().unwrap();
+        assert_eq!(caps.thinking, Some(true));
+        assert_eq!(caps.vision, Some(true));
+
+        let flash_model = models.iter().find(|m| m.model_id.as_str() == "gemini-1.5-flash").unwrap();
+        assert_eq!(flash_model.display_name.as_deref(), Some("Gemini 1.5 Flash"));
+        assert_eq!(flash_model.context_length, Some(200000));
+        assert_eq!(flash_model.max_output_tokens, Some(8192)); // Uses fallback 8192
+        let flash_caps = flash_model.capabilities.as_ref().unwrap();
+        assert_eq!(flash_caps.thinking, Some(false));
+    }
+
+    #[test]
+    fn test_parse_models_response_invalid() {
+        let body = json!({});
+        assert!(AntigravityAdapter::parse_models_response(&body).is_none());
+    }
+
+    #[test]
     fn test_parse_antigravity_models_response_missing_models() {
         let body = json!({});
         let result = parse_antigravity_models_response(&body);
