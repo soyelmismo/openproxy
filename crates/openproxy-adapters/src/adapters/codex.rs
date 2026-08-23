@@ -150,12 +150,12 @@ impl ProviderAdapter for CodexAdapter {
         None
     }
 
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
-        Ok(Self::hardcoded_models())
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        std::future::ready(Ok(Self::hardcoded_models()))
     }
 
     async fn fetch_quota(

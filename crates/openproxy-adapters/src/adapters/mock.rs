@@ -67,23 +67,24 @@ impl ProviderAdapter for MockAdapter {
     fn models_url(&self) -> Option<String> {
         None
     }
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
         _api_key: &str,
-    ) -> openproxy_types::Result<Vec<DiscoveredModel>> {
+    ) -> impl std::future::Future<Output = openproxy_types::Result<Vec<DiscoveredModel>>> + Send
+    {
         if self.fail_fetch {
-            return Err(openproxy_types::error::CoreError::Internal(
+            return std::future::ready(Err(openproxy_types::error::CoreError::Internal(
                 "simulated upstream 500".into(),
-            ));
+            )));
         }
         if let Some(counter) = &self.call_count {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        if let Some(models) = &self.models_to_return {
+        std::future::ready(if let Some(models) = &self.models_to_return {
             Ok(models.clone())
         } else {
             Ok(Vec::new())
-        }
+        })
     }
 }

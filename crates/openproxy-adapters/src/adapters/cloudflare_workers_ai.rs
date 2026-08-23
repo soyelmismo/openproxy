@@ -101,14 +101,14 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         ))
     }
 
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
-        Err(CoreError::Internal(
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        std::future::ready(Err(CoreError::Internal(
             "cloudflare-workers-ai: use fetch_models_for_account".into(),
-        ))
+        )))
     }
 
     async fn fetch_models_for_account(

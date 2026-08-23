@@ -126,11 +126,11 @@ impl ProviderAdapter for AtomesusAdapter {
             .map_err(|e| CoreError::Internal(format!("failed to serialize atomesus body: {e}")))
     }
 
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
         let base = |id: &str, name: &str, ctx: i64, out: i64| DiscoveredModel {
             model_id: ModelId::new(id),
             display_name: Some(name.into()),
@@ -144,7 +144,7 @@ impl ProviderAdapter for AtomesusAdapter {
             capabilities: None,
         };
 
-        Ok(vec![
+        std::future::ready(Ok(vec![
             // Atomesus 1.5
             base("atomesus-1-5-fast", "Atomesus 1.5 Fast", 128_000, 8_192),
             base(
@@ -164,7 +164,7 @@ impl ProviderAdapter for AtomesusAdapter {
             // Cipher (paid)
             base("cipher-fast", "Cipher Fast", 128_000, 8_192),
             base("cipher-thinking", "Cipher Thinking", 128_000, 16_384),
-        ])
+        ]))
     }
 }
 

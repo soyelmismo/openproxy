@@ -278,11 +278,11 @@ impl ProviderAdapter for FxAdapter {
         })
     }
 
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
         let make_model = |id: &'static str, name: &'static str, ctx: i64| DiscoveredModel {
             model_id: ModelId::new(id),
             display_name: Some(name.into()),
@@ -296,7 +296,7 @@ impl ProviderAdapter for FxAdapter {
             capabilities: None,
         };
 
-        Ok(vec![
+        std::future::ready(Ok(vec![
             make_model("zai/glm-5.2", "GLM 5.2 (Free)", 1_000_000),
             make_model("zai/glm-5.2-fast", "GLM 5.2 Fast (Free)", 1_000_000),
             make_model("zai/glm-5.3", "GLM 5.3", 1_000_000),
@@ -304,7 +304,7 @@ impl ProviderAdapter for FxAdapter {
             make_model("zai/glm-5.1", "GLM 5.1", 202_800),
             make_model("zai/glm-5v-turbo", "GLM 5V Turbo (Vision)", 200_000),
             make_model("zai/glm-4.7-flashx", "GLM 4.7 FlashX", 200_000),
-        ])
+        ]))
     }
 }
 

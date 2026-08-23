@@ -332,7 +332,7 @@ pub trait ProviderAdapter: Send + Sync {
         _: Option<&str>,
     ) -> impl std::future::Future<Output = Option<Result<openproxy_types::AccountQuota>>> + Send
     {
-        async { None }
+        std::future::ready(None)
     }
 
     /// Normalize an OpenAI request view before serialization.

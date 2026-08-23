@@ -141,16 +141,6 @@ impl ProviderAdapter for ClineAdapter {
         Ok(discovered)
     }
 
-    async fn fetch_quota(
-        &self,
-        _upstream_client: &Arc<UpstreamClient>,
-        _api_key: &str,
-        _access_token: Option<&str>,
-        _provider_specific: Option<&str>,
-    ) -> Option<Result<openproxy_types::AccountQuota>> {
-        None
-    }
-
     fn wrap_request_body(
         &self,
         body: bytes::Bytes,
