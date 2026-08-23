@@ -252,14 +252,13 @@ pub fn list_proxies(
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-    let mut list = Vec::new();
-    for r in rows {
-        list.push(r.map_err(|e| crate::error::CoreError::Database {
+    rows.map(|r| {
+        r.map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
-        })?);
-    }
-    Ok(list)
+        })
+    })
+    .collect::<std::result::Result<Vec<_>, crate::error::CoreError>>()
 }
 
 pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<FreeProxy>> {
@@ -1150,8 +1149,7 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-    let mut list = Vec::new();
-    for row_res in rows {
+    rows.map(|row_res| {
         let mut r = row_res.map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
@@ -1172,9 +1170,9 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
             }
         }
 
-        list.push(r);
-    }
-    Ok(list)
+        Ok(r)
+    })
+    .collect::<std::result::Result<Vec<_>, crate::error::CoreError>>()
 }
 
 pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Option<ProxySource>> {
@@ -1621,11 +1619,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                     return;
                 }
             };
-            let mut list = Vec::new();
-            for item in rows.flatten() {
-                list.push(item);
-            }
-            list
+            rows.flatten().collect::<Vec<_>>()
         };
 
         if proxies.is_empty() {
