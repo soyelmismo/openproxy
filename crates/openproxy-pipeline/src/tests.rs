@@ -4075,8 +4075,8 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     // gives the hyper-util Pooled -> Idle -> drop chain
     // enough time to close the TCP connection on the wire.
     // We surface the observed value in the test logs so a
-    // regression in the cancellation path is visible even
-    // if the connection eventually reuses elsewhere.
+    // regression in the cancellation path is visible even if
+    // the connection eventually reuses elsewhere.
     let close_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !client_closed.load(Ordering::SeqCst) && std::time::Instant::now() < close_deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
