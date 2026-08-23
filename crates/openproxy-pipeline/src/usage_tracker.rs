@@ -413,13 +413,8 @@ impl<'a> UsageRecordBuilder<'a> {
                 let completion_text = self
                     .response_body_json
                     .as_ref()
-                    .and_then(|v| {
-                        v.get("choices")
-                            .and_then(|c| c.get(0))
-                            .and_then(|c| c.get("message"))
-                            .and_then(|m| m.get("content"))
-                            .and_then(|c| c.as_str())
-                    })
+                    .and_then(|v| v.pointer("/choices/0/message/content"))
+                    .and_then(|c| c.as_str())
                     .unwrap_or("");
                 if completion_text.is_empty() {
                     (None, false)
