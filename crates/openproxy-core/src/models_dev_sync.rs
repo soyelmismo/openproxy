@@ -772,11 +772,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(openproxy_db::error::map_db_error)?;
-        let mut ids = Vec::new();
-        for row in rows {
-            ids.push(row.map_err(openproxy_db::error::map_db_error)?);
-        }
-        ids
+        rows.map(|row| row.map_err(openproxy_db::error::map_db_error))
+            .collect::<std::result::Result<Vec<_>, crate::error::CoreError>>()?
     };
 
     // Pre-group all active targets by model_id_normalized for the target normalized_ids to avoid N queries inside the loop.
