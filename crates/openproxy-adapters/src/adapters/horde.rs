@@ -493,19 +493,23 @@ impl HordeAdapter {
         };
 
         let mut post_processing_list = Vec::new();
+        let mut seen_post_processing = std::collections::HashSet::new();
         if req.quality.as_deref() == Some("hd") {
-            post_processing_list.push("RealESRGAN_x4plus".to_string());
-            post_processing_list.push("GFPGAN".to_string());
+            for item in ["RealESRGAN_x4plus", "GFPGAN"] {
+                if seen_post_processing.insert(item.to_string()) {
+                    post_processing_list.push(item.to_string());
+                }
+            }
         }
         if let Some(req_pp) = &req.post_processing {
             for pp in req_pp {
-                if !post_processing_list.contains(pp) {
+                if seen_post_processing.insert(pp.clone()) {
                     post_processing_list.push(pp.clone());
                 }
             }
         }
         for pp in parsed.post_processing {
-            if !post_processing_list.contains(&pp) {
+            if seen_post_processing.insert(pp.clone()) {
                 post_processing_list.push(pp);
             }
         }
