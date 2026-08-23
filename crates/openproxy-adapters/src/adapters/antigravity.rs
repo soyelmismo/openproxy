@@ -831,7 +831,10 @@ mod tests {
         let models = AntigravityAdapter::parse_models_response(&body).expect("should parse");
         assert_eq!(models.len(), 2);
 
-        let pro_model = models.iter().find(|m| m.model_id.as_str() == "gemini-1.5-pro").unwrap();
+        let pro_model = models
+            .iter()
+            .find(|m| m.model_id.as_str() == "gemini-1.5-pro")
+            .unwrap();
         assert_eq!(pro_model.display_name.as_deref(), Some("Gemini 1.5 Pro"));
         assert_eq!(pro_model.context_length, Some(1000000));
         assert_eq!(pro_model.max_output_tokens, Some(8192));
@@ -839,8 +842,14 @@ mod tests {
         assert_eq!(caps.thinking, Some(true));
         assert_eq!(caps.vision, Some(true));
 
-        let flash_model = models.iter().find(|m| m.model_id.as_str() == "gemini-1.5-flash").unwrap();
-        assert_eq!(flash_model.display_name.as_deref(), Some("Gemini 1.5 Flash"));
+        let flash_model = models
+            .iter()
+            .find(|m| m.model_id.as_str() == "gemini-1.5-flash")
+            .unwrap();
+        assert_eq!(
+            flash_model.display_name.as_deref(),
+            Some("Gemini 1.5 Flash")
+        );
         assert_eq!(flash_model.context_length, Some(200000));
         assert_eq!(flash_model.max_output_tokens, Some(8192)); // Uses fallback 8192
         let flash_caps = flash_model.capabilities.as_ref().unwrap();
