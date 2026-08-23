@@ -385,6 +385,7 @@ pub(crate) fn json_text(value: &serde_json::Value) -> Result<String, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openproxy_db::maintenance::DbTable;
 
     #[test]
     fn test_json_text_success() {
@@ -402,5 +403,26 @@ mod tests {
         let err_msg = err.to_string();
         assert!(err_msg.contains("failed to serialize websocket message"));
         assert!(!err_msg.contains("serialize websocket message:"));
+    }
+
+    #[test]
+    fn test_db_table_strict_parsing_prevents_sql_injection() {
+        let malicious_inputs = [
+            "providers\"; DROP TABLE providers; --",
+            "users",
+            "SELECT * FROM sqlite_master",
+            "providers' OR '1'='1",
+            "api_keys --",
+        ];
+
+        for input in malicious_inputs {
+            assert!(
+                DbTable::parse(input).is_none(),
+                "Unmodeled/malicious table name '{input}' must be rejected by DbTable::parse"
+            );
+        }
+
+        assert_eq!(DbTable::parse("providers"), Some(DbTable::Providers));
+        assert_eq!(DbTable::parse("api_keys"), Some(DbTable::ApiKeys));
     }
 }
