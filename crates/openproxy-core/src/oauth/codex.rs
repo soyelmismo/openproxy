@@ -69,25 +69,25 @@ impl Default for CodexOAuthProvider {
 impl OAuthProvider for CodexOAuthProvider {
     crate::delegate_oauth_to_generic!(name, flow);
 
-    async fn build_auth_url(
+    fn build_auth_url(
         &self,
         _redirect_uri: &str,
-    ) -> Result<(String, String, String, String)> {
-        Err(CoreError::Validation(
+    ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
+        std::future::ready(Err(CoreError::Validation(
             "codex uses device code flow, not PKCE".into(),
-        ))
+        )))
     }
 
-    async fn exchange_code(
+    fn exchange_code(
         &self,
         _code: &str,
         _code_verifier: &str,
         _upstream_client: &Arc<UpstreamClient>,
         _redirect_uri: &str,
-    ) -> Result<TokenResponse> {
-        Err(CoreError::Validation(
+    ) -> impl std::future::Future<Output = Result<TokenResponse>> + Send {
+        std::future::ready(Err(CoreError::Validation(
             "codex uses device code flow, not authorization code".into(),
-        ))
+        )))
     }
 
     async fn request_device_code(

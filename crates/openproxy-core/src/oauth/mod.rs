@@ -183,16 +183,12 @@ pub trait OAuthProvider: Send + Sync {
     /// Returns `Err` if the provider uses Device Code flow.
     fn build_auth_url(
         &self,
-        redirect_uri: &str,
+        _redirect_uri: &str,
     ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
-        let redirect_uri_clone = redirect_uri.to_string();
-        async move {
-            let _ = redirect_uri_clone;
-            Err(CoreError::Validation(format!(
-                "provider '{}' does not support authorization URL",
-                self.name()
-            )))
-        }
+        std::future::ready(Err(CoreError::Validation(format!(
+            "provider '{}' does not support authorization URL",
+            self.name()
+        ))))
     }
 
     /// Exchange an authorization code for tokens (PKCE flow).

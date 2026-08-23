@@ -33,7 +33,10 @@ impl OAuthProvider for ClineOAuthProvider {
         OAuthFlow::AuthorizationCode
     }
 
-    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
+    fn build_auth_url(
+        &self,
+        redirect_uri: &str,
+    ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
         let authorize_url = "https://api.cline.bot/api/v1/auth/authorize";
 
         let state = uuid::Uuid::new_v4().to_string();
@@ -50,7 +53,7 @@ impl OAuthProvider for ClineOAuthProvider {
             crate::oauth::generic::urlencoded_string(&params)
         );
 
-        Ok((url, String::new(), String::new(), state))
+        std::future::ready(Ok((url, String::new(), String::new(), state)))
     }
 
     async fn exchange_code(
@@ -120,23 +123,23 @@ impl OAuthProvider for ClineOAuthProvider {
         })
     }
 
-    async fn request_device_code(
+    fn request_device_code(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
-    ) -> Result<DeviceAuthorizationResponse> {
-        Err(CoreError::Validation(
+    ) -> impl std::future::Future<Output = Result<DeviceAuthorizationResponse>> + Send {
+        std::future::ready(Err(CoreError::Validation(
             "cline uses auth code flow, not device code".into(),
-        ))
+        )))
     }
 
-    async fn poll_device_token(
+    fn poll_device_token(
         &self,
         _device_code: &str,
         _upstream_client: &Arc<UpstreamClient>,
-    ) -> Result<Option<TokenResponse>> {
-        Err(CoreError::Validation(
+    ) -> impl std::future::Future<Output = Result<Option<TokenResponse>>> + Send {
+        std::future::ready(Err(CoreError::Validation(
             "cline uses auth code flow, not device code".into(),
-        ))
+        )))
     }
 
     async fn refresh_token(

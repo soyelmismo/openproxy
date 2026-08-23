@@ -138,65 +138,72 @@ impl OAuthProvider for GenericOAuthProvider {
         self.spec.flow
     }
 
-    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
-        let authorize_url = self.spec.authorize_url.ok_or_else(|| {
-            CoreError::Validation(format!(
-                "provider '{}' does not support authorization URL",
-                self.spec.id
+    fn build_auth_url(
+        &self,
+        redirect_uri: &str,
+    ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
+        let res = (|| {
+            let authorize_url = self.spec.authorize_url.ok_or_else(|| {
+                CoreError::Validation(format!(
+                    "provider '{}' does not support authorization URL",
+                    self.spec.id
+                ))
+            })?;
+            if self.spec.flow != OAuthFlow::AuthorizationCodePkce
+                && self.spec.flow != OAuthFlow::AuthorizationCode
+            {
+                return Err(CoreError::Validation(format!(
+                    "provider '{}' does not support authorization code flow",
+                    self.spec.id
+                )));
+            }
+
+            let code_verifier = if self.spec.flow == OAuthFlow::AuthorizationCodePkce {
+                generate_code_verifier()
+            } else {
+                String::new()
+            };
+            let code_challenge = if code_verifier.is_empty() {
+                String::new()
+            } else {
+                code_challenge_s256(&code_verifier)
+            };
+            let client_id = self.spec.client_id()?;
+            let scopes = if self.spec.scopes.is_empty() {
+                String::new()
+            } else {
+                self.spec.scopes.join(" ")
+            };
+
+            let mut params = vec![
+                ("response_type", "code"),
+                ("client_id", client_id.as_str()),
+                ("redirect_uri", redirect_uri),
+            ];
+            if !self.spec.scopes.is_empty() {
+                params.push(("scope", scopes.as_str()));
+            }
+            if !code_challenge.is_empty() {
+                params.push(("code_challenge", code_challenge.as_str()));
+                params.push(("code_challenge_method", "S256"));
+            }
+            for (key, value) in self.spec.auth_extra_params {
+                params.push((*key, *value));
+            }
+
+            // Generate a random state value to prevent CSRF on the callback.
+            let state = Uuid::new_v4().to_string();
+            params.push(("state", state.as_str()));
+
+            Ok((
+                format!("{authorize_url}?{}", urlencoded_string(&params)),
+                code_verifier,
+                code_challenge,
+                state,
             ))
-        })?;
-        if self.spec.flow != OAuthFlow::AuthorizationCodePkce
-            && self.spec.flow != OAuthFlow::AuthorizationCode
-        {
-            return Err(CoreError::Validation(format!(
-                "provider '{}' does not support authorization code flow",
-                self.spec.id
-            )));
-        }
+        })();
 
-        let code_verifier = if self.spec.flow == OAuthFlow::AuthorizationCodePkce {
-            generate_code_verifier()
-        } else {
-            String::new()
-        };
-        let code_challenge = if code_verifier.is_empty() {
-            String::new()
-        } else {
-            code_challenge_s256(&code_verifier)
-        };
-        let client_id = self.spec.client_id()?;
-        let scopes = if self.spec.scopes.is_empty() {
-            String::new()
-        } else {
-            self.spec.scopes.join(" ")
-        };
-
-        let mut params = vec![
-            ("response_type", "code"),
-            ("client_id", client_id.as_str()),
-            ("redirect_uri", redirect_uri),
-        ];
-        if !self.spec.scopes.is_empty() {
-            params.push(("scope", scopes.as_str()));
-        }
-        if !code_challenge.is_empty() {
-            params.push(("code_challenge", code_challenge.as_str()));
-            params.push(("code_challenge_method", "S256"));
-        }
-        for (key, value) in self.spec.auth_extra_params {
-            params.push((*key, *value));
-        }
-
-        // Generate a random state value to prevent CSRF on the callback.
-        let state = Uuid::new_v4().to_string();
-        params.push(("state", state.as_str()));
-
-        Ok((
-            format!("{authorize_url}?{}", urlencoded_string(&params)),
-            code_verifier,
-            code_challenge,
-            state,
-        ))
+        std::future::ready(res)
     }
 
     async fn exchange_code(
@@ -342,56 +349,53 @@ macro_rules! delegate_oauth_to_generic {
         }
     };
     (build_auth_url) => {
-        async fn build_auth_url(
+        fn build_auth_url(
             &self,
             redirect_uri: &str,
-        ) -> $crate::error::Result<(String, String, String, String)> {
-            self.generic.build_auth_url(redirect_uri).await
+        ) -> impl std::future::Future<Output = $crate::error::Result<(String, String, String, String)>> + Send {
+            self.generic.build_auth_url(redirect_uri)
         }
     };
     (exchange_code) => {
-        async fn exchange_code(
+        fn exchange_code(
             &self,
             code: &str,
             code_verifier: &str,
             upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             redirect_uri: &str,
-        ) -> $crate::error::Result<$crate::oauth::TokenResponse> {
+        ) -> impl std::future::Future<Output = $crate::error::Result<$crate::oauth::TokenResponse>> + Send {
             self.generic
                 .exchange_code(code, code_verifier, upstream_client, redirect_uri)
-                .await
         }
     };
     (request_device_code) => {
-        async fn request_device_code(
+        fn request_device_code(
             &self,
             upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
-        ) -> $crate::error::Result<$crate::oauth::DeviceAuthorizationResponse> {
-            self.generic.request_device_code(upstream_client).await
+        ) -> impl std::future::Future<Output = $crate::error::Result<$crate::oauth::DeviceAuthorizationResponse>> + Send {
+            self.generic.request_device_code(upstream_client)
         }
     };
     (poll_device_token) => {
-        async fn poll_device_token(
+        fn poll_device_token(
             &self,
             device_code: &str,
             upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
-        ) -> $crate::error::Result<Option<$crate::oauth::TokenResponse>> {
+        ) -> impl std::future::Future<Output = $crate::error::Result<Option<$crate::oauth::TokenResponse>>> + Send {
             self.generic
                 .poll_device_token(device_code, upstream_client)
-                .await
         }
     };
     (refresh_token) => {
-        async fn refresh_token(
+        fn refresh_token(
             &self,
             refresh_token: &str,
             upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             account_id: $crate::ids::AccountId,
             db: $crate::oauth::DbRef<'_>,
-        ) -> $crate::error::Result<$crate::oauth::TokenResponse> {
+        ) -> impl std::future::Future<Output = $crate::error::Result<$crate::oauth::TokenResponse>> + Send {
             self.generic
                 .refresh_token(refresh_token, upstream_client, account_id, db)
-                .await
         }
     };
     ( $($method:ident),+ $(,)? ) => {
