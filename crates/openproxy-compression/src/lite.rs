@@ -329,6 +329,32 @@ fn strip_ansi_string(text: &str) -> String {
 
 // ─── Technique 8: Compact formatted multiline JSON ────────────────────────
 
+fn minify_json(json: &str) -> String {
+    let mut out = Vec::with_capacity(json.len());
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for &b in json.as_bytes() {
+        if in_string {
+            out.push(b);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+        } else if b == b'"' {
+            in_string = true;
+            out.push(b);
+        } else if !b.is_ascii_whitespace() {
+            out.push(b);
+        }
+    }
+
+    String::from_utf8(out).unwrap_or_else(|_| json.to_string())
+}
+
 pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
@@ -337,10 +363,11 @@ pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
             if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
                 || (trimmed.starts_with('[') && trimmed.ends_with(']')))
                 && (trimmed.contains('\n') || trimmed.contains("  "))
-                && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
             {
-                let minified = val.to_string();
-                if minified.len() < text.len() {
+                let minified = minify_json(trimmed);
+                if minified.len() < text.len()
+                    && serde_json::from_str::<&serde_json::value::RawValue>(&minified).is_ok()
+                {
                     return Some(minified);
                 }
             }
@@ -709,7 +736,7 @@ mod tests {
         let res = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         assert_eq!(
             res,
-            "{\"count\":42,\"name\":\"test\",\"nested\":{\"ok\":true}}"
+            "{\"name\":\"test\",\"count\":42,\"nested\":{\"ok\":true}}"
         );
     }
 
