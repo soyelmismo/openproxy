@@ -80,10 +80,12 @@ impl CompressionStats {
         if self.techniques.is_empty() {
             None
         } else {
-            let mut unique: Vec<&str> = Vec::new();
+            let mut seen = std::collections::HashSet::with_capacity(self.techniques.len());
+            let mut unique: Vec<&str> = Vec::with_capacity(self.techniques.len());
             for t in &self.techniques {
-                if !unique.contains(&t.as_str()) {
-                    unique.push(t.as_str());
+                let s = t.as_str();
+                if seen.insert(s) {
+                    unique.push(s);
                 }
             }
             Some(unique.join(","))
