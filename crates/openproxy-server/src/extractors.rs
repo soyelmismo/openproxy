@@ -27,10 +27,13 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    fn from_request_parts(
+        _parts: &mut Parts,
+        state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
         let app_state = AppState::from_ref(state);
         let r = app_state.db_pool().reader_guard();
-        Ok(DbReader(r))
+        std::future::ready(Ok(DbReader(r)))
     }
 }
 
@@ -58,10 +61,13 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    fn from_request_parts(
+        _parts: &mut Parts,
+        state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
         let app_state = AppState::from_ref(state);
         let w = app_state.db_pool().writer_guard();
-        Ok(DbWriter(w))
+        std::future::ready(Ok(DbWriter(w)))
     }
 }
 
@@ -75,9 +81,12 @@ where
 {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(ValidatedToken(
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        std::future::ready(Ok(ValidatedToken(
             parts.extensions.get::<ValidatedApiToken>().cloned(),
-        ))
+        )))
     }
 }
