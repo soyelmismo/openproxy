@@ -8,8 +8,8 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use zeroize::Zeroize;
 use rand::Rng;
+use zeroize::Zeroize;
 
 use openproxy_types::{CoreError, Result};
 
