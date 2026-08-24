@@ -31,6 +31,28 @@ impl TargetFormatter for OpenaiFormatter {
             messages_ref,
             stream,
         );
+        // "developer" role is only valid for native OpenAI; normalize to
+        // "system" so every OpenAI-compatible upstream accepts it.
+        if view
+            .messages
+            .iter()
+            .any(|m| m.role == "developer")
+        {
+            view.messages = std::borrow::Cow::Owned(
+                view.messages
+                    .iter()
+                    .map(|m| {
+                        if m.role == "developer" {
+                            let mut patched = m.clone();
+                            patched.role = "system".to_string();
+                            patched
+                        } else {
+                            m.clone()
+                        }
+                    })
+                    .collect(),
+            );
+        }
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
