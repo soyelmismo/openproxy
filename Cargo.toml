@@ -35,7 +35,7 @@ futures = "0.3"
 parking_lot = { version = "0.12", features = ["send_guard", "arc_lock"] }
 rand = "0.10"
 hex = "0.4"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 argon2 = "0.5"
 base64 = "0.23"
 tdigest = "1.0.0"

@@ -4,11 +4,12 @@
 //! Embedding the nonce in the blob keeps encrypt output atomic (no separate
 //! nonce column required at rest).
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, Nonce, OsRng};
-use aes_gcm::{Aes256Gcm, Key};
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use zeroize::Zeroize;
+use rand::Rng;
 
 use openproxy_types::{CoreError, Result};
 
@@ -65,8 +66,8 @@ impl MasterKey {
 
     /// Generate a fresh random key. For tests and bootstrapping.
     pub fn generate() -> Self {
-        let key = Aes256Gcm::generate_key(OsRng);
-        let bytes: [u8; KEY_LEN] = key.into();
+        let mut bytes = [0u8; KEY_LEN];
+        rand::rng().fill_bytes(&mut bytes);
         Self {
             current: bytes,
             previous: None,
@@ -77,8 +78,10 @@ impl MasterKey {
     ///
     /// Output layout: `nonce (12 bytes) || ciphertext_with_tag`.
     pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>> {
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.current));
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let cipher = Aes256Gcm::new_from_slice(&self.current).expect("key should be valid len");
+        let mut nonce_bytes = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("nonce len is always 12");
         let mut blob = nonce.to_vec();
         let ct = cipher
             .encrypt(&nonce, plaintext.as_bytes())
@@ -96,16 +99,16 @@ impl MasterKey {
             ));
         }
         let (nonce_bytes, ct) = blob.split_at(NONCE_LEN);
-        let nonce = Nonce::<Aes256Gcm>::from_slice(nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes).expect("slice len is 12");
 
         // Try current key first.
-        if let Some(res) = try_decrypt(&self.current, nonce, ct) {
+        if let Some(res) = try_decrypt(&self.current, &nonce, ct) {
             return res;
         }
 
         // Fall back to previous key (rotation).
         if let Some(prev) = &self.previous
-            && let Some(res) = try_decrypt(prev, nonce, ct)
+            && let Some(res) = try_decrypt(prev, &nonce, ct)
         {
             tracing::debug!("decrypted with previous master key (rotation fallback)");
             return res;
@@ -119,10 +122,10 @@ impl MasterKey {
 
 fn try_decrypt(
     raw_key: &[u8; KEY_LEN],
-    nonce: &Nonce<Aes256Gcm>,
+    nonce: &Nonce<aes_gcm::aead::consts::U12>,
     ct: &[u8],
 ) -> Option<Result<String>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(raw_key));
+    let cipher = Aes256Gcm::new_from_slice(raw_key).expect("key should be valid len");
     let pt = cipher.decrypt(nonce, ct).ok()?;
     Some(
         String::from_utf8(pt)
