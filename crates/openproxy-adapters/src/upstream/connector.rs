@@ -1070,9 +1070,7 @@ mod tests {
     #[test]
     fn test_is_private_or_reserved() {
         // IPv4 private/reserved
-        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
-            127, 0, 0, 1
-        )))); // loopback
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::LOCALHOST))); // loopback
         assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
             10, 0, 0, 1
         )))); // private
@@ -1082,9 +1080,7 @@ mod tests {
         assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
             169, 254, 0, 1
         )))); // link-local
-        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
-            0, 0, 0, 0
-        )))); // zero
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::UNSPECIFIED))); // zero
 
         // IPv4 public
         assert!(!is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
@@ -1092,9 +1088,7 @@ mod tests {
         ))));
 
         // IPv6 private/reserved
-        assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
-            0, 0, 0, 0, 0, 0, 0, 1
-        )))); // loopback
+        assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::LOCALHOST))); // loopback
 
         // IPv6 public
         assert!(!is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
