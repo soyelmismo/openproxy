@@ -1061,3 +1061,28 @@ async fn run_proxy_tunnel(
 
     Ok(stream)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn test_is_private_or_reserved() {
+        // IPv4 private/reserved
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))); // loopback
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))); // private
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)))); // private
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(169, 254, 0, 1)))); // link-local
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)))); // zero
+
+        // IPv4 public
+        assert!(!is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+
+        // IPv6 private/reserved
+        assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)))); // loopback
+
+        // IPv6 public
+        assert!(!is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888))));
+    }
+}
