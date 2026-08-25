@@ -225,7 +225,6 @@ impl UpstreamDispatcher {
     }
 
     pub(crate) fn is_client_disconnected(
-        &self,
         rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
     ) -> Option<openproxy_types::CancelReason> {
         *rx.borrow_and_update()
@@ -1842,7 +1841,7 @@ impl UpstreamDispatcher {
             None
         } else {
             let mut rx = tokio::sync::watch::Receiver::clone(&req.client_disconnected);
-            self.is_client_disconnected(&mut rx)
+            Self::is_client_disconnected(&mut rx)
         };
 
         if let Some(_reason) = client_disconnected {

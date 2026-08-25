@@ -30,7 +30,7 @@ impl Pipeline {
             Ok(result) => result,
             Err(e) => {
                 // Fallback if the chain entirely fails without catching
-                self.failure(e, 1, ErrorPhase::Route)
+                Self::failure(e, 1, ErrorPhase::Route)
             }
         }
     }
@@ -276,7 +276,6 @@ impl Pipeline {
     }
 
     pub(crate) fn failure(
-        &self,
         err: CoreError,
         attempts: u8,
         _phase: ErrorPhase,
@@ -291,15 +290,13 @@ impl Pipeline {
     }
 
     pub(crate) fn client_disconnected_result(
-        &self,
         attempts: u8,
         reason: openproxy_types::CancelReason,
     ) -> PipelineResult {
-        self.failure(CoreError::Cancelled(reason), attempts, ErrorPhase::Retry)
+        Self::failure(CoreError::Cancelled(reason), attempts, ErrorPhase::Retry)
     }
 
     pub(crate) fn is_client_disconnected(
-        &self,
         rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
     ) -> Option<openproxy_types::CancelReason> {
         *rx.borrow_and_update()
