@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }
-rusqlite = { workspace = true }
+rusqlite.workspace = true
 parking_lot = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
