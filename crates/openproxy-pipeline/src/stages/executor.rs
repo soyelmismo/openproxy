@@ -63,7 +63,7 @@ impl PipelineStage for UpstreamExecutorStage {
         for target in &to_run {
             let client_disconnected = {
                 let mut rx = tokio::sync::watch::Receiver::clone(&ctx.req.client_disconnected);
-                ctx.pipeline.is_client_disconnected(&mut rx)
+                crate::Pipeline::is_client_disconnected(&mut rx)
             };
             if let Some(reason) = client_disconnected {
                 tracing::warn!(
@@ -73,7 +73,10 @@ impl PipelineStage for UpstreamExecutorStage {
                     attempt = ctx.attempt,
                     "client cancelled between targets; aborting pipeline"
                 );
-                return Ok(ctx.pipeline.client_disconnected_result(ctx.attempt, reason));
+                return Ok(crate::Pipeline::client_disconnected_result(
+                    ctx.attempt,
+                    reason,
+                ));
             }
 
             let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
@@ -133,7 +136,7 @@ impl PipelineStage for UpstreamExecutorStage {
                 }
                 let client_disconnected = {
                     let mut rx = tokio::sync::watch::Receiver::clone(&ctx.req.client_disconnected);
-                    ctx.pipeline.is_client_disconnected(&mut rx)
+                    crate::Pipeline::is_client_disconnected(&mut rx)
                 };
                 if let Some(reason) = client_disconnected {
                     tracing::warn!(
@@ -143,7 +146,10 @@ impl PipelineStage for UpstreamExecutorStage {
                         attempt = ctx.attempt,
                         "client cancelled before target dispatch"
                     );
-                    return Ok(ctx.pipeline.client_disconnected_result(ctx.attempt, reason));
+                    return Ok(crate::Pipeline::client_disconnected_result(
+                        ctx.attempt,
+                        reason,
+                    ));
                 }
 
                 if can_incremental_race && consecutive_failures >= 3 {
