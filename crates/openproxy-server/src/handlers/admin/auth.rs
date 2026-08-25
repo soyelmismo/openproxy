@@ -31,7 +31,9 @@ pub(crate) fn authenticate_admin_ws(
                     ip = %addr.ip(),
                     "attempted to use OPENPROXY_DASHBOARD_AUTH_BYPASS from non-loopback IP"
                 );
-                return Err(ApiError(CoreError::Auth("unauthorized IP for dev bypass".into())));
+                return Err(ApiError(CoreError::Auth(
+                    "unauthorized IP for dev bypass".into(),
+                )));
             }
             tracing::warn!(
                 target: "openproxy::security",
