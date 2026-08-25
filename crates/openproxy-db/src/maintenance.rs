@@ -18,7 +18,7 @@ pub fn checkpoint_wal(conn: &Connection) -> Result<()> {
 /// Execute incremental vacuum.
 pub fn incremental_vacuum(conn: &Connection, pages: i64) -> Result<()> {
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-    conn.execute_batch(&format!("PRAGMA incremental_vacuum({pages});"))
+    conn.pragma_update(None, "incremental_vacuum", pages)
         .map_err(crate::error::map_db_error)
 }
 
