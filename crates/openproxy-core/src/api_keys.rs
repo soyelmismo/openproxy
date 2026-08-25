@@ -68,11 +68,11 @@ impl ApiKey {
             (None, model)
         };
         let effective_prov = provider_id.or(prov_from_model);
-        let full_id = effective_prov.map(|p| {
+        let full_id = effective_prov.and_then(|p| {
             if model.starts_with(&format!("{p}/")) {
-                model.to_string()
+                None
             } else {
-                format!("{p}/{model}")
+                Some(format!("{p}/{model}"))
             }
         });
 
@@ -97,8 +97,6 @@ impl ApiKey {
             matches_spec(pattern, model)
                 || matches_spec(pattern, bare_model)
                 || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
-                || model.strip_prefix(&format!("{pattern}/")).is_some()
-                || model.strip_suffix(&format!("/{pattern}")).is_some()
         };
 
         // 1. Allowlist check (if set and non-empty)
@@ -1228,6 +1226,48 @@ mod tests {
         // Revoke k1. count_active must drop back to 1.
         revoke(&conn, k1.id).expect("revoke");
         assert_eq!(count_active(&conn).expect("count"), 1);
+    }
+
+    #[test]
+    fn test_is_model_allowed_strict_glob_matching() {
+        let (conn, _p) = fresh_pool();
+
+        let (key1, _) = create(
+            &conn,
+            CreateApiKeyInput {
+                label: Some("strict-test-1".into()),
+                scopes: vec!["chat".into()],
+                allowed_models: Some(vec!["openai".into()]),
+                ..Default::default()
+            },
+            "admin",
+        )
+        .expect("create");
+
+        // The pattern is "openai". Without a slash wildcard or explicit matching,
+        // slash-stripping bypass shouldn't happen. The old behavior implicitly allowed
+        // model="openai/gpt-4o" because `strip_prefix("openai/")` matched.
+        assert!(!key1.is_model_allowed("openai/gpt-4o", None));
+        assert!(!key1.is_model_allowed("gpt-4o", Some("openai")));
+
+        // Exact match should still work
+        assert!(key1.is_model_allowed("openai", None));
+
+        let (key2, _) = create(
+            &conn,
+            CreateApiKeyInput {
+                label: Some("strict-test-2".into()),
+                scopes: vec!["chat".into()],
+                allowed_models: Some(vec!["openai/*".into()]),
+                ..Default::default()
+            },
+            "admin",
+        )
+        .expect("create");
+
+        // "openai/*" should allow anything starting with "openai/"
+        assert!(key2.is_model_allowed("openai/gpt-4o", None));
+        assert!(key2.is_model_allowed("gpt-4o", Some("openai")));
     }
 
     #[test]
