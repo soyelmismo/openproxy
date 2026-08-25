@@ -36,9 +36,20 @@ impl From<tokio::task::JoinError> for ApiError {
 impl ApiError {
     /// Return the error message sanitized (secrets redacted) and truncated to length limit.
     pub fn sanitized_message(&self) -> String {
-        let raw = self.0.to_string();
-        let redacted = openproxy_core::cost::redact_error_msg(&raw);
-        truncate_error_message(&redacted.0).into_owned()
+        match &self.0 {
+            CoreError::Internal(_)
+            | CoreError::Database { .. }
+            | CoreError::Migration { .. }
+            | CoreError::Config(_) => {
+                tracing::error!(error = %self.0, "internal server error");
+                "Internal server error".to_string()
+            }
+            _ => {
+                let raw = self.0.to_string();
+                let redacted = openproxy_core::cost::redact_error_msg(&raw);
+                truncate_error_message(&redacted.0).into_owned()
+            }
+        }
     }
 
     /// Render this error as a pre-formatted SSE frame (`Bytes`).
@@ -200,5 +211,26 @@ mod tests {
         assert!(!frame_str.contains("secret_token_12345"));
         assert!(frame_str.contains("[REDACTED]"));
         assert!(frame_str.contains("\"type\":\"error\""));
+    }
+
+    #[test]
+    fn test_sanitized_message_internal_errors() {
+        let err = ApiError(CoreError::Internal("stack trace here".into()));
+        assert_eq!(err.sanitized_message(), "Internal server error");
+
+        let err = ApiError(CoreError::Database {
+            message: "db timeout".into(),
+            source: None,
+        });
+        assert_eq!(err.sanitized_message(), "Internal server error");
+
+        let err = ApiError(CoreError::Migration {
+            version: 1,
+            message: "migration failed".into(),
+        });
+        assert_eq!(err.sanitized_message(), "Internal server error");
+
+        let err = ApiError(CoreError::Config("bad config".into()));
+        assert_eq!(err.sanitized_message(), "Internal server error");
     }
 }
