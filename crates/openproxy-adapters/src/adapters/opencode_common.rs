@@ -12,6 +12,15 @@ use crate::spoofer::{ClientSpoofer, OpenCodeSpoofer};
 
 /// Heuristic for picking the wire format of a model in OpenCode's catalogue.
 ///
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum OpenCodeFlavor {
+    Zen,
+    Go,
+}
+
+pub use classify_opencode_target_format as classify_zen_target_format;
+pub use classify_opencode_target_format as classify_go_target_format;
+
 /// Anthropic-family identifiers (`claude`, `minimax`) go to `/messages`; the
 /// rest are served as OpenAI on `/chat/completions`. The matching is
 /// case-insensitive.
@@ -85,74 +94,145 @@ pub async fn fetch_opencode_models(
     Ok(out)
 }
 
-#[macro_export]
-macro_rules! define_opencode_adapter {
-    (
-        $(#[$meta:meta])*
-        $struct_name:ident,
-        id: $id:literal,
-        name: $name:literal,
-        base_url: $base_url:literal
-        $(, models_dev_canonical_ids: $canon_ids:expr)? $(,)?
-    ) => {
-        $(#[$meta])*
-        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-        pub struct $struct_name {
-            config: $crate::adapters::ProviderAdapterConfig,
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct OpenCodeAdapter {
+    flavor: OpenCodeFlavor,
+    config: crate::adapters::ProviderAdapterConfig,
+}
+
+impl OpenCodeAdapter {
+    pub fn new(flavor: OpenCodeFlavor) -> Self {
+        let (id, name, base_url) = match flavor {
+            OpenCodeFlavor::Zen => ("opencode-zen", "OpenCode Zen", "https://opencode.ai/zen/v1"),
+            OpenCodeFlavor::Go => (
+                "opencode-go",
+                "OpenCode Go",
+                "https://opencode.ai/zen/go/v1",
+            ),
+        };
+
+        Self {
+            flavor,
+            config: crate::adapters::ProviderAdapterConfig {
+                id: openproxy_types::ProviderId::new(id),
+                name: name.into(),
+                anonymous_fallback: true,
+                rate_limit_scope: "account".into(),
+                base_url: base_url.into(),
+                auth_type: crate::adapters::AdapterAuthType::Bearer,
+                format: crate::adapters::AdapterFormat::Mixed,
+                extra_headers: vec![],
+            },
         }
+    }
+}
 
-        impl $struct_name {
-            pub fn new() -> Self {
-                Self {
-                    config: $crate::adapters::ProviderAdapterConfig {
-                        id: openproxy_types::ProviderId::new($id),
-                        name: $name.into(),
-                        anonymous_fallback: true,
-                        rate_limit_scope: "account".into(),
-                        base_url: $base_url.into(),
-                        auth_type: $crate::adapters::AdapterAuthType::Bearer,
-                        format: $crate::adapters::AdapterFormat::Mixed,
-                        extra_headers: vec![],
-                    },
-                }
-            }
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct OpenCodeGoAdapter(pub OpenCodeAdapter);
+
+impl OpenCodeGoAdapter {
+    pub fn new() -> Self {
+        Self(OpenCodeAdapter::new(OpenCodeFlavor::Go))
+    }
+}
+crate::adapters::derive_default_from_new!(OpenCodeGoAdapter);
+
+impl crate::adapters::ProviderAdapter for OpenCodeGoAdapter {
+    fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
+        self.0.config()
+    }
+    fn is_anonymous_fallback(&self) -> bool {
+        self.0.is_anonymous_fallback()
+    }
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        self.0.models_dev_canonical_ids()
+    }
+    fn build_headers(
+        &self,
+        api_key: &str,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+    ) -> Vec<(String, String)> {
+        self.0.build_headers(api_key, target_format, model)
+    }
+    async fn fetch_models(
+        &self,
+        upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+        api_key: &str,
+    ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
+        self.0.fetch_models(upstream_client, api_key).await
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct OpenCodeZenAdapter(pub OpenCodeAdapter);
+
+impl OpenCodeZenAdapter {
+    pub fn new() -> Self {
+        Self(OpenCodeAdapter::new(OpenCodeFlavor::Zen))
+    }
+}
+crate::adapters::derive_default_from_new!(OpenCodeZenAdapter);
+
+impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
+    fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
+        self.0.config()
+    }
+    fn is_anonymous_fallback(&self) -> bool {
+        self.0.is_anonymous_fallback()
+    }
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        self.0.models_dev_canonical_ids()
+    }
+    fn build_headers(
+        &self,
+        api_key: &str,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+    ) -> Vec<(String, String)> {
+        self.0.build_headers(api_key, target_format, model)
+    }
+    async fn fetch_models(
+        &self,
+        upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+        api_key: &str,
+    ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
+        self.0.fetch_models(upstream_client, api_key).await
+    }
+}
+
+impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
+    fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
+        &self.config
+    }
+
+    fn is_anonymous_fallback(&self) -> bool {
+        true
+    }
+
+    fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+        match self.flavor {
+            OpenCodeFlavor::Zen => &["opencode"],
+            OpenCodeFlavor::Go => &["opencode-go"],
         }
+    }
 
-        $crate::adapters::derive_default_from_new!($struct_name);
+    fn build_headers(
+        &self,
+        api_key: &str,
+        target_format: openproxy_types::TargetFormat,
+        _model: &openproxy_types::ModelId,
+    ) -> Vec<(String, String)> {
+        build_opencode_headers(self, api_key, target_format)
+    }
 
-        impl $crate::adapters::ProviderAdapter for $struct_name {
-            fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
-                &self.config
-            }
-
-            fn is_anonymous_fallback(&self) -> bool {
-                true
-            }
-
-            $(
-                fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
-                    $canon_ids
-                }
-            )?
-
-            fn build_headers(
-                &self,
-                api_key: &str,
-                target_format: openproxy_types::TargetFormat,
-                _model: &openproxy_types::ModelId,
-            ) -> Vec<(String, String)> {
-                $crate::adapters::opencode_common::build_opencode_headers(self, api_key, target_format)
-            }
-
-            async fn fetch_models(
-                &self,
-                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
-                api_key: &str,
-            ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
-                $crate::adapters::opencode_common::fetch_opencode_models(self, upstream_client, api_key).await
-            }
-        }
-    };
+    async fn fetch_models(
+        &self,
+        upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+        api_key: &str,
+    ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
+        fetch_opencode_models(self, upstream_client, api_key).await
+    }
 }
 
 #[cfg(test)]

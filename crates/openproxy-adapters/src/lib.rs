@@ -17,8 +17,8 @@ pub use adapters::{
     custom_adapter::CustomAdapter, gemini::GeminiAdapter, horde::HordeAdapter,
     kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, minimax::MiniMaxAdapter,
     nous_research::NousResearchAdapter, nvidia_nim::NvidiaNimAdapter,
-    ollama_cloud::OllamaCloudAdapter, opencode_go::OpenCodeGoAdapter,
-    opencode_zen::OpenCodeZenAdapter, openrouter::OpenRouterAdapter,
+    ollama_cloud::OllamaCloudAdapter, opencode_common::OpenCodeGoAdapter,
+    opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter,
 };
 
 pub use upstream::{

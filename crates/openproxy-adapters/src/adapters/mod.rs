@@ -731,8 +731,8 @@ define_provider_adapter! {
             "nous-research" => NousResearch(crate::adapters::nous_research::NousResearchAdapter),
             "nvidia-nim" => NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter),
             "ollama-cloud" => OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter),
-            "opencode-go" => OpenCodeGo(crate::adapters::opencode_go::OpenCodeGoAdapter),
-            "opencode-zen" => OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter),
+            "opencode-go" => OpenCodeGo(crate::adapters::opencode_common::OpenCodeGoAdapter),
+            "opencode-zen" => OpenCodeZen(crate::adapters::opencode_common::OpenCodeZenAdapter),
             "openrouter" => OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
             "vercel-gateway" => VercelGateway(crate::adapters::vercel_gateway::VercelGatewayAdapter),
             "fx" => Fx(crate::adapters::fx::FxAdapter),
@@ -883,8 +883,6 @@ pub mod nous_research;
 pub mod nvidia_nim;
 pub mod ollama_cloud;
 pub mod opencode_common;
-pub mod opencode_go;
-pub mod opencode_zen;
 pub mod openrouter;
 pub mod vercel_gateway;
 
@@ -907,8 +905,8 @@ pub use minimax::MiniMaxAdapter;
 pub use nous_research::NousResearchAdapter;
 pub use nvidia_nim::NvidiaNimAdapter;
 pub use ollama_cloud::OllamaCloudAdapter;
-pub use opencode_go::OpenCodeGoAdapter;
-pub use opencode_zen::OpenCodeZenAdapter;
+pub use opencode_common::OpenCodeGoAdapter;
+pub use opencode_common::OpenCodeZenAdapter;
 pub use openrouter::OpenRouterAdapter;
 pub use vercel_gateway::VercelGatewayAdapter;
 
@@ -1123,7 +1121,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::opencode_zen::classify_zen_target_format;
+    use crate::adapters::opencode_common::classify_zen_target_format;
 
     fn first_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         headers
