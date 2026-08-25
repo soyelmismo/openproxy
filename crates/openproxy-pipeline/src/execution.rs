@@ -275,11 +275,7 @@ impl Pipeline {
         .map_err(|e| CoreError::Internal(e.to_string()))?
     }
 
-    pub(crate) fn failure(
-        err: CoreError,
-        attempts: u8,
-        _phase: ErrorPhase,
-    ) -> PipelineResult {
+    pub(crate) fn failure(err: CoreError, attempts: u8, _phase: ErrorPhase) -> PipelineResult {
         PipelineResult {
             status_code: err.http_status(),
             error: Some(err),
