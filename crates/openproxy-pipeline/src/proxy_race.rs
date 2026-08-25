@@ -102,46 +102,40 @@ pub async fn run_proxy_race(
         });
     }
 
-    loop {
-        {
-            let mut w = winner.lock();
-            if let Some((result, win_proxy_id)) = w.take() {
-                for token in &worker_tokens {
-                    token.cancel();
-                }
-                {
-                    let conn = pipeline.conn.lock();
-                    let _ = openproxy_db::providers::update_current_proxy(
-                        &conn,
-                        &target.target.provider_id,
-                        Some(&win_proxy_id),
-                    );
-                    tracing::info!(
-                        provider = %target.target.provider_id,
-                        proxy_id = %win_proxy_id,
-                        "incremental proxy race won: updated provider current_proxy_id"
-                    );
-                }
-                crate::racing::spawn_graceful_drain(set, pipeline.config.racing.abort_grace_ms);
-                return result;
-            }
+    let default_err = CoreError::NoHealthyTargets(combo.id.0);
+
+    match crate::racing::wait_for_race_winner(
+        winner,
+        running,
+        all_done,
+        worker_tokens,
+        last_err,
+        set,
+        pipeline.config.racing.abort_grace_ms,
+        default_err,
+    )
+    .await
+    {
+        Ok((result, win_proxy_id)) => {
+            let conn = pipeline.conn.lock();
+            let _ = openproxy_db::providers::update_current_proxy(
+                &conn,
+                &target.target.provider_id,
+                Some(&win_proxy_id),
+            );
+            tracing::info!(
+                provider = %target.target.provider_id,
+                proxy_id = %win_proxy_id,
+                "incremental proxy race won: updated provider current_proxy_id"
+            );
+            result
         }
-        if running.load(Ordering::Acquire) == 0 {
-            for token in &worker_tokens {
-                token.cancel();
-            }
-            let err = last_err
-                .lock()
-                .take()
-                .unwrap_or(CoreError::NoHealthyTargets(combo.id.0));
-            return PipelineResult {
-                status_code: err.http_status(),
-                error: Some(err),
-                final_response: None,
-                attempts: overall_attempt,
-                usage_tuple: None,
-            };
-        }
-        all_done.notified().await;
+        Err(err) => PipelineResult {
+            status_code: err.http_status(),
+            error: Some(err),
+            final_response: None,
+            attempts: overall_attempt,
+            usage_tuple: None,
+        },
     }
 }

@@ -33,11 +33,7 @@ impl TargetFormatter for OpenaiFormatter {
         );
         // "developer" role is only valid for native OpenAI; normalize to
         // "system" so every OpenAI-compatible upstream accepts it.
-        if view
-            .messages
-            .iter()
-            .any(|m| m.role == "developer")
-        {
+        if view.messages.iter().any(|m| m.role == "developer") {
             view.messages = std::borrow::Cow::Owned(
                 view.messages
                     .iter()
