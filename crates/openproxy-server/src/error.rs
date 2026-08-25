@@ -17,6 +17,8 @@ use serde_json::json;
 ///
 /// Use `.into()` / `?` to lift a `CoreError` into an [`ApiError`]; both
 /// paths go through the [`From<CoreError>`] impl below.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
 pub struct ApiError(pub CoreError);
 
 impl From<CoreError> for ApiError {
@@ -28,18 +30,6 @@ impl From<CoreError> for ApiError {
 impl From<tokio::task::JoinError> for ApiError {
     fn from(err: tokio::task::JoinError) -> Self {
         ApiError(CoreError::Internal(err.to_string()))
-    }
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl std::fmt::Debug for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("ApiError").field(&self.0).finish()
     }
 }
 

@@ -1,13 +1,19 @@
 use openproxy_types::error::CoreError;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DbErrorKind {
+    #[error("unique constraint violation")]
     UniqueViolation,
+    #[error("foreign key constraint violation")]
     ForeignKeyViolation,
+    #[error("check constraint violation")]
     CheckViolation,
+    #[error("database busy or locked")]
     BusyOrLocked,
+    #[error("database is corrupt")]
     Corrupt,
+    #[error("other database error")]
     Other,
 }
 
