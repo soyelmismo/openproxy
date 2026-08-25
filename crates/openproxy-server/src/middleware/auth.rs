@@ -335,24 +335,32 @@ pub async fn auth_middleware(
     // Sanitize orphaned tool calls and tool messages to avoid upstream 400 Bad Request errors.
     // DeepSeek and other strict OpenAI-compatible providers require that every
     // tool_call in an assistant message is followed by a matching tool response.
+    const MAX_TOOL_CALLS: usize = 64;
+    const MAX_ID_LEN: usize = 128;
+
     let mut valid_messages = Vec::with_capacity(parsed.messages.len());
     let mut last_assistant_tool_calls: Vec<String> = Vec::new();
 
-    for msg in std::mem::take(&mut parsed.messages) {
+    for mut msg in std::mem::take(&mut parsed.messages) {
         if msg.role == "assistant" {
             last_assistant_tool_calls.clear();
-            if let Some(calls) = &msg.tool_calls {
-                for call in calls {
+            if let Some(calls) = &mut msg.tool_calls {
+                calls.truncate(MAX_TOOL_CALLS);
+                for call in calls.iter() {
                     if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-                        last_assistant_tool_calls.push(id.to_string());
+                        if id.len() <= MAX_ID_LEN {
+                            last_assistant_tool_calls.push(id.to_string());
+                        }
                     }
                 }
             }
             valid_messages.push(msg);
         } else if msg.role == "tool" {
             if let Some(id) = msg.tool_call_id.as_deref()
-                && last_assistant_tool_calls.iter().any(|c| c == id)
+                && id.len() <= MAX_ID_LEN
+                && let Some(pos) = last_assistant_tool_calls.iter().position(|c| c == id)
             {
+                last_assistant_tool_calls.remove(pos);
                 valid_messages.push(msg);
             }
         } else {
@@ -371,9 +379,11 @@ pub async fn auth_middleware(
             calls.retain(|call| {
                 let call_id = call.get("id").and_then(|v| v.as_str());
                 call_id.is_some_and(|id| {
+                    id.len() <= MAX_ID_LEN &&
                     remainder
                         .iter()
                         .take_while(|m| m.role == "tool")
+                        .take(MAX_TOOL_CALLS)
                         .any(|m| m.tool_call_id.as_deref() == Some(id))
                 })
             });
