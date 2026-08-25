@@ -33,11 +33,7 @@ impl TargetFormatter for OpenaiFormatter {
         );
         // "developer" role is only valid for native OpenAI; normalize to
         // "system" so every OpenAI-compatible upstream accepts it.
-        if view
-            .messages
-            .iter()
-            .any(|m| m.role == "developer")
-        {
+        if view.messages.iter().any(|m| m.role == "developer") {
             view.messages = std::borrow::Cow::Owned(
                 view.messages
                     .iter()
@@ -86,8 +82,11 @@ impl TargetFormatter for AnthropicFormatter {
     }
 }
 
-pub struct GeminiFormatter;
-impl TargetFormatter for GeminiFormatter {
+pub struct GenericFormatter {
+    pub format_spec: TargetFormat,
+}
+
+impl TargetFormatter for GenericFormatter {
     fn format_request(
         &self,
         req: &PipelineRequest,
@@ -97,7 +96,7 @@ impl TargetFormatter for GeminiFormatter {
         adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
         adapter.format_request(
-            TargetFormat::Gemini,
+            self.format_spec,
             &req.openai_request,
             &model.model_id,
             messages_ref,
@@ -105,35 +104,21 @@ impl TargetFormatter for GeminiFormatter {
         )
     }
 }
+
+static GEMINI_FORMATTER: GenericFormatter = GenericFormatter {
+    format_spec: TargetFormat::Gemini,
+};
+static FX_FORMATTER: GenericFormatter = GenericFormatter {
+    format_spec: TargetFormat::Fx,
+};
 
 pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatter {
     match target_format {
         TargetFormat::Openai | TargetFormat::Atomesus => &OpenaiFormatter,
         TargetFormat::Anthropic => &AnthropicFormatter,
-        TargetFormat::Gemini => &GeminiFormatter,
+        TargetFormat::Gemini => &GEMINI_FORMATTER,
         TargetFormat::Responses => &ResponsesFormatter,
-        TargetFormat::Fx => &FxFormatter,
-    }
-}
-
-pub struct FxFormatter;
-
-impl TargetFormatter for FxFormatter {
-    fn format_request(
-        &self,
-        req: &PipelineRequest,
-        model: &Model,
-        messages_ref: &[OpenAIMessage],
-        stream: bool,
-        adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
-    ) -> Result<bytes::Bytes, CoreError> {
-        adapter.format_request(
-            TargetFormat::Fx,
-            &req.openai_request,
-            &model.model_id,
-            messages_ref,
-            stream,
-        )
+        TargetFormat::Fx => &FX_FORMATTER,
     }
 }
 
