@@ -264,12 +264,12 @@ pub(crate) fn authenticate_and_authorize_model(
 ) -> Result<Option<ApiKeyId>, ApiError> {
     let auth_result = authenticate(state, headers)?;
 
-    if let Some(token) = &auth_result {
-        if !token.is_model_allowed(model_name, None) {
-            return Err(ApiError(CoreError::Auth(format!(
-                "model '{model_name}' not allowed or blacklisted for this key"
-            ))));
-        }
+    if let Some(token) = &auth_result
+        && !token.is_model_allowed(model_name, None)
+    {
+        return Err(ApiError(CoreError::Auth(format!(
+            "model '{model_name}' not allowed or blacklisted for this key"
+        ))));
     }
 
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
@@ -406,12 +406,12 @@ pub async fn auth_middleware(
 
     let requested_model = &parsed.model;
 
-    if let Some(token) = &auth_result {
-        if !token.is_model_allowed(requested_model, None) {
-            return Err(ApiError(CoreError::Auth(format!(
-                "model '{requested_model}' not allowed or blacklisted for this key"
-            ))));
-        }
+    if let Some(token) = &auth_result
+        && !token.is_model_allowed(requested_model, None)
+    {
+        return Err(ApiError(CoreError::Auth(format!(
+            "model '{requested_model}' not allowed or blacklisted for this key"
+        ))));
     }
 
     parts.extensions.insert(ParsedChatRequest {
