@@ -9,6 +9,17 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "sse_streaming"
+harness = false
+
+[[bench]]
+name = "think_extractor"
+harness = false
+
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
