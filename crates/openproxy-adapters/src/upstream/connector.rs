@@ -85,18 +85,7 @@ use super::phases::UpstreamPhase;
 /// addresses that should never be the target of an upstream HTTP request
 /// (SSRF protection).
 pub fn is_private_or_reserved(ip: &IpAddr) -> bool {
-    let check_ip = match ip {
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                IpAddr::V4(v4)
-            } else {
-                *ip
-            }
-        }
-        _ => *ip,
-    };
-
-    match check_ip {
+    match ip {
         IpAddr::V4(v4) => {
             v4.octets()[0] == 0 || v4.is_loopback() || v4.is_private() || v4.is_link_local()
         }
