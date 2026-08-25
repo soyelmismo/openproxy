@@ -50,6 +50,7 @@ pub struct UpstreamRequest {
     pub proxy_status: Option<String>,
 }
 
+#[allow(clippy::collapsible_if)]
 fn sanitize_upstream_url(url: String) -> String {
     let allow_private = cfg!(test)
         || cfg!(feature = "ssrf-bypass")
