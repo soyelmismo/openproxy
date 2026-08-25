@@ -144,15 +144,8 @@ pub(crate) fn authenticate(
     let Some(token) = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            use subtle::ConstantTimeEq;
-            let b = s.as_bytes();
-            if b.len() >= 7 && bool::from(b[..7].ct_eq(b"Bearer ")) {
-                Some(s[7..].trim())
-            } else {
-                None
-            }
-        })
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::trim)
         .or_else(|| {
             headers
                 .get("x-api-key")
