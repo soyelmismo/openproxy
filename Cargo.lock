@@ -1852,6 +1852,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "thiserror",
  "tracing",
  "zeroize",
 ]
@@ -1915,6 +1916,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tower",
