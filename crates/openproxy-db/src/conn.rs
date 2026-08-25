@@ -13,7 +13,10 @@ use openproxy_types::{CoreError, Result};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 /// Alias for the writer guard returned by [`DbPool::writer`].
 pub type WriterGuard<'a> = parking_lot::MutexGuard<'a, Connection>;
@@ -34,7 +37,8 @@ pub type ArcReaderGuard = parking_lot::ArcMutexGuard<parking_lot::RawMutex, Conn
 #[derive(Clone)]
 pub struct DbPool {
     writer: Arc<Mutex<Connection>>,
-    reader: Arc<Mutex<Connection>>,
+    readers: Arc<Vec<Arc<Mutex<Connection>>>>,
+    next_reader: Arc<AtomicUsize>,
     /// Path to the SQLite file the pool was opened against. Used by
     /// [`DbPool::open_connection`] to spin up an *additional* owned
     /// handle on the same handle when a caller needs an owned
@@ -98,20 +102,29 @@ impl DbPool {
 
         configure_connection(&writer)?;
 
-        // Reader: open a second handle on the same file. Cloning the writer
-        // would also work, but a fresh open is explicit and avoids sharing any
-        // per-connection state that might be written during the writer setup.
-        let reader = Connection::open_with_flags(path, flags).map_err(
-            crate::error::map_db_error_ctx(format!("open reader {}", path.display())),
-        )?;
-
-        configure_connection(&reader)?;
+        // Readers: open multiple handles on the same file to avoid mutex contention
+        // on high-throughput API endpoints.
+        let num_readers = 16;
+        let mut readers = Vec::with_capacity(num_readers);
+        for i in 0..num_readers {
+            let reader = Connection::open_with_flags(path, flags).map_err(
+                crate::error::map_db_error_ctx(format!("open reader {i} for {}", path.display())),
+            )?;
+            configure_connection(&reader)?;
+            readers.push(Arc::new(Mutex::new(reader)));
+        }
 
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
-            reader: Arc::new(Mutex::new(reader)),
+            readers: Arc::new(readers),
+            next_reader: Arc::new(AtomicUsize::new(0)),
             path: Arc::from(path),
         })
+    }
+
+    #[inline]
+    fn get_reader_idx(&self) -> usize {
+        self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len()
     }
 
     /// Acquire the serialized writer. Blocks until the previous writer is released.
@@ -148,12 +161,14 @@ impl DbPool {
 
     /// Acquire the serialized reader with an owned guard backed by Arc.
     pub fn reader_guard(&self) -> ArcReaderGuard {
-        parking_lot::Mutex::lock_arc(&self.reader)
+        let idx = self.get_reader_idx();
+        parking_lot::Mutex::lock_arc(&self.readers[idx])
     }
 
     /// Acquire the serialized reader. Blocks until the previous reader is released.
     pub fn reader(&self) -> ReaderGuard<'_> {
-        self.reader.lock()
+        let idx = self.get_reader_idx();
+        self.readers[idx].lock()
     }
 
     /// Try to acquire the reader lock for at most `timeout` (blocking).
@@ -162,7 +177,8 @@ impl DbPool {
     /// admin endpoint indefinitely — the caller returns 503 and the
     /// operator can retry.
     pub fn try_reader_for(&self, timeout: std::time::Duration) -> Option<ReaderGuard<'_>> {
-        self.reader.try_lock_for(timeout)
+        let idx = self.get_reader_idx();
+        self.readers[idx].try_lock_for(timeout)
     }
 
     /// Run a closure against the serialized writer connection.
@@ -181,13 +197,13 @@ impl DbPool {
         &self.path
     }
 
-    /// Close and reopen BOTH connections (writer + reader). This is
+    /// Close and reopen BOTH connections (writer + readers). This is
     /// necessary after a VACUUM that changes the DB file structure,
     /// or after an offline DB repair — the long-lived connections
     /// hold stale page caches that reference pages that no longer
     /// exist in the rebuilt DB file.
     ///
-    /// **BLOCKING**: takes BOTH locks (writer then reader). Must not
+    /// **BLOCKING**: takes ALL locks (writer then readers). Must not
     /// be called while any query is in flight — the caller must hold
     /// the writer lock before calling this (or ensure no concurrent
     /// access by other means).
@@ -209,19 +225,28 @@ impl DbPool {
         )?;
         configure_connection(&new_writer)?;
 
-        // Reopen the reader. We need to take the reader lock too.
-        let new_reader = Connection::open_with_flags(&*self.path, flags).map_err(
-            crate::error::map_db_error_ctx(format!("reopen reader {}", self.path.display())),
-        )?;
-        configure_connection(&new_reader)?;
+        // Reopen the readers. We need to take the reader locks too.
+        let mut new_readers = Vec::with_capacity(self.readers.len());
+        for i in 0..self.readers.len() {
+            let r = Connection::open_with_flags(&*self.path, flags).map_err(
+                crate::error::map_db_error_ctx(format!(
+                    "reopen reader {i} for {}",
+                    self.path.display()
+                )),
+            )?;
+            configure_connection(&r)?;
+            new_readers.push(r);
+        }
 
         // Replace the connections. The old connections are dropped
         // (and their SQLite handles closed) when we assign the new
         // ones.
         *self.writer.lock() = new_writer;
-        *self.reader.lock() = new_reader;
+        for (i, new_r) in new_readers.into_iter().enumerate() {
+            *self.readers[i].lock() = new_r;
+        }
 
-        tracing::info!("DbPool: reopened both connections (writer + reader)");
+        tracing::info!("DbPool: reopened all connections (writer + readers)");
         Ok(())
     }
 
