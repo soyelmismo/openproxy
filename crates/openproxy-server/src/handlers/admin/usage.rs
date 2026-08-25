@@ -202,6 +202,7 @@ pub async fn usage_recent(
 
 pub async fn usage_stream(
     State(s): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     Query(q): Query<UsageStreamQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
@@ -257,7 +258,7 @@ pub async fn usage_stream(
         }
     }
 
-    match authenticate_admin_ws(&s, &headers, q.token.as_deref()) {
+    match authenticate_admin_ws(&s, &headers, q.token.as_deref(), Some(&addr)) {
         Ok(()) => ws
             .on_upgrade(move |socket| stream_usage_rows(socket, s))
             .into_response(),
@@ -267,10 +268,11 @@ pub async fn usage_stream(
 
 pub async fn usage_detail(
     State(s): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Query(q): Query<DetailQuery>,
 ) -> Result<Json<UsageDetailResponse>, ApiError> {
-    authenticate_admin_ws(&s, &headers, None)?;
+    authenticate_admin_ws(&s, &headers, None, Some(&addr))?;
     // Read-only SELECT — use the READER.
     let r = s.db_pool().reader();
     let row = match (q.id, q.trace_id.as_deref()) {

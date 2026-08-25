@@ -1,9 +1,11 @@
 use super::{ApiError, AppState, CoreError, HeaderMap, IntoResponse};
+use std::net::SocketAddr;
 
 pub(crate) fn authenticate_admin_ws(
     state: &AppState,
     headers: &HeaderMap,
     query_token: Option<&str>,
+    remote_addr: Option<&SocketAddr>,
 ) -> Result<(), ApiError> {
     // Dev convenience: when the operator explicitly opts in by setting
     // OPENPROXY_DASHBOARD_AUTH_BYPASS=1 in the server's environment, every
@@ -21,6 +23,16 @@ pub(crate) fn authenticate_admin_ws(
         if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS")
             && bypass == "1"
         {
+            if let Some(addr) = remote_addr
+                && !addr.ip().is_loopback()
+            {
+                tracing::error!(
+                    target: "openproxy::security",
+                    ip = %addr.ip(),
+                    "attempted to use OPENPROXY_DASHBOARD_AUTH_BYPASS from non-loopback IP"
+                );
+                return Err(ApiError(CoreError::Auth("unauthorized IP for dev bypass".into())));
+            }
             tracing::warn!(
                 target: "openproxy::security",
                 path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
@@ -55,10 +67,11 @@ pub(crate) fn authenticate_admin_ws(
 
 pub async fn admin_auth_middleware(
     axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    if let Err(e) = authenticate_admin_ws(&state, req.headers(), None) {
+    if let Err(e) = authenticate_admin_ws(&state, req.headers(), None, Some(&addr)) {
         return e.into_response();
     }
     next.run(req).await

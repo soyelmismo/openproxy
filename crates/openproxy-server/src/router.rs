@@ -249,7 +249,11 @@ mod tests {
     async fn test_admin_api_fallback_404_json() {
         // Unmatched /admin/api/* routes should return JSON 404, not HTML
         let state = make_state().await;
-        let app = build_router(state.clone());
+        let app = build_router(state.clone()).layer(axum::Extension(
+            axum::extract::connect_info::ConnectInfo(
+                "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+            ),
+        ));
 
         let api_key = "test-api-key-123";
         let key_hash = openproxy_core::api_keys::hash_key(api_key);
