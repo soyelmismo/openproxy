@@ -42,7 +42,7 @@ fn insert_manage_key(pool: &core_db::DbPool, plaintext: &str) {
             key_hash,
             &plaintext[..plaintext.len().min(12)],
             "smoke-test",
-            "[\"manage\"]",
+            "[\"manage\", \"chat\"]",
         ],
     )
     .expect("insert api key");
@@ -558,7 +558,7 @@ async fn body_limit_accepts_10_mib_chat_body() {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
     let tmp = tempfile::tempdir().expect("tempdir");
-    let (state, _key) = make_state_with_key(tmp.path()).await;
+    let (state, key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let big = "x".repeat(10 * 1024 * 1024);
     let body_json =
@@ -567,6 +567,7 @@ async fn body_limit_accepts_10_mib_chat_body() {
         .method("POST")
         .uri("/v1/chat/completions")
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
         .body(Body::from(body_json))
         .expect("build req");
     req.extensions_mut()
@@ -588,7 +589,7 @@ async fn body_limit_rejects_100_mib_chat_body() {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
     let tmp = tempfile::tempdir().expect("tempdir");
-    let (state, _key) = make_state_with_key(tmp.path()).await;
+    let (state, key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let big = "x".repeat(100 * 1024 * 1024);
     let body_json =
@@ -597,6 +598,7 @@ async fn body_limit_rejects_100_mib_chat_body() {
         .method("POST")
         .uri("/v1/chat/completions")
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
         .body(Body::from(body_json))
         .expect("build req");
     req.extensions_mut()
