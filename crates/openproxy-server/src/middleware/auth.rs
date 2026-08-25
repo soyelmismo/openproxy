@@ -139,7 +139,6 @@ impl ValidatedApiToken {
 pub(crate) fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
-    requested_model: &str,
 ) -> Result<Option<ValidatedApiToken>, ApiError> {
     let Some(token) = headers
         .get("authorization")
@@ -190,12 +189,6 @@ pub(crate) fn authenticate(
     }
 
     let key = verify_key_credentials(state, token, "chat")?;
-
-    if !key.is_model_allowed(requested_model, None) {
-        return Err(ApiError(CoreError::Auth(format!(
-            "model '{requested_model}' not allowed or blacklisted for this key"
-        ))));
-    }
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
@@ -269,7 +262,16 @@ pub(crate) fn authenticate_and_authorize_model(
     headers: &HeaderMap,
     model_name: &str,
 ) -> Result<Option<ApiKeyId>, ApiError> {
-    let auth_result = authenticate(state, headers, model_name)?;
+    let auth_result = authenticate(state, headers)?;
+
+    if let Some(token) = &auth_result {
+        if !token.is_model_allowed(model_name, None) {
+            return Err(ApiError(CoreError::Auth(format!(
+                "model '{model_name}' not allowed or blacklisted for this key"
+            ))));
+        }
+    }
+
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
     if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
@@ -312,6 +314,8 @@ pub async fn auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, crate::error::ApiError> {
     let (mut parts, body) = req.into_parts();
+
+    let auth_result = authenticate(&state, &parts.headers)?;
 
     // Enforce 32 MiB limit directly, matching DefaultBodyLimit
     let bytes = match axum::body::to_bytes(body, 32 * 1024 * 1024).await {
@@ -402,7 +406,13 @@ pub async fn auth_middleware(
 
     let requested_model = &parsed.model;
 
-    let auth_result = authenticate(&state, &parts.headers, requested_model)?;
+    if let Some(token) = &auth_result {
+        if !token.is_model_allowed(requested_model, None) {
+            return Err(ApiError(CoreError::Auth(format!(
+                "model '{requested_model}' not allowed or blacklisted for this key"
+            ))));
+        }
+    }
 
     parts.extensions.insert(ParsedChatRequest {
         parsed: Arc::new(parsed),
