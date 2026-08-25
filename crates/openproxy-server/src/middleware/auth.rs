@@ -347,10 +347,10 @@ pub async fn auth_middleware(
             if let Some(calls) = &mut msg.tool_calls {
                 calls.truncate(MAX_TOOL_CALLS);
                 for call in calls.iter() {
-                    if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-                        if id.len() <= MAX_ID_LEN {
-                            last_assistant_tool_calls.push(id.to_string());
-                        }
+                    if let Some(id) = call.get("id").and_then(|v| v.as_str())
+                        && id.len() <= MAX_ID_LEN
+                    {
+                        last_assistant_tool_calls.push(id.to_string());
                     }
                 }
             }
