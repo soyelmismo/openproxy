@@ -342,18 +342,20 @@ pub async fn auth_middleware(
         if msg.role == "assistant" {
             last_assistant_tool_calls.clear();
             if let Some(calls) = &msg.tool_calls {
-                for call in calls {
+                for call in calls.iter().take(64) {
                     if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-                        last_assistant_tool_calls.push(id.to_string());
+                        let safe_id = id.chars().take(256).collect::<String>();
+                        last_assistant_tool_calls.push(safe_id);
                     }
                 }
             }
             valid_messages.push(msg);
         } else if msg.role == "tool" {
-            if let Some(id) = msg.tool_call_id.as_deref()
-                && last_assistant_tool_calls.iter().any(|c| c == id)
-            {
-                valid_messages.push(msg);
+            if let Some(id) = msg.tool_call_id.as_deref() {
+                let safe_id = id.chars().take(256).collect::<String>();
+                if last_assistant_tool_calls.contains(&safe_id) {
+                    valid_messages.push(msg);
+                }
             }
         } else {
             last_assistant_tool_calls.clear();
@@ -368,13 +370,16 @@ pub async fn auth_middleware(
         if msg.role == "assistant"
             && let Some(calls) = &mut msg.tool_calls
         {
+            calls.truncate(64);
             calls.retain(|call| {
                 let call_id = call.get("id").and_then(|v| v.as_str());
                 call_id.is_some_and(|id| {
+                    let safe_id = id.chars().take(256).collect::<String>();
                     remainder
                         .iter()
+                        .take(64)
                         .take_while(|m| m.role == "tool")
-                        .any(|m| m.tool_call_id.as_deref() == Some(id))
+                        .any(|m| m.tool_call_id.as_deref().map(|s| s.chars().take(256).collect::<String>()).as_deref() == Some(safe_id.as_str()))
                 })
             });
             if calls.is_empty() {
