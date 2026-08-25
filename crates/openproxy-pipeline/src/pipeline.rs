@@ -256,3 +256,35 @@ pub fn parse_retry_after_ms(val: &str) -> Option<u64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_retry_after_ms() {
+        // Empty string
+        assert_eq!(parse_retry_after_ms(""), None);
+        assert_eq!(parse_retry_after_ms("   "), None);
+
+        // Float / Int seconds
+        assert_eq!(parse_retry_after_ms("10"), Some(10000));
+        assert_eq!(parse_retry_after_ms("1.5"), Some(1500));
+        assert_eq!(parse_retry_after_ms("0"), Some(0));
+
+        // Invalid strings
+        assert_eq!(parse_retry_after_ms("abc"), None);
+        assert_eq!(parse_retry_after_ms("-1"), None);
+
+        // Date parsing is hard to test deterministically for future without mocking time,
+        // but we can test past dates returning 0
+        let past_date = "Fri, 31 Dec 1999 23:59:59 GMT";
+        assert_eq!(parse_retry_after_ms(past_date), Some(0));
+
+        // test valid future date parsing logic roughly
+        let future_date = (chrono::Utc::now() + chrono::Duration::seconds(10)).to_rfc2822();
+        let res = parse_retry_after_ms(&future_date).unwrap();
+        // Since some time passes between now and parsing, it's roughly 10000
+        assert!(res > 8000 && res <= 10000);
+    }
+}
