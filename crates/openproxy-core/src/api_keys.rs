@@ -97,8 +97,6 @@ impl ApiKey {
             matches_spec(pattern, model)
                 || matches_spec(pattern, bare_model)
                 || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
-                || model.strip_prefix(&format!("{pattern}/")).is_some()
-                || model.strip_suffix(&format!("/{pattern}")).is_some()
         };
 
         // 1. Allowlist check (if set and non-empty)

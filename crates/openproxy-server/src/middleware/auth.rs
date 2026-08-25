@@ -77,12 +77,6 @@ impl ValidatedApiToken {
             matches_spec(pattern, model)
                 || matches_spec(pattern, bare_model)
                 || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
-                || model
-                    .strip_prefix(pattern)
-                    .is_some_and(|rest| rest.starts_with('/'))
-                || model
-                    .strip_suffix(pattern)
-                    .is_some_and(|rest| rest.ends_with('/'))
         };
 
         // 1. Allowlist check
