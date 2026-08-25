@@ -13,6 +13,40 @@ macro_rules! notify_worker_done {
 }
 pub(crate) use notify_worker_done;
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn wait_for_race_winner<T>(
+    winner: Arc<parking_lot::Mutex<Option<T>>>,
+    running: Arc<std::sync::atomic::AtomicUsize>,
+    all_done: Arc<tokio::sync::Notify>,
+    worker_tokens: Vec<openproxy_adapters::upstream::CancellationToken>,
+    last_err: Arc<parking_lot::Mutex<Option<CoreError>>>,
+    set: tokio::task::JoinSet<()>,
+    abort_grace_ms: u64,
+    default_err: CoreError,
+) -> Result<T, CoreError> {
+    use std::sync::atomic::Ordering;
+    loop {
+        {
+            let mut w = winner.lock();
+            if let Some(result) = w.take() {
+                for token in &worker_tokens {
+                    token.cancel();
+                }
+                spawn_graceful_drain(set, abort_grace_ms);
+                return Ok(result);
+            }
+        }
+        if running.load(Ordering::Acquire) == 0 {
+            for token in &worker_tokens {
+                token.cancel();
+            }
+            let err = last_err.lock().take().unwrap_or(default_err);
+            return Err(err);
+        }
+        all_done.notified().await;
+    }
+}
+
 pub(crate) fn spawn_graceful_drain(mut set: tokio::task::JoinSet<()>, abort_grace_ms: u64) {
     let grace = std::time::Duration::from_millis(abort_grace_ms.max(50));
     tokio::spawn(async move {
@@ -30,7 +64,7 @@ pub(crate) async fn run_race(
     race_size: u8,
 ) -> PipelineResult {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use tokio::sync::Notify;
 
     let num_workers = race_size.min(to_run.len() as u8);
@@ -144,33 +178,27 @@ pub(crate) async fn run_race(
         });
     }
 
-    loop {
-        {
-            let mut w = winner.lock();
-            if let Some(result) = w.take() {
-                for token in &worker_tokens {
-                    token.cancel();
-                }
-                spawn_graceful_drain(set, pipeline.config.racing.abort_grace_ms);
-                return result;
-            }
-        }
-        if running.load(Ordering::Acquire) == 0 {
-            for token in &worker_tokens {
-                token.cancel();
-            }
-            let err = last_err
-                .lock()
-                .take()
-                .unwrap_or(CoreError::NoHealthyTargets(combo.id.0));
-            return PipelineResult {
-                status_code: err.http_status(),
-                error: Some(err),
-                final_response: None,
-                attempts: race_size,
-                usage_tuple: None,
-            };
-        }
-        all_done.notified().await;
+    let default_err = CoreError::NoHealthyTargets(combo.id.0);
+
+    match wait_for_race_winner(
+        winner,
+        running,
+        all_done,
+        worker_tokens,
+        last_err,
+        set,
+        pipeline.config.racing.abort_grace_ms,
+        default_err,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => PipelineResult {
+            status_code: err.http_status(),
+            error: Some(err),
+            final_response: None,
+            attempts: race_size,
+            usage_tuple: None,
+        },
     }
 }
