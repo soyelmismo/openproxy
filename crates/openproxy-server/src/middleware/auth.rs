@@ -161,7 +161,7 @@ pub(crate) fn authenticate(
         // the anonymous-fallback check doesn't serialize through
         // the writer mutex (see `db::conn::DbPool::reader`).
         let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-        if active == 0 {
+        if active == 0 && state.config().server.allow_anonymous {
             tracing::debug!(
                 target: "openproxy::auth",
                 "anonymous request admitted (no active api keys configured)"
@@ -174,7 +174,7 @@ pub(crate) fn authenticate(
         // Same gate: a bare `Authorization: Bearer ` (empty
         // token) is treated as "no header".
         let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-        if active == 0 {
+        if active == 0 && state.config().server.allow_anonymous {
             return Ok(None);
         }
         return Err(ApiError(CoreError::Auth("missing api key".into())));
