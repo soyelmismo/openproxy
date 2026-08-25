@@ -352,23 +352,29 @@ impl ResponseAccumulator {
             if !json_str.starts_with('{') {
                 continue;
             }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+            #[derive(serde::Deserialize)]
+            struct UpstreamErrorProbe<'a> {
+                choices: Option<Vec<serde_json::Value>>,
+                #[serde(borrow)]
+                error: Option<ErrorObjProbe<'a>>,
+            }
+            #[derive(serde::Deserialize)]
+            struct ErrorObjProbe<'a> {
+                code: Option<u64>,
+                #[serde(borrow)]
+                message: Option<std::borrow::Cow<'a, str>>,
+            }
+            if let Ok(v) = serde_json::from_slice::<UpstreamErrorProbe<'_>>(json_str.as_bytes()) {
                 // Check for empty choices (or absent choices) + error object.
-                let has_empty_choices = v
-                    .get("choices")
-                    .and_then(|c| c.as_array())
-                    .is_none_or(std::vec::Vec::is_empty);
+                let has_empty_choices = v.choices.is_none_or(|c| c.is_empty());
                 if !has_empty_choices {
                     continue;
                 }
-                if let Some(error_obj) = v.get("error") {
-                    let code = error_obj
-                        .get("code")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(502) as u16;
+                if let Some(error_obj) = v.error {
+                    let code = error_obj.code.unwrap_or(502) as u16;
                     let message = error_obj
-                        .get("message")
-                        .and_then(|m| m.as_str())
+                        .message
+                        .as_deref()
                         .unwrap_or("unknown upstream error in SSE stream")
                         .to_string();
                     return Some((code, message));
@@ -396,33 +402,50 @@ impl ResponseAccumulator {
             self.content.push_str(content);
             self.total_bytes += additional;
         }
+        #[derive(serde::Deserialize)]
+        struct ToolCallProbeOuter<'a> {
+            #[serde(borrow)]
+            choices: Option<Vec<ToolCallProbeChoice<'a>>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ToolCallProbeChoice<'a> {
+            #[serde(borrow)]
+            delta: Option<ToolCallProbeDelta<'a>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ToolCallProbeDelta<'a> {
+            #[serde(borrow)]
+            tool_calls: Option<Vec<ToolCallProbe<'a>>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ToolCallProbe<'a> {
+            index: Option<usize>,
+            #[serde(borrow)]
+            id: Option<std::borrow::Cow<'a, str>>,
+            #[serde(borrow)]
+            function: Option<ToolCallFunctionProbe<'a>>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ToolCallFunctionProbe<'a> {
+            #[serde(borrow)]
+            name: Option<std::borrow::Cow<'a, str>>,
+            #[serde(borrow)]
+            arguments: Option<std::borrow::Cow<'a, str>>,
+        }
+
         if payload.contains("\"tool_calls\"")
-            && let Ok(v) = serde_json::from_str::<Value>(payload)
-            && let Some(tool_calls) = v
-                .get("choices")
-                .and_then(|c| c.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|choice| choice.get("delta"))
-                .and_then(|delta| delta.get("tool_calls"))
-                .and_then(|t| t.as_array())
+            && let Ok(v) = serde_json::from_slice::<ToolCallProbeOuter<'_>>(payload.as_bytes())
+            && let Some(choices) = v.choices
+            && let Some(choice) = choices.first()
+            && let Some(delta) = &choice.delta
+            && let Some(tool_calls) = &delta.tool_calls
         {
             for tc in tool_calls {
-                if let Some(tc_obj) = tc.as_object() {
-                    let index = tc_obj
-                        .get("index")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as usize;
-                    let id = tc_obj.get("id").and_then(|i| i.as_str());
-                    let name = tc_obj
-                        .get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str());
-                    let arguments = tc_obj
-                        .get("function")
-                        .and_then(|f| f.get("arguments"))
-                        .and_then(|a| a.as_str());
-                    self.update_openai_tool_call_delta(index, id, name, arguments);
-                }
+                let index = tc.index.unwrap_or(0);
+                let id = tc.id.as_deref();
+                let name = tc.function.as_ref().and_then(|f| f.name.as_deref());
+                let arguments = tc.function.as_ref().and_then(|f| f.arguments.as_deref());
+                self.update_openai_tool_call_delta(index, id, name, arguments);
             }
         }
     }
