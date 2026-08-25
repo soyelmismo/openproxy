@@ -141,6 +141,9 @@ impl DbPool {
     /// long-running admin query holding the writer no longer freezes
     /// the hot path indefinitely.
     pub fn try_writer_for(&self, timeout: std::time::Duration) -> Option<WriterGuard<'_>> {
+        if let Some(guard) = self.writer.try_lock() {
+            return Some(guard);
+        }
         self.writer.try_lock_for(timeout)
     }
 
@@ -178,6 +181,9 @@ impl DbPool {
     /// operator can retry.
     pub fn try_reader_for(&self, timeout: std::time::Duration) -> Option<ReaderGuard<'_>> {
         let idx = self.get_reader_idx();
+        if let Some(guard) = self.readers[idx].try_lock() {
+            return Some(guard);
+        }
         self.readers[idx].try_lock_for(timeout)
     }
 
@@ -356,5 +362,31 @@ mod tests {
 
         assert!(elapsed < std::time::Duration::from_millis(50));
         drop(guard);
+    }
+
+    #[test]
+    fn bench_try_writer_for_latency() {
+        let dir = tempdir();
+        let path = dir.join("test.db");
+        let pool = DbPool::open(&path).expect("open");
+
+        // Warm up and verify uncontended latency is extremely low (bypass Instant::now() overhead)
+        let iters = 10_000;
+        let timeout = std::time::Duration::from_millis(10);
+        let start = std::time::Instant::now();
+
+        for _ in 0..iters {
+            let guard = pool.try_writer_for(timeout).unwrap();
+            let _ = std::hint::black_box(guard);
+        }
+
+        let elapsed = start.elapsed();
+        // Since try_lock is a simple atomic CAS, this should take << 1ms.
+        // We'll give it a generous 100ms budget to avoid flakiness in slow CI environments,
+        // but typically it finishes in < 1ms on a normal machine.
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "lock latency too high: {elapsed:?}, fast path might be missing"
+        );
     }
 }
