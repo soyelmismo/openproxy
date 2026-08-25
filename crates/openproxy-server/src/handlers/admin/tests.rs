@@ -170,6 +170,9 @@ async fn put_runtime_timeouts_without_auth_returns_401() {
             state.clone(),
             admin_auth_middleware,
         ))
+        .layer(axum::Extension(axum::extract::connect_info::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        )))
         .with_state(state);
     let body = serde_json::json!({
         "connect_ms": 1_u64, "request_send_ms": 2_u64, "ttft_ms": 3_u64,
@@ -273,8 +276,9 @@ async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
     let headers = HeaderMap::new();
     let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
     let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
+    let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        authenticate_admin_ws(&state, &headers, None)
+        authenticate_admin_ws(&state, &headers, None, Some(&addr))
     }));
     let result = result.expect("authenticate_admin_ws should not panic");
     assert!(
@@ -303,7 +307,7 @@ async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
         let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
         let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            authenticate_admin_ws(&state, &headers, None)
+            authenticate_admin_ws(&state, &headers, None, None)
         }));
         let result = result.expect("authenticate_admin_ws should not panic");
         assert!(
@@ -1123,4 +1127,29 @@ async fn test_run_test_for_model_cancellation() {
 
     assert_eq!(r.status, 0);
     assert_eq!(r.error_msg.as_deref(), Some("Cancel"));
+}
+
+#[tokio::test]
+async fn auth_bypass_sentinel_1_rejects_non_loopback() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (state, _key) = make_state_with_key(tmp.path()).await;
+    {
+        let w = state.db_pool().writer();
+        w.execute("DELETE FROM api_keys", []).expect("delete keys");
+    }
+    let headers = HeaderMap::new();
+    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+    let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
+
+    let addr = "192.168.1.100:12345"
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        authenticate_admin_ws(&state, &headers, None, Some(&addr))
+    }));
+    let result = result.expect("authenticate_admin_ws should not panic");
+    assert!(
+        result.is_err(),
+        "authenticate_admin_ws should reject non-loopback IPs even with bypass"
+    );
 }
