@@ -19,10 +19,16 @@ pub struct ServerConfig {
     pub request_max_body_bytes: usize,
     #[serde(default = "default_rate_limit_requests")]
     pub rate_limit_requests_per_minute: u32,
+    #[serde(default = "default_allow_anonymous")]
+    pub allow_anonymous: bool,
 }
 
 fn default_rate_limit_requests() -> u32 {
     1000
+}
+
+fn default_allow_anonymous() -> bool {
+    false
 }
 
 impl Default for ServerConfig {
@@ -31,6 +37,7 @@ impl Default for ServerConfig {
             bind: "0.0.0.0:8787".into(),
             request_max_body_bytes: 10 * 1024 * 1024,
             rate_limit_requests_per_minute: 1000,
+            allow_anonymous: default_allow_anonymous(),
         }
     }
 }
