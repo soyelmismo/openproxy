@@ -379,12 +379,12 @@ pub async fn auth_middleware(
             calls.retain(|call| {
                 let call_id = call.get("id").and_then(|v| v.as_str());
                 call_id.is_some_and(|id| {
-                    id.len() <= MAX_ID_LEN &&
-                    remainder
-                        .iter()
-                        .take_while(|m| m.role == "tool")
-                        .take(MAX_TOOL_CALLS)
-                        .any(|m| m.tool_call_id.as_deref() == Some(id))
+                    id.len() <= MAX_ID_LEN
+                        && remainder
+                            .iter()
+                            .take_while(|m| m.role == "tool")
+                            .take(MAX_TOOL_CALLS)
+                            .any(|m| m.tool_call_id.as_deref() == Some(id))
                 })
             });
             if calls.is_empty() {
