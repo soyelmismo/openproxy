@@ -190,18 +190,22 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
 
     // Probe the JSON for the discriminator. A "ping" event from Anthropic
     // must be ignored, not surfaced as a parse error.
-    let probe: serde_json::Value = serde_json::from_str(payload)
+    #[derive(serde::Deserialize)]
+    struct TypeProbe<'a> {
+        #[serde(borrow)]
+        r#type: Option<std::borrow::Cow<'a, str>>,
+    }
+    let probe: TypeProbe = serde_json::from_slice(payload.as_bytes())
         .map_err(|e| CoreError::Parse(format!("invalid SSE JSON: {e}")))?;
 
-    if let Some(t) = probe.get("type").and_then(|v| v.as_str())
+    if let Some(t) = probe.r#type
         && t == "ping"
     {
         return Ok(None);
     }
 
-    let event: AnthropicSseEvent =
-        <AnthropicSseEvent as serde::Deserialize>::deserialize(&probe)
-            .map_err(|e| CoreError::Parse(format!("invalid Anthropic SSE event: {e}")))?;
+    let event: AnthropicSseEvent = serde_json::from_slice(payload.as_bytes())
+        .map_err(|e| CoreError::Parse(format!("invalid Anthropic SSE event: {e}")))?;
 
     Ok(Some(event))
 }
@@ -248,7 +252,9 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                     let s = std::str::from_utf8(&chunk).unwrap_or("");
                     if s.starts_with("data: ") && !s.contains("[DONE]") {
                         let json_str = s.trim_start_matches("data: ").trim();
-                        if let Ok(v) = serde_json::from_str::<OpenAISseProbe>(json_str) {
+                        if let Ok(v) =
+                            serde_json::from_slice::<OpenAISseProbe<'_>>(json_str.as_bytes())
+                        {
                             let mut out = bytes::BytesMut::new();
 
                             if !this.has_started {
@@ -427,7 +433,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                         out.extend_from_slice(b"\n\n");
                                     }
 
-                                    let anthropic_stop = match finish_reason.as_str() {
+                                    let anthropic_stop = match finish_reason.as_ref() {
                                         "length" => "max_tokens",
                                         "tool_calls" | "function_call" => "tool_use",
                                         "content_filter" => "stop_sequence",
@@ -466,30 +472,39 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct OpenAISseProbe {
-    pub choices: Option<Vec<OpenAIChoiceProbe>>,
+pub struct OpenAISseProbe<'a> {
+    #[serde(borrow)]
+    pub choices: Option<Vec<OpenAIChoiceProbe<'a>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct OpenAIChoiceProbe {
-    pub delta: Option<OpenAIDeltaProbe>,
-    pub finish_reason: Option<String>,
+pub struct OpenAIChoiceProbe<'a> {
+    #[serde(borrow)]
+    pub delta: Option<OpenAIDeltaProbe<'a>>,
+    #[serde(borrow)]
+    pub finish_reason: Option<std::borrow::Cow<'a, str>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct OpenAIDeltaProbe {
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<OpenAIToolCallProbe>>,
+pub struct OpenAIDeltaProbe<'a> {
+    #[serde(borrow)]
+    pub content: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    pub tool_calls: Option<Vec<OpenAIToolCallProbe<'a>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct OpenAIToolCallProbe {
-    pub id: Option<String>,
-    pub function: Option<OpenAIFunctionCallProbe>,
+pub struct OpenAIToolCallProbe<'a> {
+    #[serde(borrow)]
+    pub id: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    pub function: Option<OpenAIFunctionCallProbe<'a>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct OpenAIFunctionCallProbe {
-    pub name: Option<String>,
-    pub arguments: Option<String>,
+pub struct OpenAIFunctionCallProbe<'a> {
+    #[serde(borrow)]
+    pub name: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    pub arguments: Option<std::borrow::Cow<'a, str>>,
 }
