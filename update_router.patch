@@ -1,0 +1,11 @@
+--- crates/openproxy-server/src/router.rs
++++ crates/openproxy-server/src/router.rs
+@@ -155,6 +155,9 @@
+         .layer(middleware::from_fn(
+             crate::middleware::request_id::request_id,
+         ))
++        .layer(middleware::from_fn(
++            crate::middleware::security::security_headers,
++        ))
+         // MEDIUM fix (audit finding #8): axum's default body limit is
+         // 2 MiB, which is too small for a single legitimate prompt (some
