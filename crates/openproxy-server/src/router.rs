@@ -202,7 +202,9 @@ mod tests {
         let adapters = Arc::new(RwLock::new(Arc::new(
             Vec::<adapters::ProviderAdapterEnum>::new(),
         )));
-        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters)
+        let mut config = AppConfig::default();
+        config.server.allow_anonymous = true;
+        AppState::for_test(config, db_pool, master_key, adapters)
     }
 
     fn fresh_pool() -> (core_db::DbPool, PathBuf) {
