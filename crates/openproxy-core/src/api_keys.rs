@@ -1241,7 +1241,8 @@ mod tests {
                 ..Default::default()
             },
             "admin",
-        ).expect("create");
+        )
+        .expect("create");
 
         // The pattern is "openai". Without a slash wildcard or explicit matching,
         // slash-stripping bypass shouldn't happen. The old behavior implicitly allowed
@@ -1261,7 +1262,8 @@ mod tests {
                 ..Default::default()
             },
             "admin",
-        ).expect("create");
+        )
+        .expect("create");
 
         // "openai/*" should allow anything starting with "openai/"
         assert!(key2.is_model_allowed("openai/gpt-4o", None));
