@@ -379,7 +379,13 @@ pub async fn auth_middleware(
                         .iter()
                         .take(64)
                         .take_while(|m| m.role == "tool")
-                        .any(|m| m.tool_call_id.as_deref().map(|s| s.chars().take(256).collect::<String>()).as_deref() == Some(safe_id.as_str()))
+                        .any(|m| {
+                            m.tool_call_id
+                                .as_deref()
+                                .map(|s| s.chars().take(256).collect::<String>())
+                                .as_deref()
+                                == Some(safe_id.as_str())
+                        })
                 })
             });
             if calls.is_empty() {
