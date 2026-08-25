@@ -46,10 +46,7 @@ impl ValidatedApiToken {
         };
 
         let full_id = provider_id.and_then(|p| {
-            if model
-                .strip_prefix(p)
-                .is_some_and(|rest| rest.starts_with('/'))
-            {
+            if model.starts_with(&format!("{p}/")) {
                 None
             } else {
                 Some(format!("{p}/{model}"))
@@ -77,12 +74,6 @@ impl ValidatedApiToken {
             matches_spec(pattern, model)
                 || matches_spec(pattern, bare_model)
                 || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
-                || model
-                    .strip_prefix(pattern)
-                    .is_some_and(|rest| rest.starts_with('/'))
-                || model
-                    .strip_suffix(pattern)
-                    .is_some_and(|rest| rest.ends_with('/'))
         };
 
         // 1. Allowlist check
