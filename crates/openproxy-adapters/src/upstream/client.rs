@@ -50,12 +50,54 @@ pub struct UpstreamRequest {
     pub proxy_status: Option<String>,
 }
 
+fn sanitize_upstream_url(url: String) -> String {
+    let allow_private = cfg!(test)
+        || cfg!(feature = "ssrf-bypass")
+        || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
+            .is_ok_and(|v| v == "true" || v == "1");
+
+    if allow_private {
+        return url;
+    }
+
+    if let Ok(uri) = url.parse::<http::Uri>() {
+        if let Some(host) = uri.host() {
+            let check_host = host.trim_start_matches('[').trim_end_matches(']');
+            let mut is_blocked = false;
+
+            if let Ok(ip) = check_host.parse::<std::net::IpAddr>() {
+                if super::connector::is_private_or_reserved(&ip) {
+                    is_blocked = true;
+                }
+            } else {
+                let lower = host.to_lowercase();
+                if lower == "localhost"
+                    || lower.ends_with(".localhost")
+                    || lower == "169.254.169.254"
+                {
+                    is_blocked = true;
+                }
+            }
+
+            if is_blocked {
+                tracing::warn!(
+                    %url,
+                    "SSRF block: upstream target is a private/reserved IP or cloud metadata hostname"
+                );
+                return "error://ssrf-blocked".to_string();
+            }
+        }
+    }
+
+    url
+}
+
 impl UpstreamRequest {
     /// Build a simple GET with no headers / body.
     pub fn get(url: impl Into<String>) -> Self {
         Self {
             method: Method::GET,
-            url: url.into(),
+            url: sanitize_upstream_url(url.into()),
             headers: HeaderMap::new(),
             body: None,
             is_streaming: true,
@@ -68,7 +110,7 @@ impl UpstreamRequest {
     pub fn delete(url: impl Into<String>) -> Self {
         Self {
             method: Method::DELETE,
-            url: url.into(),
+            url: sanitize_upstream_url(url.into()),
             headers: HeaderMap::new(),
             body: None,
             is_streaming: true,
@@ -86,7 +128,7 @@ impl UpstreamRequest {
         );
         Self {
             method: Method::POST,
-            url: url.into(),
+            url: sanitize_upstream_url(url.into()),
             headers,
             body: Some(body),
             is_streaming: true,
@@ -116,7 +158,7 @@ impl UpstreamRequest {
         );
         Self {
             method: Method::POST,
-            url: url.into(),
+            url: sanitize_upstream_url(url.into()),
             headers,
             body: Some(body),
             // Non-streaming: the upstream builds the full transcription
@@ -401,6 +443,14 @@ impl UpstreamClient {
             .url
             .parse()
             .map_err(|e: http::uri::InvalidUri| UpstreamError::Invalid(e.to_string()))?;
+
+        if uri.scheme_str() == Some("error") && uri.host() == Some("ssrf-blocked") {
+            return Err(UpstreamError::Invalid(
+                "SSRF block: upstream target is a private/reserved IP or cloud metadata hostname"
+                    .to_string(),
+            ));
+        }
+
         let scheme = Scheme::from_uri(uri.scheme_str().unwrap_or("http"));
         let host = uri.host().unwrap_or("").to_string();
         let port = uri
