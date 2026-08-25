@@ -46,6 +46,22 @@
 const THINK_OPEN_TAGS: &[&str] = &["<think>", "<thinking>", "<reasoning>", "<thought>"];
 const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "</thought>"];
 
+/// Find the first case-insensitive match of a needle in a haystack without allocating.
+fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if haystack.len() < needle.len() {
+        return None;
+    }
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .position(|w| w.eq_ignore_ascii_case(needle_bytes))
+}
+
 /// Extract `<think>` blocks from a non-streaming `OpenAIResponse`'s
 /// message content and move them to `reasoning_content`.
 ///
@@ -154,15 +170,21 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
         let after_open = &remaining[tag_idx..];
 
         // Determine the close tag we're looking for.
-        let open_tag_lower = after_open.to_ascii_lowercase();
+        let after_open_bytes = after_open.as_bytes();
         let close_tag = THINK_CLOSE_TAGS
             .iter()
             .find(|ct| {
                 let open_prefix = &ct[..ct.len() - 1]; // "</think" from "</think>"
                 let open_eq = format!("<{}>", &open_prefix[2..]); // "<think>" from "</think>"
-                open_tag_lower.starts_with(&open_eq.to_ascii_lowercase())
+
+                let open_eq_bytes = open_eq.as_bytes();
+                if after_open_bytes.len() >= open_eq_bytes.len() {
+                    after_open_bytes[..open_eq_bytes.len()].eq_ignore_ascii_case(open_eq_bytes)
+                } else {
+                    false
+                }
             })
-            .map(|ct| ct.to_ascii_lowercase());
+            .map(|ct| ct.to_string()); // We'll just use the original case string for searching
 
         let after_tag_content =
             &after_open[after_open.find('>').map_or(after_open.len(), |p| p + 1)..];
@@ -170,12 +192,10 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
         let (think_text, rest) = match &close_tag {
             Some(ct) => {
                 // Find the close tag (case-insensitive).
-                let ct_lower = ct.as_str();
-                let lower = after_tag_content.to_ascii_lowercase();
-                match lower.find(ct_lower) {
+                match find_ignore_ascii_case(after_tag_content, ct) {
                     Some(pos) => {
                         let think = &after_tag_content[..pos];
-                        let rest = &after_tag_content[pos + ct_lower.len()..];
+                        let rest = &after_tag_content[pos + ct.len()..];
                         (think, rest)
                     }
                     None => {
@@ -214,13 +234,8 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
 /// Find the earliest occurrence of any of the given tags in `s`.
 /// Returns `(byte_offset, tag_string)`.
 fn find_earliest_tag<'a>(s: &str, tags: &[&'a str]) -> Option<(usize, &'a str)> {
-    let lower = s.to_ascii_lowercase();
     tags.iter()
-        .filter_map(|tag| {
-            lower
-                .find(tag.to_ascii_lowercase().as_str())
-                .map(|pos| (pos, *tag))
-        })
+        .filter_map(|tag| find_ignore_ascii_case(s, tag).map(|pos| (pos, *tag)))
         .min_by_key(|(pos, _)| *pos)
 }
 
@@ -232,19 +247,16 @@ fn find_earliest_tag<'a>(s: &str, tags: &[&'a str]) -> Option<(usize, &'a str)> 
 /// After the first </think> is matched by the extractor, the second
 /// </think> remains as orphaned content. This function removes it.
 fn strip_orphaned_close_tags(content: &str) -> String {
+    if !content.contains('<') {
+        return content.to_string();
+    }
     let mut result = content.to_string();
     for close_tag in THINK_CLOSE_TAGS {
-        let close_lower = close_tag.to_ascii_lowercase();
-        loop {
-            let lower = result.to_ascii_lowercase();
-            let Some(pos) = lower.find(&close_lower) else {
-                break;
-            };
+        while let Some(pos) = find_ignore_ascii_case(&result, close_tag) {
             // Check that there's no matching open tag before this
             // close tag in the content.
             let open_tag = format!("<{}>", &close_tag[2..close_tag.len() - 1]);
-            let open_lower = open_tag.to_ascii_lowercase();
-            if lower[..pos].contains(&open_lower) {
+            if find_ignore_ascii_case(&result[..pos], &open_tag).is_some() {
                 break;
             }
             // Remove the orphaned close tag.
@@ -308,6 +320,14 @@ impl ThinkStreamExtractor {
             return (String::new(), String::new());
         }
 
+        // Fast path for 99% of chunks: no partial tags buffered, and no `<` in delta.
+        if self.tag_buffer.is_empty() && !delta.contains('<') {
+            if self.inside_think {
+                return (String::new(), delta.to_string());
+            }
+            return (delta.to_string(), String::new());
+        }
+
         // Prepend any buffered tag-pending content.
         let mut input = std::mem::take(&mut self.tag_buffer);
         input.push_str(delta);
@@ -353,9 +373,7 @@ impl crate::streaming::StreamingChunkStage for ThinkStreamExtractor {
 
 impl ThinkStreamExtractor {
     fn process_outside_think(&mut self, input: &str) -> (String, String) {
-        let lower = input.to_ascii_lowercase();
-
-        let Some((tag_pos, tag_str)) = find_earliest_tag(&lower, THINK_OPEN_TAGS) else {
+        let Some((tag_pos, tag_str)) = find_earliest_tag(input, THINK_OPEN_TAGS) else {
             // No opening tag found. But the end of the input might
             // be the start of a tag (e.g. "<thi"). Check if the
             // input ends with a partial tag prefix and buffer it.
@@ -405,8 +423,8 @@ impl ThinkStreamExtractor {
     }
 
     fn process_inside_think(&mut self, input: &str) -> (String, String) {
-        let (close_tag_len, close_lower) = match &self.close_tag {
-            Some(ct) => (ct.len(), ct.to_ascii_lowercase()),
+        let close_tag = match &self.close_tag {
+            Some(ct) => ct.clone(),
             None => {
                 // Shouldn't happen, but handle gracefully.
                 self.inside_think = false;
@@ -414,13 +432,11 @@ impl ThinkStreamExtractor {
             }
         };
 
-        let lower = input.to_ascii_lowercase();
-
-        match lower.find(&close_lower) {
+        match find_ignore_ascii_case(input, &close_tag) {
             Some(pos) => {
                 // Found closing tag. Everything before it is reasoning.
                 let reasoning = input[..pos].to_string();
-                let after_close = &input[pos + close_tag_len..];
+                let after_close = &input[pos + close_tag.len()..];
                 self.inside_think = false;
                 self.close_tag = None;
 
@@ -441,7 +457,7 @@ impl ThinkStreamExtractor {
                 // No closing tag found. But the end of the input might
                 // be the start of the close tag. Buffer the potential
                 // partial close tag.
-                let safe_len = find_safe_split_point_close(input, &close_lower);
+                let safe_len = find_safe_split_point_close(input, &close_tag);
                 let reasoning = input[..safe_len].to_string();
                 self.tag_buffer = input[safe_len..].to_string();
                 (String::new(), reasoning)
@@ -460,8 +476,11 @@ impl Default for ThinkStreamExtractor {
 /// without cutting a potential opening tag. Everything after this
 /// position might be the start of a `<think>` tag.
 fn find_safe_split_point(input: &str) -> usize {
+    if !input.contains('<') {
+        return input.len();
+    }
+
     // Check if the input ends with a prefix of any opening tag.
-    let lower = input.to_ascii_lowercase();
     let max_tag_len = THINK_OPEN_TAGS.iter().map(|t| t.len()).max().unwrap_or(0);
 
     // The longest possible partial tag prefix is max_tag_len - 1.
@@ -469,22 +488,18 @@ fn find_safe_split_point(input: &str) -> usize {
     let check_len = std::cmp::min(max_tag_len - 1, input.len());
     for partial_len in (1..=check_len).rev() {
         let split_byte = input.len() - partial_len;
-        // CRITICAL: `split_byte` must be a UTF-8 char boundary,
-        // otherwise `&lower[split_byte..]` panics with "byte index
-        // N is not a char boundary". This happens when the content
-        // contains multi-byte characters (é, ×, emojis, etc.) and
-        // `partial_len` falls in the middle of one. All tag
-        // prefixes are pure ASCII (`<`, `<t`, `<th`, etc.), so a
-        // non-char-boundary split can NEVER match a tag prefix —
-        // skip it and try the next shorter prefix.
-        if !lower.is_char_boundary(split_byte) {
+        // CRITICAL: `split_byte` must be a UTF-8 char boundary
+        if !input.is_char_boundary(split_byte) {
             continue;
         }
-        let tail = &lower[split_byte..];
+        let tail = &input[split_byte..];
+        let tail_bytes = tail.as_bytes();
+
         // Check if this tail is a prefix of any opening tag.
         if THINK_OPEN_TAGS.iter().any(|tag| {
-            let tag_lower = tag.to_ascii_lowercase();
-            tag_lower.starts_with(tail)
+            tag.as_bytes().starts_with(tail_bytes)
+                || (tag.len() >= tail.len()
+                    && tag.as_bytes()[..tail.len()].eq_ignore_ascii_case(tail_bytes))
         }) {
             // The tail might be the start of a tag — split before it.
             return split_byte;
@@ -496,19 +511,22 @@ fn find_safe_split_point(input: &str) -> usize {
 /// Find the latest position in `input` where we can safely split
 /// without cutting the `close_tag`. Everything after this position
 /// might be the start of the close tag.
-fn find_safe_split_point_close(input: &str, close_tag_lower: &str) -> usize {
-    let lower = input.to_ascii_lowercase();
-    let check_len = std::cmp::min(close_tag_lower.len() - 1, input.len());
+fn find_safe_split_point_close(input: &str, close_tag: &str) -> usize {
+    if !input.contains('<') {
+        return input.len();
+    }
+
+    let check_len = std::cmp::min(close_tag.len() - 1, input.len());
     for partial_len in (1..=check_len).rev() {
         let split_byte = input.len() - partial_len;
-        // CRITICAL: same UTF-8 char boundary check as
-        // `find_safe_split_point` — without this, multi-byte
-        // content causes a panic.
-        if !lower.is_char_boundary(split_byte) {
+        // CRITICAL: same UTF-8 char boundary check
+        if !input.is_char_boundary(split_byte) {
             continue;
         }
-        let tail = &lower[split_byte..];
-        if close_tag_lower.starts_with(tail) {
+        let tail = &input[split_byte..];
+        let tail_bytes = tail.as_bytes();
+
+        if close_tag.as_bytes()[..tail.len()].eq_ignore_ascii_case(tail_bytes) {
             return split_byte;
         }
     }
