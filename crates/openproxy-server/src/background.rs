@@ -108,7 +108,7 @@ impl BackgroundService for RecordingTtlPrunerService {
 
 /// Periodically runs rate limiter bucket cleanup.
 pub struct RateLimiterCleanupService {
-    pub rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    pub rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter>,
     pub interval: Duration,
 }
 
