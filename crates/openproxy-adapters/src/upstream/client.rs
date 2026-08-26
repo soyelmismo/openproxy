@@ -191,10 +191,9 @@ impl UpstreamTransport for ProductionTransport {
                 + '_,
         >,
     > {
-        let inner = self.hyper.clone();
         Box::pin(async move {
             let fut = async move {
-                inner.request(req).await.map_err(|e| {
+                self.hyper.request(req).await.map_err(|e| {
                     if let Some(up_err) = hyper_source_connector_error(&e) {
                         return up_err;
                     }
@@ -268,10 +267,9 @@ where
                 + '_,
         >,
     > {
-        let inner = self.hyper.clone();
         Box::pin(async move {
             let fut = async move {
-                inner.request(req).await.map_err(|e| {
+                self.hyper.request(req).await.map_err(|e| {
                     if let Some(phase) = hyper_source_phase(&e) {
                         return UpstreamError::Timeout(phase);
                     }
