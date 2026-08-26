@@ -35,25 +35,35 @@ impl Default for RateLimitConfig {
     }
 }
 
+pub trait RateLimiter: Send + Sync {
+    /// Check if a request from `key` is allowed. Returns `true` if
+    /// allowed, `false` if rate-limited.
+    fn check(&self, key: RateLimitKey) -> bool;
+
+    /// Remove expired entries. Call periodically to prevent unbounded
+    /// growth (e.g. every 5 minutes).
+    fn cleanup(&self);
+}
+
 /// A per-key rate limiter. Keyed on [`RateLimitKey`] (typically the API key id
 /// or the client IP).
-pub struct RateLimiter {
+pub struct SlidingWindowRateLimiter {
     config: RateLimitConfig,
     /// Map of key -> (count, window_start).
     windows: Arc<DashMap<RateLimitKey, (u32, Instant)>>,
 }
 
-impl RateLimiter {
+impl SlidingWindowRateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
             windows: Arc::new(DashMap::new()),
         }
     }
+}
 
-    /// Check if a request from `key` is allowed. Returns `true` if
-    /// allowed, `false` if rate-limited.
-    pub fn check(&self, key: RateLimitKey) -> bool {
+impl RateLimiter for SlidingWindowRateLimiter {
+    fn check(&self, key: RateLimitKey) -> bool {
         let now = Instant::now();
         let max = self.config.max_requests;
         let window = self.config.window;
@@ -76,9 +86,7 @@ impl RateLimiter {
         true
     }
 
-    /// Remove expired entries. Call periodically to prevent unbounded
-    /// growth (e.g. every 5 minutes).
-    pub fn cleanup(&self) {
+    fn cleanup(&self) {
         let now = Instant::now();
         let window = self.config.window;
         self.windows
@@ -92,7 +100,7 @@ mod tests {
 
     #[test]
     fn allows_up_to_limit() {
-        let rl = RateLimiter::new(RateLimitConfig {
+        let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
             max_requests: 3,
             window: Duration::from_mins(1),
         });
@@ -105,7 +113,7 @@ mod tests {
 
     #[test]
     fn different_keys_independent() {
-        let rl = RateLimiter::new(RateLimitConfig {
+        let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
             max_requests: 2,
             window: Duration::from_mins(1),
         });
@@ -121,7 +129,7 @@ mod tests {
 
     #[test]
     fn window_resets_after_expiry() {
-        let rl = RateLimiter::new(RateLimitConfig {
+        let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
             max_requests: 1,
             window: Duration::from_millis(50),
         });

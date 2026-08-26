@@ -1,6 +1,7 @@
 use super::auth::ValidatedApiToken;
-use crate::{error::ApiError, rate_limit::RateLimitKey, state::AppState};
+use crate::{error::ApiError, state::AppState};
 use axum::extract::{ConnectInfo, State};
+use openproxy_core::rate_limit::RateLimitKey;
 use openproxy_types::CoreError;
 
 pub async fn rate_limit_middleware(

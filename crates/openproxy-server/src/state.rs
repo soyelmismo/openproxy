@@ -38,7 +38,7 @@ pub struct AppState {
     adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>>,
     /// Per-key rate limiter for /v1/chat/completions. Prevents a
     /// single API key from driving unlimited paid upstream traffic.
-    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter>,
     /// Shared hyper-based upstream client used by the new
     /// `UpstreamClient::call()` path. The chat pipeline and the
     /// kiro/antigravity executors hold an `Arc<UpstreamClient>`
@@ -222,11 +222,13 @@ impl AppState {
         );
 
         let timeouts_initial = config.timeouts;
-        let rate_limiter_config = crate::rate_limit::RateLimitConfig {
+        let rate_limiter_config = openproxy_core::rate_limit::RateLimitConfig {
             max_requests: config.server.rate_limit_requests_per_minute,
             ..Default::default()
         };
-        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
+        let rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter> = Arc::new(
+            openproxy_core::rate_limit::SlidingWindowRateLimiter::new(rate_limiter_config),
+        );
         spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
@@ -341,11 +343,13 @@ impl AppState {
             },
         );
 
-        let rate_limiter_config = crate::rate_limit::RateLimitConfig {
+        let rate_limiter_config = openproxy_core::rate_limit::RateLimitConfig {
             max_requests: config.server.rate_limit_requests_per_minute,
             ..Default::default()
         };
-        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
+        let rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter> = Arc::new(
+            openproxy_core::rate_limit::SlidingWindowRateLimiter::new(rate_limiter_config),
+        );
         spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
@@ -414,8 +418,8 @@ impl AppState {
     }
 
     /// Borrow the per-key rate limiter.
-    pub fn rate_limiter(&self) -> &crate::rate_limit::RateLimiter {
-        &self.rate_limiter
+    pub fn rate_limiter(&self) -> &(dyn openproxy_core::rate_limit::RateLimiter + 'static) {
+        self.rate_limiter.as_ref()
     }
 
     /// Borrow the master encryption key.
@@ -919,7 +923,7 @@ fn start_discovery_scheduler(
 
 fn spawn_rate_limiter_cleanup(
     supervisor: &crate::background::BackgroundSupervisor,
-    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter>,
 ) {
     supervisor.spawn(crate::background::RateLimiterCleanupService {
         rate_limiter,

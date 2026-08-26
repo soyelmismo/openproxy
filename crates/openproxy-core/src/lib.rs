@@ -46,6 +46,7 @@ pub mod smart_warmup;
 
 pub mod token_estimate;
 
+pub mod rate_limit;
 pub mod usage;
 
 // Gate 0: hyper-based upstream client. See `upstream/mod.rs` for the
