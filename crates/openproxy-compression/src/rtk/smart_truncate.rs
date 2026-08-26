@@ -99,7 +99,13 @@ mod tests {
     /// Helper: compile a single priority pattern for tests (mirrors the
     /// production default `TruncateConfig::default().priority_patterns`).
     fn default_priority() -> Vec<regex::Regex> {
-        vec![regex::Regex::new(r"(?i)(error|failed|exception|traceback|FAIL|panic|✖|✗)").unwrap()]
+        static RE: std::sync::LazyLock<Vec<regex::Regex>> = std::sync::LazyLock::new(|| {
+            vec![
+                regex::Regex::new(r"(?i)(error|failed|exception|traceback|FAIL|panic|✖|✗)")
+                    .unwrap(),
+            ]
+        });
+        RE.clone()
     }
 
     #[test]
