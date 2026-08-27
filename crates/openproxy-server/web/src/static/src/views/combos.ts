@@ -421,8 +421,8 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   const providerCell = isSub ? html`<span class="virtual-provider">${t.provider_id}</span>` : html`<a href="#/providers/${encodeURIComponent(t.provider_id)}">${t.provider_id}</a>`;
   const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
   const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);
-  const weightCell = showWeight ? (isSub ? html`<td><em>n/a</em></td>` : html`<td><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
-  const cooldownCell = isSub ? html`<td><em>sub-combo</em></td>` : html`<td>
+  const weightCell = showWeight ? (isSub ? html`<td class="col-target-weight" data-label="Weight"><em>n/a</em></td>` : html`<td class="col-target-weight" data-label="Weight"><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
+  const cooldownCell = isSub ? html`<td class="col-target-cooldown" data-label="Cooldown"><em>sub-combo</em></td>` : html`<td class="col-target-cooldown" data-label="Cooldown">
     <div style="display:flex;align-items:center;gap:4px">
       <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:95px" @change=${(e: Event) => onUpdateTargetCooldownMode(t.id, e)}>
         <option value="" ?selected=${!t.cooldown_mode && t.cooldown_base_secs == null}>Inherit</option>

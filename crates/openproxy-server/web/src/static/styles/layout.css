@@ -306,10 +306,10 @@ section.card {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
-    z-index: 998;
+    z-index: 900;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s ease-in-out;
+    transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
   body.mobile-nav-open .sidebar-backdrop {
     opacity: 1;
@@ -324,7 +324,7 @@ section.card {
     width: 290px;
     max-width: 85vw;
     background: var(--color-surface);
-    z-index: 999;
+    z-index: 901;
     transform: translateX(-100%);
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     display: flex;

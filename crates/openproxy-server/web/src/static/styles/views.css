@@ -650,7 +650,7 @@
 #logs > .log-row:first-child { /* header row */ }
 
 .log-detail-modal { z-index: var(--z-modal); }
-.log-detail-modal-card { min-width: 500px; max-width: 800px; width: 90vw; max-height: 90vh; }
+.log-detail-modal-card { min-width: min(500px, 95vw); max-width: 800px; width: 90vw; max-height: 90vh; }
 
 .detail-tabs {
   display: flex;
@@ -689,6 +689,11 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-1) var(--space-2);
     font-size: var(--fs-xs);
+  }
+}
+@media (max-width: 480px) {
+  .log-detail-summary {
+    grid-template-columns: 1fr;
   }
 }
 .log-detail-summary > div { font-size: var(--fs-xs); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -835,6 +840,9 @@
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border-soft);
   border-radius: var(--radius-md);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header, 10);
 }
 .logs-search-box {
   position: relative;
@@ -1154,6 +1162,8 @@ table.monthly-matrix {
 .log-detail-copy-bundle-btn {
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-xs);
+  white-space: nowrap;
+  flex-shrink: 0;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -2285,6 +2295,12 @@ abbr {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
   }
+}
+@media (max-width: 480px) {
+  .home-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
   .home-race-summary { grid-template-columns: 1fr; gap: var(--space-3); }
   /* On mobile, hide the provider + tokens columns to save horizontal
      space — the most important info (time, model, status, latency,
@@ -2705,7 +2721,7 @@ abbr {
 }
 @media (max-width: 480px) {
   .analytics-dashboard { gap: var(--space-4); }
-  .analytics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .analytics-metrics { grid-template-columns: 1fr; gap: var(--space-2); }
   .analytics-metric-card { padding: var(--space-2); }
   .analytics-clear-btn { width: 100%; margin-left: 0; }
   .analytics-status-legend { display: flex; }
@@ -4175,20 +4191,35 @@ abbr {
   }
   .provider-detail-meta {
     gap: var(--space-1);
+    min-width: 0;
+    width: 100%;
+  }
+  .provider-detail-meta .meta-link {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
   }
   .provider-detail-actions {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
     width: 100%;
   }
   .provider-detail-actions button {
-    width: 100%;
+    flex: 1 1 calc(50% - var(--space-1));
+    min-width: 120px;
     min-height: 40px;
     justify-content: center;
+    padding: 0 4px;
+    font-size: var(--fs-xs);
   }
-  .provider-detail-actions button.primary {
-    grid-column: span 2;
+  .provider-detail-actions button.primary,
+  .provider-detail-actions button.danger,
+  .provider-detail-actions button.locked {
+    flex: 1 1 100%;
   }
 
   .filter-bar {
@@ -4321,14 +4352,21 @@ abbr {
     gap: var(--space-2);
     font-size: var(--fs-md);
     font-weight: 600;
+    width: 100%;
+    min-width: 0;
   }
   .account-name {
     color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: calc(100% - 24px);
   }
   .account-edit-icon {
     color: var(--color-text-muted);
     font-size: 0.85rem;
     cursor: pointer;
+    flex-shrink: 0;
   }
   .account-card-row .col-account-priority {
     display: inline-flex !important;
@@ -4343,13 +4381,30 @@ abbr {
     border-radius: var(--radius-pill);
     color: var(--color-text-muted);
   }
+  .account-card-row .col-account-health {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .account-card-row .col-account-health::before {
+    content: "Health:";
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+  }
   .account-card-row .col-account-health select {
-    width: 100% !important;
-    min-height: 38px;
-    font-size: var(--fs-sm);
+    width: auto !important;
+    min-height: 32px;
+    font-size: var(--fs-xs);
+    padding: 0 24px 0 8px;
   }
   .account-card-row .col-account-quota {
-    padding-top: var(--space-1) !important;
+    padding-top: var(--space-2) !important;
+    padding-bottom: var(--space-2) !important;
+    border-top: 1px solid var(--color-border-soft);
+    border-bottom: 1px solid var(--color-border-soft);
+    margin: var(--space-1) 0;
   }
   .account-card-row .col-account-created {
     font-size: var(--fs-xs);
@@ -4414,15 +4469,16 @@ abbr {
     cursor: pointer;
   }
   .model-card-row .col-model-name {
-    padding-left: 2rem !important;
-    padding-right: 5rem !important;
+    padding-left: 2.2rem !important;
+    padding-right: 0 !important;
     min-height: 24px;
   }
   .model-name-wrapper {
     display: flex;
-    align-items: center;
-    gap: var(--space-1);
+    align-items: flex-start;
+    gap: var(--space-2);
     flex-wrap: wrap;
+    padding-right: 4.5rem;
   }
   .model-usage-code {
     font-size: var(--fs-xs) !important;
@@ -4515,7 +4571,9 @@ abbr {
     width: 100% !important;
     max-width: 100% !important;
     min-height: 36px;
-    font-size: 12px !important;
+    font-size: 11px !important;
+    padding: 0 4px !important;
+    text-overflow: ellipsis;
   }
   .model-btn-group {
     display: flex;
@@ -4994,6 +5052,73 @@ abbr {
     padding: 0 !important;
     border: none !important;
   }
+
+  /* --- Fine Mobile UX Refinements --- */
+  
+  /* 1. Combo Targets Cooldown & Weight */
+  .combo-target-card-row .col-target-cooldown,
+  .combo-target-card-row .col-target-weight {
+    display: flex !important;
+    align-items: center;
+    gap: var(--space-2);
+    padding-top: var(--space-1) !important;
+    font-size: var(--fs-xs);
+  }
+  .combo-target-card-row .col-target-cooldown::before { content: "Cooldown: "; font-weight: 500; color: var(--color-text-muted); }
+  .combo-target-card-row .col-target-weight::before { content: "Weight: "; font-weight: 500; color: var(--color-text-muted); }
+
+  /* 2. Proxy Sources */
+  .proxy-source-card-row .col-source-drag .drag-handle {
+    font-size: 1.4rem;
+    padding: 4px 12px;
+    background: var(--color-surface-2);
+    border-radius: var(--radius-sm);
+  }
+  .proxy-source-card-row .col-source-drag button.small {
+    min-height: 32px !important;
+    flex: 1 1 auto;
+  }
+  
+  /* 3. API Keys */
+  .api-key-card-row .col-key-label { font-size: var(--fs-md); font-weight: 600; }
+  .api-key-card-row .col-key-prefix,
+  .api-key-card-row .col-key-scopes,
+  .api-key-card-row .col-key-status,
+  .api-key-card-row .col-key-last-used {
+    display: inline-flex !important;
+    align-items: center;
+    width: auto !important;
+    font-size: var(--fs-xs);
+    margin-right: var(--space-3);
+    margin-top: var(--space-1);
+  }
+  .api-key-card-row .col-key-prefix::before { content: "Prefix: "; font-weight: 500; color: var(--color-text-muted); margin-right: 4px; }
+  .api-key-card-row .col-key-restrictions { padding-top: var(--space-1) !important; font-size: var(--fs-xs); }
+  .key-actions-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .key-actions-wrap button { flex: 1 1 auto; min-height: 38px !important; justify-content: center; }
+
+  /* 4. Playground Studio */
+  .playground-studio-grid { grid-template-columns: 1fr !important; gap: var(--space-3) !important; }
+  .playground-segmented-control { flex-wrap: wrap; }
+  .playground-segmented-control button { flex: 1 1 45%; text-align: center; }
+  .playground-inspector-sidebar { width: 100% !important; border-left: none !important; border-top: var(--border-w) var(--border-style) var(--color-border); padding-top: var(--space-3); }
+  .playground-studio-actions { width: 100%; justify-content: stretch; }
+  .playground-action-btn, .playground-run-btn { flex: 1 1 auto; min-height: 44px; justify-content: center; }
+  .playground-composer-card, .playground-msg-card { padding: var(--space-2) !important; }
+  .playground-directives-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+
+  /* 5. Configuration */
+  .config-grid { grid-template-columns: 1fr !important; gap: var(--space-4) !important; }
+  .config-field input[type="number"], .config-field select, .config-field button { width: 100% !important; min-height: 44px; }
+  .config-field { gap: 0.5rem !important; }
+  .config-actions button { width: 100%; min-height: 44px; }
 }
 
 

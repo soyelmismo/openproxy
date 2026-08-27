@@ -42,6 +42,7 @@ button.close-btn {
   font-size: 1.4rem;
   line-height: 1;
   padding: 0 var(--space-2);
+  flex-shrink: 0;
 }
 
 /* ----- Tables ----- */
@@ -180,11 +181,12 @@ tr.selected { background: var(--color-primary-soft); }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border-bottom: var(--border-w) var(--border-style) var(--color-border);
   background: var(--color-surface-2);
 }
-.modal-header h2 { margin: 0; font-size: var(--fs-lg); }
+.modal-header h2 { margin: 0; font-size: var(--fs-lg); flex: 1; min-width: 0; word-break: break-word; }
 .modal-body { padding: var(--space-4); }
 .modal-footer {
   display: flex;
@@ -200,13 +202,13 @@ tr.selected { background: var(--color-primary-soft); }
 /* ----- Modal — responsive base overrides (≤768px) ----- */
 @media (max-width: 768px) {
   .modal-bg {
-    padding: var(--space-2);
-    align-items: center;
+    padding: max(var(--space-2), env(safe-area-inset-top)) var(--space-2) max(var(--space-2), env(safe-area-inset-bottom));
+    align-items: flex-start;
   }
   .modal {
     min-width: 0;
-    max-width: calc(100vw - 1rem);
-    max-height: calc(100dvh - 2rem);
+    max-width: 100%;
+    max-height: calc(100dvh - max(var(--space-4), env(safe-area-inset-top) + env(safe-area-inset-bottom)));
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -224,15 +226,21 @@ tr.selected { background: var(--color-primary-soft); }
   }
   .modal-header h2,
   .modal-header h3 {
-    max-width: calc(100vw - 6rem);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     margin: 0;
+    flex: 1;
+    min-width: 0;
   }
   .modal-footer {
     flex-wrap: wrap;
     gap: var(--space-2);
+  }
+  .modal-footer button {
+    width: 100%;
+    min-height: 40px;
+    justify-content: center;
   }
   .modal-picker { max-width: calc(100vw - 1rem); }
 
@@ -267,9 +275,9 @@ tr.selected { background: var(--color-primary-soft); }
 
 @media (max-width: 768px) {
   .toast-container {
-    bottom: var(--space-3);
-    right: var(--space-3);
-    left: var(--space-3);
+    bottom: max(var(--space-3), env(safe-area-inset-bottom));
+    right: max(var(--space-3), env(safe-area-inset-right));
+    left: max(var(--space-3), env(safe-area-inset-left));
     width: auto;
     max-width: 100%;
     align-items: stretch;
@@ -323,15 +331,15 @@ tr.selected { background: var(--color-primary-soft); }
   background: transparent;
   border: none;
   color: inherit;
-  opacity: 0.65;
+  opacity: 0.8;
   cursor: pointer;
   padding: 0 0.25rem;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: opacity var(--transition-fast);
+  transition: opacity var(--t-fast);
 }
 .toast-close:hover {
   opacity: 1;
