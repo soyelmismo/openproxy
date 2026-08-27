@@ -71,7 +71,8 @@ function setProviderUi(providerId: string, ui: ProviderDetailUiState): void {
   state.providerDetail[providerId] = ui;
 }
 
-function extractDomain(urlStr: string): string | null {
+function extractDomain(urlStr?: string | null): string | null {
+  if (!urlStr || typeof urlStr !== "string") return null;
   try {
     const u = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
     return u.hostname;

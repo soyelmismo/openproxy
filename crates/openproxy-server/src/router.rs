@@ -89,7 +89,9 @@ pub fn build_router(state: AppState) -> Router {
         ))
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::HeaderName::from_static("content-security-policy"),
-            axum::http::HeaderValue::from_static("default-src 'self'"),
+            axum::http::HeaderValue::from_static(
+                "default-src 'self'; img-src 'self' data: https://www.google.com https://icons.duckduckgo.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;",
+            ),
         ))
 }
 
@@ -266,7 +268,7 @@ mod tests {
         assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
         assert_eq!(
             response.headers().get("content-security-policy").unwrap(),
-            "default-src 'self'"
+            "default-src 'self'; img-src 'self' data: https://www.google.com https://icons.duckduckgo.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;"
         );
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -329,7 +331,7 @@ mod tests {
         assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
         assert_eq!(
             response.headers().get("content-security-policy").unwrap(),
-            "default-src 'self'"
+            "default-src 'self'; img-src 'self' data: https://www.google.com https://icons.duckduckgo.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;"
         );
 
         let body = response.into_body().collect().await.unwrap().to_bytes();

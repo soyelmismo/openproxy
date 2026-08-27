@@ -279,6 +279,10 @@ export const HANDLERS = {
       const el = sec as HTMLElement;
       el.style.display = (sec.getAttribute("data-log-tab") === which) ? "" : "none";
     });
+    document.querySelectorAll(".log-detail-tabs .detail-tab").forEach((btn) => {
+      const b = btn as HTMLElement;
+      b.classList.toggle("active", b.getAttribute("data-arg1") === which);
+    });
   },
 
   // Theme toggle (called from sidebar; works through addEventListener

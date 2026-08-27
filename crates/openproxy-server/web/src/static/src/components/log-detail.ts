@@ -1172,29 +1172,21 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             ${userAgentBlock}
           </div>
           <div class="log-detail-tabs">
-            <button class="detail-tab ${currentActiveTab === "request" ? "active" : ""}" data-arg1="request" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
-            <button class="detail-tab ${currentActiveTab === "response" ? "active" : ""}" data-arg1="response" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
-            <button class="detail-tab ${currentActiveTab === "errors" ? "active" : ""}" data-arg1="errors" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
-            <button class="detail-tab ${currentActiveTab === "raw" ? "active" : ""}" data-arg1="raw" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
+            <button class="detail-tab ${currentActiveTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
+            <button class="detail-tab ${currentActiveTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
+            <button class="detail-tab ${currentActiveTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
+            <button class="detail-tab ${currentActiveTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
           </div>
           <div class="log-detail-content" id="log-detail-content">
-            <div style="display: ${currentActiveTab === "request" ? "block" : "none"}">
-              ${renderRequestTab(requestBody, createdAt)}
-            </div>
-            <div style="display: ${currentActiveTab === "response" ? "block" : "none"}">
-              ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
-            </div>
-            <div style="display: ${currentActiveTab === "errors" ? "block" : "none"}">
-              ${errors != null
+            ${renderRequestTab(requestBody, createdAt)}
+            ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
+            ${errors != null
       ? jsonSection("Errors", errors, "errors")
       : html`<section class="log-detail-section" data-log-tab="errors">
                      <h4>Errors</h4>
                      <p class="muted">No errors recorded.</p>
                    </section>`}
-            </div>
-            <div style="display: ${currentActiveTab === "raw" ? "block" : "none"}">
-              ${jsonSection("Raw log", log, "raw")}
-            </div>
+            ${jsonSection("Raw log", log, "raw")}
           </div>
         </div>
       </div>
@@ -1206,23 +1198,26 @@ let currentActiveTab: string = "request";
 
 /** Click handler for the `.detail-tab` buttons. Toggles which
  *  `#log-detail-content [data-log-tab]` section is visible (mutually
- *  exclusive) AND marks the clicked button as `.active`.
- *
- *  Lit-html's `@click` wiring means we no longer need a separate
- *  document-level listener (`tabClickOnce` / `wireTabClickOnce` in
- *  the pre-migration code). */
-function logDetailTabClick(which: string, _e: Event): void {
+ *  exclusive) AND marks the clicked button as `.active`. */
+export function logDetailTabClick(which: string, _e?: Event): void {
   currentActiveTab = which;
-  renderModal(); // re-render to reflect the new active tab
+  // Update section visibility in DOM
+  document.querySelectorAll("#log-detail-content [data-log-tab]").forEach((sec) => {
+    const el = sec as HTMLElement;
+    el.style.display = (sec.getAttribute("data-log-tab") === which) ? "" : "none";
+  });
+  // Update active tab buttons
+  document.querySelectorAll(".log-detail-tabs .detail-tab").forEach((btn) => {
+    const b = btn as HTMLElement;
+    b.classList.toggle("active", b.getAttribute("data-arg1") === which);
+  });
 }
 
 // Initialize the log-detail tab UI: show only the first [data-log-tab]
-// section, hide the remaining ones, and mark the first detail-tab as
-// active. Centralized here so it can be re-invoked after any in-place
-// re-render (e.g. updateOpenLogDetail re-rendering the modal).
-function initializeLogDetailTabs(): void {
+// section, hide the remaining ones, and mark the first detail-tab as active.
+export function initializeLogDetailTabs(): void {
   currentActiveTab = "request";
-  renderModal();
+  logDetailTabClick("request");
 }
 
 /** Remove a `.log-detail-modal` element AND its wrapper parent (the
