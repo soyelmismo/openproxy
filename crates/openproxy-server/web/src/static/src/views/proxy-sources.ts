@@ -3,6 +3,7 @@
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
 import { createView } from "../lib/view-utils.js";
+import { icons } from "../lib/icons.js";
 import { reloadProxySources, moveProxySource, reorderProxySources } from "../handlers/proxy-source-handlers.js";
 import type { ProxySource } from "../lib/types/api.js";
 
@@ -83,7 +84,7 @@ function renderPageHeader(): TemplateResult {
           class="primary"
           data-action="showAddProxySource"
         >
-          + Add Source
+          ${icons.plus()} Add Source
         </button>
       </div>
     </div>
@@ -105,7 +106,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
           data-action="showAddProxySource"
           style="margin-top: 1rem;"
         >
-          Add your first proxy source
+          ${icons.plus()} Add your first proxy source
         </button>
       </div>
     `;
@@ -146,9 +147,9 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                     @touchmove=${(e: TouchEvent) => onSourceTouchMove(e)}
                     @touchend=${() => void onSourceTouchEnd()}
                     @touchcancel=${() => void onSourceTouchEnd()}>
-                  <span style="cursor:grab;">⠿</span>
-                  <button type="button" class="small" style="padding:1px 4px;margin-left:2px;" title="Move up" @click=${() => void moveProxySource(s.id, -1)}>▲</button>
-                  <button type="button" class="small" style="padding:1px 4px;" title="Move down" @click=${() => void moveProxySource(s.id, 1)}>▼</button>
+                  <span style="cursor:grab;">${icons.dragHandle()}</span>
+                  <button type="button" class="small" style="padding:1px 4px;margin-left:2px;" title="Move up" @click=${() => void moveProxySource(s.id, -1)}>${icons.caretUp()}</button>
+                  <button type="button" class="small" style="padding:1px 4px;" title="Move down" @click=${() => void moveProxySource(s.id, 1)}>${icons.caretDown()}</button>
                 </td>
                 <td class="col-source-name" data-label="Name"><strong>${s.name}</strong></td>
                 <td class="col-source-url" data-label="URL">
@@ -189,7 +190,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                       data-arg1=${s.id}
                       title="Test source by fetching URL and counting proxies"
                     >
-                      🧪 Test
+                      ${icons.flask()} Test
                     </button>
                     <button
                       type="button"
@@ -197,7 +198,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                       data-action="showEditProxySource"
                       data-arg1=${s.id}
                     >
-                      Edit
+                      ${icons.pencil()} Edit
                     </button>
                     ${!s.is_builtin
                       ? html`
@@ -207,7 +208,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                             data-action="deleteProxySource"
                             data-arg1=${s.id}
                           >
-                            Delete
+                            ${icons.trash()} Delete
                           </button>
                         `
                       : html``}

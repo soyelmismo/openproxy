@@ -39,9 +39,19 @@ button.link:hover { color: var(--color-link-hover); background: transparent; }
 button.close-btn {
   background: transparent;
   border: none;
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   line-height: 1;
   padding: 0 var(--space-2);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Centralized SVG Icon styling */
+.icon {
+  display: inline-block;
+  vertical-align: -0.125em;
   flex-shrink: 0;
 }
 

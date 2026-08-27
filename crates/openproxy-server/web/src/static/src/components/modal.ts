@@ -19,6 +19,7 @@
 
 import { html, nothing, type TemplateResult } from "lit-html";
 import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
+import { icons } from "../lib/icons.js";
 
 export interface ModalProps {
   id?: string;
@@ -47,7 +48,7 @@ export function modal(props: ModalProps = { body: "" }): TemplateResult {
         <div class="modal-header">
           <h2>${title || ""}</h2>
           <button type="button" class="close-btn" data-action="${closeAction}" aria-label="Close">
-            &times;
+            ${icons.close()}
           </button>
         </div>
         ${unsafeHTML(body)}

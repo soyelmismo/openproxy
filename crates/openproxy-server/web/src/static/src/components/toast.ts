@@ -3,6 +3,7 @@
 // in #toast-container with individual dismiss controls and hover pause.
 
 import { html, render } from "lit-html";
+import { icons } from "../lib/icons.js";
 
 export type ToastType = "info" | "success" | "error" | "warning" | string;
 
@@ -35,7 +36,7 @@ export function showToast(message: string, type: ToastType = "info", durationMs 
   render(
     html`
       <div class="toast-content">${message}</div>
-      <button type="button" class="toast-close" @click=${dismiss} aria-label="Close">&times;</button>
+      <button type="button" class="toast-close" @click=${dismiss} aria-label="Close">${icons.close()}</button>
     `,
     toast
   );

@@ -24,6 +24,7 @@ import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { flashButton, showApiError } from "../lib/ui-utils.js";
+import { icons } from "../lib/icons.js";
 import { showCreateProvider, editProviderEndpointPrompt, editProviderHeadersPrompt } from "../handlers/provider-handlers.js";
 import { showCreateAccount, showUpdateAccountKey, updateAccountLabel, copyAccountApiKey } from "../handlers/account-handlers.js";
 import { showCustomModelForm } from "../components/model-custom-form.js";
@@ -877,7 +878,7 @@ function renderProviderGrid(): TemplateResult {
     ? html`<div class="empty-state">
         <h3>No providers configured</h3>
         <p>Add a provider to get started.</p>
-        <button class="primary" @click=${onShowCreateProvider}>+ Add provider</button>
+        <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} Add provider</button>
       </div>`
     : html`<div class="provider-grid">${list.map((p) => {
         const accounts = (state.accounts || []).filter((a) => a.provider_id === p.id);
@@ -886,8 +887,8 @@ function renderProviderGrid(): TemplateResult {
   return html`
     <div class="page-header"><h2>Providers</h2>
       <div class="actions">
-        <button @click=${onRefreshAllProviders}>Refresh all</button>
-        <button class="primary" @click=${onShowCreateProvider}>+ Add provider</button>
+        <button @click=${onRefreshAllProviders}>${icons.refresh()} Refresh all</button>
+        <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} Add provider</button>
       </div>
     </div>
     ${cards}
@@ -906,7 +907,7 @@ function renderDetailHeader(provider: Provider): TemplateResult {
           <div class="provider-detail-title-row">
             <h2>
               <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>
-              <small class="editable-pencil">✎</small>
+              <small class="editable-pencil">${icons.pencil()}</small>
             </h2>
             <code class="provider-detail-id">${provider.id}</code>
             ${provider.active ? html`` : html`<span class="chip inactive-chip">inactive</span>`}
@@ -915,7 +916,7 @@ function renderDetailHeader(provider: Provider): TemplateResult {
             <span class="chip format-chip" data-format=${provider.format}>${provider.format}</span>
             <span class="chip auth-chip">${provider.auth_type}</span>
             <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
-            <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎</small>
+            <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
             ${provider.extra_headers_json
               ? html`<span class="chip headers-chip" title=${provider.extra_headers_json} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>headers (${Object.keys(JSON.parse(provider.extra_headers_json || "{}")).length})</span>`
               : html``}
@@ -923,14 +924,14 @@ function renderDetailHeader(provider: Provider): TemplateResult {
         </div>
       </div>
       <div class="actions provider-detail-actions">
-        <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎ Endpoint</button>
-        <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>✎ Headers</button>
-        <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>↻ Sync Models</button>
+        <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()} Endpoint</button>
+        <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${icons.pencil()} Headers</button>
+        <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>${icons.refresh()} Sync Models</button>
         <button class="primary" @click=${() => onToggleProviderActive(provider.id, !provider.active)}>
           ${provider.active ? "Deactivate" : "Activate"}
         </button>
         ${!isDeletable
-          ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete</button>`
+          ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">${icons.key()} Delete</button>`
           : html`<button class="danger" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
       </div>
     </div>
@@ -985,7 +986,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
                 <span class="editable account-name" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || "")}>
                   ${a.label || a.email || "—"}
                 </span>
-                <small class="account-edit-icon" title="Rename label">✎</small>
+                <small class="account-edit-icon" title="Rename label">${icons.pencil()}</small>
               </div>
             </td>
             <td class="col-account-priority" data-label="Priority">
@@ -1004,10 +1005,10 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             </td>
             <td class="col-account-actions" data-label="Actions">
               <div class="account-actions-wrap">
-                ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>↻ Quota</button>` : html``}
-                ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>🖥️ Apply Local</button>` : html``}
-                <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>📋 Copy</button>
-                <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>🔑 Key</button>
+                ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>${icons.refresh()} Quota</button>` : html``}
+                ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>${icons.desktop()} Apply Local</button>` : html``}
+                <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>${icons.copy()} Copy</button>
+                <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>${icons.key()} Key</button>
                 <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
               </div>
             </td>
@@ -1015,8 +1016,8 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
         })}</tbody>
       </table></div>`;
   const toolbar: TemplateResult = html`<div>
-    ${hasQuota ? html`<button @click=${() => onRefreshAllQuotas(provider.id)}>↻ Refresh all quotas</button>` : html``}
-    <button class="primary" @click=${() => onShowCreateAccount(provider.id)}>+ Add account</button>
+    ${hasQuota ? html`<button @click=${() => onRefreshAllQuotas(provider.id)}>${icons.refresh()} Refresh all quotas</button>` : html``}
+    <button class="primary" @click=${() => onShowCreateAccount(provider.id)}>${icons.plus()} Add account</button>
   </div>`;
   return html`<section class="detail-section">
     <div class="section-header"><h3>Connections (${accounts.length})</h3>${toolbar}</div>
@@ -1054,10 +1055,10 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
         <span><strong>${state.selectedModels.size}</strong> selected</span>
         <button @click=${() => onBulkEnableSelected(provider.id)}>Enable selected</button>
         <button @click=${() => onBulkDisableSelected(provider.id)}>Disable selected</button>
-        <button @click=${() => onBulkSetModalitySelected("chat")}>💬 Tag Chat</button>
-        <button @click=${() => onBulkSetModalitySelected("image")}>🎨 Tag Image</button>
-        <button @click=${() => onBulkSetModalitySelected("embedding")}>📐 Tag Embedding</button>
-        <button @click=${() => onBulkSetModalitySelected("audio")}>🎙️ Tag Audio</button>
+        <button @click=${() => onBulkSetModalitySelected("chat")}>${icons.chat()} Tag Chat</button>
+        <button @click=${() => onBulkSetModalitySelected("image")}>${icons.image()} Tag Image</button>
+        <button @click=${() => onBulkSetModalitySelected("embedding")}>${icons.embedding()} Tag Embedding</button>
+        <button @click=${() => onBulkSetModalitySelected("audio")}>${icons.audio()} Tag Audio</button>
         <button @click=${() => onBulkTestSelected(provider.id)}>Test selected</button>
         <button class="danger" @click=${() => onBulkDeleteSelected(provider.id)}>Delete selected</button>
         <button class="link" @click=${onClearModelSelection}>Clear selection</button>
@@ -1069,11 +1070,11 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
       <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.5rem; margin-top: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted);">
         <div>Showing ${startIdx + 1}–${Math.min(startIdx + pageSize, totalFiltered)} of ${totalFiltered} models</div>
         <div style="display: flex; gap: 0.5rem; align-items: center;">
-          <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, 1)}>« First</button>
-          <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, currentPage - 1)}>‹ Prev</button>
+          <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, 1)} title="First page">${icons.chevronsLeft()} First</button>
+          <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, currentPage - 1)} title="Previous page">${icons.chevronLeft()} Prev</button>
           <span style="padding: 0 0.5rem; font-weight: bold; color: var(--color-text);">Page ${currentPage} / ${totalPages}</span>
-          <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, currentPage + 1)}>Next ›</button>
-          <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, totalPages)}>Last »</button>
+          <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, currentPage + 1)} title="Next page">Next ${icons.chevronRight()}</button>
+          <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, totalPages)} title="Last page">Last ${icons.chevronsRight()}</button>
         </div>
       </div>`
     : html``;
@@ -1085,7 +1086,7 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
         <div>
           <button @click=${() => onBulkToggleModels(provider.id, true)}>Enable all</button>
           <button @click=${() => onBulkToggleModels(provider.id, false)}>Disable all</button>
-          <button class="primary" @click=${() => onShowCustomModelForm(provider.id)}>+ Custom model</button>
+          <button class="primary" @click=${() => onShowCustomModelForm(provider.id)}>${icons.plus()} Custom model</button>
         </div>
       </div>
 
@@ -1235,11 +1236,11 @@ function renderModelRow(m: Model): TemplateResult {
             .value=${m.model_type || "chat"}
             @change=${(e: Event) => onChangeModelType(m.row_id, e)}
           >
-            <option value="chat" ?selected=${!m.model_type || m.model_type === "chat"}>💬 Chat</option>
-            <option value="image" ?selected=${m.model_type === "image"}>🎨 Image</option>
-            <option value="embedding" ?selected=${m.model_type === "embedding"}>📐 Embedding</option>
-            <option value="audio" ?selected=${m.model_type === "audio"}>🎙️ Audio</option>
-            <option value="rerank" ?selected=${m.model_type === "rerank"}>🔄 Rerank</option>
+            <option value="chat" ?selected=${!m.model_type || m.model_type === "chat"}>Chat</option>
+            <option value="image" ?selected=${m.model_type === "image"}>Image</option>
+            <option value="embedding" ?selected=${m.model_type === "embedding"}>Embedding</option>
+            <option value="audio" ?selected=${m.model_type === "audio"}>Audio</option>
+            <option value="rerank" ?selected=${m.model_type === "rerank"}>Rerank</option>
           </select>
         </div>
         <div class="model-caps-row">
@@ -1263,9 +1264,9 @@ function renderModelRow(m: Model): TemplateResult {
           </select>
         </div>
         <div class="model-btn-group">
-          <button class="small primary" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>🧪 Test</button>
+          <button class="small primary" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>${icons.flask()} Test</button>
           <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? "Disable" : "Enable"}</button>
-          <button class="small danger" @click=${() => onDeleteModel(m.row_id)} title="Delete model">×</button>
+          <button class="small danger" @click=${() => onDeleteModel(m.row_id)} title="Delete model">${icons.close()}</button>
         </div>
       </div>
     </td>

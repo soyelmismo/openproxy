@@ -3,6 +3,7 @@ import { repeat } from "lit-html/directives/repeat.js";
 import { live } from "lit-html/directives/live.js";
 import { state } from "../state/index.js";
 import { renderLogRowHtml } from "../components/log-row.js";
+import { icons } from "../lib/icons.js";
 import { LOG_COLUMNS, LOGS_VISIBLE_COLUMNS_STORAGE_KEY } from "../lib/constants.js";
 import {
   connectLogsWebSocket,
@@ -147,11 +148,11 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
   const isLast = state.logs.page >= totalP;
   return html`<div class="logs-pagination">
     <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>
-    <button ?disabled=${isFirst} @click=${() => logsGoPage(1)}>⟨⟨</button>
-    <button ?disabled=${isFirst} @click=${logsPrevPage}>‹ Prev</button>
+    <button ?disabled=${isFirst} @click=${() => logsGoPage(1)} title="First page">${icons.chevronsLeft()}</button>
+    <button ?disabled=${isFirst} @click=${logsPrevPage} title="Previous page">${icons.chevronLeft()} Prev</button>
     <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
-    <button ?disabled=${isLast} @click=${logsNextPage}>Next ›</button>
-    <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)}>⟩⟩</button>
+    <button ?disabled=${isLast} @click=${logsNextPage} title="Next page">Next ${icons.chevronRight()}</button>
+    <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)} title="Last page">${icons.chevronsRight()}</button>
     <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page.">
       <input type="checkbox" id="logs-follow-input" ?checked=${state.logs.followTail} @change=${logsSetFollow}>
       <span>Follow</span>
@@ -195,22 +196,22 @@ function renderLogsView(): TemplateResult {
       <h2>Live Logs</h2>
       <div class="logs-header-actions">
         <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" @click=${onTogglePause} title=${isPaused ? "Resume live streaming" : "Pause live stream to inspect"}>
-          ${isPaused ? "▶ Resume" : "⏸ Pause"}
+          ${isPaused ? html`${icons.play()} Resume` : html`${icons.pause()} Pause`}
         </button>
         <button type="button" class="btn btn-sm" @click=${exportLogsCSV} title="Export logs as CSV file">
-          📥 Export CSV
+          ${icons.export()} Export CSV
         </button>
         <div class="columns-menu-wrapper">
           <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} @click=${onToggleColumnsMenu}>
             <span>Columns</span>
-            <span class="logs-columns-caret" aria-hidden="true">▾</span>
+            <span class="logs-columns-caret" aria-hidden="true">${icons.caretDown()}</span>
           </button>
           ${renderColumnsMenu()}
         </div>
-        <span id="logs-connection-status" class="logs-connection-badge disconnected">🔴 disconnected</span>
+        <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
         <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${onRecordingToggleClick}>
-          <span class="logs-recording-dot" aria-hidden="true"></span>
-          <span class="logs-recording-label">⏺ Record: <strong>OFF</strong></span>
+          <span class="logs-recording-dot" aria-hidden="true">${icons.record()}</span>
+          <span class="logs-recording-label">Record: <strong>OFF</strong></span>
         </button>
       </div>
     </div>
@@ -218,7 +219,7 @@ function renderLogsView(): TemplateResult {
     <!-- Live Logs Filter Toolbar -->
     <div class="logs-filter-toolbar">
       <div class="logs-search-box">
-        <span class="logs-search-icon" aria-hidden="true">🔍</span>
+        <span class="logs-search-icon" aria-hidden="true">${icons.search()}</span>
         <input
           type="search"
           class="logs-search-input"
@@ -226,11 +227,11 @@ function renderLogsView(): TemplateResult {
           .value=${filterSearch}
           @input=${onSearchInput}
         />
-        ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${onClearSearch} aria-label="Clear filter">✕</button>` : null}
+        ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${onClearSearch} aria-label="Clear filter">${icons.close()}</button>` : null}
       </div>
       <div class="logs-status-filters" role="group" aria-label="Status filter">
         <button type="button" class="logs-filter-btn ${filterStatus === "all" ? "active" : ""}" @click=${() => onSetStatusFilter("all")}>All</button>
-        <button type="button" class="logs-filter-btn ${filterStatus === "inflight" ? "active" : ""}" @click=${() => onSetStatusFilter("inflight")}>⚡ In-flight</button>
+        <button type="button" class="logs-filter-btn ${filterStatus === "inflight" ? "active" : ""}" @click=${() => onSetStatusFilter("inflight")}>${icons.lightning()} In-flight</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "2xx" ? "active" : ""}" @click=${() => onSetStatusFilter("2xx")}>2xx OK</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "4xx" ? "active" : ""}" @click=${() => onSetStatusFilter("4xx")}>4xx Client</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "5xx" ? "active" : ""}" @click=${() => onSetStatusFilter("5xx")}>5xx Server</button>

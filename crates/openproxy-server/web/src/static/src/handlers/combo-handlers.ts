@@ -72,7 +72,7 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
             <div class="field">
               <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input id="combo-predictive-rl" name="preventive_rate_limit" type="checkbox">
-                <span>⚡ Preventive Rate Limit (Predict 429s)</span>
+                <span>Preventive Rate Limit (Predict 429s)</span>
               </label>
             </div>
             <div class="field">
@@ -389,7 +389,7 @@ export async function updateSelectionWindow(id: number, e: Event | null): Promis
 export async function testAllTargets(comboId: number, e: Event | null): Promise<void> {
   const btn = e && e.target ? (e.target as HTMLElement).closest("button") : null;
   const oldText = btn ? btn.textContent : null;
-  if (btn) { btn.disabled = true; btn.textContent = "🧪 Testing..."; }
+  if (btn) { btn.disabled = true; btn.textContent = "Testing..."; }
   try {
     const results = await api(`/combos/${comboId}/test-all`, { method: "POST" });
     state.comboTestResults[comboId] = Array.isArray(results) ? results : [];
@@ -397,7 +397,7 @@ export async function testAllTargets(comboId: number, e: Event | null): Promise<
   } catch (err: unknown) {
     showApiError(err, "Test all failed");
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = oldText || "🧪 Test all"; }
+    if (btn) { btn.disabled = false; btn.textContent = oldText || "Test all"; }
   }
 }
 

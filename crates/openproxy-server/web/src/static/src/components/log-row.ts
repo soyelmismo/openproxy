@@ -4,6 +4,7 @@
 import { html, type TemplateResult } from 'lit-html';
 import { formatContext } from "../lib/format.js";
 import { STAGE_LABELS } from "../lib/constants.js";
+import { icons, endpointIcon } from "../lib/icons.js";
 import type { AttemptState } from "../state/live-logs-store.js";
 
 export function renderLogPhaseHtml(attempt: AttemptState): TemplateResult {
@@ -58,8 +59,7 @@ function buildLogRowCells(
       : rawKind === "video"
       ? "/v1/video/generations"
       : "/v1/chat/completions";
-    const icon = rawKind === "audio" ? "🎙️" : rawKind === "image" ? "🎨" : rawKind === "embedding" ? "🧠" : rawKind === "video" ? "🎬" : "💬";
-    cells.push(html`<span class="log-type" title="Endpoint: POST ${path} (${rawKind})"><span class="log-type-tag log-type-tag--${rawKind}">${icon} ${rawKind}</span></span>`);
+    cells.push(html`<span class="log-type" title="Endpoint: POST ${path} (${rawKind})"><span class="log-type-tag log-type-tag--${rawKind}">${endpointIcon(rawKind)} ${rawKind}</span></span>`);
   }
   
   if (has("client")) {
@@ -93,7 +93,7 @@ function buildLogRowCells(
       const title = (row.prompt_tokens_estimated || row.completion_tokens_estimated)
         ? "Tokens marked ≈ are estimated (upstream didn't report usage)"
         : "Tokens reported by upstream";
-      cells.push(html`<span class="log-tokens" title="${title}">${ptEst}${formatContext(row.prompt_tokens)}↓ ${ctEst}${formatContext(row.completion_tokens)}↑</span>`);
+      cells.push(html`<span class="log-tokens" title="${title}">${ptEst}${formatContext(row.prompt_tokens)}${icons.arrowDown()} ${ctEst}${formatContext(row.completion_tokens)}${icons.arrowUp()}</span>`);
     } else {
       cells.push(html`<span class="log-tokens">—</span>`);
     }
@@ -113,7 +113,7 @@ function buildLogRowCells(
   
   if (has("cache")) {
     if (row && row.cached_tokens != null && row.cached_tokens > 0) {
-      cells.push(html`<span class="log-cache" style="color: var(--color-success);" title="${formatContext(row.cached_tokens)} tokens cached by upstream API">🎯 ${formatContext(row.cached_tokens)}</span>`);
+      cells.push(html`<span class="log-cache" style="color: var(--color-success);" title="${formatContext(row.cached_tokens)} tokens cached by upstream API">${icons.target()} ${formatContext(row.cached_tokens)}</span>`);
     } else {
       cells.push(html`<span class="log-cache">—</span>`);
     }
@@ -124,7 +124,7 @@ function buildLogRowCells(
     if (savings != null && savings > 0) {
       const pct = savings < 1 ? savings.toFixed(2) : Math.round(savings).toString();
       const tech = row ? row.compression_techniques : "";
-      cells.push(html`<span class="log-compression" style="background: rgba(34, 197, 94, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: 500;" title="Local Compression: ${pct}% savings (BPE cl100k_base) — ${tech}">⚡ ${pct}%</span>`);
+      cells.push(html`<span class="log-compression" style="background: rgba(34, 197, 94, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: 500;" title="Local Compression: ${pct}% savings (BPE cl100k_base) — ${tech}">${icons.lightning()} ${pct}%</span>`);
     } else {
       cells.push(html`<span class="log-compression log-compression--none" title="No compression applied (or mode is Off)">—</span>`);
     }

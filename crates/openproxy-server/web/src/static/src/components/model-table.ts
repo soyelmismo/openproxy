@@ -23,6 +23,7 @@
 import { html, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { statusPillClass } from "../lib/constants.js";
+import { icons } from "../lib/icons.js";
 import {
   toggleModelSelection,
   testModel,
@@ -111,9 +112,9 @@ export function renderModelRow(m: Model): TemplateResult {
       <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
       <td class="last-test-cell">${lastTest}</td>
       <td>
-        <button class="small" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => testModel(m.row_id, m.model_id, e)}>Test</button>
+        <button class="small" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => testModel(m.row_id, m.model_id, e)}>${icons.flask()} Test</button>
         <button class="small model-toggle-btn" @click=${() => toggleModel(m.row_id, !m.active, null)}>${m.active ? "Disable" : "Enable"}</button>
-        <button class="small danger" @click=${() => deleteModel(m.row_id)}>×</button>
+        <button class="small danger" @click=${() => deleteModel(m.row_id)} title="Delete model">${icons.close()}</button>
       </td>
     </tr>
   `;
@@ -294,6 +295,6 @@ export function applySort(rows: readonly Model[], sort: ModelSort | null): reado
 // model-handlers.ts.
 export function renderSortableTh(col: SortableColumn, sort: ModelSort | null, providerId: string): TemplateResult {
   const isActive: boolean = !!(sort && sort.key === col.key);
-  const indicator: string = isActive ? (sort && sort.dir === "desc" ? " ▼" : " ▲") : "";
+  const indicator: TemplateResult | string = isActive ? (sort && sort.dir === "desc" ? icons.caretDown() : icons.caretUp()) : "";
   return html`<th class=${"sortable" + (isActive ? " sorted" : "")} @click=${() => cycleProviderSort(providerId, col.key, null)}>${col.label}<span class="sort-indicator">${indicator}</span></th>`;
 }

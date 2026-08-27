@@ -238,14 +238,9 @@ fn parse_minimax_quota(
         "current_weekly_remaining_percent",
     );
 
-    let session_reset_at = target
-        .get("remains_time")
-        .and_then(serde_json::Value::as_i64)
-        .and_then(ms_epoch_to_secs_str);
-    let weekly_reset_at = target
-        .get("weekly_remains_time")
-        .and_then(serde_json::Value::as_i64)
-        .and_then(ms_epoch_to_secs_str);
+    let session_reset_at = extract_reset_timestamp(target, "end_time", "remains_time");
+    let weekly_reset_at =
+        extract_reset_timestamp(target, "weekly_end_time", "weekly_remains_time");
 
     Ok(openproxy_types::AccountQuota {
         session_used,
@@ -259,6 +254,32 @@ fn parse_minimax_quota(
         fetch_error: None,
         model_details: None,
     })
+}
+
+fn extract_reset_timestamp(
+    entry: &serde_json::Value,
+    end_time_key: &str,
+    remains_time_key: &str,
+) -> Option<String> {
+    if let Some(end_ms) = entry
+        .get(end_time_key)
+        .and_then(serde_json::Value::as_i64)
+        .filter(|&v| v > 0)
+    {
+        return ms_epoch_to_secs_str(end_ms);
+    }
+    if let Some(remains_ms) = entry
+        .get(remains_time_key)
+        .and_then(serde_json::Value::as_i64)
+        .filter(|&v| v > 0)
+    {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let delta_secs = (remains_ms / 1000) as u64;
+        return Some((now_secs + delta_secs).to_string());
+    }
+    None
 }
 
 fn extract_used_limit(
@@ -295,4 +316,69 @@ fn extract_used_limit(
 fn ms_epoch_to_secs_str(ms: i64) -> Option<String> {
     let secs = ms.checked_div(1000)?;
     Some(secs.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_minimax_quota_with_end_times() {
+        let json = serde_json::json!({
+            "model_remains": [
+                {
+                    "start_time": 1787842800000_i64,
+                    "end_time": 1787860800000_i64,
+                    "remains_time": 11409757,
+                    "current_interval_total_count": 0,
+                    "current_interval_usage_count": 0,
+                    "model_name": "general",
+                    "current_weekly_total_count": 0,
+                    "current_weekly_usage_count": 0,
+                    "weekly_start_time": 1787529600000_i64,
+                    "weekly_end_time": 1788134400000_i64,
+                    "weekly_remains_time": 285009757,
+                    "current_interval_status": 2,
+                    "current_interval_remaining_percent": 0,
+                    "current_weekly_status": 1,
+                    "current_weekly_remaining_percent": 79
+                }
+            ],
+            "base_resp": {
+                "status_code": 0,
+                "status_msg": "success"
+            }
+        });
+
+        let quota = parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains")
+            .expect("quota parsed successfully");
+
+        assert_eq!(quota.session_reset_at.as_deref(), Some("1787860800"));
+        assert_eq!(quota.weekly_reset_at.as_deref(), Some("1788134400"));
+        assert_eq!(quota.session_used, Some(100));
+        assert_eq!(quota.session_limit, Some(100));
+        assert_eq!(quota.weekly_used, Some(21));
+        assert_eq!(quota.weekly_limit, Some(100));
+    }
+
+    #[test]
+    fn parses_minimax_quota_fallback_remains_time() {
+        let json = serde_json::json!({
+            "model_remains": [
+                {
+                    "remains_time": 3600000,
+                    "model_name": "coding-plan",
+                    "current_interval_total_count": 50,
+                    "current_interval_usage_count": 10
+                }
+            ]
+        });
+
+        let quota = parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains")
+            .expect("quota parsed successfully");
+
+        assert_eq!(quota.session_used, Some(10));
+        assert_eq!(quota.session_limit, Some(50));
+        assert!(quota.session_reset_at.is_some());
+    }
 }

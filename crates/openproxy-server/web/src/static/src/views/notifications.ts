@@ -48,6 +48,7 @@ import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
 import { state } from "../state/index.js";
+import { icons } from "../lib/icons.js";
 import {
   getUnreadCount,
   setUnreadCount,
@@ -87,16 +88,6 @@ const FILTER_OPTIONS: ReadonlyArray<{
   { value: "model_auto_activated", key: "notifications.filter.model_auto_activated" },
   { value: "system", key: "notifications.filter.system" },
 ];
-
-/** Per-kind icon glyph. Kept as a unicode string so it inherits the
- *  text color of its container (vs. an SVG that would need its own
- *  stroke color management). */
-const KIND_ICON = {
-  model_new: "⊕",
-  model_gone: "⊖",
-  model_auto_activated: "⚡",
-  system: "ℹ",
-} satisfies Record<NotificationKind, string>;
 
 /**
  * Per-kind CSS color variable for the card's left border accent and
@@ -150,35 +141,6 @@ function notificationCardColor(r: NotificationRow): string {
 }
 
 /**
- * Per-code icon glyph for `system` notifications. Falls back to
- * `KIND_ICON.system` (`ℹ`) for unknown codes — the same generic info
- * glyph the pre-G2 tray used for every system row.
- *
- * Unicode symbols (NOT emoji) are used to match the existing
- * `KIND_ICON` convention. The variants picked are the closest
- * non-emoji Unicode has to each semantic:
- *
- *  - `discovery_failed`            ⚠  WARNING SIGN (U+26A0)
- *  - `account_key_decrypt_failed`  ⚿  SQUARED KEY (U+26BF)
- *  - `circuit_open`                ⏻  POWER SYMBOL (U+23FB) — breaker "off"
- *  - `oauth_expired`               ⊘  CIRCLED DIVISION SLASH (U+2298) — token "blocked"
- *  - `account_invalid`             ⊗  CIRCLED TIMES (U+2297) — access "denied"
- *  - `quota_low`                   ▼  BLACK DOWN-POINTING TRIANGLE (U+25BC) — "low"
- *
- * The frontend learns about new codes defensively: a code that the
- * server starts emitting before this map is updated renders with the
- * generic `ℹ` glyph (still visible, just not semantically colored).
- */
-const SYSTEM_CODE_ICON = {
-  discovery_failed: "⚠",
-  account_key_decrypt_failed: "⚿", // U+26BF SQUARED KEY
-  circuit_open: "⏻", // U+23FB POWER SYMBOL
-  oauth_expired: "⊘", // U+2298 CIRCLED DIVISION SLASH
-  account_invalid: "⊗", // U+2297 CIRCLED TIMES
-  quota_low: "▼", // U+25BC BLACK DOWN-POINTING TRIANGLE
-} satisfies Record<string, string>;
-
-/**
  * Per-code CSS color variable for `system` notifications. The icon
  * glyph gets this color via the `notification-card-icon--code-{code}`
  * class (added by `renderCard` only when `r.kind === "system"` and
@@ -204,15 +166,33 @@ const SYSTEM_CODE_COLOR_VAR = {
 
 /** Resolve the icon glyph for a row. For `system` rows, dispatches on
  *  `payload.code`; for everything else, uses the per-kind table. */
-function notificationIcon(r: NotificationRow): string {
+function notificationIcon(r: NotificationRow): TemplateResult {
   if (r.kind === "system") {
     const code: string = payloadString(r.payload, "code");
-    if (code && (code in SYSTEM_CODE_ICON)) {
-      return SYSTEM_CODE_ICON[code as keyof typeof SYSTEM_CODE_ICON];
+    switch (code) {
+      case "discovery_failed":
+      case "circuit_open":
+      case "account_invalid":
+        return icons.warning();
+      case "account_key_decrypt_failed":
+      case "oauth_expired":
+        return icons.key();
+      case "quota_low":
+        return icons.caretDown();
+      default:
+        return icons.tag();
     }
-    return KIND_ICON.system;
   }
-  return KIND_ICON[r.kind] ?? "•";
+  switch (r.kind) {
+    case "model_new":
+      return icons.plus();
+    case "model_gone":
+      return icons.close();
+    case "model_auto_activated":
+      return icons.lightning();
+    default:
+      return icons.tag();
+  }
 }
 
 /** Resolve the CSS color variable for a system notification's icon,
@@ -832,7 +812,7 @@ function renderTargetRow(tgt: ComboTargetWithModel): TemplateResult {
     ? "→ " + (tgt.sub_combo_name ?? "#" + String(tgt.sub_combo_id))
     : (tgt.model_display_name || tgt.model_id || "row #" + String(tgt.model_row_id));
   const cdBadge: TemplateResult = tgt.in_cooldown
-    ? html` <span class="badge badge-cooldown" title=${tgt.cooldown_reason ?? ""}>⏸</span>`
+    ? html` <span class="badge badge-cooldown" title=${tgt.cooldown_reason ?? ""}>${icons.pause()}</span>`
     : html``;
   return html`<div class="dnd-target">
     <span class="dnd-target-pos">${String(tgt.priority_order)}</span>
@@ -1092,7 +1072,7 @@ async function onDismiss(r: NotificationRow): Promise<void> {
 // ============================================================================
 
 function renderCard(r: NotificationRow): TemplateResult {
-  const icon: string = notificationIcon(r);
+  const icon: TemplateResult = notificationIcon(r);
   const iconColorVar: string | null = notificationIconColorVar(r);
   const cardColor: string = notificationCardColor(r);
   const body: string = notificationBody(r);
@@ -1225,7 +1205,7 @@ function renderList(): TemplateResult {
     : nothing;
   if (filtered.length === 0) {
     return html`${noUnreadHint}<div class="notification-empty">
-      <div class="notification-empty-icon" aria-hidden="true">🔍</div>
+      <div class="notification-empty-icon" aria-hidden="true">${icons.search()}</div>
       <p>${t("common.empty")}</p>
       ${hasMore ? html`<button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>
         ${isLoadingMore ? t("common.loading") : t("notifications.load_more")}

@@ -11,9 +11,10 @@
 
 import { html, render } from "lit-html";
 import { toggleTheme, getTheme } from "../state/theme.js";
+import { icons } from "../lib/icons.js";
 
 function renderThemeToggle(slot: HTMLElement): void {
-  const icon: string = getTheme() === "dark" ? "☀" : "🌙";
+  const isDark = getTheme() === "dark";
   render(
     html`<button
       id="theme-toggle"
@@ -27,7 +28,7 @@ function renderThemeToggle(slot: HTMLElement): void {
         renderThemeToggle(slot);
       }}
     >
-      ${icon}
+      ${isDark ? icons.sun() : icons.moon()}
     </button>`,
     slot,
   );

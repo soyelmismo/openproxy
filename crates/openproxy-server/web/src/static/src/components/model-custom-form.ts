@@ -44,11 +44,11 @@ function customModelFormTemplate(providerId: string): TemplateResult {
             <div class="field">
               <label for="custom-model-type">Modality / Model Type</label>
               <select id="custom-model-type" name="model_type">
-                <option value="chat">💬 Chat / LLM</option>
-                <option value="image">🎨 Image Generation</option>
-                <option value="embedding">📐 Text Embeddings</option>
-                <option value="audio">🎙️ Audio Transcription</option>
-                <option value="rerank">🔄 Reranker</option>
+                <option value="chat">Chat / LLM</option>
+                <option value="image">Image Generation</option>
+                <option value="embedding">Text Embeddings</option>
+                <option value="audio">Audio Transcription</option>
+                <option value="rerank">Reranker</option>
               </select>
             </div>
             <div class="field">

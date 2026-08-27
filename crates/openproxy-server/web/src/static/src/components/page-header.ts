@@ -11,6 +11,7 @@
 
 import { html, type TemplateResult } from "lit-html";
 import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
+import { icons } from "../lib/icons.js";
 
 export interface PageHeaderBack {
   href: string;
@@ -26,7 +27,7 @@ export interface PageHeaderProps {
 
 export function pageHeader(props: PageHeaderProps): TemplateResult {
   const back: TemplateResult = props.back
-    ? html`<a href="${props.back.href}" class="back-link">${props.back.label || "← Back"}</a>`
+    ? html`<a href="${props.back.href}" class="back-link">${icons.arrowLeft()} ${props.back.label || "Back"}</a>`
     : html``;
   const actions: TemplateResult = props.actions
     ? html`<div class="actions">${unsafeHTML(props.actions)}</div>`

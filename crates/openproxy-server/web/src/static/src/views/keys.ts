@@ -16,6 +16,7 @@ import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
+import { icons } from "../lib/icons.js";
 import type { Model } from "../lib/types/api.js";
 
 // The api_key row shape. Defined locally (not in lib/types/api.ts)
@@ -136,13 +137,13 @@ function renderKeyRow(k: ApiKeyRow): TemplateResult {
       <td class="col-key-created" data-label="Created"><span class="key-meta-time">${k.created_at || "—"}</span></td>
       <td class="col-key-actions" data-label="Actions">
         <div class="key-actions-wrap">
-          <button class="small" @click=${() => onShowEditKey(k.id)}>Edit</button>
-          <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>Regenerate</button>
-          <button class="small" @click=${() => onViewKeyUsage(k.id)}>Usage</button>
+          <button class="small" @click=${() => onShowEditKey(k.id)}>${icons.pencil()} Edit</button>
+          <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>${icons.refresh()} Regenerate</button>
+          <button class="small" @click=${() => onViewKeyUsage(k.id)}>${icons.lightning()} Usage</button>
           ${k.is_active && !k.revoked_at
             ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
             : html``}
-          <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>Delete</button>
+          <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>${icons.trash()} Delete</button>
         </div>
       </td>
     </tr>
@@ -153,7 +154,7 @@ function renderKeys(): TemplateResult {
   if (loadError) {
     return html`
       <div class="page-header"><h2>API Keys</h2>
-        <div class="actions"><button class="primary" @click=${onShowCreateKey}>+ Create key</button></div>
+        <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} Create key</button></div>
       </div>
       <div class="banner banner-error">${loadError}</div>
     `;
@@ -167,7 +168,7 @@ function renderKeys(): TemplateResult {
       </table></div>`;
   return html`
     <div class="page-header"><h2>API Keys</h2>
-      <div class="actions"><button class="primary" @click=${onShowCreateKey}>+ Create key</button></div>
+      <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} Create key</button></div>
     </div>
     ${body}
   `;

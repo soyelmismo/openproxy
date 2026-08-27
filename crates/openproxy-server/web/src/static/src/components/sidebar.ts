@@ -6,6 +6,7 @@ import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
 import { state } from "../state/index.js";
 import { mountThemeToggle } from "./theme-toggle.js";
 import { t } from "../i18n/index.js";
+import { icons } from "../lib/icons.js";
 import {
   initNotificationsStore,
   getUnreadCount,
@@ -221,7 +222,7 @@ export function renderSidebar(): void {
   const collapsed = !!mutableState().ui?.sidebarCollapsed;
   document.body.classList.toggle("sidebar-collapsed", collapsed);
   document.body.classList.toggle("mobile-nav-open", mobileNavOpen);
-  const toggleLabel = collapsed ? "→" : "←";
+  const toggleIcon = collapsed ? icons.chevronsRight() : icons.chevronsLeft();
 
   render(html`
     <div class="mobile-topbar mobile-only">
@@ -232,7 +233,7 @@ export function renderSidebar(): void {
         <span class="health-dot ${dotClass}" title="Health: ${healthText}"></span>
         <button class="mobile-nav-toggle" type="button" data-action="toggleMobileNav"
                 aria-label=${mobileNavOpen ? "Close navigation" : "Open navigation"}>
-          ${mobileNavOpen ? "✕" : "☰"}
+          ${mobileNavOpen ? icons.close() : icons.menu()}
         </button>
       </div>
     </div>
@@ -246,7 +247,7 @@ export function renderSidebar(): void {
       </div>
       <div class="mobile-drawer-header mobile-only">
         <div class="brand">OpenProxy</div>
-        <button class="mobile-nav-close" type="button" data-action="toggleMobileNav" aria-label="Close menu">✕</button>
+        <button class="mobile-nav-close" type="button" data-action="toggleMobileNav" aria-label="Close menu">${icons.close()}</button>
       </div>
       <nav @click=${handleNavClick}>${renderLink(HOME_LINK, collapsed)}${GROUPS.map((g: SidebarGroup) => html`
         <div class="sidebar-nav-group">
@@ -261,12 +262,12 @@ export function renderSidebar(): void {
       <div class="sidebar-footer">
         <button class="sidebar-toggle desktop-only" type="button" data-action="toggleSidebar"
                 title=${collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                aria-label=${collapsed ? "Expand sidebar" : "Collapse sidebar"}>${toggleLabel}</button>
+                aria-label=${collapsed ? "Expand sidebar" : "Collapse sidebar"}>${toggleIcon}</button>
         <span id="theme-toggle-slot"></span>
         <button class="sidebar-logout" type="button" data-action="logout"
                 title=${t("nav.logout")}
                 aria-label=${t("nav.logout")}
-                ?hidden=${collapsed}>${t("nav.logout")}</button>
+                ?hidden=${collapsed}>${icons.logout()} ${t("nav.logout")}</button>
       </div>
     </div>
   `, sb as HTMLElement);

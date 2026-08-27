@@ -16,6 +16,7 @@ import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
 import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
 import { showAddTarget } from "../handlers/combo-target-handlers.js";
+import { icons } from "../lib/icons.js";
 import { statusPillClass, PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 import type {
   Combo,
@@ -266,7 +267,7 @@ async function onTestTarget(targetId: number, modelRowId: number | null, e: Even
     if (btn) {
       setTimeout(() => {
         btn.disabled = false;
-        btn.textContent = oldText || "🧪";
+        btn.textContent = oldText || "Test";
       }, 1500);
     }
   }
@@ -467,7 +468,7 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
         @touchstart=${(e: TouchEvent) => onTouchStartHandle(t.id, e)}
         @touchmove=${(e: TouchEvent) => onTouchMoveHandle(e)}
         @touchend=${() => void onTouchEndHandle()}
-        @touchcancel=${() => void onTouchEndHandle()}>⠿</td>
+        @touchcancel=${() => void onTouchEndHandle()}>${icons.dragHandle()}</td>
     <td class="col-target-order" data-label="#">${t.priority_order}</td>
     <td class="col-target-provider" data-label="Provider">${providerCell}</td>
     <td class="col-target-account" data-label="Account">${accountCell}</td>
@@ -478,12 +479,12 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
     <td class="last-test-cell col-target-test-status" data-label="Last test">${lastTestCell}</td>
     <td class="col-target-actions" data-label="Actions">
       <div class="target-actions-wrap">
-        ${!isSub ? html`<button class="small primary" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪 Test</button>` : html``}
-        <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸ Pause" : "▶ Resume"}</button>
-        <button class="small reorder-btn" title="Move Up" @click=${() => onChangePriority(t.id, -1)}>▲</button>
-        <button class="small reorder-btn" title="Move Down" @click=${() => onChangePriority(t.id, 1)}>▼</button>
-        ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄 Reset CD</button>` : html``}
-        <button class="small danger" title="Remove target" @click=${() => onDeleteTarget(t.id)}>×</button>
+        ${!isSub ? html`<button class="small primary" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>${icons.flask()} Test</button>` : html``}
+        <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? html`${icons.pause()} Pause` : html`${icons.play()} Resume`}</button>
+        <button class="small reorder-btn" title="Move Up" @click=${() => onChangePriority(t.id, -1)}>${icons.caretUp()}</button>
+        <button class="small reorder-btn" title="Move Down" @click=${() => onChangePriority(t.id, 1)}>${icons.caretDown()}</button>
+        ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>${icons.refresh()} Reset CD</button>` : html``}
+        <button class="small danger" title="Remove target" @click=${() => onDeleteTarget(t.id)}>${icons.close()}</button>
       </div>
     </td>
   </tr>`;
@@ -504,7 +505,7 @@ function renderComboDetail(): TemplateResult {
   const cds = targets.filter((t) => t.in_cooldown);
   const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>Weight</abbr></th>` : html``;
   return html`
-    <div class="page-header"><a href="#/combos" class="back-link">← All combos</a><h2>${combo.name}</h2>
+    <div class="page-header"><a href="#/combos" class="back-link">${icons.arrowLeft()} All combos</a><h2>${combo.name}</h2>
       <div class="actions">
         <label style="display:inline-flex;align-items:center;gap:5px;font-size:0.85rem;">
           Strategy:
@@ -517,7 +518,7 @@ function renderComboDetail(): TemplateResult {
         <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
         <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title="Rate Limit Preventivo: Predice 429s por target y salta proactivamente al siguiente target del combo sin consumir intentos.">
           <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${onTogglePreventiveRateLimit}>
-          ⚡ Predictive RL
+          ${icons.lightning()} Predictive RL
         </label>
         <label>Race size: <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${onUpdateRaceSize} @input=${onUpdateRaceSize} class="race-input"></label>
         <button class="danger" @click=${onDeleteCombo}>Delete</button></div></div>
@@ -525,9 +526,9 @@ function renderComboDetail(): TemplateResult {
       <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${onUpdateContextWindow} @input=${onUpdateContextWindow} class="cw-input" title="Override context window (tokens). Empty = auto-compute."></label>
       <span class="cw-hint">Auto: <strong>${autoCwLabel}</strong> · Effective: <strong>${effectiveCwLabel}</strong></span></div>
     ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
-    ${cds.length > 0 ? html`<div class="cooldown-banner">⏸ ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
+    ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
-      <div class="actions"><button @click=${onTestAllTargets}>🧪 Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div></div>
+      <div class="actions"><button @click=${onTestAllTargets}>${icons.flask()} Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} Add target</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
         <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Cooldown</th><th>Last test</th><th>Actions</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
@@ -536,7 +537,7 @@ function renderComboDetail(): TemplateResult {
 
 function renderComboGrid(): TemplateResult {
   const list = state.combos || [];
-  return html`<div class="page-header"><h2>Combos</h2><div class="actions"><button class="primary" @click=${() => showCreateCombo()}>+ Create combo</button></div></div>
+  return html`<div class="page-header"><h2>Combos</h2><div class="actions"><button class="primary" @click=${() => showCreateCombo()}>${icons.plus()} Create combo</button></div></div>
     ${list.length === 0 ? html`<p class="empty">No combos yet. Create one to start routing.</p>` : html`<div class="combo-grid">${list.map((c) => {
       const pm = priorityModeOf(c);
       const pmChip = pm === "strict" ? html`` : html` · <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>`;

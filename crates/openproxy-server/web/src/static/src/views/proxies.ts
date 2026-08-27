@@ -4,6 +4,7 @@ import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
 import { requestUpdate } from "../state/reactive.js";
 import { createView } from "../lib/view-utils.js";
+import { icons } from "../lib/icons.js";
 import {
   syncProxies,
   testProxy,
@@ -168,8 +169,8 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
       <td class="col-proxy-validated" data-label="Checked"><small class="proxy-time-text">${lastVal}</small></td>
       <td class="col-proxy-actions" data-label="Actions">
         <div class="proxy-actions-wrap">
-          <button class="small" @click=${() => void testProxy(p.id)}>${t("common.retry")}</button>
-          <button class="small danger" @click=${() => void deleteProxy(p.id)}>${t("common.delete")}</button>
+          <button class="small" @click=${() => void testProxy(p.id)}>${icons.flask()} ${t("common.retry")}</button>
+          <button class="small danger" @click=${() => void deleteProxy(p.id)}>${icons.trash()} ${t("common.delete")}</button>
         </div>
       </td>
     </tr>
@@ -205,14 +206,14 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
       </div>
       <div class="actions">
         <button class="primary" ?disabled=${isSyncing} @click=${triggerSync}>
-          ${isSyncing ? html`<span class="spinner"></span>` : html``}
+          ${isSyncing ? html`<span class="spinner"></span>` : icons.refresh()}
           ${syncBtnLabel}
         </button>
         <button class="secondary" @click=${() => void testAllProxies()}>
-          ${t("proxies.btn.test_all")}
+          ${icons.flask()} ${t("proxies.btn.test_all")}
         </button>
         <button class="secondary" @click=${showAddCustomProxy}>
-          + ${t("proxies.btn.add")}
+          ${icons.plus()} ${t("proxies.btn.add")}
         </button>
       </div>
     </div>

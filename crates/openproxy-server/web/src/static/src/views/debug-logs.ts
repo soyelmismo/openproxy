@@ -22,6 +22,7 @@
 
 import { html, type TemplateResult } from 'lit-html';
 import { fetchDebugLogs, clearDebugLogs } from "../lib/api.js";
+import { icons } from "../lib/icons.js";
 import type { FetchDebugLogsOpts } from "../lib/api.js";
 import { showToast } from "../components/toast.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
@@ -358,8 +359,8 @@ function renderDebugLogs(): TemplateResult {
     <div class="page-header"><h2>Debug Logs</h2>
       <div class="actions">
         <span class="debug-buffer-indicator" id="debug-buffer-indicator" style="font-size:0.85rem;color:var(--color-text-muted);margin-right:0.5rem;font-family:var(--font-mono);">Buffer: ${lastTotalInBuffer} / ${BUFFER_CAPACITY}</span>
-        <button type="button" class="link" title="Copy all visible entries as Markdown to the clipboard" @click=${onCopyAll}>Copy all</button>
-        <button type="button" class="link" title="Clear the in-memory debug log ring buffer on the server" style="margin-left:0.5rem;" @click=${onClear}>Clear</button>
+        <button type="button" class="link" title="Copy all visible entries as Markdown to the clipboard" @click=${onCopyAll}>${icons.copy()} Copy all</button>
+        <button type="button" class="link" title="Clear the in-memory debug log ring buffer on the server" style="margin-left:0.5rem;" @click=${onClear}>${icons.trash()} Clear</button>
       </div>
     </div>
     <div class="debug-filters" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-end;padding:0.5rem 0 1rem;border-bottom:1px solid var(--color-border-soft);margin-bottom:0.5rem;">

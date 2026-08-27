@@ -531,14 +531,14 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
             e.stopPropagation();
             const btn = e.target as HTMLButtonElement;
             btn.disabled = true;
-            btn.textContent = "⏳";
+            btn.textContent = "...";
             try {
               const result = await api(`/models/${rowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
-              btn.textContent = result.status >= 200 && result.status < 300 ? "✓" : "✗";
+              btn.textContent = result.status >= 200 && result.status < 300 ? "OK" : "ERR";
               btn.style.color = result.status >= 200 && result.status < 300 ? "var(--color-success)" : "var(--color-error)";
-            } catch { btn.textContent = "✗"; btn.style.color = "var(--color-error)"; }
-            setTimeout(() => { btn.disabled = false; btn.textContent = "🧪"; btn.style.color = ""; }, 3000);
-          }}>🧪</button>
+            } catch { btn.textContent = "ERR"; btn.style.color = "var(--color-error)"; }
+            setTimeout(() => { btn.disabled = false; btn.textContent = "Test"; btn.style.color = ""; }, 3000);
+          }}>Test</button>
         </label>
         <div class="model-checkbox-controls"
              style="display: none"

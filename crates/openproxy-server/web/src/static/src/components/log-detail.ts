@@ -15,6 +15,7 @@ import { state } from "../state/index.js";
 import { showToast } from "./toast.js";
 import { ensureModalRoot } from "../lib/ui-utils.js";
 import { liveLogsStore } from "../state/live-logs-store.js";
+import { icons, endpointIcon } from "../lib/icons.js";
 
 /** Loose shape for the `log` arg in renderLogDetailModal. The
  *  modal accepts the long-poll row shape (RecentUsageRow) and the
@@ -1143,7 +1144,6 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     : endpointKind === "video"
     ? "/v1/video/generations"
     : "/v1/chat/completions";
-  const endpointIcon = endpointKind === "audio" ? "🎙️" : endpointKind === "image" ? "🎨" : endpointKind === "embedding" ? "🧠" : endpointKind === "video" ? "🎬" : "💬";
 
   return html`
     <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
@@ -1151,14 +1151,14 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
         <div class="modal-header">
           <div style="display:flex;align-items:center;gap:var(--space-2);min-width:0;flex:1 1 auto;overflow:hidden;">
             <h2 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
-            <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">📋 Copy debug bundle</button>
+            <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">${icons.copy()} Copy debug bundle</button>
           </div>
-          <button type="button" class="close-btn" @click=${(e: Event) => closeLogDetailModal(e)} aria-label="Close">&times;</button>
+          <button type="button" class="close-btn" @click=${(e: Event) => closeLogDetailModal(e)} aria-label="Close">${icons.close()}</button>
         </div>
         <div class="modal-body">
           <div class="log-detail-summary">
             <div><strong>Status:</strong> <span class="status-pill ${statusClass}">${String(status)}</span></div>
-            <div><strong>Endpoint:</strong> <span title="HTTP Entry: POST ${endpointPath} (${endpointKind})"><code style="font-size:0.85em;padding:1px 4px;background:var(--color-surface-2);border-radius:3px;">POST ${endpointPath}</code> <span class="log-type-tag log-type-tag--${endpointKind}" style="font-size:0.75em;padding:1px 5px;margin-left:4px;">${endpointIcon} ${endpointKind}</span></span></div>
+            <div><strong>Endpoint:</strong> <span title="HTTP Entry: POST ${endpointPath} (${endpointKind})"><code style="font-size:0.85em;padding:1px 4px;background:var(--color-surface-2);border-radius:3px;">POST ${endpointPath}</code> <span class="log-type-tag log-type-tag--${endpointKind}" style="font-size:0.75em;padding:1px 5px;margin-left:4px;">${endpointIcon(endpointKind)} ${endpointKind}</span></span></div>
             <div><strong>Provider:</strong> ${String(provider)}</div>
             <div><strong>Account:</strong> ${String(account)}</div>
             <div><strong>Combo:</strong> ${comboText}</div>

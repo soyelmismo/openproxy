@@ -22,6 +22,7 @@ import { getToken } from '../state/auth.js';
 import { requestUpdate } from '../state/reactive.js';
 import { createView } from '../lib/view-utils.js';
 import { showToast } from '../components/toast.js';
+import { icons } from '../lib/icons.js';
 import type { Model, Provider, Account, Combo } from '../lib/types/api.js';
 
 export type ModalityType = 'chat' | 'image' | 'embedding' | 'audio';
@@ -1127,10 +1128,10 @@ function renderStudioHeader(): TemplateResult {
           ${isLoading
             ? html`<span class="playground-live-badge live-generating"><span class="pulse-dot"></span> Generating…</span>`
             : isOk
-            ? html`<span class="playground-live-badge live-done">● Ready (${currentMetrics.totalLatencyMs || 0}ms)</span>`
+            ? html`<span class="playground-live-badge live-done"><span class="status-dot"></span> Ready (${currentMetrics.totalLatencyMs || 0}ms)</span>`
             : isErr
-            ? html`<span class="playground-live-badge live-error">⚠️ ${status ? `HTTP ${status}` : 'Error'}</span>`
-            : html`<span class="playground-live-badge live-idle">● Idle</span>`}
+            ? html`<span class="playground-live-badge live-error">${icons.warning()} ${status ? `HTTP ${status}` : 'Error'}</span>`
+            : html`<span class="playground-live-badge live-idle"><span class="status-dot"></span> Idle</span>`}
         </div>
       </div>
 
@@ -1145,7 +1146,7 @@ function renderStudioHeader(): TemplateResult {
             requestUpdate();
           }}
         >
-          <span class="seg-icon">💬</span> Chat
+          <span class="seg-icon">${icons.chat()}</span> Chat
         </button>
         <button
           class="segmented-item ${modality === 'image' ? 'active' : ''}"
@@ -1156,7 +1157,7 @@ function renderStudioHeader(): TemplateResult {
             requestUpdate();
           }}
         >
-          <span class="seg-icon">🎨</span> Image Studio
+          <span class="seg-icon">${icons.image()}</span> Image Studio
         </button>
         <button
           class="segmented-item ${modality === 'embedding' ? 'active' : ''}"
@@ -1167,7 +1168,7 @@ function renderStudioHeader(): TemplateResult {
             requestUpdate();
           }}
         >
-          <span class="seg-icon">📐</span> Embeddings
+          <span class="seg-icon">${icons.embedding()}</span> Embeddings
         </button>
         <button
           class="segmented-item ${modality === 'audio' ? 'active' : ''}"
@@ -1178,7 +1179,7 @@ function renderStudioHeader(): TemplateResult {
             requestUpdate();
           }}
         >
-          <span class="seg-icon">🎙️</span> Audio Transcription
+          <span class="seg-icon">${icons.audio()}</span> Audio Transcription
         </button>
       </div>
 
@@ -1186,16 +1187,16 @@ function renderStudioHeader(): TemplateResult {
       <div class="playground-studio-actions">
         ${isLoading
           ? html`<button class="playground-run-btn btn-danger" @click=${cancelRequest}>
-              <span>⏹</span> Stop
+              ${icons.pause()} Stop
             </button>`
           : html`<button class="playground-run-btn btn-primary" @click=${executeRequest} title="Execute Request (Ctrl+Enter)">
-              <span>▶</span> Run <kbd class="playground-kbd">Ctrl+↵</kbd>
+              ${icons.play()} Run <kbd class="playground-kbd">Ctrl+↵</kbd>
             </button>`}
         <button class="playground-action-btn" @click=${copyCurlToClipboard} title="Copy as cURL command">
-          Copy cURL
+          ${icons.copy()} Copy cURL
         </button>
         <button class="playground-action-btn text-muted" @click=${clearPlayground} title="Clear conversation or inputs">
-          Clear
+          ${icons.trash()} Clear
         </button>
       </div>
     </div>
@@ -1218,15 +1219,17 @@ function renderChatWorkspace(): TemplateResult {
             <span class="system-tag">SYSTEM</span>
             <span class="system-title">System Instructions</span>
           </div>
-          <span class="collapse-icon">${systemInstructionsExpanded ? '▲' : '▼'}</span>
+          <button class="system-toggle-btn" type="button">
+            ${systemInstructionsExpanded ? icons.caretUp() : icons.caretDown()}
+          </button>
         </div>
         ${systemInstructionsExpanded
           ? html`
               <div class="playground-system-body">
                 <textarea
                   class="playground-system-textarea"
-                  rows="2"
-                  placeholder="Set AI behavior, instructions, persona, output rules... (e.g. You are a senior engineer...)"
+                  rows="3"
+                  placeholder="Enter system prompt / behavioral guidelines..."
                   .value=${systemInstruction}
                   @input=${(e: Event) => {
                     systemInstruction = (e.target as HTMLTextAreaElement).value;
@@ -1266,14 +1269,14 @@ function renderChatWorkspace(): TemplateResult {
                     title="Copy message"
                     @click=${() => copyText(msg.content, 'Message')}
                   >
-                    📋
+                    ${icons.copy()}
                   </button>
                   <button
                     class="icon-btn danger"
                     title="Delete message"
                     @click=${() => removeChatMessage(msg.id)}
                   >
-                    ✕
+                    ${icons.close()}
                   </button>
                 </div>
               </div>
@@ -1295,22 +1298,22 @@ function renderChatWorkspace(): TemplateResult {
       <div class="playground-directives-bar">
         <span class="directives-label">Directives:</span>
         <button class="directive-chip" @click=${() => insertChatDirective('Respond exclusively in valid, parseable JSON.')}>
-          + JSON Mode
+          ${icons.plus()} JSON Mode
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective('Please format all code inside fenced markdown blocks with syntax highlighting.')}>
-          + Code formatting
+          ${icons.plus()} Code formatting
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective('Use clear Markdown headers, bold highlights, and clean bullet points.')}>
-          + Markdown
+          ${icons.plus()} Markdown
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective('Be direct, concise, and eliminate conversational filler.')}>
-          + Concise
+          ${icons.plus()} Concise
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective('Think step-by-step and provide detailed reasoning.')}>
-          + Step-by-step
+          ${icons.plus()} Step-by-step
         </button>
         <button class="directive-chip-add" @click=${() => addChatMessage('user', '')}>
-          + Add Message
+          ${icons.plus()} Add Message
         </button>
       </div>
 
@@ -1346,10 +1349,10 @@ function renderChatWorkspace(): TemplateResult {
                 }
               }}
             >
-              + Add to Thread
+              ${icons.plus()} Add to Thread
             </button>
             <button class="button primary small" @click=${executeRequest}>
-              Send Prompt ▶
+              Send Prompt ${icons.send()}
             </button>
           </div>
         </div>
@@ -1616,7 +1619,7 @@ function renderAudioWorkspace(): TemplateResult {
                     <audio controls src=${URL.createObjectURL(audioFile)} style="margin-top: var(--space-2); width: 100%;"></audio>
                   </div>
                 `
-              : html`<p class="text-muted">🎙️ Click or drag an audio file here</p>`}
+              : html`<p class="text-muted">${icons.audio()} Click or drag an audio file here</p>`}
           </div>
         </div>
 
@@ -2280,7 +2283,7 @@ function renderFormattedResponse(): TemplateResult {
                   title="${reasoningExpanded ? 'Click to collapse reasoning' : 'Click to expand reasoning'}"
                 >
                   <div class="reasoning-title-group">
-                    <span class="reasoning-icon">🧠</span>
+                    <span class="reasoning-icon">${icons.embedding()}</span>
                     <span class="reasoning-title">Thinking Process</span>
                     ${isThinking
                       ? html`
@@ -2291,7 +2294,7 @@ function renderFormattedResponse(): TemplateResult {
                   </div>
                   <button class="reasoning-toggle-btn" type="button">
                     ${reasoningExpanded ? 'Hide' : 'Show'}
-                    <span class="reasoning-chevron">${reasoningExpanded ? '▲' : '▼'}</span>
+                    <span class="reasoning-chevron">${reasoningExpanded ? icons.caretUp() : icons.caretDown()}</span>
                   </button>
                 </div>
                 ${reasoningExpanded
@@ -2341,7 +2344,7 @@ function renderFormattedResponse(): TemplateResult {
             <div class="playground-image-card">
               <div class="img-preview-wrap" @click=${() => { lightboxImageUrl = imgSrc; requestUpdate(); }}>
                 <img src=${imgSrc} alt="Generated image ${idx + 1}" loading="lazy" />
-                <span class="zoom-hint">🔍 Click to zoom</span>
+                <span class="zoom-hint">${icons.search()} Click to zoom</span>
               </div>
               ${item.revised_prompt
                 ? html`<p class="image-revised-prompt"><small>${item.revised_prompt}</small></p>`
@@ -2359,10 +2362,10 @@ function renderFormattedResponse(): TemplateResult {
                   @click=${() => copyText(item.b64_json ? item.b64_json : (item.url || ''), 'Image data')}
                   title="Copy base64 / URL"
                 >
-                  Copy Data
+                  ${icons.copy()} Copy Data
                 </button>
                 <a class="button small primary" href=${imgSrc} download="generated-image-${idx + 1}.png" target="_blank">
-                  Download PNG
+                  ${icons.export()} Download PNG
                 </a>
               </div>
             </div>
@@ -2666,7 +2669,7 @@ function renderInspectorSidebar(): TemplateResult {
             <div style="position: relative; margin-bottom: 6px;">
               <input
                 type="text"
-                placeholder="🔍 Search or type custom model..."
+                placeholder="Search or type custom model..."
                 .value=${modelSearchQuery}
                 @input=${(e: Event) => {
                   modelSearchQuery = (e.target as HTMLInputElement).value;
