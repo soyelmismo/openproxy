@@ -63,16 +63,19 @@ function buildLogRowCells(
   }
   
   if (has("client")) {
-    const isWinner = row ? row.client_response : (attempt.terminal ? false : true); // Assume winner if inflight
+    const isSkipped = attempt.stage === "predict_skipped" || attempt.terminalKind === "predict_skipped";
+    const isWinner = isSkipped ? false : (row ? row.client_response : (attempt.terminal ? false : true));
     if (isWinner) {
       cells.push(html`<span class="log-client log-client--winner" title="Response delivered to client (winning attempt)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8.5l3.5 3.5L13 5.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`);
     } else {
-      cells.push(html`<span class="log-client log-client--internal" title="Intermediate retry (not returned to client)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-dasharray="3 2"/></svg></span>`);
+      cells.push(html`<span class="log-client log-client--internal" title="Intermediate retry or skipped attempt (not returned to client)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-dasharray="3 2"/></svg></span>`);
     }
   }
   
   if (has("status")) {
-    cells.push(html`<span class="log-status">${attempt.statusCode ?? "—"}</span>`);
+    const isSkipped = attempt.stage === "predict_skipped" || attempt.terminalKind === "predict_skipped";
+    const statusText = isSkipped ? "skip" : (attempt.statusCode != null && attempt.statusCode > 0 ? String(attempt.statusCode) : "—");
+    cells.push(html`<span class="log-status ${isSkipped ? "log-status--skipped" : ""}">${statusText}</span>`);
   }
   
   if (has("provider")) {
@@ -140,14 +143,15 @@ export function renderLogRowHtml(
     attempt.elapsedMsAtEvent = Math.max(0, nowMs - attempt.startedAtMs);
   }
 
-  const processing = !attempt.terminal;
-  const isErrorState = (attempt.statusCode != null && attempt.statusCode >= 400) || !!attempt.error || attempt.stage === "failed" || attempt.stage === "cancelled";
+  const isPredictSkipped = attempt.stage === "predict_skipped" || attempt.terminalKind === "predict_skipped";
+  const processing = !attempt.terminal && !isPredictSkipped;
+  const isErrorState = !isPredictSkipped && ((attempt.statusCode != null && attempt.statusCode >= 400) || !!attempt.error || attempt.stage === "failed" || attempt.stage === "cancelled");
   const statusErr = !processing && isErrorState;
-  const streaming = !attempt.terminal && !isErrorState && (attempt.row ? (!!attempt.row.is_streaming && !attempt.row.stream_complete) : (attempt.stage === "streaming"));
+  const streaming = !attempt.terminal && !isErrorState && !isPredictSkipped && (attempt.row ? (!!attempt.row.is_streaming && !attempt.row.stream_complete) : (attempt.stage === "streaming"));
   
   const cls = [
     "log-row",
-    processing ? "processing" : (statusErr ? "error" : "ok"),
+    isPredictSkipped ? "predict-skipped" : (processing ? "processing" : (statusErr ? "error" : "ok")),
     (attempt.row?.race_lost || attempt.stage === "cancelled") ? "loser" : "",
     streaming ? "streaming" : "",
   ].filter(Boolean).join(" ");

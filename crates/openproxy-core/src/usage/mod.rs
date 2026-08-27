@@ -90,8 +90,10 @@ fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
 }
 
 fn is_terminal_stage_event(event: &openproxy_types::usage::StageEvent) -> bool {
-    matches!(event.stage.as_str(), "completed" | "failed" | "cancelled")
-        || event.status_code.is_some_and(|s| s >= 400 && s != 0)
+    matches!(
+        event.stage.as_str(),
+        "completed" | "failed" | "cancelled" | "predict_skipped"
+    ) || event.status_code.is_some_and(|s| s >= 400 && s != 0)
         || event.error.is_some()
 }
 

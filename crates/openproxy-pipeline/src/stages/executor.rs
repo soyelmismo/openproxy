@@ -107,6 +107,18 @@ async fn execute_single_target_step(
     let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
     let remaining = &to_run[idx + 1..];
     if should_skip_preventive_target(&ctx.pipeline, combo, target, remaining, now_ms) {
+        let skip_trace_id = format!("{}:{}", ctx.req.trace_id, *overall_attempt);
+        *overall_attempt = overall_attempt.saturating_add(1);
+        openproxy_types::emit_stage_event!(
+            request_id: ctx.req.request_id,
+            trace_id: skip_trace_id,
+            stage: "predict_skipped",
+            elapsed_ms: 0,
+            provider_id: target.target.provider_id.0.as_str(),
+            upstream_model_id: target.model.model_id.0.as_str(),
+            error: "predictive rate limit: skipped to avoid 429",
+            endpoint_kind: ctx.req.endpoint_kind,
+        );
         return TargetLoopOutcome::Skip;
     }
 

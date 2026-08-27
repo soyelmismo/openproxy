@@ -12,7 +12,8 @@ export type StageName =
   | "streaming"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "predict_skipped";
 
 export interface AttemptState {
   attemptKey: string;
@@ -30,7 +31,7 @@ export interface AttemptState {
   ttftMs: number | null;
   statusCode: number | null;
   terminal: boolean;
-  terminalKind: "completed" | "failed" | "cancelled" | null;
+  terminalKind: "completed" | "failed" | "cancelled" | "predict_skipped" | null;
   error: string | null;
   rowId: number | null;
   row: RecentUsageRow | null;
@@ -79,6 +80,7 @@ const STAGE_RANK = {
   completed: 4,
   failed: 4,
   cancelled: 4,
+  predict_skipped: 4,
 } satisfies Record<string, number>;
 
 function rankStage(stage: string): number {
@@ -86,7 +88,7 @@ function rankStage(stage: string): number {
 }
 
 function isTerminalStage(stage: string): boolean {
-  return stage === "completed" || stage === "failed" || stage === "cancelled";
+  return stage === "completed" || stage === "failed" || stage === "cancelled" || stage === "predict_skipped";
 }
 
 function deriveTerminal(stage: string, statusCode: number | null | undefined, error: string | null | undefined): boolean {
@@ -95,7 +97,8 @@ function deriveTerminal(stage: string, statusCode: number | null | undefined, er
     || (!!error && error.length > 0);
 }
 
-function deriveTerminalKind(stage: string, statusCode: number | null | undefined): "completed" | "failed" | "cancelled" | null {
+function deriveTerminalKind(stage: string, statusCode: number | null | undefined): "completed" | "failed" | "cancelled" | "predict_skipped" | null {
+  if (stage === "predict_skipped") return "predict_skipped";
   if (stage === "cancelled") return "cancelled";
   if (stage === "failed" || (statusCode != null && statusCode >= 400)) return "failed";
   if (stage === "completed") return "completed";

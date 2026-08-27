@@ -14,6 +14,7 @@ export const STAGE_LABELS = {
   completed: "completado",
   failed: "falló",
   cancelled: "cancelado",
+  predict_skipped: "predict skipped",
 } as const;
 
 // Live logs WS reconnect backoff in ms.
@@ -89,10 +90,10 @@ export const COOLDOWN_MODE_TOOLTIPS = {
 // Localised status -> CSS class for the status-pill component.
 export function statusPillClass(code: number | null): string {
   if (code == null) return "lost";
+  if (code === 0) return "skipped";
   if (code >= 500) return "err";
   if (code >= 400) return "warn";
   if (code >= 200 && code < 300) return "ok";
-  if (code === 0) return "lost";
   return "lost";
 }
 
