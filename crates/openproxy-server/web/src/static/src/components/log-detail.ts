@@ -1851,20 +1851,35 @@ export async function copyDebugBundle(): Promise<void> {
   }
   const bundle: string = buildDebugBundle(row);
   try {
-    // Try the modern Clipboard API first. Requires a secure context
-    // (HTTPS or localhost). If unavailable or it throws, fall back
-    // to showing the bundle in a modal.
     if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
       await navigator.clipboard.writeText(bundle);
       showToast("Debug bundle copied to clipboard.", "success");
       return;
     }
   } catch (err) {
-    // Log the Clipboard API error for debugging.
-    console.warn("[openproxy] navigator.clipboard.writeText failed, falling back to modal:", err);
+    console.warn("[openproxy] navigator.clipboard.writeText failed, trying execCommand fallback:", err);
   }
 
-  // Fallback: Show the bundle in a modal so the user can manually select+copy.
+  // Fallback for non-HTTPS / non-secure contexts (e.g. LAN IP HTTP access)
+  try {
+    const ta: HTMLTextAreaElement = document.createElement("textarea");
+    ta.value = bundle;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.setAttribute("readonly", "");
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) {
+      showToast("Debug bundle copied to clipboard.", "success");
+      return;
+    }
+  } catch (fallbackErr) {
+    console.warn("[openproxy] execCommand fallback failed:", fallbackErr);
+  }
+
+  // Last-resort fallback: Show the bundle in a modal so the user can manually select+copy.
   showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
   showToast("Copy unavailable — bundle shown in a window for manual copy.", "warning");
 }
