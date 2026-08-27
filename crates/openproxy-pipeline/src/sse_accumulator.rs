@@ -703,6 +703,25 @@ mod tests {
     }
 
     #[test]
+    fn openai_raw_payloads_multibyte_utf8_boundaries() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"при"}}]}"#);
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"вет"}}]}"#);
+        let v = acc.finish("id", 0, "m");
+        assert_eq!(v["choices"][0]["message"]["content"], "привет");
+    }
+
+    #[test]
+    fn openai_raw_payloads_mid_stream_malformed_json() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"good"}}]}"#);
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":" malformed"#); // malformed
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":" bye"}}]}"#);
+        let v = acc.finish("id", 0, "m");
+        assert_eq!(v["choices"][0]["message"]["content"], "good bye");
+    }
+
+    #[test]
     fn reasoning_goes_into_extra() {
         let mut acc = ResponseAccumulator::new();
         acc.append_reasoning("step 1");
