@@ -121,33 +121,26 @@ const JSON_ARRAY_MIN_ITEMS: usize = 5;
 /// Order matters — see the [module docs](self) for the full precedence list.
 /// The scan is bounded to the first [`DETECT_SCAN_LINES`] lines so detection
 /// is O(N) in the (truncated) input length, never in the full content size.
-fn detect_from_lines(lines: &[&str]) -> ContentType {
-    if is_git_diff(lines) {
-        ContentType::GitDiff
-    } else if is_build_output(lines) {
-        ContentType::BuildOutput
-    } else if is_search_results(lines) {
-        ContentType::SearchResults
-    } else if is_tabular(lines) {
-        ContentType::Tabular
-    } else if is_source_code(lines) {
-        ContentType::SourceCode
-    } else {
-        ContentType::PlainText
-    }
-}
-
-/// Detect the content type of a text string.
-///
-/// Order matters — see the [module docs](self) for the full precedence list.
-/// The scan is bounded to the first [`DETECT_SCAN_LINES`] lines so detection
-/// is O(N) in the (truncated) input length, never in the full content size.
 pub fn detect(content: &str) -> ContentType {
     if is_json_array(content) {
         return ContentType::JsonArray;
     }
-    let lines: Vec<&str> = content.lines().take(DETECT_SCAN_LINES).collect();
-    detect_from_lines(&lines)
+    if is_git_diff(content) {
+        return ContentType::GitDiff;
+    }
+    if is_build_output(content) {
+        return ContentType::BuildOutput;
+    }
+    if is_search_results(content) {
+        return ContentType::SearchResults;
+    }
+    if is_tabular(content) {
+        return ContentType::Tabular;
+    }
+    if is_source_code(content) {
+        return ContentType::SourceCode;
+    }
+    ContentType::PlainText
 }
 
 /// Route a single message's content to the appropriate compressor.
@@ -228,47 +221,11 @@ fn is_json_array(content: &str) -> bool {
 
 /// `GitDiff`: first 10 lines contain `diff --git` OR a strict
 /// `@@ -\d+,\d+ \+\d+,\d+ @@` hunk header.
-fn is_git_diff(lines: &[&str]) -> bool {
-    lines
-        .iter()
+fn is_git_diff(content: &str) -> bool {
+    content
+        .lines()
         .take(10)
         .any(|l| l.starts_with("diff --git ") || HUNK_HEADER_RE.is_match(l))
-}
-
-fn has_pytest_match(head: &[&str]) -> bool {
-    head.iter()
-        .any(|l| l.contains("===== test session starts ====="))
-}
-
-fn has_cargo_match(head: &[&str]) -> bool {
-    head.iter()
-        .any(|l| CARGO_RUNNING_RE.is_match(l) || l.starts_with("test result:"))
-}
-
-fn has_jest_match(head: &[&str]) -> bool {
-    head.iter()
-        .any(|l| l.starts_with("PASS ") || l.starts_with("FAIL ") || l.contains("Test Suites:"))
-}
-
-fn count_build_matches(head: &[&str]) -> usize {
-    let mut matches = 0;
-    if has_pytest_match(head) {
-        matches += 1;
-    }
-    if has_cargo_match(head) {
-        matches += 1;
-    }
-    if has_jest_match(head) {
-        matches += 1;
-    }
-    if head.iter().any(|l| MAKE_RE.is_match(l)) {
-        matches += 1;
-    }
-    let generic_count = head.iter().filter(|l| GENERIC_ERROR_RE.is_match(l)).count();
-    if generic_count >= 5 {
-        matches += 1;
-    }
-    matches
 }
 
 /// `BuildOutput`: first 50 lines match ≥2 of these patterns:
@@ -278,19 +235,53 @@ fn count_build_matches(head: &[&str]) -> usize {
 /// - make: line matches `^make[N]:`
 /// - generic: ≥5 lines match `(error|fail|warn|traceback|panic|exception)`
 ///   (case-insensitive).
-fn is_build_output(lines: &[&str]) -> bool {
+fn is_build_output(content: &str) -> bool {
     // Scan up to 200 lines for build-output patterns — test output
     // often has a header in the first few lines and errors/summaries
     // at the end, so scanning only 50 lines misses the error signals.
-    let head = &lines[..lines.len().min(200)];
-    count_build_matches(head) >= 2
+    let mut has_pytest = false;
+    let mut has_cargo = false;
+    let mut has_jest = false;
+    let mut has_make = false;
+    let mut generic_count = 0;
+
+    for l in content.lines().take(200) {
+        if !has_pytest && l.contains("===== test session starts =====") {
+            has_pytest = true;
+        }
+        if !has_cargo && (CARGO_RUNNING_RE.is_match(l) || l.starts_with("test result:")) {
+            has_cargo = true;
+        }
+        if !has_jest
+            && (l.starts_with("PASS ") || l.starts_with("FAIL ") || l.contains("Test Suites:"))
+        {
+            has_jest = true;
+        }
+        if !has_make && MAKE_RE.is_match(l) {
+            has_make = true;
+        }
+        if GENERIC_ERROR_RE.is_match(l) {
+            generic_count += 1;
+        }
+    }
+
+    let mut matches = usize::from(has_pytest)
+        + usize::from(has_cargo)
+        + usize::from(has_jest)
+        + usize::from(has_make);
+    if generic_count >= 5 {
+        matches += 1;
+    }
+
+    matches >= 2
 }
 
 /// `SearchResults`: ≥3 lines match `^[\w/.\-]+:\d+:` (the grep/ripgrep
 /// `path:line:content` shape). Scans the (already first-100-lines) head.
-fn is_search_results(lines: &[&str]) -> bool {
-    let count = lines
-        .iter()
+fn is_search_results(content: &str) -> bool {
+    let count = content
+        .lines()
+        .take(DETECT_SCAN_LINES)
         .filter(|l| SEARCH_RESULT_RE.is_match(l))
         .count();
     count >= 3
@@ -307,8 +298,8 @@ fn is_search_results(lines: &[&str]) -> bool {
 /// single-line JSON array/object literal (which can have many commas and no
 /// spaces) is not mistaken for a CSV header. JSON shapes are handled by
 /// [`is_json_array`] upstream.
-fn is_tabular(lines: &[&str]) -> bool {
-    if let Some(first) = lines.first() {
+fn is_tabular(content: &str) -> bool {
+    if let Some(first) = content.lines().next() {
         let trimmed = first.trim_start();
         // Don't confuse a JSON array/object literal with a CSV header.
         if !trimmed.starts_with('[') && !trimmed.starts_with('{') {
@@ -321,23 +312,27 @@ fn is_tabular(lines: &[&str]) -> bool {
     }
     // Markdown table: a separator line containing `|---` (covers
     // `|---|---|`, `| --- | --- |`, `|:---|:---|` via the leading pipe).
-    lines.iter().take(5).any(|l| l.contains("|---"))
+    content.lines().take(5).any(|l| l.contains("|---"))
 }
 
 /// `SourceCode`: first non-empty line starts with an import-like prefix
 /// (`import `, `from `, `use `, `package `, `#include `, `require(`) OR ≥3
 /// lines match a structural keyword (`fn `, `func `, `def `, `class `,
 /// `struct `, `enum `, `interface `, `public `, `private `, `protected `).
-fn is_source_code(lines: &[&str]) -> bool {
+fn is_source_code(content: &str) -> bool {
     // First non-empty line check: starts with `import `, `use `, etc.
-    if let Some(first) = lines.iter().find(|l| !l.trim().is_empty()).copied()
+    if let Some(first) = content
+        .lines()
+        .take(DETECT_SCAN_LINES)
+        .find(|l| !l.trim().is_empty())
         && SOURCE_IMPORT_RE.is_match(first)
     {
         return true;
     }
     // Structural keyword density check.
-    let keyword_matches = lines
-        .iter()
+    let keyword_matches = content
+        .lines()
+        .take(DETECT_SCAN_LINES)
         .filter(|l| SOURCE_KEYWORD_RE.is_match(l))
         .count();
     keyword_matches >= 3
