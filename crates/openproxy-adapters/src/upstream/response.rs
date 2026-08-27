@@ -192,6 +192,53 @@ impl UpstreamBodyStream {
     /// `body_chunk_ms` does NOT apply. This is intentional: a stub
     /// SSE event (`event: message_start`, empty `data:`) that
     /// arrives before the first real token should NOT start the
+fn compute_min_deadline(
+    is_streaming: bool,
+    last_chunk_at: Option<Instant>,
+    body_chunk_ms: u64,
+    total_deadline: Instant,
+) -> Instant {
+    if !is_streaming {
+        return total_deadline;
+    }
+    match last_chunk_at {
+        Some(last) => {
+            let chunk_gap_deadline = last + Duration::from_millis(body_chunk_ms);
+            std::cmp::min(chunk_gap_deadline, total_deadline)
+        }
+        None => total_deadline,
+    }
+}
+
+fn timeout_error_for_gap(last_chunk_at: Option<Instant>) -> UpstreamError {
+    if last_chunk_at.is_some() {
+        UpstreamError::Timeout(UpstreamPhase::Body)
+    } else {
+        UpstreamError::Timeout(UpstreamPhase::Total)
+    }
+}
+
+#[cfg(feature = "upstream-hyper")]
+fn map_stream_frame<E: std::fmt::Display>(
+    res: Option<Result<hyper::body::Frame<Bytes>, E>>,
+) -> UpstreamResult<Option<Bytes>> {
+    match res {
+        Some(Ok(frame)) => Ok(Some(frame.into_data().unwrap_or_default())),
+        Some(Err(e)) => Err(UpstreamError::Http(e.to_string())),
+        None => Ok(None),
+    }
+}
+
+    /// Pull the next chunk from the upstream body stream.
+    ///
+    /// Returns `Ok(Some(chunk))` on data, `Ok(None)` on EOF,
+    /// `Err(Cancel)` on cancellation, `Err(Timeout(Body))` on
+    /// chunk-gap expiry, `Err(Timeout(Total))` on total-deadline
+    /// expiry, or `Err(Http)` on stream error.
+    ///
+    /// Note: the caller must call [`note_content_chunk`] after
+    /// receiving a chunk that contains real model output (e.g. a
+    /// non-empty SSE data line). Only real content resets the
     /// chunk-gap timer; the request should be bounded by
     /// `total_deadline` until real content flows.
     ///
@@ -201,33 +248,12 @@ impl UpstreamBodyStream {
             return Err(UpstreamError::Cancel);
         }
 
-        // For non-streaming: only total_deadline applies (no chunk gap).
-        // The LLM generates the full response server-side before sending
-        // the first chunk — measuring a "gap" between chunks is meaningless.
-        //
-        // For streaming: the gap timeout (body_chunk_ms / idle_chunk_ms)
-        // only applies AFTER the caller marks a chunk as "real content"
-        // via `note_content_chunk()`. Until that first call,
-        // `last_chunk_at` is None and every wait is bounded by
-        // `total_deadline`. This prevents stub SSE events
-        // (`event: message_start`, empty `data:` lines, `:` comments)
-        // from starting the chunk-gap timer before any real token has
-        // been produced — the root cause of the "idle_chunk after
-        // 10000ms" errors users saw when an upstream opened the stream
-        // with a metadata event and then went silent for >10s while
-        // generating the first token.
-        let min_deadline = if self.is_streaming {
-            if let Some(last) = self.last_chunk_at {
-                // Subsequent chunk: gap = last_chunk + body_chunk_ms
-                let chunk_gap_deadline = last + Duration::from_millis(self.body_chunk_ms);
-                std::cmp::min(chunk_gap_deadline, self.total_deadline)
-            } else {
-                // First chunk: no gap, only total_deadline
-                self.total_deadline
-            }
-        } else {
-            self.total_deadline
-        };
+        let min_deadline = Self::compute_min_deadline(
+            self.is_streaming,
+            self.last_chunk_at,
+            self.body_chunk_ms,
+            self.total_deadline,
+        );
 
         #[cfg(feature = "upstream-hyper")]
         {
@@ -246,46 +272,10 @@ impl UpstreamBodyStream {
                     Err(UpstreamError::Cancel)
                 }
                 () = &mut self.sleep => {
-                    // Distinguish chunk-gap timeout from total-deadline
-                    // timeout. When `last_chunk_at` is Some, the sleep
-                    // was set to `last_chunk_at + body_chunk_ms` — this
-                    // is a genuine idle_chunk timeout (the upstream
-                    // stalled between content chunks). When
-                    // `last_chunk_at` is None, the sleep was set to
-                    // `total_deadline` — this is the total request
-                    // budget expiring before any content chunk arrived
-                    // (or between metadata-only events that did NOT
-                    // reset the chunk-gap timer). The pipeline maps
-                    // these to different error labels so the operator
-                    // can distinguish "model stalled mid-stream" from
-                    // "model never produced a token".
-                    if self.last_chunk_at.is_some() {
-                        Err(UpstreamError::Timeout(UpstreamPhase::Body))
-                    } else {
-                        Err(UpstreamError::Timeout(UpstreamPhase::Total))
-                    }
+                    Err(Self::timeout_error_for_gap(self.last_chunk_at))
                 }
                 res = futures_util::StreamExt::next(stream) => {
-                    match res {
-                        Some(Ok(frame)) => {
-                            // Do NOT auto-update `last_chunk_at` here.
-                            // The caller (pipeline) decides whether this
-                            // byte frame carries "real content" (a token
-                            // delta, a tool-call fragment, etc.) or is a
-                            // stub event (`event: message_start`, an
-                            // empty `data:` line, a `:` comment). Only
-                            // real content resets the chunk-gap timer
-                            // — stub events leave `last_chunk_at` alone
-                            // so the next-chunk wait stays bounded by
-                            // `total_deadline` instead of `body_chunk_ms`.
-                            // The caller signals "real content" by
-                            // calling `note_content_chunk()` after
-                            // parsing the SSE event.
-                            Ok(Some(frame.into_data().unwrap_or_default()))
-                        }
-                        Some(Err(e)) => Err(UpstreamError::Http(e.to_string())),
-                        None => Ok(None),
-                    }
+                    Self::map_stream_frame(res)
                 }
             }
         }

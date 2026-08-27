@@ -72,39 +72,48 @@ impl PipelineStage for OAuthRefreshStage {
                 "missing current_target in pipeline context".into(),
             ));
         };
-        let target = &current.target;
+        try_proactive_oauth_refresh(&ctx.pipeline, current).await;
+        next.execute(ctx).await
+    }
+}
 
-        if let Some(account_id) = target.account_id
-            && let Some(custom_meta) = &mut current.custom_meta
-            && let Some(refresh_token) = &custom_meta.maybe_refresh
-            && let Some(registry) = ctx.pipeline.config.oauth_provider_registry.as_ref()
-        {
-            let provider_id_str = target.provider_id.as_str();
-            tracing::info!(
+async fn try_proactive_oauth_refresh(
+    pipeline: &crate::Pipeline,
+    current: &mut crate::context::ResolvedTarget,
+) {
+    let Some(account_id) = current.target.account_id else { return; };
+    let Some(custom_meta) = current.custom_meta.as_mut() else { return; };
+    let Some(refresh_token) = custom_meta.maybe_refresh.as_ref() else { return; };
+    let Some(registry) = pipeline.config.oauth_provider_registry.as_ref() else { return; };
+
+    let provider_id_str = current.target.provider_id.as_str();
+    tracing::info!(
+        account = account_id.0,
+        provider = provider_id_str,
+        "pipeline: proactive OAuth token refresh"
+    );
+    match registry
+        .refresh_and_store(
+            provider_id_str,
+            refresh_token,
+            &pipeline.config.upstream_client,
+            account_id,
+            &pipeline.conn,
+            &pipeline.config.master_key,
+        )
+        .await
+    {
+        Ok(token) => {
+            custom_meta.access_token = token.access_token;
+        }
+        Err(e) => {
+            tracing::warn!(
                 account = account_id.0,
                 provider = provider_id_str,
-                "pipeline: proactive OAuth token refresh"
+                error = %e,
+                "pipeline: proactive OAuth refresh failed, continuing with existing token"
             );
-            match registry
-                .refresh_and_store(
-                    provider_id_str,
-                    refresh_token,
-                    &ctx.pipeline.config.upstream_client,
-                    account_id,
-                    &ctx.pipeline.conn,
-                    &ctx.pipeline.config.master_key,
-                )
-                .await
-            {
-                Ok(token) => {
-                    custom_meta.access_token = token.access_token;
-                }
-                Err(e) => {
-                    tracing::warn!(account = account_id.0, provider = provider_id_str, error = %e, "pipeline: proactive OAuth refresh failed, continuing with existing token");
-                }
-            }
         }
-        next.execute(ctx).await
     }
 }
 
@@ -120,7 +129,7 @@ impl PipelineStage for TimeoutResolutionStage {
         let current = ctx.current_target.as_ref().ok_or_else(|| {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
-        let model = &current.model;
+        let cloned_model = current.model.clone(); let model = &cloned_model;
 
         let model_overrides =
             match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
@@ -167,54 +176,9 @@ impl PipelineStage for FormattingStage {
             return fail_stage!(ctx, &current.target, &err, None);
         };
 
-        let target_format = match adapter.format() {
-            openproxy_adapters::adapters::AdapterFormat::Openai => {
-                openproxy_types::TargetFormat::Openai
-            }
-            openproxy_adapters::adapters::AdapterFormat::Anthropic => {
-                openproxy_types::TargetFormat::Anthropic
-            }
-            openproxy_adapters::adapters::AdapterFormat::Mixed => current.model.target_format,
-            openproxy_adapters::adapters::AdapterFormat::Gemini => {
-                openproxy_types::TargetFormat::Gemini
-            }
-            openproxy_adapters::adapters::AdapterFormat::Responses => {
-                openproxy_types::TargetFormat::Responses
-            }
-            openproxy_adapters::adapters::AdapterFormat::Atomesus => {
-                openproxy_types::TargetFormat::Atomesus
-            }
-            openproxy_adapters::adapters::AdapterFormat::Fx => openproxy_types::TargetFormat::Fx,
-        };
-
-        let stream = if !ctx.req.openai_request.stream && ctx.req.stream_sink.is_some() {
-            true
-        } else {
-            ctx.req.openai_request.stream
-        };
-
-        let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
-            if openproxy_compression::would_compress(
-                &ctx.req.openai_request.messages,
-                ctx.pipeline.config.compression_mode,
-            ) {
-                let mut msgs = ctx.req.openai_request.messages.clone();
-                let stats = openproxy_compression::apply_compression(
-                    &mut msgs,
-                    ctx.pipeline.config.compression_mode,
-                );
-                *ctx.pipeline.compression_stats_cell.write() = Some(stats);
-                Some(msgs)
-            } else {
-                *ctx.pipeline.compression_stats_cell.write() =
-                    Some(openproxy_compression::stats::CompressionStats::empty());
-                None
-            }
-        });
-
-        let messages_ref = cloned_messages_ref
-            .as_deref()
-            .unwrap_or(&ctx.req.openai_request.messages);
+        let target_format = resolve_target_format(adapter, current.model.target_format);
+        let stream = ctx.req.openai_request.stream || ctx.req.stream_sink.is_some();
+        let messages_ref = prepare_messages_for_formatting(ctx);
 
         let formatter = crate::formatting::get_formatter(target_format);
         let body_bytes = match formatter
@@ -232,6 +196,58 @@ impl PipelineStage for FormattingStage {
     }
 }
 
+fn resolve_target_format(
+    adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
+    model_format: openproxy_types::TargetFormat,
+) -> openproxy_types::TargetFormat {
+    match adapter.format() {
+        openproxy_adapters::adapters::AdapterFormat::Openai => {
+            openproxy_types::TargetFormat::Openai
+        }
+        openproxy_adapters::adapters::AdapterFormat::Anthropic => {
+            openproxy_types::TargetFormat::Anthropic
+        }
+        openproxy_adapters::adapters::AdapterFormat::Mixed => model_format,
+        openproxy_adapters::adapters::AdapterFormat::Gemini => {
+            openproxy_types::TargetFormat::Gemini
+        }
+        openproxy_adapters::adapters::AdapterFormat::Responses => {
+            openproxy_types::TargetFormat::Responses
+        }
+        openproxy_adapters::adapters::AdapterFormat::Atomesus => {
+            openproxy_types::TargetFormat::Atomesus
+        }
+        openproxy_adapters::adapters::AdapterFormat::Fx => openproxy_types::TargetFormat::Fx,
+    }
+}
+
+fn prepare_messages_for_formatting(
+    ctx: &PipelineContext,
+) -> &[openproxy_types::OpenAIMessage] {
+    let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
+        if openproxy_compression::would_compress(
+            &ctx.req.openai_request.messages,
+            ctx.pipeline.config.compression_mode,
+        ) {
+            let mut msgs = ctx.req.openai_request.messages.clone();
+            let stats = openproxy_compression::apply_compression(
+                &mut msgs,
+                ctx.pipeline.config.compression_mode,
+            );
+            *ctx.pipeline.compression_stats_cell.write() = Some(stats);
+            Some(msgs)
+        } else {
+            *ctx.pipeline.compression_stats_cell.write() =
+                Some(openproxy_compression::stats::CompressionStats::empty());
+            None
+        }
+    });
+
+    cloned_messages_ref
+        .as_deref()
+        .unwrap_or(&ctx.req.openai_request.messages)
+}
+
 #[derive(Clone, Copy)]
 pub struct DispatchStage;
 
@@ -244,8 +260,8 @@ impl PipelineStage for DispatchStage {
         let current = ctx.current_target.as_mut().ok_or_else(|| {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
-        let target = &current.target;
-        let model = &current.model;
+        let cloned_target = current.target.clone(); let target = &cloned_target;
+        let cloned_model = current.model.clone(); let model = &cloned_model;
         let attempt = ctx.current_target_attempt;
         let race_size = ctx.race_size;
         let started = ctx.started.unwrap_or_else(std::time::Instant::now);
@@ -266,9 +282,7 @@ impl PipelineStage for DispatchStage {
             return fail_stage!(ctx, target, &err, Some(model));
         };
 
-        if let Some(cancel) = &ctx.race_cancel
-            && cancel.is_cancelled()
-        {
+        if ctx.race_cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
             return fail_stage!(
                 with_trace;
                 ctx,
@@ -279,40 +293,7 @@ impl PipelineStage for DispatchStage {
             );
         }
 
-        if target.provider_id.as_str() == "antigravity"
-            && let Some(custom_meta) = current.custom_meta.as_mut()
-            && custom_meta.antigravity_project.is_none()
-            && let Some(ref meta_str) = custom_meta.antigravity_metadata
-            && let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str)
-        {
-            tracing::info!(
-                "Lazy fetching antigravity projectId for target {}",
-                target.id.0
-            );
-            match openproxy_adapters::adapters::antigravity::load_code_assist(
-                &ctx.pipeline.config.upstream_client,
-                &custom_meta.access_token,
-                &metadata,
-            )
-            .await
-            {
-                Ok(Some(pid)) => {
-                    tracing::info!("Successfully fetched antigravity projectId: {}", pid);
-                    custom_meta.antigravity_project = Some(pid.clone());
-                    // Update DB cache
-                    if let Some(ref account_id) = target.account_id
-                        && let Err(e) = ctx
-                            .pipeline
-                            .repo()
-                            .update_antigravity_project_id(account_id.0, &pid)
-                    {
-                        tracing::error!("Failed to update antigravity project id in db: {}", e);
-                    }
-                }
-                Ok(None) => tracing::warn!("loadCodeAssist returned Ok(None)"),
-                Err(e) => tracing::error!("loadCodeAssist failed: {}", e),
-            }
-        }
+        try_lazy_fetch_antigravity_project(&ctx.pipeline, current).await;
 
         let api_key = current
             .custom_meta
@@ -362,70 +343,131 @@ impl PipelineStage for DispatchStage {
             })
             .await;
 
-        if let Some(aid) = target.account_id {
-            match &result.error {
-                Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)) => {
-                    tracing::debug!(
-                        account_id = aid.0,
-                        "client cancelled; leaving circuit breaker untouched"
-                    );
-                }
-                Some(e)
-                    if RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) =>
-                {
-                    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
-                        aid,
-                        target.rate_limit_scope,
-                        target.model_row_id,
-                    );
-                    let outcome = ctx.pipeline.circuit_breaker.record_failure_outcome(key);
-                    if outcome.just_opened {
-                        let provider_id_str = target.provider_id.to_string();
-                        let model_id_str = model.model_id.as_str().to_string();
-                        let combo_target_id = target.id.0;
-                        let dedup_key = format!("circuit_open:{}", aid.0);
-                        let payload = serde_json::json!({
-                            "code": "circuit_open",
-                            "message": format!(
-                                "Circuit breaker opened for account {} on {} ({}) — {}/{} failures",
-                                aid.0, provider_id_str, model_id_str,
-                                outcome.consecutive_failures, outcome.threshold,
-                            ),
-                            "provider_id": &provider_id_str,
-                            "details": {
-                                "combo_target_id": combo_target_id,
-                                "account_id": aid.0,
-                                "provider_id": &provider_id_str,
-                                "model_id": &model_id_str,
-                                "failure_count": outcome.consecutive_failures,
-                                "threshold": outcome.threshold,
-                            },
-                        });
-                        let repo = ctx.pipeline.repo();
-                        tokio::task::spawn_blocking(move || {
-                            let _ = repo.insert_and_broadcast_notification(
-                                "system",
-                                &payload,
-                                Some(&dedup_key),
-                                Some(&provider_id_str),
-                            );
-                        });
-                    }
-                }
-                _ => {
-                    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
-                        aid,
-                        target.rate_limit_scope,
-                        target.model_row_id,
-                    );
-                    ctx.pipeline.circuit_breaker.record_success(key);
-                }
-            }
-        }
+        update_circuit_breaker_on_result(&ctx.pipeline, target, model, &result);
 
         // Do not call next.execute here. We are the final stage of target execution.
         Ok(result)
     }
+}
+
+async fn try_lazy_fetch_antigravity_project(
+    pipeline: &crate::Pipeline,
+    current: &mut crate::context::ResolvedTarget,
+) {
+    if current.target.provider_id.as_str() != "antigravity" {
+        return;
+    }
+    let Some(custom_meta) = current.custom_meta.as_mut() else { return; };
+    if custom_meta.antigravity_project.is_some() {
+        return;
+    }
+    let Some(ref meta_str) = custom_meta.antigravity_metadata else { return; };
+    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str) else { return; };
+
+    tracing::info!(
+        "Lazy fetching antigravity projectId for target {}",
+        current.target.id.0
+    );
+    match openproxy_adapters::adapters::antigravity::load_code_assist(
+        &pipeline.config.upstream_client,
+        &custom_meta.access_token,
+        &metadata,
+    )
+    .await
+    {
+        Ok(Some(pid)) => {
+            tracing::info!("Successfully fetched antigravity projectId: {}", pid);
+            custom_meta.antigravity_project = Some(pid.clone());
+            if let Some(ref account_id) = current.target.account_id
+                && let Err(e) = pipeline
+                    .repo()
+                    .update_antigravity_project_id(account_id.0, &pid)
+            {
+                tracing::error!("Failed to update antigravity project id in db: {}", e);
+            }
+        }
+        Ok(None) => tracing::warn!("loadCodeAssist returned Ok(None)"),
+        Err(e) => tracing::error!("loadCodeAssist failed: {}", e),
+    }
+}
+
+fn update_circuit_breaker_on_result(
+    pipeline: &crate::Pipeline,
+    target: &openproxy_types::ComboTarget,
+    model: &openproxy_types::models::Model,
+    result: &PipelineResult,
+) {
+    let Some(aid) = target.account_id else { return; };
+    let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
+        aid,
+        target.rate_limit_scope,
+        target.model_row_id,
+    );
+
+    match &result.error {
+        Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)) => {
+            tracing::debug!(
+                account_id = aid.0,
+                "client cancelled; leaving circuit breaker untouched"
+            );
+        }
+        Some(e) if RetryPolicy::is_retryable(e, pipeline.config.idle_chunk_retryable) => {
+            let outcome = pipeline.circuit_breaker.record_failure_outcome(key);
+            if outcome.just_opened {
+                notify_circuit_breaker_opened(
+                    pipeline,
+                    target,
+                    model,
+                    aid.0,
+                    outcome.consecutive_failures.into(),
+                    outcome.threshold.into(),
+                );
+            }
+        }
+        _ => {
+            pipeline.circuit_breaker.record_success(key);
+        }
+    }
+}
+
+fn notify_circuit_breaker_opened(
+    pipeline: &crate::Pipeline,
+    target: &openproxy_types::ComboTarget,
+    model: &openproxy_types::models::Model,
+    account_id: i64,
+    consecutive_failures: u32,
+    threshold: u32,
+) {
+    let provider_id_str = target.provider_id.to_string();
+    let model_id_str = model.model_id.as_str().to_string();
+    let combo_target_id = target.id.0;
+    let dedup_key = format!("circuit_open:{account_id}");
+    let payload = serde_json::json!({
+        "code": "circuit_open",
+        "message": format!(
+            "Circuit breaker opened for account {} on {} ({}) — {}/{} failures",
+            account_id, provider_id_str, model_id_str,
+            consecutive_failures, threshold,
+        ),
+        "provider_id": &provider_id_str,
+        "details": {
+            "combo_target_id": combo_target_id,
+            "account_id": account_id,
+            "provider_id": &provider_id_str,
+            "model_id": &model_id_str,
+            "failure_count": consecutive_failures,
+            "threshold": threshold,
+        },
+    });
+    let repo = pipeline.repo();
+    tokio::task::spawn_blocking(move || {
+        let _ = repo.insert_and_broadcast_notification(
+            "system",
+            &payload,
+            Some(&dedup_key),
+            Some(&provider_id_str),
+        );
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -442,7 +484,7 @@ impl PipelineStage for CustomAdapterStage {
                 "missing current_target in pipeline context".into(),
             ));
         };
-        let target = &current.target;
+        let cloned_target = current.target.clone(); let target = &cloned_target;
         let Some(_adapter) = ctx
             .pipeline
             .config

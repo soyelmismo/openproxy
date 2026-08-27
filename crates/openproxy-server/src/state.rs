@@ -720,12 +720,9 @@ fn run_database_maintenance(
     Ok(())
 }
 
-fn load_persisted_config_overrides(
+fn load_persisted_timeouts(
     w: &openproxy_db::conn::WriterGuard<'_>,
     config: &mut openproxy_core::AppConfig,
-    recording_ttl_secs: &mut i64,
-    idle_chunk_retryable: &mut bool,
-    compression_mode: &mut openproxy_compression::CompressionMode,
 ) -> anyhow::Result<()> {
     if let Some(override_cfg) = openproxy_db::app_config::load_timeouts_override_from_db(w)? {
         tracing::info!(
@@ -738,12 +735,19 @@ fn load_persisted_config_overrides(
         );
         config.timeouts = override_cfg;
     }
+    Ok(())
+}
 
+fn load_persisted_runtime_flags(
+    w: &openproxy_db::conn::WriterGuard<'_>,
+    recording_ttl_secs: &mut i64,
+    idle_chunk_retryable: &mut bool,
+) -> anyhow::Result<()> {
     if let Some(ttl) = openproxy_db::app_config::load_recording_ttl_from_db(w)? {
         *recording_ttl_secs = ttl;
     }
     tracing::info!(
-        recording_ttl_secs,
+        recording_ttl_secs = *recording_ttl_secs,
         "loaded recording TTL from app_config (default 300s)"
     );
 
@@ -751,10 +755,17 @@ fn load_persisted_config_overrides(
         *idle_chunk_retryable = val;
     }
     tracing::info!(
-        idle_chunk_retryable,
+        idle_chunk_retryable = *idle_chunk_retryable,
         "loaded idle_chunk_retryable from app_config (default false)"
     );
+    Ok(())
+}
 
+fn load_persisted_compression_and_quota(
+    w: &openproxy_db::conn::WriterGuard<'_>,
+    config: &mut openproxy_core::AppConfig,
+    compression_mode: &mut openproxy_compression::CompressionMode,
+) -> anyhow::Result<()> {
     if let Some(mode) = openproxy_db::app_config::load_compression_override_from_db(w)? {
         tracing::info!(
             ?mode,
@@ -776,11 +787,23 @@ fn load_persisted_config_overrides(
         );
         config.quota_protection = quota_cfg;
     }
-
     Ok(())
 }
 
-fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
+fn load_persisted_config_overrides(
+    w: &openproxy_db::conn::WriterGuard<'_>,
+    config: &mut openproxy_core::AppConfig,
+    recording_ttl_secs: &mut i64,
+    idle_chunk_retryable: &mut bool,
+    compression_mode: &mut openproxy_compression::CompressionMode,
+) -> anyhow::Result<()> {
+    load_persisted_timeouts(w, config)?;
+    load_persisted_runtime_flags(w, recording_ttl_secs, idle_chunk_retryable)?;
+    load_persisted_compression_and_quota(w, config, compression_mode)?;
+    Ok(())
+}
+
+fn run_provider_and_combo_seeding(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
     let seeded = openproxy_core::seed::seed_builtin_providers(w)?;
     if seeded > 0 {
         tracing::info!(seeded, "auto-seeded built-in providers on first start");
@@ -789,7 +812,10 @@ fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow
     if openproxy_core::seed::seed_virtual_combo_provider(w)? {
         tracing::info!("auto-seeded virtual 'combo' provider for sub-combo targets");
     }
+    Ok(())
+}
 
+fn run_model_and_usage_backfills(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
     let backfilled = openproxy_core::seed::backfill_model_metadata(w)?;
     if backfilled > 0 {
         tracing::info!(
@@ -813,7 +839,10 @@ fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow
             "re-priced historical usage rows with missing pricing on boot"
         );
     }
+    Ok(())
+}
 
+fn ensure_bootstrap_key_logged(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
     if let Some(b) = openproxy_core::bootstrap::ensure_bootstrap_key(w, "bootstrap")? {
         tracing::info!(
             id = b.id.0,
@@ -821,7 +850,13 @@ fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow
             "bootstrap key ready (see WARN log / stderr for plaintext)"
         );
     }
+    Ok(())
+}
 
+fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
+    run_provider_and_combo_seeding(w)?;
+    run_model_and_usage_backfills(w)?;
+    ensure_bootstrap_key_logged(w)?;
     Ok(())
 }
 

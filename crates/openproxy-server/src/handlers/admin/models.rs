@@ -83,6 +83,31 @@ pub async fn create_custom_model(
     Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
 }
 
+fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> {
+    tokio::task::block_in_place(|| {
+        let r = s.db_pool().reader();
+        let p = openproxy_core::free_proxies::get_proxy(&r, pid).ok().flatten()?;
+        Some(format!("{}://{}:{}", p.r#type.to_lowercase(), p.host, p.port))
+    })
+}
+
+fn parse_test_model_params(
+    s: &AppState,
+    body_bytes: &[u8],
+) -> Result<(Option<AccountId>, Option<String>), ApiError> {
+    if body_bytes.is_empty() {
+        return Ok((None, None));
+    }
+    let input = serde_json::from_slice::<TestModelInput>(body_bytes)
+        .map_err(|e| ApiError(CoreError::Parse(format!("Invalid JSON: {e}"))))?;
+    let aid = input.account_id.map(AccountId::new);
+    let purl = input
+        .proxy_id
+        .as_deref()
+        .and_then(|pid| resolve_proxy_url_by_id(s, pid));
+    Ok((aid, purl))
+}
+
 pub async fn test_model(
     State(s): State<AppState>,
     Path(model_row_id): Path<i64>,
@@ -90,37 +115,7 @@ pub async fn test_model(
     body_bytes: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
-
-    let (account_id, proxy_url) = if body_bytes.is_empty() {
-        (None, None)
-    } else {
-        match serde_json::from_slice::<TestModelInput>(&body_bytes) {
-            Ok(input) => {
-                let aid = input.account_id.map(AccountId::new);
-                let purl = if let Some(ref pid) = input.proxy_id {
-                    tokio::task::block_in_place(|| {
-                        let r = s.db_pool().reader();
-                        if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
-                            Some(format!(
-                                "{}://{}:{}",
-                                p.r#type.to_lowercase(),
-                                p.host,
-                                p.port
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                };
-                (aid, purl)
-            }
-            Err(e) => {
-                return Err(ApiError(CoreError::Parse(format!("Invalid JSON: {e}"))));
-            }
-        }
-    };
+    let (account_id, proxy_url) = parse_test_model_params(&s, &body_bytes)?;
 
     let (r, debug_payload) = run_test_for_model(
         &s,
@@ -234,96 +229,109 @@ pub async fn refresh_models(
     run_refresh(s, id, q).await
 }
 
-pub(crate) async fn run_test_for_model(
+fn test_error_result(row_id: i64, status: u16, err_msg: &str) -> TestResult {
+    let redacted = openproxy_core::cost::redact_error_msg(err_msg).0;
+    TestResult {
+        row_id,
+        status,
+        elapsed_ms: 0,
+        error_msg: Some(redacted.clone()),
+        skipped: true,
+        skip_reason: Some(redacted),
+    }
+}
+
+fn load_model_for_test(s: &AppState, model_row_id: i64) -> Result<core_models::Model, TestResult> {
+    let r = s.db_pool().reader();
+    match core_models::get_by_row_id(&r, ModelRowId(model_row_id)) {
+        Ok(Some(m)) => Ok(m),
+        Ok(None) => Err(test_error_result(
+            model_row_id,
+            404,
+            &format!("model lookup failed: row_id={model_row_id}"),
+        )),
+        Err(e) => Err(test_error_result(
+            model_row_id,
+            e.http_status(),
+            &format!("model lookup failed: {e}"),
+        )),
+    }
+}
+
+fn resolve_effective_target_format(
+    format: adapters::AdapterFormat,
+    fallback: openproxy_core::models::TargetFormat,
+) -> openproxy_core::models::TargetFormat {
+    match format {
+        adapters::AdapterFormat::Openai => openproxy_core::models::TargetFormat::Openai,
+        adapters::AdapterFormat::Anthropic => openproxy_core::models::TargetFormat::Anthropic,
+        adapters::AdapterFormat::Mixed => fallback,
+        adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
+        adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
+        adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
+        adapters::AdapterFormat::Fx => openproxy_core::models::TargetFormat::Fx,
+    }
+}
+
+fn select_account_candidate(accounts_list: &[core_accounts::Account]) -> Option<AccountId> {
+    accounts_list
+        .iter()
+        .find(|a| a.health_status == core_accounts::HealthStatus::Healthy)
+        .or_else(|| {
+            accounts_list
+                .iter()
+                .find(|a| a.health_status == core_accounts::HealthStatus::Degraded)
+        })
+        .or_else(|| accounts_list.first())
+        .map(|a| a.id)
+}
+
+async fn decrypt_test_account_key(
     s: &AppState,
     model_row_id: i64,
-    account_id: Option<AccountId>,
-    proxy_url: Option<String>,
-    opts: TestOptions,
-    cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
-) -> (TestResult, Option<serde_json::Value>) {
-    use openproxy_adapters::adapters::gemini::openai_to_gemini;
-    use openproxy_pipeline::translation::openai_to_anthropic;
-    use openproxy_types::{OpenAIMessage, OpenAIRequest};
-
-    let row_id = ModelRowId(model_row_id);
-    let start = std::time::Instant::now();
-
-    // 1. Load the model row.
-    let res = {
-        let r = s.db_pool().reader();
-        match core_models::get_by_row_id(&r, row_id) {
-            Ok(Some(m)) => Ok(m),
-            Ok(None) => Err(ApiError(CoreError::ModelNotFound {
-                provider: "<unknown>".into(),
-                model: format!("row_id={model_row_id}"),
-            })),
-            Err(e) => Err(ApiError(e)),
-        }
-    };
-    let model = match res {
-        Ok(m) => m,
-        Err(ApiError(e)) => {
-            return (
-                TestResult {
-                    row_id: model_row_id,
-                    status: e.http_status(),
-                    elapsed_ms: 0,
-                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-                    skipped: true,
-                    skip_reason: Some(format!(
-                        "model lookup failed: {}",
-                        openproxy_core::cost::redact_error_msg(&e.to_string()).0
-                    )),
-                },
-                None,
-            );
-        }
-    };
-
-    // 1a. If the model is toggled inactive, the per-row handler
-    //     would still let the operator fire a test (they may be
-    //     debugging why a model went inactive). The combo handler,
-    //     however, wants to skip these rows outright — a fan-out
-    //     should not bombard a model the operator has explicitly
-    //     deactivated. We can detect which caller we are by
-    //     inspecting `account_id`: a `Some(_)` value came from the
-    //     combo path (the target row had a pinned account), while
-    //     `None` means the per-row handler is asking us to pick.
-    //     A pinned account means "this is a real target, respect
-    //     its active flag"; no pinned account means "the operator
-    //     clicked the button, do what they ask". This is a
-    //     lightweight heuristic that keeps both flows happy without
-    //     adding a new parameter to the helper signature.
-    if !model.active && opts.in_combo_fanout {
-        return (TestResult::skipped(model_row_id, "model is inactive"), None);
+    aid: AccountId,
+    account_opt: Option<&core_accounts::Account>,
+    provider_id: &str,
+    start: std::time::Instant,
+) -> Result<String, TestResult> {
+    if let Some(acc) = account_opt
+        && acc.auth_type == "oauth"
+    {
+        return core_oauth::resolve_oauth_token(
+            s.db_pool().as_ref(),
+            acc,
+            provider_id,
+            s.oauth_provider_registry().as_ref(),
+            s.upstream_client(),
+            s.master_key().as_ref(),
+        )
+        .await
+        .map_err(|e| {
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            TestResult {
+                row_id: model_row_id,
+                status: e.http_status(),
+                elapsed_ms,
+                error_msg: Some(format!("resolve oauth token: {e}")),
+                skipped: false,
+                skip_reason: None,
+            }
+        });
     }
 
-    // 2. Find the adapter for that provider. Check built-in adapters
-    //    first, then fall back to constructing a CustomAdapter from the
-    //    DB row.
-    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
-        Ok(a) => a,
-        Err(err) => {
-            return (
-                TestResult {
-                    row_id: model_row_id,
-                    status: err.http_status(),
-                    elapsed_ms: 0,
-                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                    skipped: true,
-                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                },
-                None,
-            );
-        }
-    };
+    let r = s.db_pool().reader();
+    core_accounts::decrypt_api_key(&r, aid, s.master_key().as_ref())
+        .or_else(|_| core_accounts::decrypt_access_token(&r, aid, s.master_key().as_ref()))
+        .map_err(|e| test_error_result(model_row_id, e.http_status(), &e.to_string()))
+}
 
-    // 3. Resolve the account to use. Anonymous access is allowed when:
-    //      - provider has auth_type "none", OR
-    //      - provider has no accounts configured (fallback to anonymous)
-    //    This lets bearer providers like opencode-zen work without
-    //    accounts while still using accounts when they exist.
+async fn resolve_test_credentials(
+    s: &AppState,
+    model: &core_models::Model,
+    model_row_id: i64,
+    account_id: Option<AccountId>,
+    start: std::time::Instant,
+) -> Result<(Option<AccountId>, String, String, Option<core_accounts::Account>), TestResult> {
     let (is_anonymous, accounts_list) = {
         let r = s.db_pool().reader();
         let provider_row = core_providers::get(&r, &model.provider_id).unwrap_or_default();
@@ -331,147 +339,301 @@ pub(crate) async fn run_test_for_model(
             .unwrap_or_default();
         let anon = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
-            _ if accs.is_empty() => true, // No accounts → try anonymous
+            _ if accs.is_empty() => true,
             _ => false,
         };
         (anon, accs)
     };
 
-    // Capture the optional account_id AND its label. The label is
-    // needed by providers whose URL embeds account-level metadata
-    // (e.g. CloudFlare Workers AI uses the label as its account ID).
-    let mut raw_account_opt = None;
-    let (_account_id_opt, account_label, api_key) = if is_anonymous {
-        (None, String::new(), String::new()) // Anonymous: no account, empty key
-    } else {
-        let account_id = match account_id {
-            Some(id) => Some(id),
-            None => {
-                let healthy = accounts_list
-                    .iter()
-                    .find(|a| a.health_status == core_accounts::HealthStatus::Healthy);
-                let degraded = || {
-                    accounts_list
-                        .iter()
-                        .find(|a| a.health_status == core_accounts::HealthStatus::Degraded)
-                };
-                healthy
-                    .or_else(degraded)
-                    .or_else(|| accounts_list.first())
-                    .map(|a| a.id)
-            }
-        };
+    if is_anonymous {
+        return Ok((None, String::new(), String::new(), None));
+    }
 
-        // 4. Decrypt the API key. Drop the reader guard immediately.
-        //    OAuth accounts store the token in access_token_encrypted,
-        //    not api_key_encrypted, so we fall back to that if the
-        //    primary decrypt fails (e.g. NULL column).
-        let api_key = match account_id {
-            Some(aid) => {
-                let account = tokio::task::block_in_place(|| {
-                    let r = s.db_pool().reader();
-                    core_accounts::get(&r, aid, s.master_key().as_ref())
-                        .ok()
-                        .flatten()
-                });
-                raw_account_opt = account;
-                if let Some(ref acc) = raw_account_opt
-                    && acc.auth_type == "oauth"
-                {
-                    match core_oauth::resolve_oauth_token(
-                        s.db_pool().as_ref(),
-                        acc,
-                        model.provider_id.as_str(),
-                        s.oauth_provider_registry().as_ref(),
-                        s.upstream_client(),
-                        s.master_key().as_ref(),
-                    )
-                    .await
-                    {
-                        Ok(token) => token,
-                        Err(e) => {
-                            let elapsed_ms = start.elapsed().as_millis() as u64;
-                            let err_msg = format!("resolve oauth token: {e}");
-                            return (
-                                TestResult {
-                                    row_id: model_row_id,
-                                    status: e.http_status(),
-                                    elapsed_ms,
-                                    error_msg: Some(err_msg),
-                                    skipped: false,
-                                    skip_reason: None,
-                                },
-                                None,
-                            );
-                        }
-                    }
-                } else {
-                    match {
-                        let r = s.db_pool().reader();
-                        core_accounts::decrypt_api_key(&r, aid, s.master_key().as_ref()).or_else(
-                            |_| {
-                                core_accounts::decrypt_access_token(
-                                    &r,
-                                    aid,
-                                    s.master_key().as_ref(),
-                                )
-                            },
-                        )
-                    }
-                    .map_err(ApiError)
-                    {
-                        Ok(k) => k,
-                        Err(ApiError(e)) => {
-                            return (
-                                TestResult {
-                                    row_id: model_row_id,
-                                    status: e.http_status(),
-                                    elapsed_ms: 0,
-                                    error_msg: Some(
-                                        openproxy_core::cost::redact_error_msg(&e.to_string()).0,
-                                    ),
-                                    skipped: true,
-                                    skip_reason: Some(
-                                        openproxy_core::cost::redact_error_msg(&e.to_string()).0,
-                                    ),
-                                },
-                                None,
-                            );
-                        }
-                    }
-                }
-            }
-            None => String::new(),
-        };
+    let resolved_aid = account_id.or_else(|| select_account_candidate(&accounts_list));
+    let raw_account = resolved_aid.and_then(|aid| {
+        tokio::task::block_in_place(|| {
+            let r = s.db_pool().reader();
+            core_accounts::get(&r, aid, s.master_key().as_ref())
+                .ok()
+                .flatten()
+        })
+    });
 
-        let account_label = raw_account_opt
-            .as_ref()
-            .and_then(|a| a.label.clone())
-            .unwrap_or_default();
-
-        (account_id, account_label, api_key)
+    let api_key = match resolved_aid {
+        Some(aid) => {
+            decrypt_test_account_key(
+                s,
+                model_row_id,
+                aid,
+                raw_account.as_ref(),
+                model.provider_id.as_str(),
+                start,
+            )
+            .await?
+        }
+        None => String::new(),
     };
 
-    // 5. Build the minimal test request. The exact prompts and limits
-    //    are not significant — we just need the upstream to issue a
-    //    real HTTP call so we can record the result.
-    //
-    //    The `system` message is sent first because some OpenRouter-
-    //    served models (e.g. certain NVIDIA Nemotron builds) reject a
-    //    bare `[{role: "user", content: "ping"}]` with a 400 from the
-    //    OpenAI Python SDK v1.x Pydantic validator: the validator's
-    //    discriminated-union ordering tries `developer` first when a
-    //    `name: null` field is present, then complains the role is
-    //    not `"developer"`. Adding a system message changes the
-    //    validator's selection to the `system` variant (or, for
-    //    non-strict validators, bypasses the discriminator) so the
-    //    `user` message is accepted as-is. This matches the wire
-    //    shape production clients (OpenAI SDK, Anthropic SDK, etc.)
-    //    send, and the system prompt is also what most providers
-    //    expect as a sanity check.
-    let openai_req = OpenAIRequest {
-        model: model.model_id.as_str().to_string(),
-        messages: vec![OpenAIMessage {
+    let account_label = raw_account
+        .as_ref()
+        .and_then(|a| a.label.clone())
+        .unwrap_or_default();
+
+    Ok((resolved_aid, account_label, api_key, raw_account))
+}
+
+fn build_stt_test_payload(
+    adapter: &adapters::ProviderAdapterEnum,
+    model: &core_models::Model,
+) -> (String, serde_json::Value, Option<(String, bytes::Bytes)>) {
+    let audio_wav = openproxy_core::audio::generate_test_speech_wav();
+    let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
+    let mut payload = Vec::new();
+
+    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+    payload.extend_from_slice(model.model_id.as_str().as_bytes());
+    payload.extend_from_slice(b"\r\n");
+
+    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    payload.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n",
+    );
+
+    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    payload.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"hello.wav\"\r\n",
+    );
+    payload.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+    payload.extend_from_slice(&audio_wav);
+    payload.extend_from_slice(b"\r\n");
+    payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+    let url = adapter.build_transcription_url();
+    let debug_val = serde_json::json!({
+        "model": model.model_id.as_str(),
+        "file": "hello.wav (16kHz 16-bit mono PCM speech)",
+        "response_format": "json"
+    });
+    (
+        url,
+        debug_val,
+        Some((content_type, bytes::Bytes::from(payload))),
+    )
+}
+
+fn build_audio_or_specialized_payload(
+    adapter: &adapters::ProviderAdapterEnum,
+    model: &core_models::Model,
+    is_embedding: bool,
+    is_image: bool,
+    _is_tts: bool,
+) -> (String, serde_json::Value) {
+    if is_embedding {
+        let url = adapter.build_embeddings_url();
+        let val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "input": "hello"
+        });
+        (url, val)
+    } else if is_image {
+        let url = adapter.build_image_url();
+        let val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "prompt": "hello",
+            "n": 1,
+            "size": "256x256"
+        });
+        (url, val)
+    } else {
+        let base_url = adapter.config().base_url.as_str();
+        let url = format!("{base_url}/audio/speech");
+        let val = serde_json::json!({
+            "model": model.model_id.as_str(),
+            "input": "hello",
+            "voice": "alloy"
+        });
+        (url, val)
+    }
+}
+
+fn build_chat_format_test_payload(
+    adapter: &adapters::ProviderAdapterEnum,
+    model: &core_models::Model,
+    openai_req: &openproxy_types::OpenAIRequest,
+    account_label: &str,
+    effective_target_format: openproxy_core::models::TargetFormat,
+    model_row_id: i64,
+) -> Result<(String, serde_json::Value), TestResult> {
+    use openproxy_adapters::adapters::gemini::openai_to_gemini;
+    use openproxy_pipeline::translation::openai_to_anthropic;
+
+    let url = adapter.build_chat_url_for_account(
+        effective_target_format,
+        &model.model_id,
+        account_label,
+    );
+
+    match effective_target_format {
+        openproxy_core::models::TargetFormat::Anthropic => {
+            let anthropic_req = openai_to_anthropic(
+                openai_req,
+                model.model_id.as_str(),
+                &openai_req.messages,
+                openai_req.stream,
+            );
+            serde_json::to_value(&anthropic_req)
+                .map(|v| (url, v))
+                .map_err(|e| {
+                    test_error_result(
+                        model_row_id,
+                        500,
+                        &format!("serialize anthropic req: {e}"),
+                    )
+                })
+        }
+        openproxy_core::models::TargetFormat::Gemini => {
+            let gemini_req = openai_to_gemini(openai_req, &openai_req.messages);
+            serde_json::to_value(&gemini_req)
+                .map(|v| (url, v))
+                .map_err(|e| {
+                    test_error_result(model_row_id, 500, &format!("serialize gemini req: {e}"))
+                })
+        }
+        openproxy_core::models::TargetFormat::Responses => {
+            let mut responses_req = openai_req.clone();
+            responses_req.max_tokens = None;
+            let (_cancel_tx, client_disconnected) =
+                tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
+            let pipeline_req = openproxy_pipeline::PipelineRequest {
+                request_id: RequestId::new(),
+                trace_id: TraceId::new(),
+                combo_id: ComboId(0),
+                openai_request: std::sync::Arc::new(responses_req),
+                client_disconnected,
+                stream_sink: None,
+                api_key_id: None,
+                race_cancel: None,
+                combo_override: None,
+                targets_override: None,
+                request_headers: std::collections::BTreeMap::new(),
+                request_body_json: None,
+                race_cancelled: false,
+                endpoint_kind: openproxy_types::EndpointKind::Chat,
+                compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+                proxy_override: None,
+            };
+            let formatter = openproxy_pipeline::formatting::get_formatter(
+                openproxy_core::models::TargetFormat::Responses,
+            );
+            let req_bytes = formatter
+                .format_request(
+                    &pipeline_req,
+                    model,
+                    &pipeline_req.openai_request.messages,
+                    true,
+                    adapter,
+                )
+                .map_err(|err| test_error_result(model_row_id, 500, &err.to_string()))?;
+            let v = serde_json::from_slice::<serde_json::Value>(&req_bytes).map_err(|e| {
+                test_error_result(
+                    model_row_id,
+                    500,
+                    &format!("serialize responses req: {e}"),
+                )
+            })?;
+            Ok((url, v))
+        }
+        openproxy_core::models::TargetFormat::Fx => {
+            let req_bytes = adapter
+                .format_request(
+                    openproxy_core::models::TargetFormat::Fx,
+                    openai_req,
+                    &model.model_id,
+                    &openai_req.messages,
+                    openai_req.stream,
+                )
+                .map_err(|err| test_error_result(model_row_id, 500, &err.to_string()))?;
+            let v = serde_json::from_slice::<serde_json::Value>(&req_bytes).map_err(|e| {
+                test_error_result(model_row_id, 500, &format!("serialize fx req: {e}"))
+            })?;
+            Ok((url, v))
+        }
+        _ => serde_json::to_value(openai_req)
+            .map(|v| (url, v))
+            .map_err(|e| test_error_result(model_row_id, 500, &format!("serialize openai req: {e}"))),
+    }
+}
+
+fn extract_antigravity_project(raw_account: Option<&core_accounts::Account>) -> Option<String> {
+    raw_account
+        .as_ref()
+        .and_then(|a| a.oauth_provider_specific.as_ref())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("project_id")
+                .or_else(|| v.get("project"))
+                .or_else(|| v.get("projectId"))
+                .or_else(|| v.get("client_id"))
+                .or_else(|| v.get("clientId"))
+                .and_then(|p| p.as_str().map(String::from))
+        })
+}
+
+fn extract_kiro_meta(
+    raw_account: Option<&core_accounts::Account>,
+) -> (Option<String>, Option<String>) {
+    raw_account
+        .as_ref()
+        .and_then(|a| a.oauth_provider_specific.as_ref())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .map_or((None, None), |v| {
+            let r = v.get("region").and_then(|x| x.as_str()).map(String::from);
+            let p = v
+                .get("profileArn")
+                .or_else(|| v.get("profile_arn"))
+                .and_then(|x| x.as_str())
+                .map(String::from);
+            (r, p)
+        })
+}
+
+fn build_custom_provider_meta(
+    provider_id: &str,
+    raw_account_opt: Option<&core_accounts::Account>,
+    api_key: &str,
+) -> Option<openproxy_types::context::CustomProviderMeta> {
+    if provider_id == "antigravity" {
+        Some(openproxy_types::context::CustomProviderMeta {
+            access_token: api_key.to_string(),
+            maybe_refresh: None,
+            kiro_region: None,
+            kiro_profile_arn: None,
+            antigravity_project: extract_antigravity_project(raw_account_opt),
+            antigravity_metadata: None,
+            codex_workspace_id: None,
+        })
+    } else if provider_id == "kiro" {
+        let (region, profile_arn) = extract_kiro_meta(raw_account_opt);
+        Some(openproxy_types::context::CustomProviderMeta {
+            access_token: api_key.to_string(),
+            maybe_refresh: None,
+            kiro_region: region,
+            kiro_profile_arn: profile_arn,
+            antigravity_project: None,
+            antigravity_metadata: None,
+            codex_workspace_id: None,
+        })
+    } else {
+        None
+    }
+}
+
+fn build_test_openai_request(model_id: &str) -> openproxy_types::OpenAIRequest {
+    openproxy_types::OpenAIRequest {
+        model: model_id.to_string(),
+        messages: vec![openproxy_types::OpenAIMessage {
             role: "user".into(),
             content: Some(serde_json::Value::String("hi".to_string())),
             name: None,
@@ -489,24 +651,59 @@ pub(crate) async fn run_test_for_model(
         top_k: None,
         user: None,
         extra: serde_json::Map::new(),
+    }
+}
+
+pub(crate) async fn run_test_for_model(
+    s: &AppState,
+    model_row_id: i64,
+    account_id: Option<AccountId>,
+    proxy_url: Option<String>,
+    opts: TestOptions,
+    cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
+) -> (TestResult, Option<serde_json::Value>) {
+    let row_id = ModelRowId(model_row_id);
+    let start = std::time::Instant::now();
+
+    // 1. Load model row
+    let model = match load_model_for_test(s, model_row_id) {
+        Ok(m) => m,
+        Err(err_res) => return (err_res, None),
     };
 
-    // 6. Test supported for all providers via standard or wrap_request_body path.
+    if !model.active && opts.in_combo_fanout {
+        return (TestResult::skipped(model_row_id, "model is inactive"), None);
+    }
 
-    // 7. Standard adapter path: translate to the row's native format
-    //    and assemble the URL. This works for all non-custom providers
-    //    (OpenAI-compatible, Anthropic, Gemini).
-    //    `serde_json::to_value` cannot fail for these struct shapes in
-    //    practice, but we still want a typed error if it ever does.
-    let effective_target_format = match adapter.format() {
-        adapters::AdapterFormat::Openai => openproxy_core::models::TargetFormat::Openai,
-        adapters::AdapterFormat::Anthropic => openproxy_core::models::TargetFormat::Anthropic,
-        adapters::AdapterFormat::Mixed => model.target_format,
-        adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
-        adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
-        adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
-        adapters::AdapterFormat::Fx => openproxy_core::models::TargetFormat::Fx,
+    // 2. Resolve adapter
+    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
+        Ok(a) => a,
+        Err(err) => {
+            return (
+                test_error_result(model_row_id, err.http_status(), &err.to_string()),
+                None,
+            );
+        }
     };
+
+    // 3. Resolve account & credentials
+    let (_account_id_opt, account_label, api_key, raw_account_opt) = match resolve_test_credentials(
+        s,
+        &model,
+        model_row_id,
+        account_id,
+        start,
+    )
+    .await
+    {
+        Ok(creds) => creds,
+        Err(err_res) => return (err_res, None),
+    };
+
+    // 4. Build request
+    let openai_req = build_test_openai_request(model.model_id.as_str());
+    let effective_target_format =
+        resolve_effective_target_format(adapter.format(), model.target_format);
     let inferred_type = openproxy_types::capabilities::infer_model_type(model.model_id.as_str());
     let is_audio = model.model_type == "audio" || inferred_type == "audio";
     let is_stt = is_audio
@@ -521,330 +718,32 @@ pub(crate) async fn run_test_for_model(
         serde_json::Value,
         Option<(String, bytes::Bytes)>,
     ) = if is_stt {
-        let audio_wav = openproxy_core::audio::generate_test_speech_wav();
-        let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
-        let mut payload = Vec::new();
-
-        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
-        payload.extend_from_slice(model.model_id.as_str().as_bytes());
-        payload.extend_from_slice(b"\r\n");
-
-        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(
-            b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n",
-        );
-
-        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(
-            b"Content-Disposition: form-data; name=\"file\"; filename=\"hello.wav\"\r\n",
-        );
-        payload.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
-        payload.extend_from_slice(&audio_wav);
-        payload.extend_from_slice(b"\r\n");
-        payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-
-        let content_type = format!("multipart/form-data; boundary={boundary}");
-        let url = adapter.build_transcription_url();
-        let debug_val = serde_json::json!({
-            "model": model.model_id.as_str(),
-            "file": "hello.wav (16kHz 16-bit mono PCM speech)",
-            "response_format": "json"
-        });
-        (
-            url,
-            debug_val,
-            Some((content_type, bytes::Bytes::from(payload))),
-        )
-    } else if is_embedding {
-        let url = adapter.build_embeddings_url();
-        let val = serde_json::json!({
-            "model": model.model_id.as_str(),
-            "input": "hello"
-        });
-        (url, val, None)
-    } else if is_image {
-        let url = adapter.build_image_url();
-        let val = serde_json::json!({
-            "model": model.model_id.as_str(),
-            "prompt": "hello",
-            "n": 1,
-            "size": "256x256"
-        });
-        (url, val, None)
-    } else if is_tts {
-        let base_url = adapter.config().base_url.as_str();
-        let url = format!("{base_url}/audio/speech");
-        let val = serde_json::json!({
-            "model": model.model_id.as_str(),
-            "input": "hello",
-            "voice": "alloy"
-        });
-        (url, val, None)
-    } else if effective_target_format == openproxy_core::models::TargetFormat::Anthropic {
-        let anthropic_req = openai_to_anthropic(
-            &openai_req,
-            model.model_id.as_str(),
-            &openai_req.messages,
-            openai_req.stream,
-        );
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Anthropic,
-            &model.model_id,
-            &account_label,
-        );
-        match serde_json::to_value(&anthropic_req) {
-            Ok(v) => (url, v, None),
-            Err(e) => {
-                let err = CoreError::Internal(format!("serialize anthropic req: {e}"));
-                return (
-                    TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                        skipped: true,
-                        skip_reason: Some(
-                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                        ),
-                    },
-                    None,
-                );
-            }
-        }
-    } else if effective_target_format == openproxy_core::models::TargetFormat::Gemini {
-        let gemini_req = openai_to_gemini(&openai_req, &openai_req.messages);
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Gemini,
-            &model.model_id,
-            &account_label,
-        );
-        match serde_json::to_value(&gemini_req) {
-            Ok(v) => (url, v, None),
-            Err(e) => {
-                let err = CoreError::Internal(format!("serialize gemini req: {e}"));
-                return (
-                    TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                        skipped: true,
-                        skip_reason: Some(
-                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                        ),
-                    },
-                    None,
-                );
-            }
-        }
-    } else if effective_target_format == openproxy_core::models::TargetFormat::Responses {
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Responses,
-            &model.model_id,
-            &account_label,
-        );
-        let mut responses_req = openai_req;
-        responses_req.max_tokens = None;
-        let (_cancel_tx, client_disconnected) =
-            tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
-        let pipeline_req = openproxy_pipeline::PipelineRequest {
-            request_id: RequestId::new(),
-            trace_id: TraceId::new(),
-            combo_id: ComboId(0),
-            openai_request: std::sync::Arc::new(responses_req),
-            client_disconnected,
-            stream_sink: None,
-            api_key_id: None,
-            race_cancel: None,
-            combo_override: None,
-            targets_override: None,
-            request_headers: std::collections::BTreeMap::new(),
-            request_body_json: None,
-            race_cancelled: false,
-            endpoint_kind: openproxy_types::EndpointKind::Chat,
-            compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
-            proxy_override: None,
-        };
-        let formatter = openproxy_pipeline::formatting::get_formatter(
-            openproxy_core::models::TargetFormat::Responses,
-        );
-        match formatter.format_request(
-            &pipeline_req,
-            &model,
-            &pipeline_req.openai_request.messages,
-            true,
+        build_stt_test_payload(&adapter, &model)
+    } else if is_embedding || is_image || is_tts {
+        let (u, v) = build_audio_or_specialized_payload(
             &adapter,
-        ) {
-            Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
-                Ok(v) => (url, v, None),
-                Err(e) => {
-                    let err = CoreError::Internal(format!("serialize responses req: {e}"));
-                    return (
-                        TestResult {
-                            row_id: model_row_id,
-                            status: 500,
-                            elapsed_ms: 0,
-                            error_msg: Some(
-                                openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                            ),
-                            skipped: true,
-                            skip_reason: Some(
-                                openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                            ),
-                        },
-                        None,
-                    );
-                }
-            },
-            Err(err) => {
-                return (
-                    TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                        skipped: true,
-                        skip_reason: Some(
-                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                        ),
-                    },
-                    None,
-                );
-            }
-        }
-    } else if effective_target_format == openproxy_core::models::TargetFormat::Fx {
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Fx,
-            &model.model_id,
-            &account_label,
+            &model,
+            is_embedding,
+            is_image,
+            is_tts,
         );
-        match adapter.format_request(
-            openproxy_core::models::TargetFormat::Fx,
-            &openai_req,
-            &model.model_id,
-            &openai_req.messages,
-            openai_req.stream,
-        ) {
-            Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
-                Ok(v) => (url, v, None),
-                Err(e) => {
-                    let err = CoreError::Internal(format!("serialize fx req: {e}"));
-                    return (
-                        TestResult {
-                            row_id: model_row_id,
-                            status: 500,
-                            elapsed_ms: 0,
-                            error_msg: Some(
-                                openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                            ),
-                            skipped: true,
-                            skip_reason: Some(
-                                openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                            ),
-                        },
-                        None,
-                    );
-                }
-            },
-            Err(err) => {
-                return (
-                    TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                        skipped: true,
-                        skip_reason: Some(
-                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                        ),
-                    },
-                    None,
-                );
-            }
-        }
+        (u, v, None)
     } else {
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Openai,
-            &model.model_id,
+        match build_chat_format_test_payload(
+            &adapter,
+            &model,
+            &openai_req,
             &account_label,
-        );
-        match serde_json::to_value(&openai_req) {
-            Ok(v) => (url, v, None),
-            Err(e) => {
-                let err = CoreError::Internal(format!("serialize openai req: {e}"));
-                return (
-                    TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                        skipped: true,
-                        skip_reason: Some(
-                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
-                        ),
-                    },
-                    None,
-                );
-            }
+            effective_target_format,
+            model_row_id,
+        ) {
+            Ok((u, v)) => (u, v, None),
+            Err(err_res) => return (err_res, None),
         }
     };
 
-    // 8. Build the HTTP request. The 15s timeout caps the test wall-
-    //    clock cost — a hung upstream shouldn't pin a dashboard
-    //    button indefinitely.
-    // Headers will be built below after resolving custom_meta
-
-    let mut custom_meta = None;
-    if model.provider_id.as_str() == "antigravity" {
-        let project = raw_account_opt
-            .as_ref()
-            .and_then(|a| a.oauth_provider_specific.as_ref())
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| {
-                v.get("project_id")
-                    .or_else(|| v.get("project"))
-                    .or_else(|| v.get("projectId"))
-                    .or_else(|| v.get("client_id"))
-                    .or_else(|| v.get("clientId"))
-                    .and_then(|p| p.as_str().map(String::from))
-            });
-
-        custom_meta = Some(openproxy_types::context::CustomProviderMeta {
-            access_token: api_key.clone(),
-            maybe_refresh: None,
-            kiro_region: None,
-            kiro_profile_arn: None,
-            antigravity_project: project,
-            antigravity_metadata: None,
-            codex_workspace_id: None,
-        });
-    } else if model.provider_id.as_str() == "kiro" {
-        let (region, profile_arn) = raw_account_opt
-            .as_ref()
-            .and_then(|a| a.oauth_provider_specific.as_ref())
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .map_or((None, None), |v| {
-                let r = v.get("region").and_then(|x| x.as_str()).map(String::from);
-                let p = v
-                    .get("profileArn")
-                    .or_else(|| v.get("profile_arn"))
-                    .and_then(|x| x.as_str())
-                    .map(String::from);
-                (r, p)
-            });
-
-        custom_meta = Some(openproxy_types::context::CustomProviderMeta {
-            access_token: api_key.clone(),
-            maybe_refresh: None,
-            kiro_region: region,
-            kiro_profile_arn: profile_arn,
-            antigravity_project: None,
-            antigravity_metadata: None,
-            codex_workspace_id: None,
-        });
-    }
-
+    let custom_meta =
+        build_custom_provider_meta(model.provider_id.as_str(), raw_account_opt.as_ref(), &api_key);
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
 
     let dummy_target = openproxy_types::context::ResolvedTarget {
@@ -877,67 +776,25 @@ pub(crate) async fn run_test_for_model(
             body_bytes,
         )
     } else {
-        openproxy_adapters::upstream::UpstreamRequest::post_json(
-            &url,
-            match serde_json::to_vec(&body_value) {
-                Ok(b) => {
-                    match adapter.wrap_request_body(
+        let wrapped_res = serde_json::to_vec(&body_value)
+            .map_err(|e| format!("failed to serialize request: {e}"))
+            .and_then(|b| {
+                adapter
+                    .wrap_request_body(
                         bytes::Bytes::from(b),
                         effective_target_format,
                         &dummy_target.model.model_id,
                         &dummy_target,
-                    ) {
-                        Ok(wrapped) => wrapped,
-                        Err(e) => {
-                            return (
-                                TestResult {
-                                    row_id: model_row_id,
-                                    status: 500,
-                                    elapsed_ms: 0,
-                                    error_msg: Some(
-                                        openproxy_core::cost::redact_error_msg(&format!(
-                                            "failed to wrap request: {e}"
-                                        ))
-                                        .0,
-                                    ),
-                                    skipped: true,
-                                    skip_reason: Some(
-                                        openproxy_core::cost::redact_error_msg(&format!(
-                                            "failed to wrap request: {e}"
-                                        ))
-                                        .0,
-                                    ),
-                                },
-                                None,
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    return (
-                        TestResult {
-                            row_id: model_row_id,
-                            status: 500,
-                            elapsed_ms: 0,
-                            error_msg: Some(
-                                openproxy_core::cost::redact_error_msg(&format!(
-                                    "failed to serialize request: {e}"
-                                ))
-                                .0,
-                            ),
-                            skipped: true,
-                            skip_reason: Some(
-                                openproxy_core::cost::redact_error_msg(&format!(
-                                    "failed to serialize request: {e}"
-                                ))
-                                .0,
-                            ),
-                        },
-                        None,
-                    );
-                }
-            },
-        )
+                    )
+                    .map_err(|e| format!("failed to wrap request: {e}"))
+            });
+
+        match wrapped_res {
+            Ok(wrapped) => openproxy_adapters::upstream::UpstreamRequest::post_json(&url, wrapped),
+            Err(err_msg) => {
+                return (test_error_result(model_row_id, 500, &err_msg), None);
+            }
+        }
     };
     req.proxy = proxy_url;
     for (k, v) in &headers {
@@ -951,13 +808,19 @@ pub(crate) async fn run_test_for_model(
         }
     }
 
-    // 9. Send + measure. We capture both the wall-clock elapsed time
-    //    and a truncated error body so the dashboard can show
-    //    something useful when the upstream is unhappy.
-    let start = std::time::Instant::now();
-    let client = s.upstream_client();
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    // 5. Upstream execution
+    let request_headers_map = if opts.in_combo_fanout {
+        None
+    } else {
+        Some(
+            req.headers
+                .iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        )
+    };
 
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
     if let Some(mut rx) = cancel_rx {
         let rx_cancel = openproxy_adapters::upstream::CancellationToken::clone(&cancel);
         tokio::spawn(async move {
@@ -986,27 +849,17 @@ pub(crate) async fn run_test_for_model(
         },
     );
 
-    let request_headers_map = if opts.in_combo_fanout {
-        None
-    } else {
-        Some(
-            req.headers
-                .iter()
-                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-                .collect::<std::collections::HashMap<_, _>>(),
-        )
-    };
+    let start_req = std::time::Instant::now();
+    let result = s.upstream_client().call(req, profile, cancel).await;
+    let elapsed_ms = start_req.elapsed().as_millis() as u64;
 
-    let result = client.call(req, profile, cancel).await;
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-    let mut debug_payload = None;
-    if let Some(req_headers) = request_headers_map {
-        debug_payload = Some(serde_json::json!({
+    let mut debug_payload = request_headers_map.map(|req_headers| {
+        serde_json::json!({
             "request_headers": req_headers,
             "request_url": url,
-            "request_body": body_value.clone(),
-        }));
-    }
+            "request_body": body_value,
+        })
+    });
 
     let (status, error_msg) = match result {
         Ok(response) => {
@@ -1024,37 +877,16 @@ pub(crate) async fn run_test_for_model(
                 (status, None)
             }
         }
-        Err(e) => {
-            // 0 = "request never reached the upstream" (DNS / connect / TLS
-            // / timeout). The schema doesn't constrain this — `0` is a
-            // distinct sentinel that the dashboard renders as a network
-            // error.
-            (0, Some(format!("{e:?}")))
-        }
+        Err(e) => (0, Some(format!("{e:?}"))),
     };
 
-    // 10. Persist the result. The persist is independent of the response
-    //     shape: the dashboard should always see *something* on the row
-    //     after the button is pressed. We write to the row from the
-    //     per-row path only; the combo fan-out does not want its
-    //     transient probe to overwrite the row's last-test status.
     if !opts.in_combo_fanout {
         let status_i32 = i32::from(status);
-        if let Err(e) = {
-            let w = s.db_pool().writer();
-            core_models::set_test_status(&w, row_id, status_i32)
-        } {
-            return (
-                TestResult {
-                    row_id: model_row_id,
-                    status: e.http_status(),
-                    elapsed_ms,
-                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-                    skipped: true,
-                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-                },
-                None,
-            );
+        let w = s.db_pool().writer();
+        if let Err(e) = core_models::set_test_status(&w, row_id, status_i32) {
+            let mut err_res = test_error_result(model_row_id, e.http_status(), &e.to_string());
+            err_res.elapsed_ms = elapsed_ms;
+            return (err_res, None);
         }
     }
 

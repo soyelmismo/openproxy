@@ -459,57 +459,55 @@ fn make_generic_filter() -> CompiledFilter {
 
 // ─── Filter pipeline ─────────────────────────────────────────────────────────
 
-/// Aplica el pipeline de filtrado de un `CompiledFilter` al texto.
-///
-/// Returns `(filtered_text, applied_rule_names)` where each rule name is
-/// a pre-computed `&'static str` (e.g. `"git-status::strip_ansi"`) — no
-/// `format!` allocation per call.
-///
-/// The 10 pipeline stages run in the same order as the previous
-/// `RtkFilter`-based implementation; behavior is identical.
-pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'static str>) {
-    let mut applied_rules: Vec<&'static str> = Vec::new();
-    let mut result = text.to_string();
-
-    // 1. Strip ANSI codes
-    if filter.strip_ansi {
-        let stripped = strip_ansi(&result);
-        if let Cow::Owned(s) = stripped {
-            applied_rules.push(filter.rule_strip_ansi);
-            result = s;
-        }
+fn apply_cleanups_and_replaces(
+    result: &mut String,
+    filter: &CompiledFilter,
+    applied: &mut Vec<&'static str>,
+) {
+    if filter.strip_ansi
+        && let Cow::Owned(s) = strip_ansi(result)
+    {
+        applied.push(filter.rule_strip_ansi);
+        *result = s;
     }
-
-    // 2. Filter stderr prefixes (uses static STDERR_RE — no per-call compile)
     if filter.filter_stderr {
-        let filtered = filter_stderr_prefixes(&result);
-        if filtered != result {
-            applied_rules.push(filter.rule_filter_stderr);
-            result = filtered;
+        let filtered = filter_stderr_prefixes(result);
+        if filtered != *result {
+            applied.push(filter.rule_filter_stderr);
+            *result = filtered;
         }
     }
-
-    // 3. Regex replacements (patterns pre-compiled)
     for (re, replacement) in &filter.replace {
-        let replaced = re.replace_all(&result, *replacement).into_owned();
-        if replaced != result {
-            applied_rules.push(filter.rule_replace);
-            result = replaced;
+        let replaced = re.replace_all(result, *replacement).into_owned();
+        if replaced != *result {
+            applied.push(filter.rule_replace);
+            *result = replaced;
         }
     }
+}
 
-    // 4. Match output (short-circuit) — patterns pre-compiled
+fn check_match_output_stage(
+    result: &str,
+    filter: &CompiledFilter,
+    applied: &mut Vec<&'static str>,
+) -> Option<String> {
     for rule in &filter.match_output {
-        if rule.re.is_match(&result) {
-            let should_skip = rule.unless.as_ref().is_some_and(|u| u.is_match(&result));
+        if rule.re.is_match(result) {
+            let should_skip = rule.unless.as_ref().is_some_and(|u| u.is_match(result));
             if !should_skip {
-                applied_rules.push(filter.rule_match_output);
-                return (rule.message.to_string(), applied_rules);
+                applied.push(filter.rule_match_output);
+                return Some(rule.message.to_string());
             }
         }
     }
+    None
+}
 
-    // 5. Strip patterns (drop matching lines) — patterns pre-compiled
+fn apply_line_dropping_and_keeping(
+    result: &mut String,
+    filter: &CompiledFilter,
+    applied: &mut Vec<&'static str>,
+) {
     if !filter.strip_patterns.is_empty() {
         let original_line_count = result.lines().count();
         let stripped: Vec<&str> = result
@@ -517,47 +515,62 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
             .filter(|l| !filter.strip_patterns.iter().any(|r| r.is_match(l)))
             .collect();
         if stripped.len() != original_line_count {
-            applied_rules.push(filter.rule_strip);
-            result = stripped.join("\n");
+            applied.push(filter.rule_strip);
+            *result = stripped.join("\n");
         }
     }
-
-    // 6. Keep patterns (only keep matching lines) — patterns pre-compiled
     if !filter.keep_patterns.is_empty() {
         let kept: Vec<&str> = result
             .lines()
             .filter(|l| filter.keep_patterns.iter().any(|r| r.is_match(l)))
             .collect();
         if !kept.is_empty() {
-            applied_rules.push(filter.rule_keep);
-            result = kept.join("\n");
+            applied.push(filter.rule_keep);
+            *result = kept.join("\n");
         }
     }
+}
 
-    // 7. Collapse patterns (non-consecutive dedup) — patterns pre-compiled
-    if !filter.collapse_patterns.is_empty() {
-        let original_line_count = result.lines().count();
-        let mut seen = std::collections::HashSet::new();
-        let collapsed: Vec<&str> = result
-            .lines()
-            .filter(|l| {
-                if filter.collapse_patterns.iter().any(|r| r.is_match(l)) {
-                    let key = l.trim();
-                    if seen.contains(key) {
-                        return false;
-                    }
-                    seen.insert(key);
-                }
-                true
-            })
-            .collect();
-        if collapsed.len() != original_line_count {
-            applied_rules.push(filter.rule_collapse);
-            result = collapsed.join("\n");
+fn should_keep_collapsed_line<'a>(
+    line: &'a str,
+    filter: &CompiledFilter,
+    seen: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    if filter.collapse_patterns.iter().any(|r| r.is_match(line)) {
+        let key = line.trim();
+        if seen.contains(key) {
+            return false;
         }
+        seen.insert(key);
     }
+    true
+}
 
-    // 8. Truncate lines (unicode-safe)
+fn apply_collapse_stage(
+    result: &mut String,
+    filter: &CompiledFilter,
+    applied: &mut Vec<&'static str>,
+) {
+    if filter.collapse_patterns.is_empty() {
+        return;
+    }
+    let original_line_count = result.lines().count();
+    let mut seen = std::collections::HashSet::new();
+    let collapsed: Vec<&str> = result
+        .lines()
+        .filter(|l| should_keep_collapsed_line(l, filter, &mut seen))
+        .collect();
+    if collapsed.len() != original_line_count {
+        applied.push(filter.rule_collapse);
+        *result = collapsed.join("\n");
+    }
+}
+
+fn apply_truncation_stages(
+    result: &mut String,
+    filter: &CompiledFilter,
+    applied: &mut Vec<&'static str>,
+) {
     if filter.truncate_line_at > 0 {
         let mut any_truncated = false;
         let truncated: Vec<Cow<'_, str>> = result
@@ -571,30 +584,58 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
             })
             .collect();
         if any_truncated {
-            applied_rules.push(filter.rule_truncate_line);
-            result = truncated.join("\n");
+            applied.push(filter.rule_truncate_line);
+            *result = truncated.join("\n");
         }
     }
-
-    // 9. Smart truncate (pre-compiled priority_patterns)
     if let Some(ref tc) = filter.truncate {
-        let (truncated, did_truncate, _dropped) = smart_truncate(&result, tc);
+        let (truncated, did_truncate, _dropped) = smart_truncate(result, tc);
         if did_truncate {
-            applied_rules.push(filter.rule_truncate);
-            result = truncated;
+            applied.push(filter.rule_truncate);
+            *result = truncated;
         }
     }
-
-    // 10. On empty fallback
     if result.trim().is_empty() && !filter.on_empty.is_empty() {
-        applied_rules.push(filter.rule_on_empty);
-        result = filter.on_empty.to_string();
+        applied.push(filter.rule_on_empty);
+        *result = filter.on_empty.to_string();
     }
+}
+
+/// Aplica el pipeline de filtrado de un `CompiledFilter` al texto.
+///
+/// Returns `(filtered_text, applied_rule_names)` where each rule name is
+/// a pre-computed `&'static str` (e.g. `"git-status::strip_ansi"`) — no
+/// `format!` allocation per call.
+///
+/// The 10 pipeline stages run in the same order as the previous
+/// `RtkFilter`-based implementation; behavior is identical.
+pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'static str>) {
+    let mut applied_rules: Vec<&'static str> = Vec::new();
+    let mut result = text.to_string();
+
+    apply_cleanups_and_replaces(&mut result, filter, &mut applied_rules);
+    if let Some(short_circuit) = check_match_output_stage(&result, filter, &mut applied_rules) {
+        return (short_circuit, applied_rules);
+    }
+    apply_line_dropping_and_keeping(&mut result, filter, &mut applied_rules);
+    apply_collapse_stage(&mut result, filter, &mut applied_rules);
+    apply_truncation_stages(&mut result, filter, &mut applied_rules);
 
     (result, applied_rules)
 }
 
 // ─── ANSI stripping (memchr-based, from Phase A) ─────────────────────────────
+
+fn skip_csi_sequence(bytes: &[u8], mut i: usize) -> usize {
+    i += 2;
+    while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+        i += 1;
+    }
+    if i < bytes.len() {
+        i += 1;
+    }
+    i
+}
 
 /// Strip ANSI CSI escape sequences from `text`.
 ///
@@ -621,18 +662,8 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
     while i < bytes.len() {
         if bytes[i] == 0x1B {
             if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                // Skip the ESC [ and everything until the final byte (0x40..=0x7E).
-                i += 2;
-                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
-                    i += 1;
-                }
-                // Skip the final byte too (if present — malformed input just ends).
-                if i < bytes.len() {
-                    i += 1;
-                }
+                i = skip_csi_sequence(bytes, i);
             } else {
-                // Lone ESC (at EOF, or not followed by '['): drop the ESC and
-                // continue scanning from the next byte.
                 i += 1;
             }
         } else {
@@ -647,35 +678,38 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
     Cow::Owned(String::from_utf8(out).unwrap_or_default())
 }
 
-fn truncate_unicode_safe(s: &str, max_chars: usize) -> Cow<'_, str> {
-    if max_chars == 0 {
-        return Cow::Borrowed(s);
-    }
-    let mut cut_byte = None;
-    let mut count = 0;
+fn find_cut_byte(s: &str, max_chars: usize) -> Option<usize> {
     let target_cut = if max_chars > 3 {
         max_chars - 3
     } else {
         max_chars
     };
-
+    let mut cut_byte = None;
+    let mut count = 0;
     for (byte_idx, _) in s.char_indices() {
         if count == target_cut {
             cut_byte = Some(byte_idx);
         }
         count += 1;
         if count > max_chars {
-            let cut = cut_byte.unwrap_or(s.len());
-            return if max_chars <= 3 {
-                Cow::Borrowed(&s[..cut])
-            } else {
-                let prefix = &s[..cut];
-                Cow::Owned(format!("{prefix}..."))
-            };
+            return Some(cut_byte.unwrap_or(s.len()));
         }
     }
+    None
+}
 
-    Cow::Borrowed(s)
+fn truncate_unicode_safe(s: &str, max_chars: usize) -> Cow<'_, str> {
+    if max_chars == 0 {
+        return Cow::Borrowed(s);
+    }
+    let Some(cut) = find_cut_byte(s, max_chars) else {
+        return Cow::Borrowed(s);
+    };
+    if max_chars <= 3 {
+        Cow::Borrowed(&s[..cut])
+    } else {
+        Cow::Owned(format!("{}...", &s[..cut]))
+    }
 }
 
 #[cfg(test)]

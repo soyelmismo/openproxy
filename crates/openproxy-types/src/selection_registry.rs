@@ -78,28 +78,34 @@ impl SelectionRegistry {
         }
     }
 
+    fn resolve_entry_reference_ms(e: &SelectionRegistryEntry) -> u64 {
+        if e.last_success_ms > 0 {
+            e.last_success_ms
+        } else {
+            e.last_activity_ms
+        }
+    }
+
+    fn get_entry_request_count(e: &SelectionRegistryEntry, window_secs: u64) -> u64 {
+        if e.request_count == 0 {
+            return 0;
+        }
+        let reference_ms = Self::resolve_entry_reference_ms(e);
+        if reference_ms == 0 {
+            return e.request_count;
+        }
+        let window_ms = window_secs.saturating_mul(1000);
+        if now_ms().saturating_sub(reference_ms) <= window_ms {
+            e.request_count
+        } else {
+            0
+        }
+    }
+
     pub fn request_count_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
         let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match g.get(&target_id.0) {
-            Some(e) if e.request_count > 0 => {
-                let reference_ms = if e.last_success_ms > 0 {
-                    e.last_success_ms
-                } else {
-                    e.last_activity_ms
-                };
-                if reference_ms == 0 {
-                    return e.request_count;
-                }
-                let now = now_ms();
-                let window_ms = window_secs.saturating_mul(1000);
-                if now.saturating_sub(reference_ms) <= window_ms {
-                    e.request_count
-                } else {
-                    0
-                }
-            }
-            _ => 0,
-        }
+        g.get(&target_id.0)
+            .map_or(0, |e| Self::get_entry_request_count(e, window_secs))
     }
 
     pub fn prune_stale(&self, max_age: std::time::Duration) -> usize {

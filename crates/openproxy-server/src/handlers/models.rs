@@ -45,58 +45,89 @@ const DEFAULT_CONTEXT_LENGTH: i64 = 128_000;
 /// has a value. 8 192 is the conservative Claude / GPT-4-class cap.
 const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 8_192;
 
+fn filter_models_for_key(
+    rows: Vec<models::Model>,
+    key: Option<&openproxy_core::api_keys::ApiKey>,
+) -> Vec<models::Model> {
+    match key {
+        Some(k) => rows
+            .into_iter()
+            .filter(|m| k.is_model_allowed(m.model_id.as_str(), Some(m.provider_id.as_str())))
+            .collect(),
+        None => rows,
+    }
+}
+
+fn filter_combos_for_key(
+    combos: Vec<openproxy_types::Combo>,
+    key: Option<&openproxy_core::api_keys::ApiKey>,
+) -> Vec<openproxy_types::Combo> {
+    match key {
+        Some(k) => combos
+            .into_iter()
+            .filter(|c| {
+                if !k.is_combo_allowed(c.id.0) {
+                    return false;
+                }
+                let combo_virtual_id = format!("combo:{}", c.name);
+                k.is_model_allowed(&combo_virtual_id, None) || k.is_model_allowed(&c.name, None)
+            })
+            .collect(),
+        None => combos,
+    }
+}
+
+fn format_anthropic_models_response(data: Vec<serde_json::Value>) -> serde_json::Value {
+    let anthropic_data: Vec<serde_json::Value> = data
+        .into_iter()
+        .map(|item| {
+            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            serde_json::json!({
+                "type": "model",
+                "id": id,
+                "display_name": id,
+                "created_at": "2024-02-29T00:00:00Z"
+            })
+        })
+        .collect();
+
+    let first_id = anthropic_data
+        .first()
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let last_id = anthropic_data
+        .last()
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    serde_json::json!({
+        "data": anthropic_data,
+        "has_more": false,
+        "first_id": first_id,
+        "last_id": last_id,
+    })
+}
+
 pub async fn list_models(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // MEDIUM-4 fix: require a chat-scope API key for /v1/models.
-    // This matches OpenAI's behaviour (their /v1/models requires auth)
-    // and prevents unauthenticated catalog enumeration.
-    //
-    // The anonymous fallback (when zero active keys exist) is preserved
-    // so first-boot before the bootstrap key is created still works.
-    let maybe_api_key = match authenticate_chat_or_anonymous(&state, &headers) {
-        Ok(key) => key,
-        Err(e) => return Err(e),
-    };
+    let maybe_api_key = authenticate_chat_or_anonymous(&state, &headers)?;
 
-    // Use try_writer_for to avoid blocking under admin lock contention.
-    // The model list is bounded (typically <1000 rows) so 5s is plenty.
-    let rows = state
+    let raw_models = state
         .services()
         .models
         .list_active_all(std::time::Duration::from_secs(5))?;
-    let combo_rows = state.services().combos.list_combos()?;
+    let raw_combos = state.services().combos.list_combos()?;
 
-    let rows: Vec<_> = if let Some(key) = &maybe_api_key {
-        rows.into_iter()
-            .filter(|m| key.is_model_allowed(m.model_id.as_str(), Some(m.provider_id.as_str())))
-            .collect()
-    } else {
-        rows
-    };
-
-    let combo_rows: Vec<_> = if let Some(key) = &maybe_api_key {
-        combo_rows
-            .into_iter()
-            .filter(|c| {
-                if !key.is_combo_allowed(c.id.0) {
-                    return false;
-                }
-                let combo_virtual_id = format!("combo:{}", c.name);
-                key.is_model_allowed(&combo_virtual_id, None) || key.is_model_allowed(&c.name, None)
-            })
-            .collect()
-    } else {
-        combo_rows
-    };
+    let rows = filter_models_for_key(raw_models, maybe_api_key.as_ref());
+    let combo_rows = filter_combos_for_key(raw_combos, maybe_api_key.as_ref());
 
     let mut data: Vec<serde_json::Value> =
         rows.into_iter().map(|m| build_model_entry(&m)).collect();
     for c in &combo_rows {
-        // Compute the effective context window: explicit override
-        // on the combo row, or auto-compute (min across all
-        // targets including sub-combos recursively).
         let effective_cw = c.context_window.or_else(|| {
             state
                 .services()
@@ -110,36 +141,7 @@ pub async fn list_models(
     let is_anthropic =
         headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
     if is_anthropic {
-        let anthropic_data: Vec<serde_json::Value> = data
-            .into_iter()
-            .map(|item| {
-                let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-                serde_json::json!({
-                    "type": "model",
-                    "id": id,
-                    "display_name": id,
-                    "created_at": "2024-02-29T00:00:00Z"
-                })
-            })
-            .collect();
-
-        let first_id = anthropic_data
-            .first()
-            .and_then(|v| v.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let last_id = anthropic_data
-            .last()
-            .and_then(|v| v.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        Ok(Json(serde_json::json!({
-            "data": anthropic_data,
-            "has_more": false,
-            "first_id": first_id,
-            "last_id": last_id,
-        })))
+        Ok(Json(format_anthropic_models_response(data)))
     } else {
         Ok(Json(serde_json::json!({
             "object": "list",
@@ -148,14 +150,8 @@ pub async fn list_models(
     }
 }
 
-/// Authenticate with a chat-scope key, OR allow anonymous when zero
-/// active keys exist (first-boot window). Returns the key if
-/// authenticated, or None if anonymous.
-fn authenticate_chat_or_anonymous(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<Option<openproxy_core::api_keys::ApiKey>, ApiError> {
-    let token = headers
+fn extract_auth_header_token(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
@@ -165,13 +161,22 @@ fn authenticate_chat_or_anonymous(
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
                 .map(str::trim)
-        });
+        })
+}
+
+/// Authenticate with a chat-scope key, OR allow anonymous when zero
+/// active keys exist (first-boot window). Returns the key if
+/// authenticated, or None if anonymous.
+fn authenticate_chat_or_anonymous(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<openproxy_core::api_keys::ApiKey>, ApiError> {
+    let token = extract_auth_header_token(headers);
 
     let Some(token) = token else {
-        // No Authorization header — allow only if zero active keys.
         let active = state.services().api_keys.count_active().map_err(ApiError)?;
         if active == 0 {
-            return Ok(None); // anonymous
+            return Ok(None);
         }
         return Err(ApiError(CoreError::Auth("missing api key".into())));
     };
@@ -215,10 +220,6 @@ fn build_combo_entry(
         "permission": [],
         "root": id,
         "parent": null,
-        // The effective context window: either the operator-set
-        // override, or the auto-computed minimum across all targets
-        // (including sub-combos recursively). `null` when no target
-        // has a known context_length.
         "context_length": effective_context_window,
         "max_input_tokens": effective_context_window,
         "max_output_tokens": null,
@@ -230,94 +231,79 @@ fn build_combo_entry(
     })
 }
 
+fn resolve_effective_model_type<'a>(
+    model_type: &'a str,
+    custom: bool,
+    inferred_type: &'a str,
+) -> &'a str {
+    if custom {
+        if model_type.is_empty() {
+            inferred_type
+        } else {
+            model_type
+        }
+    } else if model_type.is_empty()
+        || (model_type == "chat" && inferred_type != "chat")
+        || (inferred_type == "chat" && (model_type == "audio" || model_type == "image"))
+    {
+        inferred_type
+    } else {
+        model_type
+    }
+}
+
+fn parse_modalities_json_or(
+    json_str: Option<&str>,
+    fallback: impl FnOnce() -> Vec<String>,
+) -> Vec<String> {
+    json_str
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_else(fallback)
+}
+
 /// Project one `core::models::Model` row to the enriched OpenAI-shape
 /// JSON object the public endpoint returns. Lifted out of the handler
 /// body so it can be unit-tested without spinning up an axum router.
 fn build_model_entry(m: &models::Model) -> serde_json::Value {
     let model_id = m.model_id.as_str();
     let provider_id = m.provider_id.as_str();
-
-    // The `id` field is the proxy-level identifier. The convention
-    // (mirrored by LiteLLM, OpenRouter, and most proxies that expose
-    // a unified /v1/models surface) is `<provider>/<upstream_model_id>`.
-    // The leading `<provider>/` prefix disambiguates models that share
-    // an upstream id across providers; any further `/` in the
-    // upstream id is part of the upstream name and is left intact.
-    //
-    // Example: provider `openrouter` + upstream `nex-agi/nex-n2-pro:free`
-    // → id `openrouter/nex-agi/nex-n2-pro:free`.
-    //
-    // The chat path strips this prefix before talking to the upstream
-    // (see `handlers::chat::run_pipeline`), so the id round-trips
-    // safely: the client sends back what it sees in the catalog.
     let full_id = format!("{provider_id}/{model_id}");
 
-    // Capabilities: prefer the stored JSON blob; fall back to the
-    // heuristic. The fallback runs through the same `from_json`
-    // helper for symmetry with the DB path.
-    let caps = if let Some(json) = m.capabilities_json.as_deref() {
-        capabilities::ModelCapabilities::from_json(Some(json))
-    } else {
-        capabilities::infer_capabilities(model_id)
-    };
+    let caps = m
+        .capabilities_json
+        .as_deref()
+        .map_or_else(
+            || capabilities::infer_capabilities(model_id),
+            |json| capabilities::ModelCapabilities::from_json(Some(json)),
+        );
 
-    // Context length: DB → heuristic → generic default. The default
-    // is the same value OpenRouter itself returns for unknown models,
-    // so clients see a sane number even for hand-curated custom rows
-    // we have no metadata for.
     let context_length = m
         .context_length
         .or_else(|| capabilities::infer_context_length(model_id))
         .unwrap_or(DEFAULT_CONTEXT_LENGTH);
 
-    // Max output tokens: same DB → heuristic → default chain.
     let max_output_tokens = m
         .max_output_tokens
         .or_else(|| capabilities::infer_max_output_tokens(model_id))
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS);
 
-    // Input / output modalities: stored JSON, falling back to the
-    // heuristic when the column is NULL or unparseable. We deliberately
-    // swallow parse errors here — the heuristic is a better answer
-    // than a 500.
-    let input_modalities: Vec<String> = match m
-        .input_modalities_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-    {
-        Some(v) => v,
-        None => capabilities::infer_input_modalities_for_model(model_id, &caps)
+    let input_modalities = parse_modalities_json_or(m.input_modalities_json.as_deref(), || {
+        capabilities::infer_input_modalities_for_model(model_id, &caps)
             .into_iter()
             .map(std::string::ToString::to_string)
-            .collect(),
-    };
-    let output_modalities: Vec<String> = match m
-        .output_modalities_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-    {
-        Some(v) => v,
-        None => capabilities::infer_output_modalities(model_id)
+            .collect()
+    });
+
+    let output_modalities = parse_modalities_json_or(m.output_modalities_json.as_deref(), || {
+        capabilities::infer_output_modalities(model_id)
             .into_iter()
             .map(std::string::ToString::to_string)
-            .collect(),
-    };
+            .collect()
+    });
 
     let inferred_type = capabilities::infer_model_type(model_id);
-    let effective_type = if m.custom {
-        if m.model_type.is_empty() {
-            inferred_type
-        } else {
-            m.model_type.as_str()
-        }
-    } else if m.model_type.is_empty()
-        || (m.model_type == "chat" && inferred_type != "chat")
-        || (inferred_type == "chat" && (m.model_type == "audio" || m.model_type == "image"))
-    {
-        inferred_type
-    } else {
-        m.model_type.as_str()
-    };
+    let effective_type =
+        resolve_effective_model_type(m.model_type.as_str(), m.custom, inferred_type);
 
     let family = m
         .family
@@ -325,28 +311,18 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
         .or_else(|| capabilities::infer_family(model_id));
 
     serde_json::json!({
-        // OpenAI-spec fields.
         "id": full_id,
         "object": "model",
         "created": unix_now_secs(),
         "owned_by": provider_id,
         "permission": [],
-        // `root` mirrors `id` (no aliasing) so SDKs that read root for
-        // a stable handle see the same string. The previous version
-        // pointed root at the bare model_id; the new shape keeps root
-        // aligned with `id` to avoid surprising tools that compare them.
         "root": full_id,
         "parent": null,
-        // OmniRoute-style capability fields.
         "context_length": context_length,
         "max_input_tokens": context_length,
         "max_output_tokens": max_output_tokens,
         "input_modalities": input_modalities,
         "output_modalities": output_modalities,
-        // The `capabilities` object: built field-by-field so `null`
-        // values are omitted entirely. Using `serde_json::Map` keeps
-        // the wire shape clean even for models where only one or two
-        // capabilities are known.
         "capabilities": build_capabilities_object(&caps),
         "type": effective_type,
         "family": family,
@@ -360,26 +336,19 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
 /// `if (caps.reasoning)` work correctly.
 fn build_capabilities_object(caps: &capabilities::ModelCapabilities) -> serde_json::Value {
     let mut out = serde_json::Map::new();
-    if let Some(v) = caps.vision {
-        out.insert("vision".into(), serde_json::Value::Bool(v));
-    }
-    if let Some(v) = caps.tool_calling {
-        out.insert("tool_calling".into(), serde_json::Value::Bool(v));
-    }
-    if let Some(v) = caps.reasoning {
-        out.insert("reasoning".into(), serde_json::Value::Bool(v));
-    }
-    if let Some(v) = caps.thinking {
-        out.insert("thinking".into(), serde_json::Value::Bool(v));
-    }
-    if let Some(v) = caps.attachment {
-        out.insert("attachment".into(), serde_json::Value::Bool(v));
-    }
-    if let Some(v) = caps.structured_output {
-        out.insert("structured_output".into(), serde_json::Value::Bool(v));
-    }
-    if let Some(v) = caps.temperature {
-        out.insert("temperature".into(), serde_json::Value::Bool(v));
+    let fields: [(&str, Option<bool>); 7] = [
+        ("vision", caps.vision),
+        ("tool_calling", caps.tool_calling),
+        ("reasoning", caps.reasoning),
+        ("thinking", caps.thinking),
+        ("attachment", caps.attachment),
+        ("structured_output", caps.structured_output),
+        ("temperature", caps.temperature),
+    ];
+    for (name, val) in fields {
+        if let Some(v) = val {
+            out.insert(name.into(), serde_json::Value::Bool(v));
+        }
     }
     serde_json::Value::Object(out)
 }

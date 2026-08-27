@@ -1,52 +1,43 @@
 use super::{ApiError, AppState, CoreError, HeaderMap, IntoResponse};
 use std::net::SocketAddr;
 
-pub(crate) fn authenticate_admin_ws(
-    state: &AppState,
+#[cfg(debug_assertions)]
+fn check_dev_auth_bypass(
     headers: &HeaderMap,
-    query_token: Option<&str>,
-    _remote_addr: Option<&SocketAddr>,
-) -> Result<(), ApiError> {
-    // Dev convenience: when the operator explicitly opts in by setting
-    // OPENPROXY_DASHBOARD_AUTH_BYPASS=1 in the server's environment, every
-    // admin request is accepted without an Authorization header or query
-    // token. The match is on the exact sentinel `1` — NOT "any non-empty
-    // value" — so a typo or stray config (e.g. `=false`, `=yes`, `=0`,
-    // `=legacy-token`) cannot silently grant full admin access. The match
-    // is logged at WARN level so the bypass is visible in production logs
-    // and dashboards alerting on auth-bypass are wired correctly.
-    // NOTE: The bypass is gated behind debug_assertions so it is
-    // completely compiled out in release builds — no attacker can
-    // exploit it even if the env var is set.
-    #[cfg(debug_assertions)]
-    {
-        if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS")
-            && bypass == "1"
-        {
-            if let Some(addr) = _remote_addr
-                && !addr.ip().is_loopback()
-            {
-                tracing::error!(
-                    target: "openproxy::security",
-                    ip = %addr.ip(),
-                    "attempted to use OPENPROXY_DASHBOARD_AUTH_BYPASS from non-loopback IP"
-                );
-                return Err(ApiError(CoreError::Auth(
-                    "unauthorized IP for dev bypass".into(),
-                )));
-            }
-            tracing::warn!(
-                target: "openproxy::security",
-                path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
-                method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
-                "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
-                 every admin endpoint is open. Remove this env var to restore auth."
-            );
-            return Ok(());
-        }
+    remote_addr: Option<&SocketAddr>,
+) -> Result<bool, ApiError> {
+    let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS") else {
+        return Ok(false);
+    };
+    if bypass != "1" {
+        return Ok(false);
     }
+    if let Some(addr) = remote_addr
+        && !addr.ip().is_loopback()
+    {
+        tracing::error!(
+            target: "openproxy::security",
+            ip = %addr.ip(),
+            "attempted to use OPENPROXY_DASHBOARD_AUTH_BYPASS from non-loopback IP"
+        );
+        return Err(ApiError(CoreError::Auth(
+            "unauthorized IP for dev bypass".into(),
+        )));
+    }
+    tracing::warn!(
+        target: "openproxy::security",
+        path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
+        method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
+        "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
+         every admin endpoint is open. Remove this env var to restore auth."
+    );
+    Ok(true)
+}
 
-    // Extract token from Authorization header or from query parameter
+fn extract_admin_token<'a>(
+    headers: &'a HeaderMap,
+    query_token: Option<&'a str>,
+) -> Result<&'a str, ApiError> {
     let header_token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -62,8 +53,22 @@ pub(crate) fn authenticate_admin_ws(
     if t.is_empty() {
         return Err(ApiError(CoreError::Auth("invalid token".into())));
     }
+    Ok(t)
+}
 
-    crate::middleware::auth::verify_key_credentials(state, t, "manage")?;
+pub(crate) fn authenticate_admin_ws(
+    state: &AppState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+    _remote_addr: Option<&SocketAddr>,
+) -> Result<(), ApiError> {
+    #[cfg(debug_assertions)]
+    if check_dev_auth_bypass(headers, _remote_addr)? {
+        return Ok(());
+    }
+
+    let token = extract_admin_token(headers, query_token)?;
+    crate::middleware::auth::verify_key_credentials(state, token, "manage")?;
     Ok(())
 }
 

@@ -24,28 +24,34 @@ pub async fn list_sources(DbReader(r): DbReader) -> Result<Json<Vec<ProxySource>
     Ok(Json(list))
 }
 
-pub async fn create_source(
-    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
-    DbWriter(w): DbWriter,
-    Json(body): Json<CreateProxySourceInput>,
-) -> Result<Json<ProxySource>, ApiError> {
+fn validate_create_source_input(body: &CreateProxySourceInput) -> Result<(), ApiError> {
     if body.name.trim().is_empty() || body.url.trim().is_empty() {
         return Err(ApiError(CoreError::Validation(
             "name and url are required".into(),
         )));
     }
-    let src = create_proxy_source(&w, &body)?;
+    Ok(())
+}
 
-    let pool = Arc::clone(state.db_pool());
+fn spawn_source_sync_and_test(pool: Arc<openproxy_db::DbPool>) {
     tokio::spawn(async move {
-        if let Ok(summary) =
-            openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await
-            && (summary.added > 0 || summary.fetched > 0)
-        {
+        let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await else {
+            return;
+        };
+        if summary.added > 0 || summary.fetched > 0 {
             openproxy_core::free_proxies::test_all_proxies_background(pool);
         }
     });
+}
 
+pub async fn create_source(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    DbWriter(w): DbWriter,
+    Json(body): Json<CreateProxySourceInput>,
+) -> Result<Json<ProxySource>, ApiError> {
+    validate_create_source_input(&body)?;
+    let src = create_proxy_source(&w, &body)?;
+    spawn_source_sync_and_test(Arc::clone(state.db_pool()));
     Ok(Json(src))
 }
 
@@ -58,24 +64,30 @@ pub async fn update_source(
     Ok(Json(src))
 }
 
-pub async fn delete_source(
-    DbWriter(w): DbWriter,
-    Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let source = get_proxy_source(&w, &id)?.ok_or_else(|| {
-        ApiError(CoreError::Validation(format!(
+fn validate_source_deletion(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<(), ApiError> {
+    let Some(source) = get_proxy_source(conn, id)? else {
+        return Err(ApiError(CoreError::Validation(format!(
             "proxy source '{id}' not found"
-        )))
-    })?;
+        ))));
+    };
 
     if source.is_builtin {
         return Err(ApiError(CoreError::Validation(
             "Cannot delete built-in proxy sources".into(),
         )));
     }
+    Ok(())
+}
 
-    let deleted = delete_proxy_source(&w, &id)?;
-    if !deleted {
+pub async fn delete_source(
+    DbWriter(w): DbWriter,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    validate_source_deletion(&w, &id)?;
+    if !delete_proxy_source(&w, &id)? {
         return Err(ApiError(CoreError::Validation(format!(
             "proxy source '{id}' not found"
         ))));

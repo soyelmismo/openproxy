@@ -389,207 +389,192 @@ impl UpstreamClient {
         let timeouts = profile.resolve();
         let deadlines = ResolvedPhaseDeadlines::from_profile(start, &timeouts);
 
-        // Pre-flight cancellation.
         if cancel.is_cancelled() {
             return Err(UpstreamError::Cancel);
         }
 
-        // Parse the URL and derive the HostKey for the pool counter.
-        let uri: Uri = spec
-            .url
-            .parse()
-            .map_err(|e: http::uri::InvalidUri| UpstreamError::Invalid(e.to_string()))?;
-        let scheme = Scheme::from_uri(uri.scheme_str().unwrap_or("http"));
-        let host = uri.host().unwrap_or("").to_string();
-        let port = uri
-            .port_u16()
-            .unwrap_or(if matches!(scheme, Scheme::Https) {
-                443
-            } else {
-                80
-            });
-        let host_key = HostKey::new(scheme, &host, port);
-
-        // Build the hyper::Request<Full<Bytes>> for the legacy client.
-        let body_bytes = spec.body;
-        let body_len = body_bytes.as_ref().map(bytes::Bytes::len);
-        let body: Full<Bytes> = match body_bytes {
-            Some(bytes) => Full::new(bytes),
-            None => Full::new(Bytes::new()),
-        };
-        let mut builder = Request::builder().method(spec.method).uri(&spec.url);
-        {
-            let headers = builder.headers_mut().ok_or_else(|| {
-                UpstreamError::Invalid("failed to build request headers".to_string())
-            })?;
-            *headers = spec.headers;
-            // Set `Content-Length` when the body is a known-size
-            // buffer. hyper-util's legacy client does NOT auto-set
-            // `Content-Length`.
-            if let Some(len) = body_len
-                && !headers.contains_key(http::header::CONTENT_LENGTH)
-                && let Ok(v) = http::HeaderValue::from_str(&len.to_string())
-            {
-                headers.insert(http::header::CONTENT_LENGTH, v);
-            }
-        }
-        let request: Request<Full<Bytes>> = builder
-            .body(body)
-            .map_err(|e| UpstreamError::Invalid(e.to_string()))?;
+        let is_streaming = spec.is_streaming;
+        let proxy_url = spec.proxy.clone();
+        let (_uri, host_key, host) = build_host_key_and_uri(&spec.url)?;
+        let request = build_hyper_request(spec)?;
 
         let pool = Pool::clone(&self.pool);
         let cancel_for_send = CancellationToken::clone(&cancel);
-        let host_key_for_send = host_key;
-        let host_for_log = host;
         let transport = Arc::clone(&self.transport);
         let phase_hint = transport.phase_hint();
         let connector_timeouts = PhasedTimeouts::from_resolved(&timeouts);
-        let proxy_url = spec.proxy;
         let send_fut = async move {
             let res = transport
                 .send_request(request, connector_timeouts, proxy_url)
                 .await;
-            // Bump the pool counter. We treat the very first request
-            // to a host as a "dial" and subsequent ones as a "reuse".
-            // (The hyper client pools per-host internally; we
-            // observe the user-visible count, not the wire.)
             if res.is_ok() {
-                let count = pool.total();
-                if count == 0 {
-                    pool.record_dial(host_key_for_send);
-                } else {
-                    pool.record_reuse(host_key_for_send);
-                }
-                tracing::debug!(host = %host_for_log, "upstream request completed");
+                record_pool_completion(&pool, host_key, &host);
             }
             res
         };
 
-        // ---- Real per-phase race --------------------------------------
-        // Three nested ceilings (outer -> inner):
-        //   1. `total_deadline`   -> Timeout(Headers)  (absolute cap;
-        //                                              attributed to
-        //                                              Headers because
-        //                                              UpstreamPhase
-        //                                              has no Total
-        //                                              variant and
-        //                                              cannot be added
-        //                                              without touching
-        //                                              pipeline.rs)
-        //   2. `write_deadline`   -> Timeout(Write)   (per-phase, OUTER)
-        //   3. `headers_deadline` -> Timeout(Headers) (per-phase, INNER)
-        //
-        // The dispatch future is raced against `write_deadline` first.
-        // If the dispatch future completes before `write_deadline` AND
-        // `headers_deadline`, we get the response. If `write_deadline`
-        // fires first, we report `Timeout(Write)`. If
-        // `headers_deadline` fires first (and the dispatch future is
-        // still in flight), we report `Timeout(Headers)`.
-        //
-        // The previous version collapsed these into a single
-        // `min(headers, write, dial, tls, total)` ceiling. That is
-        // explicitly forbidden by the bug-2 contract: the user
-        // rejected soft-accumulation. The nested-timeouts design
-        // honors the per-phase attribution because each ceiling
-        // carries its own label.
-        // Bug 2 fix: build the phase_hint sleep future here. It
-        // only resolves when a dispatch declares a `phase_hint`;
-        // otherwise it stays pending forever and the
-        // `if phase_hint.is_some()` guard on the `select!` arm
-        // makes it a no-op.
-        let phase_hint_sleep = async {
-            match phase_hint {
-                Some(phase) => {
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(
-                        deadlines.deadline_for(phase),
-                    ))
-                    .await;
-                }
-                None => std::future::pending::<()>().await,
-            }
-        };
-        let total_sleep =
-            tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.total_deadline));
-        let write_sleep =
-            tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.write_deadline));
-        let headers_sleep =
-            tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.headers_deadline));
-        let cancel_wait = async move {
-            cancel_for_send.cancelled().await;
-        };
-        tokio::pin!(send_fut);
-        tokio::pin!(total_sleep);
-        tokio::pin!(write_sleep);
-        tokio::pin!(headers_sleep);
-        tokio::pin!(phase_hint_sleep);
-        tokio::pin!(cancel_wait);
-        let response = tokio::select! {
-            biased;
-            () = &mut cancel_wait => return Err(UpstreamError::Cancel),
-            // OUTERMOST ceiling: the absolute total budget. We
-            // attribute it to `Total` so the error message correctly
-            // says "upstream timeout in phase total after Nms" instead
-            // of the misleading "headers" label.
-            () = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Total)),
-            // Dispatch-supplied phase hint. When the test harness
-            // (or any future production wrapper) declares a
-            // `phase_hint`, we honour its exact deadline and
-            // attribute the timeout to that phase. Guarded by
-            // `if phase_hint.is_some()` so production dispatches
-            // (which return `None`) keep racing against the
-            // generic per-phase ceilings below.
-            () = &mut phase_hint_sleep, if phase_hint.is_some() => {
-                return Err(UpstreamError::Timeout(phase_hint.unwrap_or(UpstreamPhase::Headers)));
-            }
-            // OUTER per-phase ceiling. Fires at `start + write_ms`.
-            // Labelled `Write` so a slow body upload is correctly
-            // attributed.
-            () = &mut write_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Write)),
-            // INNER per-phase ceiling. Fires at `start + headers_ms`
-            // but ONLY if `write_sleep` is still pending. Labelled
-            // `Headers` so a slow server (but prompt body upload) is
-            // correctly attributed.
-            () = &mut headers_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Headers)),
-            res = &mut send_fut => match res {
-                Ok(r) => r,
-                Err(e) => {
-                    // The dispatch shims (ProductionDispatch,
-                    // TestDispatch) already convert a phased
-                    // connector error into `Timeout(phase)` at the
-                    // boundary, so we pass that through unchanged.
-                    // The fallback `recover_phased_phase` is a
-                    // belt-and-suspenders for any path that doesn't
-                    // (none today, but kept defensively).
-                    if let Some(phase) = recover_phased_phase(&e) {
-                        return Err(UpstreamError::Timeout(phase));
-                    }
-                    return Err(e);
-                }
-            },
-        };
+        let response =
+            race_dispatch(send_fut, &deadlines, phase_hint, cancel_for_send).await?;
 
-        let (parts, body) = response.into_parts();
-        // Wrap the streaming body in our cancellable adapter. The
-        // body-chunk timer is computed as a GAP inside `next_chunk`
-        // (see the doc on `UpstreamBodyStream`), so we pass the gap
-        // budget in ms and the total ceiling.
-        let body_stream = UpstreamBodyStream::from_hyper(
-            body,
+        Ok(wrap_upstream_response(
+            response,
             cancel,
             timeouts.body_chunk_ms,
             deadlines.total_deadline,
-            // 8 MiB hard cap per body (was 32 MiB). LLM responses
-            // are rarely >1 MiB; 8 MiB is a generous ceiling that
-            // bounds worst-case memory per concurrent request.
-            8 * 1024 * 1024,
-            spec.is_streaming,
-        );
+            is_streaming,
+        ))
+    }
+}
 
-        Ok(UpstreamResponse {
-            status: parts.status,
-            headers: parts.headers,
-            body: body_stream,
-        })
+#[cfg(feature = "upstream-hyper")]
+fn build_host_key_and_uri(url: &str) -> UpstreamResult<(Uri, HostKey, String)> {
+    let uri: Uri = url
+        .parse()
+        .map_err(|e: http::uri::InvalidUri| UpstreamError::Invalid(e.to_string()))?;
+    let scheme = Scheme::from_uri(uri.scheme_str().unwrap_or("http"));
+    let host = uri.host().unwrap_or("").to_string();
+    let port = uri.port_u16().unwrap_or(if matches!(scheme, Scheme::Https) {
+        443
+    } else {
+        80
+    });
+    let host_key = HostKey::new(scheme, &host, port);
+    Ok((uri, host_key, host))
+}
+
+#[cfg(feature = "upstream-hyper")]
+fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Bytes>>> {
+    let body_bytes = spec.body;
+    let body_len = body_bytes.as_ref().map(bytes::Bytes::len);
+    let body: Full<Bytes> = match body_bytes {
+        Some(bytes) => Full::new(bytes),
+        None => Full::new(Bytes::new()),
+    };
+    let mut builder = Request::builder().method(spec.method).uri(&spec.url);
+    {
+        let headers = builder.headers_mut().ok_or_else(|| {
+            UpstreamError::Invalid("failed to build request headers".to_string())
+        })?;
+        *headers = spec.headers;
+        if let Some(len) = body_len
+            && !headers.contains_key(http::header::CONTENT_LENGTH)
+            && let Ok(v) = http::HeaderValue::from_str(&len.to_string())
+        {
+            headers.insert(http::header::CONTENT_LENGTH, v);
+        }
+    }
+    builder
+        .body(body)
+        .map_err(|e| UpstreamError::Invalid(e.to_string()))
+}
+
+#[cfg(feature = "upstream-hyper")]
+fn record_pool_completion(pool: &Pool, host_key: HostKey, host: &str) {
+    if pool.total() == 0 {
+        pool.record_dial(host_key);
+    } else {
+        pool.record_reuse(host_key);
+    }
+    tracing::debug!(host = %host, "upstream request completed");
+}
+
+#[cfg(feature = "upstream-hyper")]
+fn handle_dispatch_error(e: UpstreamError) -> UpstreamError {
+    if let Some(phase) = recover_phased_phase(&e) {
+        UpstreamError::Timeout(phase)
+    } else {
+        e
+    }
+}
+
+#[cfg(feature = "upstream-hyper")]
+fn wrap_upstream_response(
+    response: hyper::Response<hyper::body::Incoming>,
+    cancel: CancellationToken,
+    body_chunk_ms: u64,
+    total_deadline: Instant,
+    is_streaming: bool,
+) -> UpstreamResponse {
+    let (parts, body) = response.into_parts();
+    let body_stream = UpstreamBodyStream::from_hyper(
+        body,
+        cancel,
+        body_chunk_ms,
+        total_deadline,
+        8 * 1024 * 1024,
+        is_streaming,
+    );
+    UpstreamResponse {
+        status: parts.status,
+        headers: parts.headers,
+        body: body_stream,
+    }
+}
+
+#[cfg(feature = "upstream-hyper")]
+async fn race_earliest_timeout(
+    deadlines: &ResolvedPhaseDeadlines,
+    phase_hint: Option<UpstreamPhase>,
+) -> UpstreamError {
+    let phase_hint_sleep = async {
+        match phase_hint {
+            Some(phase) => {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    deadlines.deadline_for(phase),
+                ))
+                .await;
+                phase
+            }
+            None => std::future::pending::<UpstreamPhase>().await,
+        }
+    };
+    let total_sleep = async {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.total_deadline)).await;
+        UpstreamPhase::Total
+    };
+    let write_sleep = async {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.write_deadline)).await;
+        UpstreamPhase::Write
+    };
+    let headers_sleep = async {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.headers_deadline)).await;
+        UpstreamPhase::Headers
+    };
+
+    tokio::pin!(total_sleep);
+    tokio::pin!(write_sleep);
+    tokio::pin!(headers_sleep);
+    tokio::pin!(phase_hint_sleep);
+
+    let phase = tokio::select! {
+        biased;
+        p = &mut total_sleep => p,
+        p = &mut phase_hint_sleep, if phase_hint.is_some() => p,
+        p = &mut write_sleep => p,
+        p = &mut headers_sleep => p,
+    };
+    UpstreamError::Timeout(phase)
+}
+
+#[cfg(feature = "upstream-hyper")]
+async fn race_dispatch<F>(
+    send_fut: F,
+    deadlines: &ResolvedPhaseDeadlines,
+    phase_hint: Option<UpstreamPhase>,
+    cancel: CancellationToken,
+) -> UpstreamResult<hyper::Response<hyper::body::Incoming>>
+where
+    F: std::future::Future<Output = UpstreamResult<hyper::Response<hyper::body::Incoming>>>,
+{
+    let timeout_fut = race_earliest_timeout(deadlines, phase_hint);
+    tokio::pin!(send_fut);
+    tokio::pin!(timeout_fut);
+
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(UpstreamError::Cancel),
+        timeout_err = &mut timeout_fut => Err(timeout_err),
+        res = &mut send_fut => res.map_err(handle_dispatch_error),
     }
 }
 
@@ -598,23 +583,14 @@ fn spawn_eviction_loop(pool: Pool) {
     // The eviction loop is a non-critical best-effort cleanup task.
     // Skip it when no Tokio runtime is active — this is the case for
     // `#[test]` (sync) call sites that build an `UpstreamClient` and
-    // never call into it, e.g. the pipeline's `test_config` helper.
-    // In production, a Tokio multi-threaded runtime is always present
-    // (`#[tokio::main]` on the server) and the spawn succeeds.
+    // drop it without running a Tokio reactor.
     if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
-            // MEDIUM-3 fix: the sweep interval is 30s and the
-            // eviction age is 60s (wall-clock `Duration`, not ticks).
-            // The previous design bumped a tick on every
-            // `record_dial`/`record_reuse` and evicted entries older
-            // than 2 ticks — under low traffic the tick barely
-            // advanced and idle entries were NEVER evicted. The new
-            // design uses `Instant` (monotonic) so eviction is
-            // independent of request volume.
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            interval.tick().await;
             let evicted = pool.evict_older_than(std::time::Duration::from_mins(1));
             if evicted > 0 {
                 tracing::debug!(evicted, "upstream pool eviction sweep");
@@ -622,6 +598,14 @@ fn spawn_eviction_loop(pool: Pool) {
         }
     });
 }
+
+#[cfg(feature = "upstream-hyper")]
+fn push_unique_source_str(parts: &mut Vec<String>, s: String) {
+    if !s.is_empty() && !parts.contains(&s) {
+        parts.push(s);
+    }
+}
+
 /// Format a hyper-util legacy `Error` with its full `source()` chain
 /// so the operator can see the root cause (e.g. "connection closed
 /// before message completed", "broken pipe", "tls handshake eof").
@@ -633,14 +617,27 @@ fn format_hyper_error(e: &hyper_util::client::legacy::Error) -> String {
     let mut parts: Vec<String> = vec![e.to_string()];
     let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
     while let Some(c) = current {
-        let s = c.to_string();
-        // Skip empty/duplicate source strings.
-        if !s.is_empty() && !parts.contains(&s) {
-            parts.push(s);
-        }
+        push_unique_source_str(&mut parts, c.to_string());
         current = c.source();
     }
     parts.join(": ")
+}
+
+#[cfg(feature = "upstream-hyper")]
+fn map_phased_connector_error(p: &super::connector::PhasedConnectorError) -> UpstreamError {
+    match &p.kind {
+        super::connector::PhasedErrorKind::Timeout => UpstreamError::Timeout(p.phase),
+        super::connector::PhasedErrorKind::InvalidUri(s) => {
+            UpstreamError::Invalid(format!("in phase `{}`: {}", p.phase, s))
+        }
+        super::connector::PhasedErrorKind::Io(io_err) => {
+            if p.phase == super::UpstreamPhase::Tls {
+                UpstreamError::Tls(format!("in phase `{}`: {}", p.phase, io_err))
+            } else {
+                UpstreamError::Connection(format!("in phase `{}`: {}", p.phase, io_err))
+            }
+        }
+    }
 }
 
 /// Walk the `source()` chain of a hyper `Error` looking for a
@@ -651,29 +648,7 @@ fn hyper_source_connector_error(e: &hyper_util::client::legacy::Error) -> Option
     let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
     while let Some(c) = current {
         if let Some(p) = c.downcast_ref::<super::connector::PhasedConnectorError>() {
-            match &p.kind {
-                super::connector::PhasedErrorKind::Timeout => {
-                    return Some(UpstreamError::Timeout(p.phase));
-                }
-                super::connector::PhasedErrorKind::InvalidUri(s) => {
-                    return Some(UpstreamError::Invalid(format!(
-                        "in phase `{}`: {}",
-                        p.phase, s
-                    )));
-                }
-                super::connector::PhasedErrorKind::Io(io_err) => {
-                    if p.phase == super::UpstreamPhase::Tls {
-                        return Some(UpstreamError::Tls(format!(
-                            "in phase `{}`: {}",
-                            p.phase, io_err
-                        )));
-                    }
-                    return Some(UpstreamError::Connection(format!(
-                        "in phase `{}`: {}",
-                        p.phase, io_err
-                    )));
-                }
-            }
+            return Some(map_phased_connector_error(p));
         }
         current = c.source();
     }

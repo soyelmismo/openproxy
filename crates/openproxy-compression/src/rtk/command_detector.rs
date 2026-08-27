@@ -73,35 +73,36 @@ pub fn extract_command(text: &str) -> Option<String> {
     None
 }
 
+fn find_best_match(text: &str, cmd_ref: Option<&str>) -> Option<(&'static str, f64)> {
+    let mut best: Option<(&'static str, f64)> = None;
+    for rule in RTK_RULES {
+        if let Some(result) = (rule.detector)(text, cmd_ref) {
+            let conf = result.1;
+            if best.as_ref().is_none_or(|b| conf > b.1) {
+                best = Some(result);
+            }
+        }
+    }
+    best
+}
+
 /// Detecta el comando en el texto. Retorna el mejor match.
 pub fn detect(text: &str) -> Detection {
     let command = extract_command(text);
     let cmd_ref = command.as_deref();
 
-    let mut best: Option<(&'static str, f64)> = None;
-    for rule in RTK_RULES {
-        if let Some(result) = (rule.detector)(text, cmd_ref) {
-            let (_id, conf) = &result;
-            if best
-                .as_ref()
-                .is_none_or(|b: &(&'static str, f64)| *conf > b.1)
-            {
-                best = Some(result);
-            }
-        }
-    }
-
-    match best {
-        Some((id, conf)) => Detection {
+    if let Some((id, conf)) = find_best_match(text, cmd_ref) {
+        Detection {
             id: id.to_string(),
             confidence: conf,
             command,
-        },
-        None => Detection {
+        }
+    } else {
+        Detection {
             id: "unknown".into(),
             confidence: 0.1,
             command,
-        },
+        }
     }
 }
 

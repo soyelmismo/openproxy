@@ -374,21 +374,8 @@ impl<'a> UsageRecordBuilder<'a> {
         self
     }
 
-    pub fn record(self) -> Result<Option<(String, u8, openproxy_types::ids::ComboTargetId)>> {
-        let recording = self.tracker.is_recording();
-        let (compression_savings_pct, compression_techniques) = {
-            let guard = self.tracker.compression_stats_cell.read();
-            (
-                guard
-                    .as_ref()
-                    .and_then(openproxy_compression::CompressionStats::savings_pct_opt),
-                guard
-                    .as_ref()
-                    .and_then(openproxy_compression::CompressionStats::techniques_csv),
-            )
-        };
-
-        let (prompt_tokens, prompt_tokens_estimated) = match self.prompt_tokens {
+    fn compute_prompt_tokens(&self) -> (Option<u32>, bool) {
+        match self.prompt_tokens {
             Some(t) if t > 0 => (Some(t), false),
             _ => {
                 let est = openproxy_compression::token_estimate::estimate_prompt_tokens(
@@ -405,9 +392,11 @@ impl<'a> UsageRecordBuilder<'a> {
                     (None, false)
                 }
             }
-        };
+        }
+    }
 
-        let (completion_tokens, completion_tokens_estimated) = match self.completion_tokens {
+    fn compute_completion_tokens(&self) -> (Option<u32>, bool) {
+        match self.completion_tokens {
             Some(t) if t > 0 => (Some(t), false),
             _ => {
                 let completion_text = self
@@ -430,102 +419,36 @@ impl<'a> UsageRecordBuilder<'a> {
                     (Some(est), true)
                 }
             }
-        };
+        }
+    }
 
-        let input = UsageInput {
+    fn emit_record_stage_event(&self) {
+        let stage_label = if self.err.is_none() {
+            "completed"
+        } else if self.req.race_cancelled {
+            "cancelled"
+        } else {
+            "failed"
+        };
+        let error_str = self
+            .err
+            .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()).0);
+        openproxy_types::emit_stage_event!(
             request_id: self.req.request_id,
-            trace_id: self.trace_id.clone(),
-            attempt: self.attempt,
-            provider_id: self.target.provider_id.clone(),
-            account_id: self.target.account_id,
-            combo_id: Some(self.combo.id),
-            combo_target_id: Some(self.target.id),
-            model_row_id: self.model.map(|m| m.row_id),
-            upstream_model_id: self
-                .model
-                .map(|m| m.model_id.as_str().to_string())
-                .unwrap_or_default(),
-            prompt_tokens,
-            completion_tokens,
-            cached_tokens: self.cached_tokens,
+            trace_id: self.trace_id,
+            stage: stage_label,
+            elapsed_ms: self.total_ms,
             connect_ms: self.connect_ms,
             ttft_ms: self.ttft_ms,
-            total_ms: self.total_ms,
             status_code: self.status_code,
-            error_msg: self.err.map(|e| format!("{e}")),
-            race_total: self.total_targets,
-            race_lost: self.err.is_some() && self.req.race_cancelled,
-            api_key_id: self.req.api_key_id,
-            request_body_json: if recording {
-                self.req.request_body_json.clone().or_else(|| {
-                    serde_json::to_vec(&*self.req.openai_request)
-                        .ok()
-                        .map(bytes::Bytes::from)
-                })
-            } else {
-                None
-            },
-            response_body_json: if recording {
-                self.response_body_json
-            } else {
-                None
-            },
-            request_headers: if recording {
-                self.request_headers
-            } else {
-                None
-            },
-            response_headers: if recording {
-                self.response_headers
-            } else {
-                None
-            },
-            error_message: self.err.map(|e| format!("{e}")),
-            race_attempts: self.race_size,
-            is_streaming: self.is_streaming,
-            stream_complete: self.stream_complete,
+            error: error_str,
             stop_reason: self.stop_reason.clone(),
-            compression_savings_pct,
-            compression_techniques,
-            client_response: false,
-            prompt_tokens_estimated,
-            completion_tokens_estimated,
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-            proxy_url: self.proxy_url.clone(),
-            proxy_status: self.proxy_status.clone(),
-            is_proxy_rotated: self.is_proxy_rotated,
-        };
+        );
+    }
 
-        {
-            let stage_label: &str = if self.err.is_none() {
-                "completed"
-            } else if self.req.race_cancelled {
-                "cancelled"
-            } else {
-                "failed"
-            };
-            let error_str: Option<String> = self
-                .err
-                .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()).0);
-            openproxy_types::emit_stage_event!(
-                request_id: self.req.request_id,
-                trace_id: self.trace_id,
-                stage: stage_label,
-                elapsed_ms: self.total_ms,
-                connect_ms: self.connect_ms,
-                ttft_ms: self.ttft_ms,
-                status_code: self.status_code,
-                error: error_str,
-                stop_reason: self.stop_reason.clone(),
-            );
-        }
-
+    fn dispatch_record_job(&self, input: UsageInput) {
         let err_msg = self.err.map(std::string::ToString::to_string);
-        let is_health_issue = if let Some(e) = self.err {
-            is_upstream_health_issue(e)
-        } else {
-            false
-        };
+        let is_health_issue = self.err.is_some_and(is_upstream_health_issue);
 
         let job = crate::worker::BackgroundJob::RecordAttempt {
             usage_input: Box::new(input),
@@ -567,7 +490,90 @@ impl<'a> UsageRecordBuilder<'a> {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
             }
         }
+    }
+}
 
+fn resolve_recorded_request_body(
+    recording: bool,
+    req_body: Option<bytes::Bytes>,
+    openai_req: &openproxy_types::OpenAIRequest,
+) -> Option<bytes::Bytes> {
+    if !recording {
+        return None;
+    }
+    req_body.or_else(|| serde_json::to_vec(openai_req).ok().map(bytes::Bytes::from))
+}
+
+fn optional_when_recording<T>(recording: bool, val: Option<T>) -> Option<T> {
+    if recording { val } else { None }
+}
+
+impl UsageRecordBuilder<'_> {
+    fn build_usage_input(
+        &self,
+        prompt_tokens: Option<u32>,
+        prompt_tokens_estimated: bool,
+        completion_tokens: Option<u32>,
+        completion_tokens_estimated: bool,
+        compression_savings_pct: Option<f64>,
+        compression_techniques: Option<String>,
+    ) -> UsageInput {
+        let recording = self.tracker.is_recording();
+        let request_body_json = resolve_recorded_request_body(
+            recording,
+            self.req.request_body_json.clone(),
+            &self.req.openai_request,
+        );
+        let response_body_json = optional_when_recording(recording, self.response_body_json.clone());
+        let request_headers = optional_when_recording(recording, self.request_headers.clone());
+        let response_headers = optional_when_recording(recording, self.response_headers.clone());
+
+        UsageInput {
+            request_id: self.req.request_id,
+            trace_id: self.trace_id.clone(),
+            attempt: self.attempt,
+            provider_id: self.target.provider_id.clone(),
+            account_id: self.target.account_id,
+            combo_id: Some(self.combo.id),
+            combo_target_id: Some(self.target.id),
+            model_row_id: self.model.map(|m| m.row_id),
+            upstream_model_id: self
+                .model
+                .map(|m| m.model_id.as_str().to_string())
+                .unwrap_or_default(),
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens: self.cached_tokens,
+            connect_ms: self.connect_ms,
+            ttft_ms: self.ttft_ms,
+            total_ms: self.total_ms,
+            status_code: self.status_code,
+            error_msg: self.err.map(|e| format!("{e}")),
+            race_total: self.total_targets,
+            race_lost: self.err.is_some() && self.req.race_cancelled,
+            api_key_id: self.req.api_key_id,
+            request_body_json,
+            response_body_json,
+            request_headers,
+            response_headers,
+            error_message: self.err.map(|e| format!("{e}")),
+            race_attempts: self.race_size,
+            is_streaming: self.is_streaming,
+            stream_complete: self.stream_complete,
+            stop_reason: self.stop_reason.clone(),
+            compression_savings_pct,
+            compression_techniques,
+            client_response: false,
+            prompt_tokens_estimated,
+            completion_tokens_estimated,
+            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            proxy_url: self.proxy_url.clone(),
+            proxy_status: self.proxy_status.clone(),
+            is_proxy_rotated: self.is_proxy_rotated,
+        }
+    }
+
+    fn update_selection_registry(&self) {
         if self.err.is_none() {
             self.tracker
                 .selection_registry
@@ -577,6 +583,36 @@ impl<'a> UsageRecordBuilder<'a> {
                 .selection_registry
                 .record_failure(self.target.id);
         }
+    }
+
+    pub fn record(self) -> Result<Option<(String, u8, openproxy_types::ids::ComboTargetId)>> {
+        let (compression_savings_pct, compression_techniques) = {
+            let guard = self.tracker.compression_stats_cell.read();
+            (
+                guard
+                    .as_ref()
+                    .and_then(openproxy_compression::CompressionStats::savings_pct_opt),
+                guard
+                    .as_ref()
+                    .and_then(openproxy_compression::CompressionStats::techniques_csv),
+            )
+        };
+
+        let (prompt_tokens, prompt_tokens_estimated) = self.compute_prompt_tokens();
+        let (completion_tokens, completion_tokens_estimated) = self.compute_completion_tokens();
+
+        let input = self.build_usage_input(
+            prompt_tokens,
+            prompt_tokens_estimated,
+            completion_tokens,
+            completion_tokens_estimated,
+            compression_savings_pct,
+            compression_techniques,
+        );
+
+        self.emit_record_stage_event();
+        self.dispatch_record_job(input);
+        self.update_selection_registry();
 
         Ok(Some((
             self.req.request_id.to_string(),

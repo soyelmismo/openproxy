@@ -52,6 +52,18 @@ pub struct UsageDetailResponse {
     pub row: core_usage::UsageDetailRow,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct UsageQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub account_id: Option<i64>,
+    pub combo_id: Option<i64>,
+    pub api_key_id: Option<i64>,
+    pub preset: Option<String>,
+}
+
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/summary", axum::routing::get(usage_summary))
@@ -200,6 +212,47 @@ pub async fn usage_recent(
     Ok(Json(rows))
 }
 
+fn is_allowed_origin(origin: &str, host: &str) -> bool {
+    let is_same_host = !host.is_empty()
+        && (origin == format!("http://{host}") || origin == format!("https://{host}"));
+    if is_same_host {
+        return true;
+    }
+
+    const LOCAL_ORIGIN_PREFIXES: &[&str] = &[
+        "http://localhost",
+        "http://127.0.0.1",
+        "https://localhost",
+        "https://127.0.0.1",
+    ];
+
+    LOCAL_ORIGIN_PREFIXES.iter().any(|prefix| {
+        origin == *prefix || origin.starts_with(&format!("{prefix}:"))
+    })
+}
+
+fn check_cswsh_origin(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
+    let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
+        return Ok(());
+    };
+
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !is_allowed_origin(origin, host) {
+        tracing::warn!(
+            origin = %origin,
+            host = %host,
+            "WebSocket connection rejected: non-matching origin"
+        );
+        return Err((StatusCode::FORBIDDEN, "Forbidden: origin mismatch"));
+    }
+    Ok(())
+}
+
 pub async fn usage_stream(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -207,55 +260,8 @@ pub async fn usage_stream(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl axum::response::IntoResponse {
-    // HIGH-2 fix: check the Origin header to prevent CSWSH
-    // (cross-site WebSocket hijacking). A malicious website can
-    // `new WebSocket('ws://victim/admin/usage/stream')` without the
-    // victim's knowledge — the browser sends cookies and the request
-    // goes through. Without this check, the attacker could read the
-    // live-logs stream if the auth bypass is on, or at minimum
-    // consume server resources.
-    //
-    // We allow:
-    // - No Origin header (non-browser clients like curl don't send it)
-    // - Any Origin that looks like localhost/127.0.0.1 (dev mode)
-    // - Any Origin (in production, the reverse proxy should restrict
-    //   access to /admin/ via network ACLs; the Origin check is
-    //   defense-in-depth for when the proxy is misconfigured)
-    //
-    // This is intentionally permissive — the real protection is the
-    // admin auth middleware + network ACLs on /admin/. The Origin
-    // check prevents the browser-based CSWSH attack vector.
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        let host = headers
-            .get("x-forwarded-host")
-            .or_else(|| headers.get("host"))
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        let is_same_host = !host.is_empty()
-            && (origin == format!("http://{host}") || origin == format!("https://{host}"));
-
-        // Allow localhost origins (dev mode / same-host dashboard).
-        let is_localhost = origin == "http://localhost"
-            || origin.starts_with("http://localhost:")
-            || origin == "http://127.0.0.1"
-            || origin.starts_with("http://127.0.0.1:")
-            || origin == "https://localhost"
-            || origin.starts_with("https://localhost:")
-            || origin == "https://127.0.0.1"
-            || origin.starts_with("https://127.0.0.1:");
-
-        if !is_localhost && !is_same_host {
-            // Reject non-localhost/non-matching origins to prevent cross-site
-            // WebSocket hijacking (CSWSH). Direct connections
-            // (curl, wscat, etc.) don't send Origin, so they pass.
-            tracing::warn!(
-                origin = %origin,
-                host = %host,
-                "WebSocket connection rejected: non-matching origin"
-            );
-            return (StatusCode::FORBIDDEN, "Forbidden: origin mismatch").into_response();
-        }
+    if let Err(resp) = check_cswsh_origin(&headers) {
+        return resp.into_response();
     }
 
     match authenticate_admin_ws(&s, &headers, q.token.as_deref(), Some(&addr)) {
@@ -266,6 +272,26 @@ pub async fn usage_stream(
     }
 }
 
+fn fetch_usage_detail(
+    r: &rusqlite::Connection,
+    q: &DetailQuery,
+) -> Result<Option<core_usage::UsageDetailRow>, ApiError> {
+    if let Some(id) = q.id
+        && id > 0
+    {
+        return core_usage::detail_by_id(r, id).map_err(ApiError);
+    }
+    if let Some(trace_id) = q.trace_id.as_deref() {
+        return core_usage::detail_by_trace_id(r, trace_id).map_err(ApiError);
+    }
+    if let Some(id) = q.id {
+        return core_usage::detail_by_id(r, id).map_err(ApiError);
+    }
+    Err(ApiError(CoreError::Validation(
+        "Either 'id' or 'trace_id' query parameter must be provided".into(),
+    )))
+}
+
 pub async fn usage_detail(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -273,366 +299,360 @@ pub async fn usage_detail(
     Query(q): Query<DetailQuery>,
 ) -> Result<Json<UsageDetailResponse>, ApiError> {
     authenticate_admin_ws(&s, &headers, None, Some(&addr))?;
-    // Read-only SELECT — use the READER.
     let r = s.db_pool().reader();
-    let row = match (q.id, q.trace_id.as_deref()) {
-        (Some(id), _) if id != 0 => core_usage::detail_by_id(&r, id)?,
-        (_, Some(trace_id)) => core_usage::detail_by_trace_id(&r, trace_id)?,
-        (Some(id), _) => core_usage::detail_by_id(&r, id)?,
-        (None, None) => {
-            return Err(ApiError(CoreError::Validation(
-                "Either 'id' or 'trace_id' query parameter must be provided".into(),
-            )));
+
+    let row = fetch_usage_detail(&r, &q)?;
+    let Some(r) = row else {
+        return Err(ApiError(CoreError::Internal(format!(
+            "usage row not found for query {q:?}"
+        ))));
+    };
+
+    Ok(Json(UsageDetailResponse { row: r }))
+}
+
+async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, val: serde_json::Value) {
+    if let Ok(text) = json_text(&val) {
+        let _ = tx.send(text).await;
+    }
+}
+
+fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, val: &serde_json::Value) {
+    if let Ok(text) = json_text(val) {
+        let _ = tx.try_send(text);
+    }
+}
+
+async fn send_inflight_sync(outbox_tx: &tokio::sync::mpsc::Sender<String>) {
+    let active = openproxy_core::usage::get_active_inflight_attempts();
+    let snap_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    outbox_send(
+        outbox_tx,
+        json!({
+            "type": "inflight_sync",
+            "server_now": snap_now,
+            "attempts": active,
+        }),
+    )
+    .await;
+}
+
+async fn handle_stage_event(
+    stage: Result<openproxy_types::usage::StageEvent, tokio::sync::broadcast::error::RecvError>,
+    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+) -> bool {
+    match stage {
+        Ok(event) => {
+            outbox_send(outbox_tx, json!({ "type": "stage", "data": event })).await;
+            true
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+            tracing::warn!(
+                "stage broadcast lagged; {} event(s) skipped — sending inflight snapshot",
+                skipped
+            );
+            send_inflight_sync(outbox_tx).await;
+            true
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => false,
+    }
+}
+
+async fn handle_usage_event(
+    usage: Result<openproxy_types::usage::RecentUsageRow, tokio::sync::broadcast::error::RecvError>,
+    last_known_id: &mut i64,
+    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+) -> bool {
+    match usage {
+        Ok(row) => {
+            if row.id.0 > *last_known_id {
+                *last_known_id = row.id.0;
+            }
+            outbox_send(outbox_tx, json!({ "type": "row", "data": row })).await;
+            true
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+            tracing::warn!(
+                "usage broadcast lagged; {} row(s) skipped — sending inflight snapshot",
+                skipped
+            );
+            send_inflight_sync(outbox_tx).await;
+            true
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => false,
+    }
+}
+
+async fn recv_next_notification(
+    notification_rx: &mut Option<
+        tokio::sync::broadcast::Receiver<openproxy_core::notifications::NotificationEvent>,
+    >,
+) -> NotifRxEvent {
+    match notification_rx.as_mut() {
+        Some(rx) => match rx.recv().await {
+            Ok(n) => NotifRxEvent::Event(n),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => NotifRxEvent::Lagged(n),
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => NotifRxEvent::Closed,
+        },
+        None => std::future::pending().await,
+    }
+}
+
+async fn handle_notification_event(
+    evt: NotifRxEvent,
+    notification_rx: &mut Option<
+        tokio::sync::broadcast::Receiver<openproxy_core::notifications::NotificationEvent>,
+    >,
+    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+) {
+    match evt {
+        NotifRxEvent::Event(n) => {
+            outbox_send(outbox_tx, json!({ "type": "notification", "data": n })).await;
+        }
+        NotifRxEvent::Lagged(skipped) => {
+            outbox_try_send(
+                outbox_tx,
+                &json!({
+                    "type": "lag_warning",
+                    "skipped": skipped,
+                    "channel": "notifications",
+                    "message": format!(
+                        "notifications broadcast channel lagged; {} event(s) skipped — refetch via GET /admin/api/notifications",
+                        skipped
+                    ),
+                }),
+            );
+        }
+        NotifRxEvent::Closed => {
+            *notification_rx = None;
+        }
+    }
+}
+
+async fn handle_client_subscribe(
+    since_id: Option<i64>,
+    state: &AppState,
+    last_known_id: &mut i64,
+    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+) {
+    let since_id = since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
+    let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::block_in_place(|| {
+        let r = state.db_pool().reader();
+        let rows = match core_usage::recent(&r, since_id, 100) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, "stream_usage_rows: subscribe recent query failed");
+                Vec::new()
+            }
+        };
+        drop(r);
+        rows.into_iter()
+            .map(openproxy_types::usage::redact_for_broadcast)
+            .collect()
+    });
+    if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
+        *last_known_id = (*last_known_id).max(mx);
+    }
+    outbox_send(outbox_tx, json!({ "type": "history", "rows": rows })).await;
+}
+
+async fn handle_client_text_message(
+    text: &str,
+    state: &AppState,
+    last_known_id: &mut i64,
+    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+) {
+    let msg: ClientWsMessage = match serde_json::from_str(text) {
+        Ok(msg) => msg,
+        Err(e) => {
+            outbox_try_send(
+                outbox_tx,
+                &json!({
+                    "type": "error",
+                    "message": format!("invalid client message: {e}"),
+                }),
+            );
+            return;
         }
     };
-    match row {
-        Some(r) => Ok(Json(UsageDetailResponse { row: r })),
-        None => Err(ApiError(CoreError::Internal(format!(
-            "usage row not found for query {q:?}"
-        )))),
+
+    match msg.msg_type.as_str() {
+        "subscribe" => {
+            handle_client_subscribe(msg.since_id, state, last_known_id, outbox_tx).await;
+        }
+        "ping" => {
+            let now_str = chrono::Utc::now().to_rfc3339();
+            outbox_try_send(
+                outbox_tx,
+                &json!({ "type": "pong", "server_time": now_str }),
+            );
+        }
+        _ => {
+            outbox_try_send(
+                outbox_tx,
+                &json!({
+                    "type": "error",
+                    "message": format!("unknown message type: {}", msg.msg_type),
+                }),
+            );
+        }
+    }
+}
+
+async fn handle_incoming_ws_message(
+    incoming: Option<Result<Message, axum::Error>>,
+    state: &AppState,
+    last_known_id: &mut i64,
+    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+) -> bool {
+    match incoming {
+        Some(Ok(Message::Text(text))) => {
+            handle_client_text_message(&text, state, last_known_id, outbox_tx).await;
+            true
+        }
+        Some(Ok(Message::Close(_))) | None => false,
+        Some(Ok(_)) => true,
+        Some(Err(e)) => {
+            tracing::debug!(error = %e, "stream_usage_rows: ws_receiver error");
+            false
+        }
+    }
+}
+
+fn fetch_initial_history_snapshot(state: &AppState) -> (i64, serde_json::Value) {
+    let rows = tokio::task::block_in_place(|| {
+        let r = state.db_pool().reader();
+        match core_usage::recent_desc(&r, 100) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "stream_usage_rows: initial history query failed, \
+                     sending empty history and continuing with live events"
+                );
+                Vec::new()
+            }
+        }
+    });
+    let last_known_id = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
+    let active_attempts = openproxy_core::usage::get_active_inflight_attempts();
+    let server_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let snapshot = json!({
+        "type": "snapshot",
+        "cursor": 0,
+        "server_now": server_now,
+        "rows": rows.into_iter().map(openproxy_types::usage::redact_for_broadcast).collect::<Vec<_>>(),
+        "attempts": active_attempts,
+    });
+    (last_known_id, snapshot)
+}
+
+fn spawn_ws_sender_task(
+    mut ws_sender: futures::stream::SplitSink<WebSocket, Message>,
+    mut outbox_rx: tokio::sync::mpsc::Receiver<String>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        use futures::SinkExt;
+        while let Some(text) = outbox_rx.recv().await {
+            if let Err(e) = ws_sender.send(Message::Text(text.into())).await {
+                tracing::debug!(error = %e, "stream_usage_rows: ws_sender.send failed, exiting sender task");
+                return;
+            }
+        }
+        let _ = ws_sender.send(Message::Close(None)).await;
+        let _ = ws_sender.close().await;
+    })
+}
+
+async fn run_ws_usage_event_loop(
+    state: &AppState,
+    mut ws_receiver: futures::stream::SplitStream<WebSocket>,
+    outbox_tx: tokio::sync::mpsc::Sender<String>,
+    mut last_known_id: i64,
+) {
+    let mut usage_rx = state.usage_tx().subscribe();
+    let mut stage_rx = state.stage_tx().subscribe();
+    let mut notification_rx = openproxy_core::notifications::try_get_tx()
+        .map(tokio::sync::broadcast::Sender::subscribe);
+
+    loop {
+        tokio::select! {
+            biased;
+            stage = stage_rx.recv() => {
+                if !handle_stage_event(stage, &outbox_tx).await {
+                    break;
+                }
+            }
+            usage = usage_rx.recv() => {
+                if !handle_usage_event(usage, &mut last_known_id, &outbox_tx).await {
+                    break;
+                }
+            }
+            evt = recv_next_notification(&mut notification_rx) => {
+                handle_notification_event(evt, &mut notification_rx, &outbox_tx).await;
+            }
+            incoming = ws_receiver.next() => {
+                if !handle_incoming_ws_message(incoming, state, &mut last_known_id, &outbox_tx).await {
+                    break;
+                }
+            }
+        }
     }
 }
 
 pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
-    // Split the WebSocket into a sender and receiver half. The
-    // sender half moves into a dedicated tokio task that drains the
-    // outbox mpsc and writes to the socket; the receiver half stays
-    // in this function for the select! loop. This is the CRITICAL
-    // architectural change that fixes the "second request doesn't
-    // appear in real-time after a failure" bug — see the comment
-    // on `WS_OUTBOX_CAPACITY` below for the full rationale.
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (ws_sender, ws_receiver) = socket.split();
+    let (outbox_tx, outbox_rx) =
+        tokio::sync::mpsc::channel::<String>(WS_OUTBOX_CAPACITY);
+    let sender_task = spawn_ws_sender_task(ws_sender, outbox_rx);
 
-    if let Err(err) = async {
-        // 1. Subscribe to broadcast channels FIRST, before any DB
-        //    query. This eliminates the TOCTOU window where stage
-        //    events published during the history fetch would be
-        //    silently dropped (broadcast::send returns SendError
-        //    when there are no receivers). Events that arrive during
-        //    the history fetch are queued in the broadcast buffer
-        //    (capacity 1024 for stages, 1024 for rows) and delivered
-        //    after the history batch is sent. The frontend's
-        //    mergeLogsByDescId dedupes by id, so a row appearing in
-        //    both history and the broadcast backlog is handled
-        //    correctly.
-        let mut usage_rx = state.usage_tx().subscribe();
-        let mut stage_rx = state.stage_tx().subscribe();
+    let (last_known_id, snapshot) = fetch_initial_history_snapshot(&state);
+    outbox_send(&outbox_tx, snapshot).await;
 
-        // F2: also subscribe to the notifications broadcast channel
-        // (created by F1 in `core_notifications::NOTIF_TX`). The channel is
-        // initialized in `AppState::new` / `AppState::for_test`, but
-        // some test paths construct a minimal AppState without that
-        // init — `try_get_tx()` returns `None` there and the
-        // notifications select! arm below becomes a no-op
-        // (`std::future::pending()`).
-        //
-        // The receiver is `Option<broadcast::Receiver<NotificationEvent>>`
-        // because (a) the channel might not be initialized in tests,
-        // and (b) we want to drop the receiver on `RecvError::Closed`
-        // (server shutting down) without breaking the WS connection
-        // — setting it to `None` makes the arm a permanent no-op
-        // until the connection closes.
-        let mut notification_rx = openproxy_core::notifications::try_get_tx()
-            .map(tokio::sync::broadcast::Sender::subscribe);
+    run_ws_usage_event_loop(&state, ws_receiver, outbox_tx, last_known_id).await;
+    let _ = sender_task.await;
+}
 
-        // 2. Spawn a DEDICATED sender task that owns `ws_sender.send`.
-        //    The receiver loop forwards every broadcast event into
-        //    `outbox` (a bounded mpsc); the sender task drains it and
-        //    writes to the socket. This decouples the broadcast
-        //    receiver loop from the WS send — a slow browser stalls
-        //    the sender task but NOT the receiver loop, so broadcast
-        //    events keep being drained into the mpsc buffer instead
-        //    of piling up in the broadcast channel and getting
-        //    dropped for this receiver.
-        //
-        // The sender task exits (and closes the WS) when:
-        //   - the outbox sender is dropped (receiver loop exited), OR
-        //   - `ws_sender.send` returns an error (broken connection).
-        let (outbox_tx, mut outbox_rx) =
-            tokio::sync::mpsc::channel::<String>(WS_OUTBOX_CAPACITY);
-        let sender_task = tokio::spawn(async move {
-            use futures::SinkExt;
-            while let Some(text) = outbox_rx.recv().await {
-                if let Err(e) = ws_sender.send(Message::Text(text.into())).await {
-                    // Broken connection — the receiver loop will
-                    // also notice via `ws_receiver.next()` returning
-                    // None/Err. Just exit the sender task.
-                    tracing::debug!(error = %e, "stream_usage_rows: ws_sender.send failed, exiting sender task");
-                    return;
-                }
-            }
-            // outbox_rx returned None — outbox_tx was dropped, which
-            // means the receiver loop exited. Send a Close frame so
-            // the client knows the session is over.
-            let _ = ws_sender.send(Message::Close(None)).await;
-            let _ = ws_sender.close().await;
-        });
+fn is_disk_io_error(err: &CoreError) -> bool {
+    let err_str = format!("{err:?}");
+    err_str.contains("disk I/O")
+        || err_str.contains("SQLITE_IOERR")
+        || err_str.contains("database disk image is malformed")
+        || err_str.contains("database is locked")
+}
 
-        // 3. Initial history batch (most recent 100).
-        // A SQLite "disk I/O error" here (e.g. WAL contention
-        // under load) must NOT kill the WebSocket — the
-        // frontend handles an empty `rows` array gracefully,
-        // and the subscription loop below will start delivering
-        // live events as soon as the DB recovers. Without this
-        // guard the error propagated via `?`, broke out of the
-        // async block, sent an error envelope, closed the WS,
-        // and triggered an immediate reconnect loop.
-        // Read-only SELECT — use the READER. The dashboard's WS
-        // reconnects would otherwise serialize every history
-        // fetch through the writer mutex.
-        let rows = tokio::task::block_in_place(|| {
-            let r = state.db_pool().reader();
-            match core_usage::recent_desc(&r, 100) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        "stream_usage_rows: initial history query failed, \
-                         sending empty history and continuing with live events"
-                    );
-                    Vec::new()
-                }
-            }
-        });
-        // H7 fix: track the highest usage `id` we have
-        // streamed to the dashboard so a `Lagged` broadcast
-        // error can be answered with a targeted resync
-        // (`{"type":"resync","since_id":last_known}`) rather
-        // than a fatal error. The frontend then fetches
-        // `core_usage::recent(since_id=last_known, limit=...)` to
-        // catch up. Without this, a slow dashboard would
-        // permanently lose rows it could not consume in time
-        // and a toast was the only signal — see the audit
-        // finding RACE-F-5.
-        //
-        // Compute `last_known_id` BEFORE redacting (redaction
-        // consumes `rows` via `into_iter`).
-        let mut last_known_id: i64 = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
-        let active_attempts = openproxy_core::usage::get_active_inflight_attempts();
-        let server_now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        outbox_send(&outbox_tx, json!({
-            "type": "snapshot",
-            "cursor": 0,
-            "server_now": server_now,
-            "rows": rows.into_iter().map(openproxy_types::usage::redact_for_broadcast).collect::<Vec<_>>(),
-            "attempts": active_attempts,
-        })).await;
-
-        // 4. Event loop — usage_rx, stage_rx, and notification_rx are
-        //    already subscribed above, before the history query. The
-        //    outbox decouples this loop from the WS sender task.
-        //
-        // `biased` ensures the broadcast channels (stage + usage +
-        // notifications) are polled BEFORE the ws_receiver. The
-        // ws_receiver almost never has messages (only ping/subscribe
-        // from the client, which are rare), so polling it first wastes
-        // a branch on every iteration. More importantly, when the
-        // browser is slow and the outbox backs up, we want to
-        // prioritize draining the broadcast channels (which have a
-        // fixed capacity and will lag if not drained) over reading
-        // client messages (which can wait indefinitely).
-        loop {
-            tokio::select! {
-                biased;
-                // Stage events FIRST — these carry the "in progress"
-                // status the operator needs to see in real time. They
-                // are the most frequent and most time-sensitive.
-                stage = stage_rx.recv() => {
-                    match stage {
-                        Ok(event) => {
-                            outbox_send(&outbox_tx, json!({ "type": "stage", "data": event })).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!("stage broadcast lagged; {} event(s) skipped — sending inflight snapshot", skipped);
-                            let active = openproxy_core::usage::get_active_inflight_attempts();
-                            let snap_now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
-                            outbox_send(&outbox_tx, json!({
-                                "type": "inflight_sync",
-                                "server_now": snap_now,
-                                "attempts": active,
-                            })).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                // Usage rows SECOND — these are the terminal "row"
-                // events published when a request completes. Less
-                // frequent than stage events but still critical.
-                usage = usage_rx.recv() => {
-                    match usage {
-                        Ok(row) => {
-                            if row.id.0 > last_known_id {
-                                last_known_id = row.id.0;
-                            }
-                            outbox_send(&outbox_tx, json!({ "type": "row", "data": row })).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!("usage broadcast lagged; {} row(s) skipped — sending inflight snapshot", skipped);
-                            let active = openproxy_core::usage::get_active_inflight_attempts();
-                            let snap_now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
-                            outbox_send(&outbox_tx, json!({
-                                "type": "inflight_sync",
-                                "server_now": snap_now,
-                                "attempts": active,
-                            })).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                // F2: notifications THIRD — model_new / model_gone /
-                // model_auto_activated / system events surfaced to the
-                // dashboard tray. Less frequent than stage/usage (a
-                // handful per discovery cycle, default 1h) but still
-                // real-time. The receiver is an Option because
-                // `try_get_tx()` returns None in tests that don't
-                // initialize the broadcast channel; in that case the
-                // async block degenerates to `pending().await` and
-                // this arm is a permanent no-op (never wins select!).
-                //
-                // On `Lagged(n)` we send a `lag_warning` with
-                // `channel: "notifications"` so the client can refetch
-                // via `GET /admin/api/notifications` (notifications are
-                // persisted, so refetch is the source of truth — we do
-                // NOT send a `resync` envelope because there is no
-                // `since_id` semantics for notifications; the client
-                // just lists the latest 50).
-                //
-                // On `Closed` (server shutting down) we set
-                // `notification_rx = None` so this arm becomes a no-op
-                // for the rest of the connection's lifetime — the
-                // stage/usage/ws arms continue running normally.
-                evt = async {
-                    match notification_rx.as_mut() {
-                        Some(rx) => match rx.recv().await {
-                            Ok(n) => NotifRxEvent::Event(n),
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                NotifRxEvent::Lagged(n)
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                NotifRxEvent::Closed
-                            }
-                        },
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    match evt {
-                        NotifRxEvent::Event(n) => {
-                            outbox_send(
-                                &outbox_tx,
-                                json!({ "type": "notification", "data": n }),
-                            )
-                            .await;
-                        }
-                        NotifRxEvent::Lagged(skipped) => {
-                            outbox_try_send(&outbox_tx, &json!({
-                                "type": "lag_warning",
-                                "skipped": skipped,
-                                "channel": "notifications",
-                                "message": format!(
-                                    "notifications broadcast channel lagged; {} event(s) skipped — refetch via GET /admin/api/notifications",
-                                    skipped
-                                ),
-                            }));
-                        }
-                        NotifRxEvent::Closed => {
-                            // Channel closed (server shutting down). Drop
-                            // the receiver so this arm becomes a no-op;
-                            // the WS connection stays alive as long as
-                            // stage/usage still have receivers.
-                            notification_rx = None;
-                        }
-                    }
-                }
-                // WS receiver LAST — client messages (subscribe, ping)
-                // are rare and can tolerate delay. Prioritizing the
-                // broadcast channels ensures we never miss a stage
-                // event because we were busy reading a ping.
-                incoming = ws_receiver.next() => {
-                    match incoming {
-                        Some(Ok(Message::Text(text))) => {
-                            let msg: ClientWsMessage = match serde_json::from_str(&text) {
-                                Ok(msg) => msg,
-                                Err(e) => {
-                                    outbox_try_send(&outbox_tx, &json!({
-                                        "type": "error",
-                                        "message": format!("invalid client message: {e}"),
-                                    }));
-                                    continue;
-                                }
-                            };
-
-                            match msg.msg_type.as_str() {
-                                "subscribe" => {
-                                    let since_id = msg
-                                        .since_id
-                                        .unwrap_or(0)
-                                        .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
-                                    let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::block_in_place(|| {
-                                        let r = state.db_pool().reader();
-                                        let rows = match core_usage::recent(&r, since_id, 100) {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                tracing::error!(error = %e, "stream_usage_rows: subscribe recent query failed");
-                                                Vec::new()
-                                            }
-                                        };
-                                        drop(r);
-                                        rows.into_iter()
-                                            .map(openproxy_types::usage::redact_for_broadcast)
-                                            .collect()
-                                    });
-                                    if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
-                                        last_known_id = last_known_id.max(mx);
-                                    }
-                                    outbox_send(&outbox_tx, json!({ "type": "history", "rows": rows })).await;
-                                }
-                                "ping" => {
-                                    let now_str = chrono::Utc::now().to_rfc3339();
-                                    outbox_try_send(&outbox_tx, &json!({ "type": "pong", "server_time": now_str }));
-                                }
-                                _ => {
-                                    outbox_try_send(&outbox_tx, &json!({
-                                        "type": "error",
-                                        "message": format!("unknown message type: {}", msg.msg_type),
-                                    }));
-                                }
-                            }
-                        }
-                        Some(Ok(Message::Close(_))) | None => break,
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => {
-                            tracing::debug!(error = %e, "stream_usage_rows: ws_receiver error");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        // Drop the outbox sender to signal the sender task to exit
-        // gracefully (it will send a Close frame and return).
-        drop(outbox_tx);
-        // Wait for the sender task to finish so we don't leak it.
-        let _ = sender_task.await;
-        Ok::<(), ApiError>(())
-    }
-    .await
+fn recover_and_retry_reader<'a>(
+    state: &'a AppState,
+    query_name: &str,
+) -> Result<openproxy_db::conn::ReaderGuard<'a>, ApiError> {
     {
-        // Best-effort error notification. The sender task owns the
-        // ws_sender at this point, so we can't send an error frame
-        // directly — just log. The frontend will see the WS close
-        // and reconnect.
-        tracing::debug!(error = %err, "stream_usage_rows: event loop exited with error");
+        let w = state.db_pool().writer();
+        let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
     }
+    tracing::info!(
+        query = %query_name,
+        "analytics retry: reopening DB connections to clear stale page cache"
+    );
+    if let Err(reopen_err) = state.db_pool().reopen() {
+        tracing::warn!(
+            error = %reopen_err,
+            "analytics retry: reopen failed (continuing with existing connection)"
+        );
+    }
+    state
+        .db_pool()
+        .try_reader_for(ADMIN_LOCK_TIMEOUT)
+        .ok_or_else(|| {
+            ApiError(CoreError::ServiceUnavailable(
+                "reader lock busy on retry; the database may be under heavy load".into(),
+            ))
+        })
 }
 
 pub(crate) fn run_analytics_query_with_filter<T, F>(
@@ -644,7 +664,6 @@ pub(crate) fn run_analytics_query_with_filter<T, F>(
 where
     F: Fn(&openproxy_db::conn::ReaderGuard<'_>, &core_usage::UsageFilter) -> Result<T, CoreError>,
 {
-    // First attempt: use the reader connection.
     let reader = state
         .db_pool()
         .try_reader_for(ADMIN_LOCK_TIMEOUT)
@@ -654,17 +673,11 @@ where
                     .into(),
             ))
         })?;
+
     match query_fn(&reader, filter) {
         Ok(result) => Ok(result),
         Err(err) => {
-            // Check if this is a disk I/O error (SQLITE_IOERR_*).
-            let err_str = format!("{err:?}");
-            let is_disk_io = err_str.contains("disk I/O")
-                || err_str.contains("SQLITE_IOERR")
-                || err_str.contains("database disk image is malformed")
-                || err_str.contains("database is locked");
-
-            if !is_disk_io {
+            if !is_disk_io_error(&err) {
                 return Err(ApiError(err));
             }
 
@@ -674,104 +687,53 @@ where
                 "analytics query failed with disk I/O error; attempting WAL checkpoint + retry"
             );
 
-            // Drop the reader guard before taking the writer (avoids
-            // a potential deadlock if the reader and writer share any
-            // internal SQLite state).
             drop(reader);
-
-            // Force a WAL checkpoint on the writer connection. This
-            // flushes the WAL file into the main DB and releases any
-            // pages that were locked by the WAL. `TRUNCATE` mode also
-            // truncates the WAL file to zero bytes.
-            {
-                let w = state.db_pool().writer();
-                let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
-            }
-
-            // Reopen BOTH connections (writer + reader). The long-lived
-            // reader connection holds a stale page cache that references
-            // pages from the pre-repair / pre-VACUUM DB file. Simply
-            // re-acquiring the reader lock (try_reader_for) reuses the
-            // SAME connection with the SAME stale cache. reopen()
-            // closes the old connections and opens fresh ones that
-            // re-read from disk.
-            tracing::info!(
-                query = %query_name,
-                "analytics retry: reopening DB connections to clear stale page cache"
-            );
-            if let Err(reopen_err) = state.db_pool().reopen() {
-                tracing::warn!(
-                    error = %reopen_err,
-                    "analytics retry: reopen failed (continuing with existing connection)"
-                );
-            }
-
-            // Retry on the (now fresh) reader connection.
-            let reader2 = state
-                .db_pool()
-                .try_reader_for(ADMIN_LOCK_TIMEOUT)
-                .ok_or_else(|| {
-                    ApiError(CoreError::ServiceUnavailable(
-                        "reader lock busy on retry; the database may be under heavy load".into(),
-                    ))
-                })?;
+            let reader2 = recover_and_retry_reader(state, query_name)?;
             query_fn(&reader2, filter).map_err(ApiError)
         }
     }
 }
 
-pub(crate) fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, ApiError> {
-    use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
+fn iso_z(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
 
-    // Helper to format a (year, month, day) tuple at 00:00:00 UTC.
-    let midnight = |y: i32, m: u32, d: u32| -> String {
-        let naive = NaiveDate::from_ymd_opt(y, m, d)
-            .expect("valid ymd")
-            .and_hms_opt(0, 0, 0)
-            .expect("valid hms");
-        iso_z(Utc.from_utc_datetime(&naive))
-    };
+fn midnight_iso(y: i32, m: u32, d: u32) -> String {
+    use chrono::{NaiveDate, TimeZone, Utc};
+    let naive = NaiveDate::from_ymd_opt(y, m, d)
+        .expect("valid ymd")
+        .and_hms_opt(0, 0, 0)
+        .expect("valid hms");
+    iso_z(Utc.from_utc_datetime(&naive))
+}
 
-    let now = Utc::now();
-    let today = now.date_naive();
-    let y = now.year();
-    let m = now.month();
-
+fn compute_calendar_preset(
+    preset: &str,
+    y: i32,
+    m: u32,
+    today: chrono::NaiveDate,
+) -> Option<(String, String)> {
+    use chrono::{Datelike, Duration};
     match preset {
         "today" => {
-            let from = midnight(y, m, today.day());
-            // Tomorrow rolls over month/year boundaries via chrono's
-            // NaiveDate arithmetic; using `today.day() + 1` directly
-            // would overflow on the last day of the month.
+            let from = midnight_iso(y, m, today.day());
             let tomorrow = today + Duration::days(1);
-            let to = midnight(tomorrow.year(), tomorrow.month(), tomorrow.day());
-            Ok(Some((from, to)))
-        }
-        "7d" => {
-            let from = now - Duration::days(7);
-            Ok(Some((iso_z(from), iso_z(now))))
-        }
-        "30d" => {
-            let from = now - Duration::days(30);
-            Ok(Some((iso_z(from), iso_z(now))))
+            let to = midnight_iso(tomorrow.year(), tomorrow.month(), tomorrow.day());
+            Some((from, to))
         }
         "this_month" => {
-            let from = midnight(y, m, 1);
-            // First day of next month (may roll into next year).
+            let from = midnight_iso(y, m, 1);
             let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
-            let to = midnight(ny, nm, 1);
-            Ok(Some((from, to)))
+            let to = midnight_iso(ny, nm, 1);
+            Some((from, to))
         }
         "last_month" => {
             let (ly, lm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
-            let from = midnight(ly, lm, 1);
-            let to = midnight(y, m, 1);
-            Ok(Some((from, to)))
+            let from = midnight_iso(ly, lm, 1);
+            let to = midnight_iso(y, m, 1);
+            Some((from, to))
         }
         "last_6_months" => {
-            // Walk back 6 months from the first day of the current
-            // month. We compute the start of each month by subtracting
-            // months one at a time to avoid the "month - 6" underflow.
             let mut ly = y;
             let mut lm = m;
             for _ in 0..6 {
@@ -782,19 +744,32 @@ pub(crate) fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, A
                     lm -= 1;
                 }
             }
-            let from = midnight(ly, lm, 1);
-            let to = midnight(y, m, 1);
-            Ok(Some((from, to)))
+            let from = midnight_iso(ly, lm, 1);
+            let to = midnight_iso(y, m, 1);
+            Some((from, to))
         }
         "ytd" => {
-            let from = midnight(y, 1, 1);
-            let to = midnight(y + 1, 1, 1);
-            Ok(Some((from, to)))
+            let from = midnight_iso(y, 1, 1);
+            let to = midnight_iso(y + 1, 1, 1);
+            Some((from, to))
         }
-        // `custom` (or any other unrecognised string the operator
-        // might type) means "use the explicit from/to as-is". We
-        // surface unknown presets as a 400 so the dashboard doesn't
-        // silently miss a window due to a typo.
+        _ => None,
+    }
+}
+
+pub(crate) fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, ApiError> {
+    use chrono::{Datelike, Duration, Utc};
+    let now = Utc::now();
+
+    if let Some(range) =
+        compute_calendar_preset(preset, now.year(), now.month(), now.date_naive())
+    {
+        return Ok(Some(range));
+    }
+
+    match preset {
+        "7d" => Ok(Some((iso_z(now - Duration::days(7)), iso_z(now)))),
+        "30d" => Ok(Some((iso_z(now - Duration::days(30)), iso_z(now)))),
         "custom" => Ok(None),
         other => Err(CoreError::Validation(format!(
             "preset must be one of today|7d|30d|this_month|last_month|last_6_months|ytd|custom; got `{other}`"
@@ -803,169 +778,87 @@ pub(crate) fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, A
     }
 }
 
-pub(crate) fn parse_usage_timestamp(s: &str, field: &str) -> Result<String, ApiError> {
-    // Try RFC-3339 first (the canonical form `created_at` is stored in).
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt
-            .with_timezone(&chrono::Utc)
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+fn parse_provider_filter(provider_id: Option<String>) -> Result<Option<ProviderId>, ApiError> {
+    provider_id
+        .map(|s| {
+            if s.is_empty() {
+                Err(CoreError::Validation("provider_id must not be empty".into()))
+            } else {
+                Ok(ProviderId::new(s))
+            }
+        })
+        .transpose()
+        .map_err(ApiError)
+}
+
+pub(crate) fn parse_usage_timestamp(s: &str, field_name: &str) -> Result<String, ApiError> {
+    use chrono::{DateTime, NaiveDateTime, Utc};
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(iso_z(dt.with_timezone(&Utc)));
     }
-    // Fall back to the SQLite "YYYY-MM-DD HH:MM:SS" form (the format
-    // operators sometimes paste from a log line). We require the
-    // space — a `T` here is the RFC-3339 form, already handled above.
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(naive
-            .and_utc()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return Ok(iso_z(DateTime::from_naive_utc_and_offset(naive, Utc)));
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Ok(iso_z(DateTime::from_naive_utc_and_offset(naive, Utc)));
     }
     Err(CoreError::Validation(format!(
-        "{field} must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or \
-         SQLite-style (e.g. 2026-06-18 07:00:00); got `{s}`"
+        "'{field_name}' parameter '{s}' must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or SQLite format (2026-06-18 07:00:00)"
     ))
     .into())
 }
 
-pub(crate) fn iso_z(dt: chrono::DateTime<chrono::Utc>) -> String {
-    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-}
+fn resolve_query_time_bounds(
+    from_raw: Option<String>,
+    to_raw: Option<String>,
+    preset: Option<&str>,
+) -> Result<(Option<String>, Option<String>), ApiError> {
+    let mut from = from_raw
+        .map(|s| parse_usage_timestamp(&s, "from"))
+        .transpose()?;
+    let mut to = to_raw
+        .map(|s| parse_usage_timestamp(&s, "to"))
+        .transpose()?;
 
-pub(crate) async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: serde_json::Value) {
-    let text: String = match json_text(&value) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(error = %e, "stream_usage_rows: json_text failed in outbox_send");
-            return;
+    if let Some(p) = preset {
+        if from.is_some() || to.is_some() {
+            tracing::warn!(
+                preset = %p,
+                from = ?from,
+                to = ?to,
+                "UsageQuery: preset is set and will override explicit from/to"
+            );
         }
-    };
-    // Use send().await for real-time messages — this blocks the
-    // receiver loop if the outbox is full, but that's BETTER than
-    // dropping the message. The broadcast channel has capacity 1024,
-    // so a brief stall won't cause lag. If the stall is prolonged
-    // (seconds), the broadcast channel will lag and trigger a resync.
-    match tx.send(text).await {
-        Ok(()) => {}
-        Err(_e) => {
-            // Sender task exited — the WS is closing. Just drop
-            // the message; the receiver loop will exit momentarily
-            // when `ws_receiver.next()` returns None.
+        if let Some((pf, pt)) = resolve_preset(p)? {
+            from = Some(pf);
+            to = Some(pt);
         }
     }
-}
 
-pub(crate) fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, value: &serde_json::Value) {
-    let text: String = match json_text(value) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(error = %e, "stream_usage_rows: json_text failed in outbox_try_send");
-            return;
-        }
-    };
-    match tx.try_send(text) {
-        Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            tracing::debug!("stream_usage_rows: outbox full, dropping non-critical WS message");
-        }
+    if let (Some(f), Some(t)) = (&from, &to)
+        && f > t
+    {
+        return Err(CoreError::Validation(format!("from ({f}) must be <= to ({t})")).into());
     }
-}
 
-#[derive(Debug, Default, Deserialize)]
-pub struct UsageQuery {
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub provider_id: Option<String>,
-    pub model_id: Option<String>,
-    pub account_id: Option<i64>,
-    pub combo_id: Option<i64>,
-    /// Restrict the roll-up to a single API key. The per-key
-    /// `GET /admin/keys/:id/usage` endpoint sets this; the
-    /// public analytics endpoints leave it absent.
-    pub api_key_id: Option<i64>,
-    /// Named time-window preset. One of: `today`, `7d`, `30d`,
-    /// `this_month`, `last_month`, `last_6_months`, `ytd`, `custom`.
-    ///
-    /// When set, the server computes `from`/`to` in UTC and ignores
-    /// any explicit `from`/`to` (with a warning). `custom` (or
-    /// `None`) falls through to the explicit `from`/`to` fields.
-    pub preset: Option<String>,
+    Ok((from, to))
 }
 
 impl UsageQuery {
     /// Project into a [`UsageFilter`]. An empty `provider_id` string
     /// surfaces here as a 400 via [`CoreError::Validation`].
     pub(crate) fn into_filter(self) -> Result<UsageFilter, ApiError> {
-        let provider_id = self
-            .provider_id
-            .map(|s| {
-                if s.is_empty() {
-                    Err(CoreError::Validation(
-                        "provider_id must not be empty".into(),
-                    ))
-                } else {
-                    Ok(ProviderId::new(s))
-                }
-            })
-            .transpose()?;
-        // MEDIUM fix: validate `from` and `to` are well-formed timestamps
-        // before they reach the SQL builder. Without this, a query
-        // like `?from=garbage` returns 0 rows silently (the SQLite
-        // string comparison fails the row against every `created_at`)
-        // and the operator gets a misleading "no data" result. A
-        // malformed timestamp is a client error and must surface as 400.
-        //
-        // Accept the two timestamp shapes the dashboard sends:
-        //   - RFC-3339 (e.g. `2026-06-18T07:00:00Z`)
-        //   - SQLite-style (e.g. `2026-06-18 07:00:00`)
-        //
-        // Both round-trip through `chrono::DateTime<Utc>` and we
-        // re-emit the canonical RFC-3339 form so the SQL comparison
-        // is consistent.
-        let mut from = self
-            .from
-            .map(|s| parse_usage_timestamp(&s, "from"))
-            .transpose()?;
-        let mut to = self
-            .to
-            .map(|s| parse_usage_timestamp(&s, "to"))
-            .transpose()?;
+        let provider_id = parse_provider_filter(self.provider_id)?;
+        let (from, to) = resolve_query_time_bounds(self.from, self.to, self.preset.as_deref())?;
 
-        // Preset handling: if `preset` is set, it takes precedence
-        // over explicit `from`/`to`. We log a warning when both are
-        // provided so the operator can spot the dashboard sending
-        // redundant data.
-        if let Some(preset) = &self.preset {
-            if from.is_some() || to.is_some() {
-                tracing::warn!(
-                    preset = %preset,
-                    from = ?from,
-                    to = ?to,
-                    "UsageQuery: preset is set and will override explicit from/to"
-                );
-            }
-            if let Some((pf, pt)) = resolve_preset(preset)? {
-                from = Some(pf);
-                to = Some(pt);
-            }
-            // `custom` (or None) falls through with the explicit values.
-        }
-
-        // If both are present, from must not be after to. (Both
-        // are inclusive at the lower bound in the SQL.)
-        if let (Some(f), Some(t)) = (&from, &to)
-            && f > t
-        {
-            return Err(CoreError::Validation(format!("from ({f}) must be <= to ({t})")).into());
-        }
-        let account_id = self.account_id.map(AccountId::new);
-        let combo_id = self.combo_id.map(ComboId);
-        let api_key_id = self.api_key_id.map(ApiKeyId);
         Ok(UsageFilter {
             from,
             to,
             provider_id,
             model_id: self.model_id,
-            account_id,
-            combo_id,
-            api_key_id,
+            account_id: self.account_id.map(AccountId::new),
+            combo_id: self.combo_id.map(ComboId),
+            api_key_id: self.api_key_id.map(ApiKeyId),
         })
     }
 }

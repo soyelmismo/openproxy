@@ -121,28 +121,33 @@ const JSON_ARRAY_MIN_ITEMS: usize = 5;
 /// Order matters — see the [module docs](self) for the full precedence list.
 /// The scan is bounded to the first [`DETECT_SCAN_LINES`] lines so detection
 /// is O(N) in the (truncated) input length, never in the full content size.
-pub fn detect(content: &str) -> ContentType {
-    let lines: Vec<&str> = content.lines().take(DETECT_SCAN_LINES).collect();
+fn detect_from_lines(lines: &[&str]) -> ContentType {
+    if is_git_diff(lines) {
+        ContentType::GitDiff
+    } else if is_build_output(lines) {
+        ContentType::BuildOutput
+    } else if is_search_results(lines) {
+        ContentType::SearchResults
+    } else if is_tabular(lines) {
+        ContentType::Tabular
+    } else if is_source_code(lines) {
+        ContentType::SourceCode
+    } else {
+        ContentType::PlainText
+    }
+}
 
+/// Detect the content type of a text string.
+///
+/// Order matters — see the [module docs](self) for the full precedence list.
+/// The scan is bounded to the first [`DETECT_SCAN_LINES`] lines so detection
+/// is O(N) in the (truncated) input length, never in the full content size.
+pub fn detect(content: &str) -> ContentType {
     if is_json_array(content) {
         return ContentType::JsonArray;
     }
-    if is_git_diff(&lines) {
-        return ContentType::GitDiff;
-    }
-    if is_build_output(&lines) {
-        return ContentType::BuildOutput;
-    }
-    if is_search_results(&lines) {
-        return ContentType::SearchResults;
-    }
-    if is_tabular(&lines) {
-        return ContentType::Tabular;
-    }
-    if is_source_code(&lines) {
-        return ContentType::SourceCode;
-    }
-    ContentType::PlainText
+    let lines: Vec<&str> = content.lines().take(DETECT_SCAN_LINES).collect();
+    detect_from_lines(&lines)
 }
 
 /// Route a single message's content to the appropriate compressor.
@@ -166,10 +171,33 @@ pub fn route_content(content: &str) -> Option<(String, &'static str)> {
         ContentType::JsonArray => smart_crusher::crush_json_string(content),
         ContentType::GitDiff => diff_compressor::compress_diff_string(content),
         ContentType::BuildOutput => log_compressor::compress_log_string(content),
-        ContentType::SearchResults
-        | ContentType::Tabular
-        | ContentType::SourceCode
-        | ContentType::PlainText => None,
+        _ => None,
+    }
+}
+
+fn route_single_message(msg: &mut OpenAIMessage) -> Option<String> {
+    if msg.role != "tool" && msg.role != "assistant" {
+        return None;
+    }
+
+    let mut applied_tech = None;
+    let mutated = mutate_message_text(msg, |content_str| {
+        if content_str.len() < 500 {
+            return None;
+        }
+        if let Some((compressed, technique)) = route_content(content_str)
+            && compressed.len() < content_str.len()
+        {
+            applied_tech = Some(technique.to_string());
+            return Some(compressed);
+        }
+        None
+    });
+
+    if mutated {
+        applied_tech
+    } else {
+        None
     }
 }
 
@@ -178,31 +206,7 @@ pub fn route_content(content: &str) -> Option<(String, &'static str)> {
 /// for JSON arrays, LogCompressor for build logs, DiffCompressor for
 /// git diffs).
 pub fn apply_content_routing(messages: &mut [OpenAIMessage]) -> Vec<String> {
-    let mut techniques: Vec<String> = Vec::new();
-    for msg in messages.iter_mut() {
-        if msg.role != "tool" && msg.role != "assistant" {
-            continue;
-        }
-
-        let mut applied_tech = None;
-        let mutated = mutate_message_text(msg, |content_str| {
-            if content_str.len() < 500 {
-                return None;
-            }
-            if let Some((compressed, technique)) = route_content(content_str)
-                && compressed.len() < content_str.len()
-            {
-                applied_tech = Some(technique.to_string());
-                return Some(compressed);
-            }
-            None
-        });
-
-        if mutated && let Some(tech) = applied_tech {
-            techniques.push(tech);
-        }
-    }
-    techniques
+    messages.iter_mut().filter_map(route_single_message).collect()
 }
 
 // ─── Per-type detectors ────────────────────────────────────────────────────
@@ -231,6 +235,42 @@ fn is_git_diff(lines: &[&str]) -> bool {
         .any(|l| l.starts_with("diff --git ") || HUNK_HEADER_RE.is_match(l))
 }
 
+fn has_pytest_match(head: &[&str]) -> bool {
+    head.iter()
+        .any(|l| l.contains("===== test session starts ====="))
+}
+
+fn has_cargo_match(head: &[&str]) -> bool {
+    head.iter()
+        .any(|l| CARGO_RUNNING_RE.is_match(l) || l.starts_with("test result:"))
+}
+
+fn has_jest_match(head: &[&str]) -> bool {
+    head.iter()
+        .any(|l| l.starts_with("PASS ") || l.starts_with("FAIL ") || l.contains("Test Suites:"))
+}
+
+fn count_build_matches(head: &[&str]) -> usize {
+    let mut matches = 0;
+    if has_pytest_match(head) {
+        matches += 1;
+    }
+    if has_cargo_match(head) {
+        matches += 1;
+    }
+    if has_jest_match(head) {
+        matches += 1;
+    }
+    if head.iter().any(|l| MAKE_RE.is_match(l)) {
+        matches += 1;
+    }
+    let generic_count = head.iter().filter(|l| GENERIC_ERROR_RE.is_match(l)).count();
+    if generic_count >= 5 {
+        matches += 1;
+    }
+    matches
+}
+
 /// `BuildOutput`: first 50 lines match ≥2 of these patterns:
 /// - pytest: line contains `===== test session starts =====`
 /// - cargo: line matches `^running \d+ tests` or starts with `test result:`
@@ -243,40 +283,7 @@ fn is_build_output(lines: &[&str]) -> bool {
     // often has a header in the first few lines and errors/summaries
     // at the end, so scanning only 50 lines misses the error signals.
     let head = &lines[..lines.len().min(200)];
-    let mut matches = 0;
-
-    // pytest
-    if head
-        .iter()
-        .any(|l| l.contains("===== test session starts ====="))
-    {
-        matches += 1;
-    }
-    // cargo
-    if head
-        .iter()
-        .any(|l| CARGO_RUNNING_RE.is_match(l) || l.starts_with("test result:"))
-    {
-        matches += 1;
-    }
-    // jest
-    if head
-        .iter()
-        .any(|l| l.starts_with("PASS ") || l.starts_with("FAIL ") || l.contains("Test Suites:"))
-    {
-        matches += 1;
-    }
-    // make
-    if head.iter().any(|l| MAKE_RE.is_match(l)) {
-        matches += 1;
-    }
-    // generic: ≥5 lines matching the error/warn token regex.
-    let generic_count = head.iter().filter(|l| GENERIC_ERROR_RE.is_match(l)).count();
-    if generic_count >= 5 {
-        matches += 1;
-    }
-
-    matches >= 2
+    count_build_matches(head) >= 2
 }
 
 /// `SearchResults`: ≥3 lines match `^[\w/.\-]+:\d+:` (the grep/ripgrep

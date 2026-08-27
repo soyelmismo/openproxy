@@ -75,39 +75,87 @@ pub async fn get_combo(
     Ok(Json(combo))
 }
 
+fn build_skipped_target_entry(
+    t: &types_combos::ComboTargetWithModel,
+) -> Option<serde_json::Value> {
+    use serde_json::json;
+    if t.sub_combo_id.is_some() {
+        return Some(json!({
+            "target_id": t.id.0,
+            "sub_combo_id": t.sub_combo_id.map(|c| c.0),
+            "sub_combo_name": t.sub_combo_name,
+            "provider_id": t.provider_id.to_string(),
+            "status": 0_i32,
+            "elapsed_ms": serde_json::Value::Null,
+            "error_msg": "sub-combo; test children individually",
+            "skipped": true,
+        }));
+    }
+    if t.in_cooldown {
+        return Some(json!({
+            "target_id": t.id.0,
+            "provider_id": t.provider_id.to_string(),
+            "account_id": t.account_id.map(|a| a.0),
+            "model_row_id": t.model_row_id.map(|m| m.0),
+            "model_id": t.model_id,
+            "model_display_name": t.model_display_name,
+            "status": 0_i32,
+            "elapsed_ms": serde_json::Value::Null,
+            "error_msg": format!(
+                "in_cooldown: {}",
+                t.cooldown_reason.as_deref().unwrap_or("no reason recorded")
+            ),
+            "skipped": true,
+        }));
+    }
+    None
+}
+
+async fn run_and_format_single_combo_target(
+    s: &AppState,
+    t: &types_combos::ComboTargetWithModel,
+    cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
+) -> serde_json::Value {
+    let (r, _) = run_test_for_model(
+        s,
+        t.model_row_id.unwrap_or(ModelRowId(0)).0,
+        t.account_id,
+        None,
+        TestOptions {
+            in_combo_fanout: true,
+        },
+        cancel_rx,
+    )
+    .await;
+
+    let mut obj = serde_json::json!({
+        "target_id": t.id.0,
+        "provider_id": t.provider_id.to_string(),
+        "account_id": t.account_id.map(|a| a.0),
+        "model_row_id": t.model_row_id.map(|m| m.0),
+        "model_id": t.model_id,
+        "model_display_name": t.model_display_name,
+        "status": r.status,
+        "elapsed_ms": r.elapsed_ms,
+        "error_msg": r.error_msg,
+        "skipped": r.skipped,
+        "row_id": r.row_id,
+    });
+    if r.skipped {
+        obj["error_msg"] =
+            serde_json::json!(r.skip_reason.unwrap_or_else(|| "skipped".to_string()));
+    }
+    obj
+}
+
 pub async fn test_combo_targets(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    use serde_json::json;
-
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
 
-    // Cancellation note: the previous implementation spawned a
-    // disconnect-watcher task that drained `request.into_parts().1`
-    // (the request body) and flipped a `tokio::sync::watch` flag
-    // when the body stream ended. For a POST with no body — which is
-    // what the dashboard actually sends — `Body::frame()` resolves
-    // to `None` immediately, so the watcher fired `disconnect_tx`
-    // before the fan-out loop started its second iteration. The
-    // fan-out then aborted after the first target, which silently
-    // broke "Test all".
-    //
-    // We rely on Axum's natural cancellation instead: when the
-    // client drops the response future (closes the tab, navigates
-    // away, etc.), the handler future is dropped, which in turn
-    // drops the in-flight `UpstreamClient::call()` future
-    // (UpstreamClient is cancel-safe) and aborts the loop. No watcher
-    // task is needed — and a watcher task is in fact *counter-
-    // productive* because it would outlive the handler and never
-    // observe the drop. The 180s `tokio::time::timeout` below
-    // remains the upper bound for the happy path.
     let res: Result<Json<Vec<serde_json::Value>>, crate::error::ApiError> = async {
-        // Snapshot the targets up-front and drop the writer guard.
-        // The per-target test below does its own short DB
-        // transactions (writer lock + drop), so the long-running
-        // HTTP calls don't block other handlers from writing.
         let targets = tokio::task::spawn_blocking({
             let pool = Arc::clone(s.db_pool());
             move || {
@@ -118,55 +166,11 @@ pub async fn test_combo_targets(
         .await
         .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn_blocking failed: {e}"))))?;
 
-        // The fan-out is intentionally serial. The prompt explicitly
-        // asked for no parallelization in the MVP ("NO paralelizar.
-        // Secuencial está bien para MVP. Documentar como
-        // follow-up"); the comment on the inner loop is the
-        // follow-up. We do, however, bound the whole fan-out with a
-        // hard timeout so the dashboard never waits longer than 3
-        // minutes — the worst case is 8 targets × 15 s each.
         let fan_out = async {
             let mut results = Vec::with_capacity(targets.len());
             for t in targets {
-                if t.sub_combo_id.is_some() {
-                    // Sub-combo row: do not recurse. The "test
-                    // children individually" message mirrors the
-                    // pre-refactor handler so existing dashboard
-                    // tooltip behavior is preserved.
-                    results.push(json!({
-                        "target_id": t.id.0,
-                        "sub_combo_id": t.sub_combo_id.map(|c| c.0),
-                        "sub_combo_name": t.sub_combo_name,
-                        "provider_id": t.provider_id.to_string(),
-                        "status": 0_i32,
-                        "elapsed_ms": serde_json::Value::Null,
-                        "error_msg": "sub-combo; test children individually",
-                        "skipped": true,
-                    }));
-                    continue;
-                }
-                if t.in_cooldown {
-                    // The target is parked. Surface that as a
-                    // skipped row with the same shape the dashboard
-                    // already knows, and copy the reason into the
-                    // error message so the operator can see *why*
-                    // the row is parked without opening a second
-                    // endpoint.
-                    results.push(json!({
-                        "target_id": t.id.0,
-                        "provider_id": t.provider_id.to_string(),
-                        "account_id": t.account_id.map(|a| a.0),
-                        "model_row_id": t.model_row_id.map(|m| m.0),
-                        "model_id": t.model_id,
-                        "model_display_name": t.model_display_name,
-                        "status": 0_i32,
-                        "elapsed_ms": serde_json::Value::Null,
-                        "error_msg": format!(
-                            "in_cooldown: {}",
-                            t.cooldown_reason.as_deref().unwrap_or("no reason recorded")
-                        ),
-                        "skipped": true,
-                    }));
+                if let Some(skipped) = build_skipped_target_entry(&t) {
+                    results.push(skipped);
                     continue;
                 }
                 if let Some(ref rx) = cancel_rx
@@ -175,55 +179,15 @@ pub async fn test_combo_targets(
                     tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
                     break;
                 }
-                // Flat, active, not in cooldown: actually fire
-                // upstream. The helper handles the model-not-active
-                // short-circuit itself (skipped row with
-                // "model is inactive" in the error_msg).
-                let (r, _) = run_test_for_model(
-                    &s,
-                    t.model_row_id.unwrap_or(ModelRowId(0)).0,
-                    t.account_id,
-                    None,
-                    TestOptions {
-                        in_combo_fanout: true,
-                    },
-                    cancel_rx.clone(),
-                )
-                .await;
-                // Use the per-target metadata from the snapshot
-                // for the response, not whatever the helper
-                // returned (the helper doesn't have the row
-                // metadata handy). `r.row_id` is informational
-                // and matches `t.model_row_id`.
-                let mut obj = json!({
-                    "target_id": t.id.0,
-                    "provider_id": t.provider_id.to_string(),
-                    "account_id": t.account_id.map(|a| a.0),
-                    "model_row_id": t.model_row_id.map(|m| m.0),
-                    "model_id": t.model_id,
-                    "model_display_name": t.model_display_name,
-                    "status": r.status,
-                    "elapsed_ms": r.elapsed_ms,
-                    "error_msg": r.error_msg,
-                    "skipped": r.skipped,
-                    "row_id": r.row_id,
-                });
-                if r.skipped {
-                    obj["error_msg"] =
-                        json!(r.skip_reason.unwrap_or_else(|| "skipped".to_string()));
-                }
-                results.push(obj);
+                results.push(
+                    run_and_format_single_combo_target(&s, &t, cancel_rx.clone()).await,
+                );
             }
             results
         };
 
         let Ok(results) = tokio::time::timeout(std::time::Duration::from_mins(3), fan_out).await
         else {
-            // Timed out before we finished. Return whatever we
-            // have so the dashboard can render the partial
-            // picture. The frontend treats the response shape
-            // uniformly; a 504 here would just wipe the
-            // button state with no data.
             tracing::warn!(combo_id = id, "test-all fan-out exceeded 180s budget");
             return Err(crate::error::ApiError(
                 openproxy_types::CoreError::Internal(
@@ -282,20 +246,69 @@ pub async fn list_valid_sub_combos(
     Ok(Json(list))
 }
 
-pub async fn update_combo(
-    State(s): State<AppState>,
-    Path(id): Path<i64>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    // Optional race_size update.
+#[allow(clippy::option_option)]
+fn parse_nullable_str<'a>(
+    body: &'a serde_json::Value,
+    field: &str,
+) -> Result<Option<Option<&'a str>>, ApiError> {
+    match body.get(field) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Ok(Some(None)),
+        Some(v) => match v.as_str() {
+            Some(s) => Ok(Some(Some(s))),
+            None => Err(ApiError(CoreError::Validation(format!(
+                "{field} must be a string or null, got {v}"
+            )))),
+        },
+    }
+}
+
+#[allow(clippy::option_option)]
+fn parse_nullable_u64(
+    body: &serde_json::Value,
+    field: &str,
+) -> Result<Option<Option<u64>>, ApiError> {
+    match body.get(field) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Ok(Some(None)),
+        Some(v) => match v.as_u64() {
+            Some(n) => Ok(Some(Some(n))),
+            None => Err(ApiError(CoreError::Validation(format!(
+                "{field} must be a non-negative integer or null"
+            )))),
+        },
+    }
+}
+
+fn apply_combo_cooldown_updates(
+    w: &rusqlite::Connection,
+    id: ComboId,
+    body: &serde_json::Value,
+) -> Result<(), ApiError> {
+    if let Some(mode) = parse_nullable_str(body, "cooldown_mode")? {
+        core_combos::update_cooldown_mode(w, id, mode)?;
+    }
+    if let Some(base) = parse_nullable_u64(body, "cooldown_base_secs")? {
+        core_combos::update_cooldown_base(w, id, base)?;
+    }
+    if let Some(max) = parse_nullable_u64(body, "cooldown_max_secs")? {
+        core_combos::update_cooldown_max(w, id, max)?;
+    }
+    if let Some(factor) = parse_nullable_u64(body, "cooldown_factor")? {
+        core_combos::update_cooldown_factor(w, id, factor.map(|f| f as u32))?;
+    }
+    Ok(())
+}
+
+fn apply_combo_general_updates(
+    w: &rusqlite::Connection,
+    id: ComboId,
+    body: &serde_json::Value,
+) -> Result<(), ApiError> {
     if let Some(n) = body.get("race_size").and_then(serde_json::Value::as_u64) {
         let rs = u8::try_from(n).unwrap_or(0);
-        core_combos::update_combo(&w, ComboId(id), Some(rs))?;
+        core_combos::update_combo(w, id, Some(rs))?;
     }
-    // Optional context_window update. `null` or missing means
-    // "auto-compute from targets". A positive integer pins the
-    // reported context window.
     if let Some(cw_val) = body.get("context_window") {
         let cw = if cw_val.is_null() {
             None
@@ -306,80 +319,11 @@ pub async fn update_combo(
                 ))
             })?)
         };
-        core_combos::update_context_window(&w, ComboId(id), cw)?;
+        core_combos::update_context_window(w, id, cw)?;
     }
-    // Optional `priority_mode` update. `null` clears the column
-    // back to `strict` (the legacy default).
-    if let Some(v) = body.get("priority_mode") {
-        let mode = if v.is_null() {
-            None
-        } else if let Some(s) = v.as_str() {
-            Some(s)
-        } else {
-            return Err(ApiError(CoreError::Validation(format!(
-                "priority_mode must be a string or null, got {v}"
-            ))));
-        };
-        core_combos::update_priority_mode(&w, ComboId(id), mode)?;
+    if let Some(mode) = parse_nullable_str(body, "priority_mode")? {
+        core_combos::update_priority_mode(w, id, mode)?;
     }
-    // Optional cooldown settings update. Each field is updated
-    // INDEPENDENTLY — if only `cooldown_base_secs` is in the body,
-    // only that column is written, leaving `cooldown_mode` etc.
-    // untouched. This prevents the "changing base resets mode to
-    // flat" bug.
-    //
-    // The frontend sends one field at a time (e.g. `{cooldown_base_secs: 30}`)
-    // so we must NOT batch them into a single UPDATE that would
-    // NULL out the absent fields.
-    if let Some(v) = body.get("cooldown_mode") {
-        let mode = if v.is_null() {
-            None
-        } else if let Some(s) = v.as_str() {
-            Some(s)
-        } else {
-            return Err(ApiError(CoreError::Validation(format!(
-                "cooldown_mode must be a string or null, got {v}"
-            ))));
-        };
-        core_combos::update_cooldown_mode(&w, ComboId(id), mode)?;
-    }
-    if let Some(v) = body.get("cooldown_base_secs") {
-        let base = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "cooldown_base_secs must be a non-negative integer or null".into(),
-                ))
-            })?)
-        };
-        core_combos::update_cooldown_base(&w, ComboId(id), base)?;
-    }
-    if let Some(v) = body.get("cooldown_max_secs") {
-        let max = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "cooldown_max_secs must be a non-negative integer or null".into(),
-                ))
-            })?)
-        };
-        core_combos::update_cooldown_max(&w, ComboId(id), max)?;
-    }
-    if let Some(v) = body.get("cooldown_factor") {
-        let factor = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "cooldown_factor must be a non-negative integer or null".into(),
-                ))
-            })? as u32)
-        };
-        core_combos::update_cooldown_factor(&w, ComboId(id), factor)?;
-    }
-    // Optional LKGP exploration rate update.
     if let Some(v) = body.get("lkgp_exploration_rate") {
         let rate = if v.is_null() {
             None
@@ -390,22 +334,151 @@ pub async fn update_combo(
                 ))
             })?)
         };
-        core_combos::update_lkgp_settings(&w, ComboId(id), rate)?;
+        core_combos::update_lkgp_settings(w, id, rate)?;
     }
-    // Optional selection window update.
-    if let Some(v) = body.get("selection_window_secs") {
-        let window = if v.is_null() {
-            None
-        } else {
-            Some(v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "selection_window_secs must be a non-negative integer or null".into(),
-                ))
-            })?)
-        };
-        core_combos::update_selection_window(&w, ComboId(id), window)?;
+    if let Some(window) = parse_nullable_u64(body, "selection_window_secs")? {
+        core_combos::update_selection_window(w, id, window)?;
     }
+    Ok(())
+}
+
+pub async fn update_combo(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let w = s.db_pool().writer();
+    let combo_id = ComboId(id);
+    apply_combo_general_updates(&w, combo_id, &body)?;
+    apply_combo_cooldown_updates(&w, combo_id, &body)?;
     Ok(Json(serde_json::json!({ "id": id })))
+}
+
+#[allow(clippy::option_option)]
+struct ComboTargetUpdates<'a> {
+    priority_order: Option<i32>,
+    weight: Option<i32>,
+    active: Option<bool>,
+    cooldown_mode: Option<Option<&'a str>>,
+    cooldown_base_secs: Option<Option<u64>>,
+    cooldown_max_secs: Option<Option<u64>>,
+    cooldown_factor: Option<Option<u32>>,
+}
+
+impl ComboTargetUpdates<'_> {
+    fn is_empty(&self) -> bool {
+        self.priority_order.is_none()
+            && self.weight.is_none()
+            && self.active.is_none()
+            && self.cooldown_mode.is_none()
+            && self.cooldown_base_secs.is_none()
+            && self.cooldown_max_secs.is_none()
+            && self.cooldown_factor.is_none()
+    }
+}
+
+fn parse_target_priority_order(body: &serde_json::Value) -> Result<Option<i32>, ApiError> {
+    let Some(v) = body.get("priority_order") else {
+        return Ok(None);
+    };
+    let p = v.as_i64().ok_or_else(|| {
+        ApiError(CoreError::Validation(
+            "priority_order must be an integer when present".into(),
+        ))
+    })?;
+    if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&p) {
+        return Err(ApiError(CoreError::Validation(format!(
+            "priority_order out of i32 range: {p}"
+        ))));
+    }
+    Ok(Some(p as i32))
+}
+
+fn parse_target_weight(body: &serde_json::Value) -> Result<Option<i32>, ApiError> {
+    let Some(v) = body.get("weight") else {
+        return Ok(None);
+    };
+    let weight_i64 = v.as_i64().ok_or_else(|| {
+        ApiError(CoreError::Validation(
+            "weight must be an integer when present".into(),
+        ))
+    })?;
+    if !(1..=i64::from(i32::MAX)).contains(&weight_i64) {
+        return Err(ApiError(CoreError::Validation(format!(
+            "weight must be a positive i32 (1..={}), got {}",
+            i32::MAX,
+            weight_i64
+        ))));
+    }
+    Ok(Some(weight_i64 as i32))
+}
+
+fn parse_target_active(body: &serde_json::Value) -> Result<Option<bool>, ApiError> {
+    let Some(v) = body.get("active") else {
+        return Ok(None);
+    };
+    v.as_bool()
+        .map(Some)
+        .ok_or_else(|| ApiError(CoreError::Validation("active must be a boolean when present".into())))
+}
+
+fn parse_combo_target_updates(
+    body: &serde_json::Value,
+) -> Result<ComboTargetUpdates<'_>, ApiError> {
+    let priority_order = parse_target_priority_order(body)?;
+    let weight = parse_target_weight(body)?;
+    let active = parse_target_active(body)?;
+    let cooldown_mode = parse_nullable_str(body, "cooldown_mode")?;
+    let cooldown_base_secs = parse_nullable_u64(body, "cooldown_base_secs")?;
+    let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
+    let cooldown_factor = parse_nullable_u64(body, "cooldown_factor")?
+        .map(|opt| opt.map(|f| f as u32));
+
+    let updates = ComboTargetUpdates {
+        priority_order,
+        weight,
+        active,
+        cooldown_mode,
+        cooldown_base_secs,
+        cooldown_max_secs,
+        cooldown_factor,
+    };
+
+    if updates.is_empty() {
+        return Err(ApiError(CoreError::Validation(
+            "missing update fields in request body".into(),
+        )));
+    }
+    Ok(updates)
+}
+
+fn apply_target_db_updates(
+    w: &rusqlite::Connection,
+    target_id: ComboTargetId,
+    updates: &ComboTargetUpdates<'_>,
+) -> Result<(), ApiError> {
+    if let Some(p) = updates.priority_order {
+        core_combos::update_target_priority(w, target_id, p)?;
+    }
+    if let Some(w_val) = updates.weight {
+        core_combos::update_target_weight(w, target_id, w_val)?;
+    }
+    if let Some(active_val) = updates.active {
+        core_combos::update_target_active(w, target_id, active_val)?;
+    }
+    if let Some(mode) = updates.cooldown_mode {
+        core_combos::update_target_cooldown_mode(w, target_id, mode)?;
+    }
+    if let Some(base) = updates.cooldown_base_secs {
+        core_combos::update_target_cooldown_base(w, target_id, base)?;
+    }
+    if let Some(max) = updates.cooldown_max_secs {
+        core_combos::update_target_cooldown_max(w, target_id, max)?;
+    }
+    if let Some(factor) = updates.cooldown_factor {
+        core_combos::update_target_cooldown_factor(w, target_id, factor)?;
+    }
+    Ok(())
 }
 
 pub async fn update_combo_target(
@@ -413,153 +486,16 @@ pub async fn update_combo_target(
     Path((combo_id, target_id)): Path<(i64, i64)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Optional `priority_order` — the historical primary field.
-    // Kept optional so a future dashboard that only wants to
-    // PATCH `weight` can do so without round-tripping the order.
-    let priority_order: Option<i32> = match body.get("priority_order") {
-        None => None,
-        Some(v) => {
-            let p = v.as_i64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "priority_order must be an integer when present".into(),
-                ))
-            })?;
-            // Cast: i32 is well under i64::MAX in practice; the SQL
-            // column is INTEGER (i64 in rusqlite) so a non-negative
-            // i32 is safe.
-            if p < i64::from(i32::MIN) || p > i64::from(i32::MAX) {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "priority_order out of i32 range: {p}"
-                ))));
-            }
-            Some(p as i32)
-        }
-    };
-    // Optional `weight` (migration 000035).
-    let weight: Option<i32> = match body.get("weight") {
-        None => None,
-        Some(v) => {
-            let weight_i64 = v.as_i64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "weight must be an integer when present".into(),
-                ))
-            })?;
-            // Range-check before the i32 cast so an out-of-range
-            // value surfaces as a 400 instead of a silent wrap.
-            if weight_i64 < 1 || weight_i64 > i64::from(i32::MAX) {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "weight must be a positive i32 (1..={}), got {}",
-                    i32::MAX,
-                    weight_i64
-                ))));
-            }
-            Some(weight_i64 as i32)
-        }
-    };
-    // Optional `active` flag.
-    let active: Option<bool> = match body.get("active") {
-        None => None,
-        Some(v) => Some(v.as_bool().ok_or_else(|| {
-            ApiError(CoreError::Validation(
-                "active must be a boolean when present".into(),
-            ))
-        })?),
-    };
-    // Optional per-target `cooldown_mode`
-    let cooldown_mode: Option<Option<&str>> = match body.get("cooldown_mode") {
-        None => None,
-        Some(v) if v.is_null() => Some(None),
-        Some(v) => match v.as_str() {
-            Some(s) => Some(Some(s)),
-            None => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "cooldown_mode must be a string or null, got {v}"
-                ))));
-            }
-        },
-    };
-    // Optional per-target `cooldown_base_secs`
-    let cooldown_base_secs: Option<Option<u64>> = match body.get("cooldown_base_secs") {
-        None => None,
-        Some(v) if v.is_null() => Some(None),
-        Some(v) => {
-            let base = v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "cooldown_base_secs must be a non-negative integer or null".into(),
-                ))
-            })?;
-            Some(Some(base))
-        }
-    };
-    // Optional per-target `cooldown_max_secs`
-    let cooldown_max_secs: Option<Option<u64>> = match body.get("cooldown_max_secs") {
-        None => None,
-        Some(v) if v.is_null() => Some(None),
-        Some(v) => {
-            let max = v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "cooldown_max_secs must be a non-negative integer or null".into(),
-                ))
-            })?;
-            Some(Some(max))
-        }
-    };
-    // Optional per-target `cooldown_factor`
-    let cooldown_factor: Option<Option<u32>> = match body.get("cooldown_factor") {
-        None => None,
-        Some(v) if v.is_null() => Some(None),
-        Some(v) => {
-            let factor = v.as_u64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "cooldown_factor must be a non-negative integer or null".into(),
-                ))
-            })? as u32;
-            Some(Some(factor))
-        }
-    };
-    // Backwards-compat: if no known field was present, surface validation error
-    if priority_order.is_none()
-        && weight.is_none()
-        && active.is_none()
-        && cooldown_mode.is_none()
-        && cooldown_base_secs.is_none()
-        && cooldown_max_secs.is_none()
-        && cooldown_factor.is_none()
-    {
-        return Err(ApiError(CoreError::Validation(
-            "missing update fields in request body".into(),
-        )));
-    }
-
+    let updates = parse_combo_target_updates(&body)?;
     let w = s.db_pool().writer();
-    if let Some(p) = priority_order {
-        core_combos::update_target_priority(&w, ComboTargetId(target_id), p)?;
-    }
-    if let Some(w_val) = weight {
-        core_combos::update_target_weight(&w, ComboTargetId(target_id), w_val)?;
-    }
-    if let Some(active_val) = active {
-        core_combos::update_target_active(&w, ComboTargetId(target_id), active_val)?;
-    }
-    if let Some(mode) = cooldown_mode {
-        core_combos::update_target_cooldown_mode(&w, ComboTargetId(target_id), mode)?;
-    }
-    if let Some(base) = cooldown_base_secs {
-        core_combos::update_target_cooldown_base(&w, ComboTargetId(target_id), base)?;
-    }
-    if let Some(max) = cooldown_max_secs {
-        core_combos::update_target_cooldown_max(&w, ComboTargetId(target_id), max)?;
-    }
-    if let Some(factor) = cooldown_factor {
-        core_combos::update_target_cooldown_factor(&w, ComboTargetId(target_id), factor)?;
-    }
+    apply_target_db_updates(&w, ComboTargetId(target_id), &updates)?;
 
     Ok(Json(serde_json::json!({
         "combo_id": combo_id,
         "id": target_id,
-        "priority_order": priority_order,
+        "priority_order": updates.priority_order,
         "weight": body.get("weight").and_then(serde_json::Value::as_i64),
-        "active": active,
+        "active": updates.active,
         "cooldown_mode": body.get("cooldown_mode"),
         "cooldown_base_secs": body.get("cooldown_base_secs"),
     })))

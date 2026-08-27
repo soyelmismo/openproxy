@@ -24,6 +24,17 @@ pub struct ErrorContext {
     pub model: Option<String>,
 }
 
+fn format_opt_field<T: fmt::Display>(
+    f: &mut fmt::Formatter<'_>,
+    name: &str,
+    val: Option<T>,
+) -> fmt::Result {
+    if let Some(v) = val {
+        write!(f, " {name}={v}")?;
+    }
+    Ok(())
+}
+
 impl fmt::Display for ErrorContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -31,16 +42,9 @@ impl fmt::Display for ErrorContext {
             "req={} trace={} phase={}",
             self.request_id, self.trace_id, self.phase
         )?;
-        if let Some(p) = &self.provider {
-            write!(f, " provider={p}")?;
-        }
-        if let Some(a) = self.account {
-            write!(f, " account={a}")?;
-        }
-        if let Some(m) = &self.model {
-            write!(f, " model={m}")?;
-        }
-        Ok(())
+        format_opt_field(f, "provider", self.provider.as_deref())?;
+        format_opt_field(f, "account", self.account)?;
+        format_opt_field(f, "model", self.model.as_deref())
     }
 }
 
@@ -301,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_code_and_message() {
+    fn test_from_code_and_message_simple() {
         assert!(matches!(
             CoreError::from_code_and_message("auth", "bad token"),
             Some(CoreError::Auth(msg)) if msg == "bad token"
@@ -315,6 +319,15 @@ mod tests {
             Some(CoreError::ProviderNotFound(msg)) if msg == "openrouter"
         ));
         assert!(matches!(
+            CoreError::from_code_and_message("service_unavailable", "overloaded"),
+            Some(CoreError::ServiceUnavailable(msg)) if msg == "overloaded"
+        ));
+        assert!(CoreError::from_code_and_message("unknown_code", "foo").is_none());
+    }
+
+    #[test]
+    fn test_from_code_and_message_numeric() {
+        assert!(matches!(
             CoreError::from_code_and_message("account_not_found", "42"),
             Some(CoreError::AccountNotFound(42))
         ));
@@ -327,10 +340,10 @@ mod tests {
             CoreError::from_code_and_message("no_healthy_targets", "99"),
             Some(CoreError::NoHealthyTargets(99))
         ));
-        assert!(matches!(
-            CoreError::from_code_and_message("service_unavailable", "overloaded"),
-            Some(CoreError::ServiceUnavailable(msg)) if msg == "overloaded"
-        ));
+    }
+
+    #[test]
+    fn test_from_code_and_message_cancelled_race() {
         assert!(matches!(
             CoreError::from_code_and_message("watchdog_timeout", "timeout"),
             Some(CoreError::Cancelled(CancelReason::WatchdogTimeout))
@@ -343,6 +356,10 @@ mod tests {
             CoreError::from_code_and_message("race_lost", "loser"),
             Some(CoreError::RaceLost)
         ));
+    }
+
+    #[test]
+    fn test_from_code_and_message_not_found() {
         assert!(matches!(
             CoreError::from_code_and_message("not_found", "ticket not found: abc-123"),
             Some(CoreError::NotFound { what, id }) if what == "ticket" && id == "abc-123"
@@ -351,7 +368,6 @@ mod tests {
             CoreError::from_code_and_message("not_found", "user: 42"),
             Some(CoreError::NotFound { what, id }) if what == "user" && id == "42"
         ));
-        assert!(CoreError::from_code_and_message("unknown_code", "foo").is_none());
     }
 
     #[test]

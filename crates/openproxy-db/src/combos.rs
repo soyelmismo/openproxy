@@ -202,6 +202,16 @@ fn validate_flat_target(
     Ok(())
 }
 
+fn check_sub_combo_cycle(conn: &Connection, combo_id: ComboId, sub_id: ComboId) -> Result<()> {
+    if combo_in_chain(conn, combo_id, sub_id, MAX_SUB_COMBO_DEPTH)? {
+        return Err(CoreError::Validation(format!(
+            "adding sub-combo {} to combo {} would create a cycle",
+            sub_id.0, combo_id.0
+        )));
+    }
+    Ok(())
+}
+
 fn validate_sub_combo_target(conn: &Connection, combo_id: ComboId, sub_id: ComboId) -> Result<()> {
     if sub_id == combo_id {
         return Err(CoreError::Validation("combo cannot contain itself".into()));
@@ -218,14 +228,7 @@ fn validate_sub_combo_target(conn: &Connection, combo_id: ComboId, sub_id: Combo
             sub_id.0
         )));
     }
-    if combo_in_chain(conn, combo_id, sub_id, MAX_SUB_COMBO_DEPTH)? {
-        return Err(CoreError::Validation(format!(
-            "adding sub-combo {} to combo {} would create a cycle",
-            sub_id.0, combo_id.0
-        )));
-    }
-
-    Ok(())
+    check_sub_combo_cycle(conn, combo_id, sub_id)
 }
 
 fn validate_account(
@@ -275,61 +278,7 @@ fn fetch_upstream_model_id(
     }
 }
 
-pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTargetId> {
-    let AddTargetInput {
-        combo_id,
-        provider_id,
-        account_id,
-        model_row_id,
-        sub_combo_id,
-        priority_order,
-    } = input;
-
-    // XOR: exactly one of model_row_id / sub_combo_id must be set.
-    // (SQLite cannot add a CHECK constraint to a populated table, so
-    // the rule is enforced here at the boundary that creates rows.)
-    if model_row_id.is_some() == sub_combo_id.is_some() {
-        return Err(CoreError::Validation(
-            "must provide exactly one of model_row_id or sub_combo_id".into(),
-        ));
-    }
-
-    // Validate the combo exists.
-    let combo_exists = crate::db_exists!(
-        conn,
-        "combos",
-        WHERE id = combo_id.0,
-        format!("check combo {} exists", combo_id.0)
-    )?;
-    if !combo_exists {
-        return Err(CoreError::ComboNotFound(combo_id.0));
-    }
-
-    // Flat-target validations: model row exists and is owned by
-    // the requested provider.
-    if let Some(model_row_id) = model_row_id {
-        validate_flat_target(conn, model_row_id, &provider_id)?;
-    }
-
-    // Sub-combo validations: target combo is not the parent (no
-    // self-loop), the sub-combo exists, and adding it does not
-    // introduce a cycle in the sub-combo graph.
-    if let Some(sub_id) = sub_combo_id {
-        validate_sub_combo_target(conn, combo_id, sub_id)?;
-    }
-
-    // If account_id is provided, validate the account exists. (Only
-    // meaningful for flat targets — sub-combo targets never carry a
-    // pinned account; they expand at runtime by flattening the
-    // sub-combo's children.)
-    validate_account(conn, account_id, model_row_id)?;
-
-    // Look up the upstream `model_id` from the `models` table so we
-    // can stamp it onto `combo_targets.upstream_model_id` (Gate F1).
-    let upstream_model_id = fetch_upstream_model_id(conn, model_row_id)?;
-
-    // Programmatic duplicate check to prevent duplicate targets (since SQLite's UNIQUE
-    // constraint does not prevent duplicates when account_id is NULL).
+fn check_duplicate_target(conn: &Connection, input: &AddTargetInput) -> Result<()> {
     let target_exists: bool = crate::db_exists!(
         conn,
         "SELECT EXISTS( \
@@ -340,11 +289,11 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
            AND COALESCE(model_row_id, -1) = COALESCE(?4, -1) \
            AND COALESCE(sub_combo_id, -1) = COALESCE(?5, -1))",
         params![
-            combo_id.0,
-            provider_id.as_str(),
-            account_id.map(|a| a.0),
-            model_row_id.map(|m| m.0),
-            sub_combo_id.map(|c| c.0),
+            input.combo_id.0,
+            input.provider_id.as_str(),
+            input.account_id.map(|a| a.0),
+            input.model_row_id.map(|m| m.0),
+            input.sub_combo_id.map(|c| c.0),
         ],
         "check target exists"
     )
@@ -353,41 +302,81 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     if target_exists {
         return Err(CoreError::Validation(format!(
             "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
-            combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
+            input.combo_id.0, input.provider_id, input.account_id, input.model_row_id, input.sub_combo_id
         )));
     }
+    Ok(())
+}
 
-    let result = conn.execute(
+fn validate_combo_exists(conn: &Connection, combo_id: ComboId) -> Result<()> {
+    let combo_exists = crate::db_exists!(
+        conn,
+        "combos",
+        WHERE id = combo_id.0,
+        format!("check combo {} exists", combo_id.0)
+    )?;
+    if !combo_exists {
+        return Err(CoreError::ComboNotFound(combo_id.0));
+    }
+    Ok(())
+}
+
+fn validate_add_target(conn: &Connection, input: &AddTargetInput) -> Result<()> {
+    if input.model_row_id.is_some() == input.sub_combo_id.is_some() {
+        return Err(CoreError::Validation(
+            "must provide exactly one of model_row_id or sub_combo_id".into(),
+        ));
+    }
+
+    validate_combo_exists(conn, input.combo_id)?;
+
+    if let Some(model_row_id) = input.model_row_id {
+        validate_flat_target(conn, model_row_id, &input.provider_id)?;
+    }
+
+    if let Some(sub_id) = input.sub_combo_id {
+        validate_sub_combo_target(conn, input.combo_id, sub_id)?;
+    }
+
+    validate_account(conn, input.account_id, input.model_row_id)?;
+    check_duplicate_target(conn, input)
+}
+
+fn map_add_target_error(input: &AddTargetInput, err: rusqlite::Error) -> CoreError {
+    match crate::error::classify_sqlite_error(&err) {
+        crate::error::DbErrorKind::ForeignKeyViolation => CoreError::Validation(format!(
+            "provider_id or sub_combo_id does not exist: {}",
+            input.provider_id
+        )),
+        crate::error::DbErrorKind::UniqueViolation => CoreError::Validation(format!(
+            "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
+            input.combo_id.0, input.provider_id, input.account_id, input.model_row_id, input.sub_combo_id
+        )),
+        _ => crate::error::map_db_error_ctx("insert combo_target")(err),
+    }
+}
+
+pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTargetId> {
+    validate_add_target(conn, &input)?;
+
+    // Look up the upstream `model_id` from the `models` table so we
+    // can stamp it onto `combo_targets.upstream_model_id` (Gate F1).
+    let upstream_model_id = fetch_upstream_model_id(conn, input.model_row_id)?;
+
+    conn.execute(
         "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            combo_id.0,
-            provider_id.as_str(),
-            account_id.map(|a| a.0),
-            model_row_id.map(|m| m.0),
-            sub_combo_id.map(|c| c.0),
+            input.combo_id.0,
+            input.provider_id.as_str(),
+            input.account_id.map(|a| a.0),
+            input.model_row_id.map(|m| m.0),
+            input.sub_combo_id.map(|c| c.0),
             upstream_model_id,
-            priority_order,
+            input.priority_order,
         ],
-    );
-
-    match result {
-        Ok(_) => {}
-        Err(e) => match crate::error::classify_sqlite_error(&e) {
-            crate::error::DbErrorKind::ForeignKeyViolation => {
-                return Err(CoreError::Validation(format!(
-                    "provider_id or sub_combo_id does not exist: {provider_id}"
-                )));
-            }
-            crate::error::DbErrorKind::UniqueViolation => {
-                return Err(CoreError::Validation(format!(
-                    "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
-                    combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
-                )));
-            }
-            _ => return Err(crate::error::map_db_error_ctx("insert combo_target")(e)),
-        },
-    }
+    )
+    .map_err(|e| map_add_target_error(&input, e))?;
 
     Ok(ComboTargetId(conn.last_insert_rowid()))
 }
@@ -463,6 +452,23 @@ pub fn reconnect_orphan_targets(
 /// ([`resolve_combo_to_targets`]) is the authoritative cycle
 /// detector — it visits every node — and will catch anything this
 /// probe misses.
+fn fetch_sub_combo_ids(conn: &Connection, current_level: &[i64]) -> Result<Vec<i64>> {
+    let json_arr = serde_json::to_string(current_level)
+        .map_err(crate::error::map_db_error_ctx("Failed to serialize current_level"))?;
+    let query = "SELECT DISTINCT sub_combo_id FROM combo_targets \
+                 WHERE combo_id IN (SELECT value FROM json_each(?)) AND sub_combo_id IS NOT NULL";
+
+    let mut stmt = conn.prepare(query).map_err(crate::error::map_db_error)?;
+
+    let sub_ids: Vec<i64> = stmt
+        .query_map([json_arr], |r| r.get::<_, Option<i64>>(0))
+        .map_err(crate::error::map_db_error)?
+        .filter_map(|x| x.ok().flatten())
+        .collect();
+
+    Ok(sub_ids)
+}
+
 pub fn combo_in_chain(
     conn: &Connection,
     target_combo_id: ComboId,
@@ -480,28 +486,9 @@ pub fn combo_in_chain(
             break;
         }
 
-        let json_arr = serde_json::to_string(&current_level).map_err(
-            crate::error::map_db_error_ctx("Failed to serialize current_level"),
-        )?;
-        let query = "SELECT DISTINCT sub_combo_id FROM combo_targets \
-                     WHERE combo_id IN (SELECT value FROM json_each(?)) AND sub_combo_id IS NOT NULL";
-
-        let mut stmt = conn.prepare(query).map_err(crate::error::map_db_error)?;
-
-        let sub_ids: Vec<i64> = stmt
-            .query_map([json_arr], |r| r.get::<_, Option<i64>>(0))
-            .map_err(crate::error::map_db_error)?
-            .filter_map(|x| x.ok().flatten())
-            .collect();
-
-        if sub_ids.is_empty() {
-            return Ok(false);
-        }
-
-        for sid in &sub_ids {
-            if *sid == target_combo_id.0 {
-                return Ok(true);
-            }
+        let sub_ids = fetch_sub_combo_ids(conn, &current_level)?;
+        if sub_ids.contains(&target_combo_id.0) {
+            return Ok(true);
         }
 
         current_level = sub_ids;
@@ -723,6 +710,67 @@ pub fn update_target_cooldown_factor(
 /// Takes `&mut Connection` because rusqlite's transaction API
 /// requires it; the caller (typically a handler) gets the
 /// `&mut` via the `WriterGuard` deref on `db_pool().writer()`.
+fn validate_reorder_target_ids(
+    tx: &rusqlite::Transaction,
+    combo_id: ComboId,
+    ordered_ids: &[ComboTargetId],
+) -> Result<()> {
+    let mut stmt = tx
+        .prepare(combo_target_ids_select!("WHERE combo_id = ?1"))
+        .map_err(crate::error::map_db_error)?;
+    let mut current: Vec<i64> = stmt
+        .query_map(params![combo_id.0], |r| r.get::<_, i64>(0))
+        .map_err(crate::error::map_db_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(crate::error::map_db_error)?;
+
+    current.sort_unstable();
+    let mut incoming: Vec<i64> = ordered_ids.iter().map(|i| i.0).collect();
+    incoming.sort_unstable();
+    if current != incoming {
+        return Err(CoreError::Validation(
+            "target_ids must be a permutation of the combo's current targets".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn apply_target_priority_chunks(
+    tx: &rusqlite::Transaction,
+    combo_id: ComboId,
+    ordered_ids: &[ComboTargetId],
+) -> Result<()> {
+    if ordered_ids.is_empty() {
+        return Ok(());
+    }
+    const CHUNK_SIZE: usize = 400;
+    for (chunk_idx, chunk) in ordered_ids.chunks(CHUNK_SIZE).enumerate() {
+        let chunk_start_priority = chunk_idx * CHUNK_SIZE;
+        let vals = crate::batch::values_placeholders(chunk.len(), 2);
+        let query = format!(
+            "WITH updates(id, priority) AS (VALUES {vals}) \
+             UPDATE combo_targets SET priority_order = updates.priority \
+             FROM updates WHERE combo_targets.id = updates.id AND combo_targets.combo_id = ?"
+        );
+
+        let mut params = Vec::with_capacity(chunk.len() * 2 + 1);
+        for (i, tid) in chunk.iter().enumerate() {
+            params.push(rusqlite::types::Value::Integer(tid.0));
+            params.push(rusqlite::types::Value::Integer(
+                (chunk_start_priority + i + 1) as i64,
+            ));
+        }
+        params.push(rusqlite::types::Value::Integer(combo_id.0));
+
+        let mut stmt = tx
+            .prepare_cached(&query)
+            .map_err(crate::error::map_db_error)?;
+        stmt.execute(rusqlite::params_from_iter(params))
+            .map_err(crate::error::map_db_error)?;
+    }
+    Ok(())
+}
+
 pub fn reorder_targets(
     conn: &mut Connection,
     combo_id: ComboId,
@@ -732,66 +780,8 @@ pub fn reorder_targets(
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(crate::error::map_db_error)?;
 
-    // Pull the current target ids for this combo, scoped by `combo_id`
-    // so a stray id from another combo can never sneak into the
-    // validation set.
-    let mut stmt = tx
-        .prepare(combo_target_ids_select!("WHERE combo_id = ?1"))
-        .map_err(crate::error::map_db_error)?;
-    let current: Vec<i64> = stmt
-        .query_map(params![combo_id.0], |r| r.get::<_, i64>(0))
-        .map_err(crate::error::map_db_error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(crate::error::map_db_error)?;
-    drop(stmt);
-
-    // Multiset equality via sorted Vec<i64>: identical multisets
-    // produce identical sorted lists, so this check catches missing
-    // ids, duplicate ids, and extra ids all at once. The
-    // "not belonging to this combo" case falls out for free because
-    // the SELECT above is scoped by `combo_id`.
-    let mut current_sorted = current;
-    current_sorted.sort_unstable();
-    let mut incoming: Vec<i64> = ordered_ids.iter().map(|i| i.0).collect();
-    incoming.sort_unstable();
-    if current_sorted != incoming {
-        return Err(CoreError::Validation(
-            "target_ids must be a permutation of the combo's current targets".into(),
-        ));
-    }
-
-    // Assign priority_order = 1, 2, 3, ... in the order received. The
-    // `combo_id = ?3` guard is what closes the cross-combo rename
-    // hole even if the validation above is ever loosened.
-    {
-        if !ordered_ids.is_empty() {
-            let chunk_size = 400;
-            for (chunk_idx, chunk) in ordered_ids.chunks(chunk_size).enumerate() {
-                let chunk_start_priority = chunk_idx * chunk_size;
-                let vals = crate::batch::values_placeholders(chunk.len(), 2);
-                let query = format!(
-                    "WITH updates(id, priority) AS (VALUES {vals}) \
-                     UPDATE combo_targets SET priority_order = updates.priority \
-                     FROM updates WHERE combo_targets.id = updates.id AND combo_targets.combo_id = ?"
-                );
-
-                let mut params = Vec::with_capacity(chunk.len() * 2 + 1);
-                for (i, tid) in chunk.iter().enumerate() {
-                    params.push(rusqlite::types::Value::Integer(tid.0));
-                    params.push(rusqlite::types::Value::Integer(
-                        (chunk_start_priority + i + 1) as i64,
-                    ));
-                }
-                params.push(rusqlite::types::Value::Integer(combo_id.0));
-
-                let mut stmt = tx
-                    .prepare_cached(&query)
-                    .map_err(crate::error::map_db_error)?;
-                stmt.execute(rusqlite::params_from_iter(params))
-                    .map_err(crate::error::map_db_error)?;
-            }
-        }
-    }
+    validate_reorder_target_ids(&tx, combo_id, ordered_ids)?;
+    apply_target_priority_chunks(&tx, combo_id, ordered_ids)?;
     tx.commit().map_err(crate::error::map_db_error)?;
     Ok(())
 }
@@ -1155,12 +1145,41 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
     })
 }
 
-fn compute_effective_context_window_recursive(
+fn resolve_target_context_window(
     conn: &rusqlite::Connection,
-    combo_id: openproxy_types::ComboId,
+    model_row_id: Option<i64>,
+    sub_combo_id: Option<i64>,
     visited: &mut Vec<openproxy_types::ComboId>,
     depth: u32,
 ) -> openproxy_types::error::Result<Option<i64>> {
+    if let Some(sub_id) = sub_combo_id {
+        compute_effective_context_window_recursive(
+            conn,
+            openproxy_types::ComboId(sub_id),
+            visited,
+            depth + 1,
+        )
+    } else if let Some(row_id) = model_row_id {
+        let model_cw: Option<i64> = conn
+            .query_row(
+                model_context_length_select!("WHERE id = ?1"),
+                rusqlite::params![row_id],
+                |row| row.get(0),
+            )
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "get context_length for model {row_id}"
+            )))?;
+        Ok(model_cw)
+    } else {
+        Ok(None)
+    }
+}
+
+fn validate_recursion_depth(
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<()> {
     if depth > openproxy_types::MAX_SUB_COMBO_DEPTH {
         return Err(openproxy_types::error::CoreError::Validation(format!(
             "max sub-combo depth ({}) exceeded",
@@ -1174,6 +1193,49 @@ fn compute_effective_context_window_recursive(
         )));
     }
     visited.push(combo_id);
+    Ok(())
+}
+
+fn extract_and_resolve_window(
+    conn: &rusqlite::Connection,
+    row: &rusqlite::Row,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Option<i64>> {
+    let (model_row_id, sub_combo_id): (Option<i64>, Option<i64>) =
+        crate::map_row_tuple!(row => (0, 1)).map_err(crate::error::map_db_error)?;
+    resolve_target_context_window(conn, model_row_id, sub_combo_id, visited, depth)
+}
+
+fn aggregate_target_context_windows(
+    conn: &rusqlite::Connection,
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Option<i64>> {
+    let mut stmt = conn
+        .prepare(combo_target_model_sub_select!("WHERE ct.combo_id = ?1"))
+        .map_err(crate::error::map_db_error)?;
+    let mut rows = stmt
+        .query(rusqlite::params![combo_id.0])
+        .map_err(crate::error::map_db_error)?;
+
+    let mut min_window: Option<i64> = None;
+    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
+        if let Some(cw) = extract_and_resolve_window(conn, row, visited, depth)? {
+            min_window = Some(min_window.map_or(cw, |min| std::cmp::min(min, cw)));
+        }
+    }
+    Ok(min_window)
+}
+
+fn compute_effective_context_window_recursive(
+    conn: &rusqlite::Connection,
+    combo_id: openproxy_types::ComboId,
+    visited: &mut Vec<openproxy_types::ComboId>,
+    depth: u32,
+) -> openproxy_types::error::Result<Option<i64>> {
+    validate_recursion_depth(combo_id, visited, depth)?;
 
     let cw: Option<i64> = conn
         .query_row(
@@ -1185,55 +1247,15 @@ fn compute_effective_context_window_recursive(
             "get context_window for combo {}",
             combo_id.0
         )))?;
-    if cw.is_some() {
-        visited.pop();
-        return Ok(cw);
-    }
 
-    let mut stmt = conn
-        .prepare(combo_target_model_sub_select!("WHERE ct.combo_id = ?1"))
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(rusqlite::params![combo_id.0])
-        .map_err(crate::error::map_db_error)?;
-
-    let mut min_window: Option<i64> = None;
-    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
-        let (model_row_id, sub_combo_id): (Option<i64>, Option<i64>) =
-            crate::map_row_tuple!(row => (0, 1)).map_err(crate::error::map_db_error)?;
-
-        let target_cw = if let Some(sub_id) = sub_combo_id {
-            compute_effective_context_window_recursive(
-                conn,
-                openproxy_types::ComboId(sub_id),
-                visited,
-                depth + 1,
-            )?
-        } else if let Some(row_id) = model_row_id {
-            let model_cw: Option<i64> = conn
-                .query_row(
-                    model_context_length_select!("WHERE id = ?1"),
-                    rusqlite::params![row_id],
-                    |row| row.get(0),
-                )
-                .map_err(crate::error::map_db_error_ctx(format!(
-                    "get context_length for model {row_id}"
-                )))?;
-            model_cw
-        } else {
-            None
-        };
-
-        if let Some(cw) = target_cw {
-            min_window = match min_window {
-                Some(min) => Some(std::cmp::min(min, cw)),
-                None => Some(cw),
-            };
-        }
-    }
+    let res = if cw.is_some() {
+        Ok(cw)
+    } else {
+        aggregate_target_context_windows(conn, combo_id, visited, depth)
+    };
 
     visited.pop();
-    Ok(min_window)
+    res
 }
 
 pub fn compute_effective_context_window(
@@ -1250,18 +1272,7 @@ pub fn resolve_combo_to_targets(
     visited: &mut Vec<ComboId>,
     depth: u32,
 ) -> Result<Vec<ComboTarget>> {
-    if depth > MAX_SUB_COMBO_DEPTH {
-        return Err(CoreError::Validation(format!(
-            "max sub-combo depth ({MAX_SUB_COMBO_DEPTH}) exceeded"
-        )));
-    }
-    if visited.contains(&combo_id) {
-        return Err(CoreError::Validation(format!(
-            "cyclic combo detected at id {}",
-            combo_id.0
-        )));
-    }
-    visited.push(combo_id);
+    validate_recursion_depth(combo_id, visited, depth)?;
 
     let targets = list_targets(conn, combo_id)?;
     let mut flat = Vec::new();
@@ -1277,36 +1288,51 @@ pub fn resolve_combo_to_targets(
     Ok(flat)
 }
 
+fn fetch_healthy_accounts(conn: &rusqlite::Connection, provider_id: &ProviderId) -> Result<Vec<AccountId>> {
+    let mut stmt = conn
+        .prepare(account_healthy_ids_select!(
+            "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
+        ))
+        .map_err(crate::error::map_db_error)?;
+    let rows = stmt
+        .query_map(params![provider_id.as_str()], |r| r.get::<_, i64>(0))
+        .map_err(crate::error::map_db_error)?;
+    let mut accounts = Vec::new();
+    for r in rows.flatten() {
+        accounts.push(AccountId(r));
+    }
+    Ok(accounts)
+}
+
+fn expand_single_target_rotation(
+    conn: &rusqlite::Connection,
+    target: ComboTarget,
+    out: &mut Vec<ComboTarget>,
+) -> Result<()> {
+    if target.account_id.is_some() || target.sub_combo_id.is_some() {
+        out.push(target);
+        return Ok(());
+    }
+    let healthy_accounts = fetch_healthy_accounts(conn, &target.provider_id)?;
+    if healthy_accounts.is_empty() {
+        out.push(target);
+    } else {
+        for acc_id in healthy_accounts {
+            let mut ct = target.clone();
+            ct.account_id = Some(acc_id);
+            out.push(ct);
+        }
+    }
+    Ok(())
+}
+
 pub fn expand_account_rotation(
     conn: &rusqlite::Connection,
     targets: Vec<ComboTarget>,
 ) -> Result<Vec<ComboTarget>> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(targets.len());
     for t in targets {
-        if t.account_id.is_some() || t.sub_combo_id.is_some() {
-            out.push(t);
-            continue;
-        }
-        let mut stmt = conn
-            .prepare(account_healthy_ids_select!(
-                "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
-            ))
-            .map_err(crate::error::map_db_error)?;
-        let mut rows = stmt
-            .query(params![t.provider_id.as_str()])
-            .map_err(crate::error::map_db_error)?;
-        let mut count = 0;
-        while let Some(r) = rows.next().map_err(crate::error::map_db_error)? {
-            let mut ct = t.clone();
-            ct.account_id = Some(AccountId(
-                r.get::<_, i64>(0).map_err(crate::error::map_db_error)?,
-            ));
-            out.push(ct);
-            count += 1;
-        }
-        if count == 0 {
-            out.push(t);
-        }
+        expand_single_target_rotation(conn, t, &mut out)?;
     }
     Ok(out)
 }

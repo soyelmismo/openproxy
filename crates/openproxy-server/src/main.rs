@@ -32,6 +32,26 @@ use std::env;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+fn load_server_config() -> anyhow::Result<AppConfig> {
+    let config_path = env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
+    let config = AppConfig::load_or_default(&config_path)?;
+    openproxy_server::telemetry::init(&config.logging)?;
+    Ok(config)
+}
+
+async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<()> {
+    let bind_addr = state.config().server.bind.clone();
+    let app = openproxy_server::router::build_router(state);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!(addr = %bind_addr, "openproxy listening");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
     // 0. Install rustls crypto provider. `ring` is pure-Rust and
@@ -46,27 +66,7 @@ async fn main() -> anyhow::Result<()> {
     // automatically determine the process-level CryptoProvider`.
     openproxy_core::install_rustls_crypto_provider();
 
-    // 1. Load config
-    let config_path = env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
-    let config = AppConfig::load_or_default(&config_path)?;
-
-    // 2. Init telemetry
-    openproxy_server::telemetry::init(&config.logging)?;
-
-    // 3. Build state
+    let config = load_server_config()?;
     let state = openproxy_server::state::AppState::new(config)?;
-
-    // 4. Build router (state is moved into the router).
-    let bind_addr = state.config().server.bind.clone();
-    let app = openproxy_server::router::build_router(state);
-
-    // 5. Bind and serve
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!(addr = %bind_addr, "openproxy listening");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
-    Ok(())
+    run_server(state).await
 }

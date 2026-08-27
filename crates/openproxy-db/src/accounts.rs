@@ -300,39 +300,35 @@ pub fn decrypt_oauth_provider_specific(
     }
 }
 
+fn resolve_oauth_expiry(expires_at: Option<&str>) -> String {
+    expires_at.map_or_else(
+        || {
+            (chrono::Utc::now() + chrono::Duration::seconds(DEFAULT_EXPIRES_IN_SECS))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string()
+        },
+        str::to_string,
+    )
+}
+
 pub fn store_oauth_tokens(
     conn: &Connection,
     id: AccountId,
     master_key: &MasterKey,
     params: StoreOAuthTokensParams<'_>,
 ) -> Result<()> {
-    let StoreOAuthTokensParams {
-        access_token,
-        refresh_token,
-        token_type,
-        expires_at,
-        scope,
-        provider_specific,
-        email,
-    } = params;
-    let access_blob = master_key.encrypt(access_token)?;
-    let refresh_blob = refresh_token.map(|rt| master_key.encrypt(rt)).transpose()?;
+    let access_blob = master_key.encrypt(params.access_token)?;
+    let refresh_blob = params
+        .refresh_token
+        .map(|rt| master_key.encrypt(rt))
+        .transpose()?;
 
-    let provider_specific_encrypted = provider_specific
+    let provider_specific_encrypted = params
+        .provider_specific
         .map(|ps| encrypt_oauth_provider_specific(ps, master_key))
         .transpose()?;
 
-    let expires_at_owned;
-    let expires_at_resolved = match expires_at {
-        Some(ts) => Some(ts),
-        None => {
-            expires_at_owned = (chrono::Utc::now()
-                + chrono::Duration::seconds(DEFAULT_EXPIRES_IN_SECS))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string();
-            Some(expires_at_owned.as_str())
-        }
-    };
+    let expires_at_resolved = resolve_oauth_expiry(params.expires_at);
 
     let affected = conn
         .execute(
@@ -350,11 +346,11 @@ pub fn store_oauth_tokens(
             params![
                 access_blob,
                 refresh_blob,
-                token_type,
+                params.token_type,
                 expires_at_resolved,
-                scope,
+                params.scope,
                 provider_specific_encrypted,
-                email,
+                params.email,
                 id.0,
             ],
         )
@@ -537,52 +533,71 @@ pub type AccountsMetaMaps = (
     std::collections::HashMap<i64, String>,
 );
 
-pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
-    if account_ids.is_empty() {
-        return Ok((
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-        ));
+fn extract_ag_meta(oauth_prov: Option<&str>) -> Option<String> {
+    let oauth_json = oauth_prov?;
+    let meta: serde_json::Value = serde_json::from_str(oauth_json).ok()?;
+    let pid = meta
+        .get("projectId")
+        .or_else(|| meta.get("project_id"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())?;
+    Some(pid.to_string())
+}
+
+fn extract_json_field(val: &serde_json::Value, primary: &str, secondary: &str) -> Option<String> {
+    val.get(primary)
+        .or_else(|| val.get(secondary))
+        .and_then(|v| v.as_str())
+        .map(std::string::ToString::to_string)
+}
+
+fn extract_kiro_meta(extra_json: Option<&str>) -> Option<KiroMeta> {
+    let cfg_str = extra_json?;
+    let val: serde_json::Value = serde_json::from_str(cfg_str).ok()?;
+    let region = extract_json_field(&val, "region", "aws_region");
+    let profile_arn = extract_json_field(&val, "profile_arn", "aws_role_arn");
+
+    if region.is_some() || profile_arn.is_some() {
+        Some(KiroMeta {
+            region,
+            profile_arn,
+        })
+    } else {
+        None
     }
+}
 
-    type AccountRowTuple = (
-        i64,
-        Option<Vec<u8>>,
-        Option<String>,
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
+type AccountRowTuple = (
+    i64,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
-    let rows: Vec<AccountRowTuple> = crate::batch::query_in_chunks_by(
-        conn,
-        account_meta_select!("WHERE id IN ({})"),
-        account_ids,
-        crate::batch::DEFAULT_CHUNK_SIZE,
-        |id| id.0,
-        |r| crate::map_row_tuple!(r => (0, 1, 2, 3, 4, 5, 6, 7, 8)),
-    )
-    .map_err(crate::error::map_db_error_ctx("batch query accounts"))?;
-
+fn populate_account_meta_maps(
+    rows: Vec<AccountRowTuple>,
+) -> (
+    std::collections::HashMap<i64, RawAccount>,
+    std::collections::HashMap<i64, KiroMeta>,
+    std::collections::HashMap<i64, String>,
+) {
     let mut raw_map = std::collections::HashMap::with_capacity(rows.len());
     let mut kiro_map = std::collections::HashMap::new();
     let mut ag_map = std::collections::HashMap::new();
 
     for (id_val, api_key, label, access, refresh, expires, oauth_prov, _email, extra_json) in rows {
-        if let Some(ref oauth_json) = oauth_prov
-            && let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json)
-            && let Some(pid) = meta
-                .get("projectId")
-                .or_else(|| meta.get("project_id"))
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-        {
-            ag_map.insert(id_val, pid.to_string());
+        if let Some(pid) = extract_ag_meta(oauth_prov.as_deref()) {
+            ag_map.insert(id_val, pid);
+        }
+
+        if let Some(kiro) = extract_kiro_meta(extra_json.as_deref()) {
+            kiro_map.insert(id_val, kiro);
         }
 
         raw_map.insert(
@@ -598,37 +613,44 @@ pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result
                 quota_model_details: None,
             },
         );
-
-        if let Some(cfg_str) = extra_json
-            && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
-        {
-            let region = val
-                .get("region")
-                .or(val.get("aws_region"))
-                .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string);
-            let profile_arn = val
-                .get("profile_arn")
-                .or(val.get("aws_role_arn"))
-                .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string);
-            if region.is_some() || profile_arn.is_some() {
-                kiro_map.insert(
-                    id_val,
-                    KiroMeta {
-                        region,
-                        profile_arn,
-                    },
-                );
-            }
-        }
     }
 
+    (raw_map, kiro_map, ag_map)
+}
+
+fn validate_all_accounts_found(
+    account_ids: &[AccountId],
+    raw_map: &std::collections::HashMap<i64, RawAccount>,
+) -> Result<()> {
     for id in account_ids {
         if !raw_map.contains_key(&id.0) {
             return Err(CoreError::Validation(format!("account {} not found", id.0)));
         }
     }
+    Ok(())
+}
+
+pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
+    if account_ids.is_empty() {
+        return Ok((
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        ));
+    }
+
+    let rows: Vec<AccountRowTuple> = crate::batch::query_in_chunks_by(
+        conn,
+        account_meta_select!("WHERE id IN ({})"),
+        account_ids,
+        crate::batch::DEFAULT_CHUNK_SIZE,
+        |id| id.0,
+        |r| crate::map_row_tuple!(r => (0, 1, 2, 3, 4, 5, 6, 7, 8)),
+    )
+    .map_err(crate::error::map_db_error_ctx("batch query accounts"))?;
+
+    let (raw_map, kiro_map, ag_map) = populate_account_meta_maps(rows);
+    validate_all_accounts_found(account_ids, &raw_map)?;
 
     Ok((raw_map, kiro_map, ag_map))
 }

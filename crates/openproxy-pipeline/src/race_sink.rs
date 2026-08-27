@@ -65,34 +65,36 @@ impl RaceSink {
         }
     }
 
-    async fn send(&self, worker_id: usize, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
-        let current = self.winner.load(Ordering::Acquire);
-        if current != 0 && current != worker_id + 1 {
-            return Err(StreamSinkError::Lost);
-        }
-
-        if current == 0 {
-            match self.winner.compare_exchange(
-                0,
-                worker_id + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    for (idx, token) in self.worker_tokens.iter().enumerate() {
-                        if idx != worker_id {
-                            token.cancel();
-                        }
-                    }
-                }
-                Err(existing) => {
-                    if existing != worker_id + 1 {
-                        return Err(StreamSinkError::Lost);
-                    }
-                }
+    fn cancel_other_workers(&self, winner_id: usize) {
+        for (idx, token) in self.worker_tokens.iter().enumerate() {
+            if idx != winner_id {
+                token.cancel();
             }
         }
+    }
 
+    fn try_register_winner(&self, target: usize, worker_id: usize) -> Result<(), StreamSinkError> {
+        match self.winner.compare_exchange(0, target, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                self.cancel_other_workers(worker_id);
+                Ok(())
+            }
+            Err(existing) if existing == target => Ok(()),
+            Err(_) => Err(StreamSinkError::Lost),
+        }
+    }
+
+    fn claim_winner(&self, worker_id: usize) -> Result<(), StreamSinkError> {
+        let target = worker_id + 1;
+        match self.winner.load(Ordering::Acquire) {
+            0 => self.try_register_winner(target, worker_id),
+            curr if curr == target => Ok(()),
+            _ => Err(StreamSinkError::Lost),
+        }
+    }
+
+    async fn send(&self, worker_id: usize, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
+        self.claim_winner(worker_id)?;
         self.inner
             .send(chunk)
             .await

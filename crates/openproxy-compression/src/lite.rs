@@ -9,17 +9,43 @@ type Messages = Vec<OpenAIMessage>;
 
 // ─── Technique 1: Collapse whitespace ───────────────────────────────────────
 
+fn collapse_msg_whitespace(msg: &mut OpenAIMessage) -> bool {
+    mutate_message_text(msg, |text| match normalize_message_whitespace(text) {
+        Cow::Borrowed(_) => None,
+        Cow::Owned(normalized) => Some(normalized),
+    })
+}
+
 pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if mutate_message_text(msg, |text| match normalize_message_whitespace(text) {
-            Cow::Borrowed(_) => None,
-            Cow::Owned(normalized) => Some(normalized),
-        }) {
+        if collapse_msg_whitespace(msg) {
             applied.push("lite::collapse_whitespace");
         }
     }
     applied
+}
+
+fn process_whitespace_char(
+    ch: char,
+    out: &mut String,
+    newline_run: &mut usize,
+    line_start: &mut usize,
+) {
+    if ch == '\n' {
+        *newline_run += 1;
+        if *newline_run <= 2 {
+            trim_trailing_ws_in_place(out, *line_start);
+            out.push('\n');
+            *line_start = out.len();
+        }
+    } else {
+        if *newline_run > 0 {
+            *newline_run = 0;
+            *line_start = out.len();
+        }
+        out.push(ch);
+    }
 }
 
 /// Collapse 3+ consecutive newlines to 2, and trim trailing whitespace
@@ -35,32 +61,31 @@ fn normalize_message_whitespace(s: &str) -> Cow<'_, str> {
 
     let mut out = String::with_capacity(s.len());
     let mut newline_run: usize = 0;
-    // Index in `out` where the current line starts (for trailing-ws trim).
     let mut line_start: usize = 0;
 
     for ch in s.chars() {
-        if ch == '\n' {
-            newline_run += 1;
-            if newline_run <= 2 {
-                // Trim trailing whitespace of the line we just finished.
-                trim_trailing_ws_in_place(&mut out, line_start);
-                out.push('\n');
-                line_start = out.len();
-            }
-            // If newline_run > 2, we suppress the newline (collapse).
-            continue;
-        }
-        if newline_run > 0 {
-            // We were in a (suppressed or not) newline run; the next
-            // non-newline char starts a fresh line.
-            newline_run = 0;
-            line_start = out.len();
-        }
-        out.push(ch);
+        process_whitespace_char(ch, &mut out, &mut newline_run, &mut line_start);
     }
     // Trim trailing whitespace of the last line (no trailing newline).
     trim_trailing_ws_in_place(&mut out, line_start);
     Cow::Owned(out)
+}
+
+fn check_byte_normalization(
+    b: u8,
+    newline_run: &mut usize,
+    line_has_trailing_ws: &mut bool,
+) -> Option<bool> {
+    if b == b'\n' {
+        if *line_has_trailing_ws || *newline_run >= 2 {
+            return Some(true);
+        }
+        *newline_run += 1;
+    } else {
+        *newline_run = 0;
+        *line_has_trailing_ws = b == b' ' || b == b'\t';
+    }
+    None
 }
 
 /// Quick check: does `s` need normalization? Returns true if there's a
@@ -70,22 +95,10 @@ fn needs_normalization(s: &str) -> bool {
     let mut newline_run = 0;
     let mut line_has_trailing_ws = false;
     for &b in s.as_bytes() {
-        if b == b'\n' {
-            if line_has_trailing_ws {
-                return true;
-            }
-            newline_run += 1;
-            if newline_run >= 3 {
-                return true;
-            }
-        } else {
-            if newline_run > 0 {
-                newline_run = 0;
-            }
-            // Re-evaluate trailing-ws state based on the current byte
-            // (always overwrites the previous value, so no need to clear
-            // it in the newline-run branch above).
-            line_has_trailing_ws = b == b' ' || b == b'\t';
+        if let Some(res) =
+            check_byte_normalization(b, &mut newline_run, &mut line_has_trailing_ws)
+        {
+            return res;
         }
     }
     // Check trailing whitespace on the last line (no newline at EOF).
@@ -140,32 +153,31 @@ pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<&'static str> {
 
 const MAX_TOOL_CHARS: usize = 2000;
 
+fn truncate_tool_text(text: &str) -> Option<String> {
+    let mut cut_byte = None;
+    let mut total_chars = 0;
+    for (i, _) in text.char_indices() {
+        if total_chars == MAX_TOOL_CHARS {
+            cut_byte = Some(i);
+        }
+        total_chars += 1;
+    }
+    if total_chars > MAX_TOOL_CHARS {
+        let cut = cut_byte.unwrap_or(text.len());
+        Some(format!(
+            "{}…[truncated {} chars]",
+            &text[..cut],
+            total_chars - MAX_TOOL_CHARS
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if msg.role != "tool" {
-            continue;
-        }
-        if mutate_message_text(msg, |text| {
-            let mut cut_byte = None;
-            let mut total_chars = 0;
-            for (i, _) in text.char_indices() {
-                if total_chars == MAX_TOOL_CHARS {
-                    cut_byte = Some(i);
-                }
-                total_chars += 1;
-            }
-            if total_chars > MAX_TOOL_CHARS {
-                let cut = cut_byte.unwrap_or(text.len());
-                Some(format!(
-                    "{}…[truncated {} chars]",
-                    &text[..cut],
-                    total_chars - MAX_TOOL_CHARS
-                ))
-            } else {
-                None
-            }
-        }) {
+        if msg.role == "tool" && mutate_message_text(msg, truncate_tool_text) {
             applied.push("lite::compress_tool_results");
         }
     }
@@ -174,79 +186,88 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
 
 // ─── Technique 4: Remove redundant consecutive messages ────────────────────
 
+fn message_has_tools(msg: &OpenAIMessage) -> bool {
+    msg.tool_calls.is_some() || msg.tool_call_id.is_some()
+}
+
+fn messages_are_redundant_duplicates(prev: &OpenAIMessage, curr: &OpenAIMessage) -> bool {
+    if message_has_tools(prev) || message_has_tools(curr) {
+        return false;
+    }
+    let prev_content = prev.content.as_ref().and_then(|c| c.as_str()).unwrap_or("");
+    let curr_content = curr.content.as_ref().and_then(|c| c.as_str()).unwrap_or("");
+    prev.role == curr.role && !prev_content.is_empty() && prev_content == curr_content
+}
+
 pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     let mut i = 1;
     while i < msgs.len() {
-        let prev = &msgs[i - 1];
-        let curr = &msgs[i];
-
-        // Never remove messages that contain tool calls or are tool responses,
-        // because their presence is structurally required by the API.
-        if prev.tool_calls.is_some()
-            || curr.tool_calls.is_some()
-            || prev.tool_call_id.is_some()
-            || curr.tool_call_id.is_some()
-        {
-            i += 1;
-            continue;
-        }
-
-        let prev_content = prev.content.as_ref().and_then(|c| c.as_str()).unwrap_or("");
-        let curr_content = curr.content.as_ref().and_then(|c| c.as_str()).unwrap_or("");
-        if prev.role == curr.role && !prev_content.is_empty() && prev_content == curr_content {
+        if messages_are_redundant_duplicates(&msgs[i - 1], &msgs[i]) {
             applied.push("lite::remove_redundant");
             msgs.remove(i);
-            continue;
+        } else {
+            i += 1;
         }
-        i += 1;
     }
     applied
 }
 
 // ─── Technique 5: Replace image URLs with placeholders ─────────────────────
 
+fn extract_data_image_format(url: &str) -> &str {
+    let Some(rest) = url.strip_prefix("data:image/") else {
+        return "unknown";
+    };
+    let fmt = rest.split_once(';').map_or(rest, |(f, _)| f);
+    if fmt.is_empty() {
+        "unknown"
+    } else {
+        fmt
+    }
+}
+
+fn try_replace_image_part(part: &mut serde_json::Value) -> bool {
+    let fmt = {
+        let url = part
+            .get("image_url")
+            .and_then(|v| v.get("url"))
+            .and_then(|v| v.as_str());
+
+        let Some(url) = url else {
+            return false;
+        };
+        if !url.starts_with("data:image/") {
+            return false;
+        }
+
+        extract_data_image_format(url).to_string()
+    };
+
+    let Some(obj) = part.as_object_mut() else {
+        return false;
+    };
+
+    *obj = serde_json::json!({
+        "type": "text",
+        "text": format!("[image: {fmt}]")
+    })
+    .as_object()
+    .cloned()
+    .unwrap_or_default();
+
+    true
+}
+
 pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content
-            && let Some(parts) = content.as_array_mut()
-        {
-            for part in parts.iter_mut() {
-                let is_data_image = part
-                    .get("image_url")
-                    .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|url| url.starts_with("data:image/"));
-                if !is_data_image {
-                    continue;
-                }
-                let fmt = part
-                    .get("image_url")
-                    .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str())
-                    .map_or_else(
-                        || "unknown".to_string(),
-                        |url| {
-                            let semi = url.find(';').unwrap_or(url.len());
-                            let fmt = &url["data:image/".len()..semi];
-                            if fmt.is_empty() {
-                                "unknown".to_string()
-                            } else {
-                                fmt.to_string()
-                            }
-                        },
-                    );
-                if let Some(obj) = part.as_object_mut() {
-                    *obj = serde_json::json!({
-                        "type": "text",
-                        "text": format!("[image: {}]", fmt)
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
-                    applied.push("lite::replace_image");
-                }
+        let Some(parts) = msg.content.as_mut().and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        for part in parts.iter_mut() {
+            if try_replace_image_part(part) {
+                applied.push("lite::replace_image");
             }
         }
     }
@@ -255,27 +276,30 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
 
 // ─── Technique 6: Clean invisible unicode & BOM ────────────────────────────
 
+fn has_invisible_or_crlf(text: &str) -> bool {
+    const INVISIBLE: [char; 6] = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0', '\r'];
+    text.chars().any(|c| INVISIBLE.contains(&c))
+}
+
+fn clean_text_unicode(text: &str) -> Option<String> {
+    if !has_invisible_or_crlf(text) {
+        return None;
+    }
+    let cleaned = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
+    if cleaned != text {
+        Some(cleaned)
+    } else {
+        None
+    }
+}
+
 pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if mutate_message_text(msg, |text| {
-            if text.contains('\u{200B}')
-                || text.contains('\u{200C}')
-                || text.contains('\u{200D}')
-                || text.contains('\u{FEFF}')
-                || text.contains('\0')
-                || text.contains('\r')
-            {
-                let cleaned = text
-                    .replace("\r\n", "\n")
-                    .replace('\r', "\n")
-                    .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
-                if cleaned != text {
-                    return Some(cleaned);
-                }
-            }
-            None
-        }) {
+        if mutate_message_text(msg, clean_text_unicode) {
             applied.push("lite::clean_unicode");
         }
     }
@@ -302,6 +326,17 @@ pub fn strip_ansi_escapes(msgs: &mut Messages) -> Vec<&'static str> {
     applied
 }
 
+fn skip_ansi_csi(bytes: &[u8], mut i: usize) -> usize {
+    i += 2;
+    while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+        i += 1;
+    }
+    if i < bytes.len() {
+        i += 1;
+    }
+    i
+}
+
 fn strip_ansi_string(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -309,13 +344,7 @@ fn strip_ansi_string(text: &str) -> String {
     while i < bytes.len() {
         if bytes[i] == 0x1B {
             if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                i += 2;
-                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
+                i = skip_ansi_csi(bytes, i);
             } else {
                 i += 1;
             }
@@ -329,50 +358,61 @@ fn strip_ansi_string(text: &str) -> String {
 
 // ─── Technique 8: Compact formatted multiline JSON ────────────────────────
 
+fn process_json_byte(b: u8, out: &mut Vec<u8>, in_string: &mut bool, escaped: &mut bool) {
+    if *in_string {
+        out.push(b);
+        if *escaped {
+            *escaped = false;
+        } else if b == b'\\' {
+            *escaped = true;
+        } else if b == b'"' {
+            *in_string = false;
+        }
+    } else if b == b'"' {
+        *in_string = true;
+        out.push(b);
+    } else if !b.is_ascii_whitespace() {
+        out.push(b);
+    }
+}
+
 fn minify_json(json: &str) -> String {
     let mut out = Vec::with_capacity(json.len());
     let mut in_string = false;
     let mut escaped = false;
 
     for &b in json.as_bytes() {
-        if in_string {
-            out.push(b);
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == b'"' {
-                in_string = false;
-            }
-        } else if b == b'"' {
-            in_string = true;
-            out.push(b);
-        } else if !b.is_ascii_whitespace() {
-            out.push(b);
-        }
+        process_json_byte(b, &mut out, &mut in_string, &mut escaped);
     }
 
     String::from_utf8(out).unwrap_or_else(|_| json.to_string())
 }
 
+fn is_json_candidate(trimmed: &str) -> bool {
+    let has_delims = (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'));
+    has_delims && (trimmed.contains('\n') || trimmed.contains("  "))
+}
+
+fn try_compact_json_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !is_json_candidate(trimmed) {
+        return None;
+    }
+    let minified = minify_json(trimmed);
+    if minified.len() < text.len()
+        && serde_json::from_str::<&serde_json::value::RawValue>(&minified).is_ok()
+    {
+        Some(minified)
+    } else {
+        None
+    }
+}
+
 pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if mutate_message_text(msg, |text| {
-            let trimmed = text.trim();
-            if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
-                || (trimmed.starts_with('[') && trimmed.ends_with(']')))
-                && (trimmed.contains('\n') || trimmed.contains("  "))
-            {
-                let minified = minify_json(trimmed);
-                if minified.len() < text.len()
-                    && serde_json::from_str::<&serde_json::value::RawValue>(&minified).is_ok()
-                {
-                    return Some(minified);
-                }
-            }
-            None
-        }) {
+        if mutate_message_text(msg, try_compact_json_text) {
             applied.push("lite::compact_json");
         }
     }
@@ -398,28 +438,39 @@ pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
     applied
 }
 
-fn collapse_separator_runs(s: &str) -> String {
-    let sep_chars = *b"-=*#_~";
-    let bytes = s.as_bytes();
-    let mut has_run = false;
-    for &sep in &sep_chars {
+const SEPARATOR_CHARS: &[u8; 6] = b"-=*#_~";
+
+fn has_long_separator_run(bytes: &[u8]) -> bool {
+    for &sep in SEPARATOR_CHARS {
         let mut count = 0;
         for &b in bytes {
             if b == sep {
                 count += 1;
                 if count >= 12 {
-                    has_run = true;
-                    break;
+                    return true;
                 }
             } else {
                 count = 0;
             }
         }
-        if has_run {
-            break;
-        }
     }
-    if !has_run {
+    false
+}
+
+fn flush_char_run(out: &mut String, ch: char, count: usize) {
+    const SEPS: [char; 6] = ['-', '=', '*', '#', '_', '~'];
+    let repeat_count = if SEPS.contains(&ch) && count >= 12 {
+        10
+    } else {
+        count
+    };
+    for _ in 0..repeat_count {
+        out.push(ch);
+    }
+}
+
+fn collapse_separator_runs(s: &str) -> String {
+    if !has_long_separator_run(s.as_bytes()) {
         return s.to_string();
     }
 
@@ -427,31 +478,20 @@ fn collapse_separator_runs(s: &str) -> String {
     let mut cur_char: Option<char> = None;
     let mut cur_count: usize = 0;
 
-    let flush = |out: &mut String, cur_char: Option<char>, cur_count: usize| {
-        if let Some(ch) = cur_char {
-            let is_sep = ['-', '=', '*', '#', '_', '~'].contains(&ch);
-            if is_sep && cur_count >= 12 {
-                for _ in 0..10 {
-                    out.push(ch);
-                }
-            } else {
-                for _ in 0..cur_count {
-                    out.push(ch);
-                }
-            }
-        }
-    };
-
     for ch in s.chars() {
-        if Some(ch) == cur_char {
+        if cur_char == Some(ch) {
             cur_count += 1;
         } else {
-            flush(&mut out, cur_char, cur_count);
+            if let Some(prev_ch) = cur_char {
+                flush_char_run(&mut out, prev_ch, cur_count);
+            }
             cur_char = Some(ch);
             cur_count = 1;
         }
     }
-    flush(&mut out, cur_char, cur_count);
+    if let Some(prev_ch) = cur_char {
+        flush_char_run(&mut out, prev_ch, cur_count);
+    }
     out
 }
 

@@ -75,29 +75,169 @@ pub fn insert(
         )
         .map_err(crate::error::map_db_error_ctx("insert notification"))?;
     if changed == 0 {
-        // Dedup hit — find the existing row id. We match on the same
-        // triple the unique index uses so we resolve to exactly the row
-        // that blocked the insert.
-        let existing: Option<i64> = if let Some(dk) = dedup_key {
-            conn.query_row(
-                notification_id_select!(
-                    "WHERE kind = ?1 AND dedup_key = ?2 AND date(created_at) = date('now') \
-                     LIMIT 1"
-                ),
-                params![kind, dk],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(crate::error::map_db_error_ctx(
-                "query dedup notification id",
-            ))?
-        } else {
-            None
-        };
-        Ok(existing)
+        dedup_notification_id(conn, kind, dedup_key)
     } else {
         Ok(Some(conn.last_insert_rowid()))
     }
+}
+
+fn dedup_notification_id(
+    conn: &Connection,
+    kind: &str,
+    dedup_key: Option<&str>,
+) -> Result<Option<i64>> {
+    let Some(dk) = dedup_key else {
+        return Ok(None);
+    };
+    conn.query_row(
+        notification_id_select!(
+            "WHERE kind = ?1 AND dedup_key = ?2 AND date(created_at) = date('now') \
+             LIMIT 1"
+        ),
+        params![kind, dk],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(crate::error::map_db_error_ctx(
+        "query dedup notification id",
+    ))
+}
+
+fn build_notification_chunk_params(
+    kind: &str,
+    chunk: &[(serde_json::Value, Option<String>, Option<String>)],
+) -> Result<Vec<rusqlite::types::Value>> {
+    let mut params = Vec::with_capacity(chunk.len() * 4);
+    for row in chunk {
+        params.push(kind.to_owned().into());
+        let payload_str = serde_json::to_string(&row.0).map_err(|e| {
+            openproxy_types::error::CoreError::Validation(format!(
+                "serialize notification payload: {e}"
+            ))
+        })?;
+        params.push(payload_str.into());
+        params.push(row.1.as_ref().map_or(rusqlite::types::Value::Null, |k| k.to_owned().into()));
+        params.push(row.2.as_ref().map_or(rusqlite::types::Value::Null, |p| p.to_owned().into()));
+    }
+    Ok(params)
+}
+
+fn collect_inserted_ids(
+    mut rows: rusqlite::Rows<'_>,
+) -> Result<(std::collections::HashMap<String, i64>, Vec<i64>)> {
+    let mut inserted_ids_by_dedup = std::collections::HashMap::new();
+    let mut inserted_ids_no_dedup = Vec::new();
+
+    while let Some(r) = rows.next().map_err(crate::error::map_db_error)? {
+        let id: i64 = r.get(0).map_err(crate::error::map_db_error)?;
+        let dedup_key: Option<String> = r.get(1).map_err(crate::error::map_db_error)?;
+        if let Some(dk) = dedup_key {
+            inserted_ids_by_dedup.insert(dk, id);
+        } else {
+            inserted_ids_no_dedup.push(id);
+        }
+    }
+    Ok((inserted_ids_by_dedup, inserted_ids_no_dedup))
+}
+
+fn execute_insert_chunk(
+    conn: &Connection,
+    kind: &str,
+    chunk: &[(serde_json::Value, Option<String>, Option<String>)],
+) -> Result<(std::collections::HashMap<String, i64>, Vec<i64>)> {
+    let sql = crate::batch::build_insert_sql(
+        "INSERT OR IGNORE INTO",
+        "notifications",
+        &["kind", "payload_json", "dedup_key", "provider_id"],
+        chunk.len(),
+        Some("RETURNING id, dedup_key"),
+    );
+    let params = build_notification_chunk_params(kind, chunk)?;
+    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let returned_rows = stmt
+        .query(rusqlite::params_from_iter(params))
+        .map_err(crate::error::map_db_error)?;
+
+    collect_inserted_ids(returned_rows)
+}
+
+fn collect_missing_dedup_keys<'a>(
+    chunk: &'a [(serde_json::Value, Option<String>, Option<String>)],
+    inserted_ids_by_dedup: &std::collections::HashMap<String, i64>,
+) -> Vec<&'a str> {
+    chunk
+        .iter()
+        .filter_map(|row| row.1.as_deref())
+        .filter(|dk| !inserted_ids_by_dedup.contains_key(*dk))
+        .collect()
+}
+
+fn fetch_existing_dedup_ids(
+    conn: &Connection,
+    kind: &str,
+    dedup_keys: &[&str],
+) -> Result<std::collections::HashMap<String, i64>> {
+    let missing_rows: Vec<(i64, String)> = crate::batch::query_in_chunks_with_params(
+        conn,
+        notification_dedup_select!(
+            "WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')"
+        ),
+        &[&kind as &dyn rusqlite::ToSql],
+        dedup_keys,
+        crate::batch::DEFAULT_CHUNK_SIZE,
+        |r| crate::map_row_tuple!(r => (0, 1)),
+    )
+    .map_err(crate::error::map_db_error)?;
+
+    Ok(missing_rows.into_iter().map(|(id, dk)| (dk, id)).collect())
+}
+
+fn resolve_notification_row_id(
+    row: &(serde_json::Value, Option<String>, Option<String>),
+    inserted_ids_by_dedup: &std::collections::HashMap<String, i64>,
+    existing_ids: &std::collections::HashMap<String, i64>,
+    inserted_ids_no_dedup: &[i64],
+    no_dedup_idx: &mut usize,
+) -> Option<i64> {
+    if let Some(dk) = &row.1 {
+        inserted_ids_by_dedup
+            .get(dk)
+            .copied()
+            .or_else(|| existing_ids.get(dk).copied())
+    } else {
+        let id = inserted_ids_no_dedup.get(*no_dedup_idx).copied();
+        *no_dedup_idx += 1;
+        id
+    }
+}
+
+fn process_notification_chunk(
+    conn: &Connection,
+    kind: &str,
+    chunk: &[(serde_json::Value, Option<String>, Option<String>)],
+    all_results: &mut Vec<(i64, serde_json::Value)>,
+) -> Result<()> {
+    let (inserted_by_dedup, inserted_no_dedup) = execute_insert_chunk(conn, kind, chunk)?;
+    let missing_keys = collect_missing_dedup_keys(chunk, &inserted_by_dedup);
+    let existing_ids = if missing_keys.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        fetch_existing_dedup_ids(conn, kind, &missing_keys)?
+    };
+
+    let mut no_dedup_idx = 0;
+    for row in chunk {
+        if let Some(id) = resolve_notification_row_id(
+            row,
+            &inserted_by_dedup,
+            &existing_ids,
+            &inserted_no_dedup,
+            &mut no_dedup_idx,
+        ) {
+            all_results.push((id, row.0.clone()));
+        }
+    }
+    Ok(())
 }
 
 /// Insert multiple notification rows. Uses `INSERT OR IGNORE` and batching.
@@ -116,105 +256,7 @@ pub fn insert_many(
     let chunk_size =
         (crate::batch::SQLITE_MAX_VARIABLE_NUMBER / 4).clamp(1, crate::batch::DEFAULT_CHUNK_SIZE);
     for chunk in rows.chunks(chunk_size) {
-        let sql = crate::batch::build_insert_sql(
-            "INSERT OR IGNORE INTO",
-            "notifications",
-            &["kind", "payload_json", "dedup_key", "provider_id"],
-            chunk.len(),
-            Some("RETURNING id, dedup_key"),
-        );
-        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() * 4);
-
-        for row in chunk {
-            params.push(kind.to_owned().into());
-            let payload_str = serde_json::to_string(&row.0).map_err(|e| {
-                openproxy_types::error::CoreError::Validation(format!(
-                    "serialize notification payload: {e}"
-                ))
-            })?;
-            params.push(payload_str.into());
-            match &row.1 {
-                Some(k) => params.push(k.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            match &row.2 {
-                Some(p) => params.push(p.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-        }
-
-        let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
-        let mut returned_rows = stmt
-            .query(rusqlite::params_from_iter(params))
-            .map_err(crate::error::map_db_error)?;
-
-        let mut inserted_ids_by_dedup = std::collections::HashMap::new();
-        let mut inserted_ids_no_dedup = Vec::new();
-
-        while let Some(r) = returned_rows.next().map_err(crate::error::map_db_error)? {
-            let id: i64 = r.get(0).map_err(crate::error::map_db_error)?;
-            let dedup_key: Option<String> = r.get(1).map_err(crate::error::map_db_error)?;
-            if let Some(dk) = dedup_key {
-                inserted_ids_by_dedup.insert(dk, id);
-            } else {
-                inserted_ids_no_dedup.push(id);
-            }
-        }
-
-        let mut no_dedup_idx = 0;
-        let mut missing_dedup_keys = Vec::new();
-
-        // Pass 1: map inserted rows and collect missing dedups
-        for (i, row) in chunk.iter().enumerate() {
-            if let Some(dk) = &row.1
-                && !inserted_ids_by_dedup.contains_key(dk)
-            {
-                missing_dedup_keys.push((i, dk.to_owned()));
-            }
-        }
-
-        let mut existing_ids = std::collections::HashMap::new();
-        if !missing_dedup_keys.is_empty() {
-            let dedup_keys: Vec<&str> = missing_dedup_keys
-                .iter()
-                .map(|(_, dk)| dk.as_str())
-                .collect();
-            let missing_rows: Vec<(i64, String)> = crate::batch::query_in_chunks_with_params(
-                conn,
-                notification_dedup_select!(
-                    "WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')"
-                ),
-                &[&kind as &dyn rusqlite::ToSql],
-                &dedup_keys,
-                crate::batch::DEFAULT_CHUNK_SIZE,
-                |r| crate::map_row_tuple!(r => (0, 1)),
-            )
-            .map_err(crate::error::map_db_error)?;
-            for (id, dk) in missing_rows {
-                existing_ids.insert(dk, id);
-            }
-        }
-
-        // Pass 2: resolve all IDs
-        for row in chunk {
-            let id = if let Some(dk) = &row.1 {
-                if let Some(&inserted_id) = inserted_ids_by_dedup.get(dk) {
-                    Some(inserted_id)
-                } else if let Some(&existing_id) = existing_ids.get(dk) {
-                    Some(existing_id)
-                } else {
-                    None
-                }
-            } else {
-                let id = inserted_ids_no_dedup.get(no_dedup_idx).copied();
-                no_dedup_idx += 1;
-                id
-            };
-
-            if let Some(id) = id {
-                all_results.push((id, row.0.clone()));
-            }
-        }
+        process_notification_chunk(conn, kind, chunk, &mut all_results)?;
     }
 
     Ok(all_results)

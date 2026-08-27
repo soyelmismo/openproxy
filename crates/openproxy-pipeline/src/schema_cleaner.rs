@@ -48,39 +48,92 @@ pub fn clean_json_schema(value: &mut Value) {
     clean_json_schema_recursive(value, true, 0);
 }
 
+fn extract_defs_from_key(
+    map: &serde_json::Map<String, Value>,
+    key: &str,
+    defs: &mut serde_json::Map<String, Value>,
+) {
+    if let Some(Value::Object(d)) = map.get(key) {
+        for (k, v) in d {
+            defs.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+}
+
+fn collect_defs_from_object(
+    map: &serde_json::Map<String, Value>,
+    defs: &mut serde_json::Map<String, Value>,
+) {
+    extract_defs_from_key(map, "$defs", defs);
+    extract_defs_from_key(map, "definitions", defs);
+    for (key, v) in map {
+        if key != "$defs" && key != "definitions" {
+            collect_all_defs(v, defs);
+        }
+    }
+}
+
 /// [NEW #952] 递归收集所有层级的 $defs 和 definitions
 ///
 /// MCP 工具的 schema 可能在任意嵌套层级定义 $defs，而非仅在根层级。
 /// 此函数深度遍历整个 schema，收集所有定义到统一的 map 中。
 fn collect_all_defs(value: &Value, defs: &mut serde_json::Map<String, Value>) {
-    if let Value::Object(map) = value {
-        // 收集当前层级的 $defs
-        if let Some(Value::Object(d)) = map.get("$defs") {
-            for (k, v) in d {
-                // 避免覆盖已存在的定义（先定义的优先）
-                if !defs.contains_key(k) {
-                    defs.insert(k.clone(), v.clone());
+    match value {
+        Value::Object(map) => collect_defs_from_object(map, defs),
+        Value::Array(arr) => {
+            for item in arr {
+                collect_all_defs(item, defs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn resolve_ref_path(
+    map: &mut serde_json::Map<String, Value>,
+    defs: &serde_json::Map<String, Value>,
+    ref_path: &str,
+    depth: usize,
+) {
+    let ref_name = ref_path.split('/').next_back().unwrap_or(ref_path);
+    if let Some(Value::Object(def_map)) = defs.get(ref_name) {
+        for (k, v) in def_map {
+            map.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        flatten_refs(map, defs, depth + 1);
+    } else {
+        map.insert("type".to_string(), serde_json::json!("string"));
+        let hint = format!("(Unresolved $ref: {ref_path})");
+        let desc_val = map
+            .entry("description".to_string())
+            .or_insert_with(|| Value::String(String::new()));
+        if let Value::String(s) = desc_val
+            && !s.contains(&hint)
+        {
+            if !s.is_empty() {
+                s.push(' ');
+            }
+            s.push_str(&hint);
+        }
+    }
+}
+
+fn flatten_refs_in_children(
+    map: &mut serde_json::Map<String, Value>,
+    defs: &serde_json::Map<String, Value>,
+    depth: usize,
+) {
+    for (_, v) in map.iter_mut() {
+        match v {
+            Value::Object(child_map) => flatten_refs(child_map, defs, depth + 1),
+            Value::Array(arr) => {
+                for item in arr {
+                    if let Value::Object(item_map) = item {
+                        flatten_refs(item_map, defs, depth + 1);
+                    }
                 }
             }
-        }
-        // 收集当前层级的 definitions (Draft-07 风格)
-        if let Some(Value::Object(d)) = map.get("definitions") {
-            for (k, v) in d {
-                if !defs.contains_key(k) {
-                    defs.insert(k.clone(), v.clone());
-                }
-            }
-        }
-        // 递归处理所有子节点
-        for (key, v) in map {
-            // 跳过 $defs/definitions 本身，避免重复处理
-            if key != "$defs" && key != "definitions" {
-                collect_all_defs(v, defs);
-            }
-        }
-    } else if let Value::Array(arr) = value {
-        for item in arr {
-            collect_all_defs(item, defs);
+            _ => {}
         }
     }
 }
@@ -96,57 +149,11 @@ fn flatten_refs(
         return;
     }
 
-    // 检查并替换 $ref
     if let Some(Value::String(ref_path)) = map.remove("$ref") {
-        // 解析引用名 (例如 #/$defs/MyType -> MyType)
-        let ref_name = ref_path.split('/').next_back().unwrap_or(&ref_path);
-
-        if let Some(def_schema) = defs.get(ref_name) {
-            // 将定义的内容合并到当前 map
-            if let Value::Object(def_map) = def_schema {
-                for (k, v) in def_map {
-                    // 仅当当前 map 没有该 key 时才插入 (避免覆盖)
-                    // 但通常 $ref 节点不应该有其他属性
-                    if !map.contains_key(k) {
-                        map.insert(k.clone(), v.clone());
-                    }
-                }
-
-                // 递归处理刚刚合并进来的内容中可能包含的 $ref
-                // 注意：由于引入了 depth 限制，循环引用不再会导致栈溢出
-                flatten_refs(map, defs, depth + 1);
-            }
-        } else {
-            // [FIX #952] 无法解析的 $ref: 转换为宽松的 string 类型，避免 API 400 错误
-            // 这比让请求失败要好，至少工具调用仍可进行
-            map.insert("type".to_string(), serde_json::json!("string"));
-            let hint = format!("(Unresolved $ref: {ref_path})");
-            let desc_val = map
-                .entry("description".to_string())
-                .or_insert_with(|| Value::String(String::new()));
-            if let Value::String(s) = desc_val
-                && !s.contains(&hint)
-            {
-                if !s.is_empty() {
-                    s.push(' ');
-                }
-                s.push_str(&hint);
-            }
-        }
+        resolve_ref_path(map, defs, &ref_path, depth);
     }
 
-    // 遍历子节点
-    for (_, v) in map.iter_mut() {
-        if let Value::Object(child_map) = v {
-            flatten_refs(child_map, defs, depth + 1);
-        } else if let Value::Array(arr) = v {
-            for item in arr {
-                if let Value::Object(item_map) = item {
-                    flatten_refs(item_map, defs, depth + 1);
-                }
-            }
-        }
-    }
+    flatten_refs_in_children(map, defs, depth);
 }
 
 fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: usize) -> bool {
@@ -186,142 +193,317 @@ fn clean_object_schema(
     sanitize_schema_fields(map, is_schema_node, depth)
 }
 
-fn normalize_object_schema(map: &mut serde_json::Map<String, Value>) {
-    if (map.get("type").and_then(|t| t.as_str()) == Some("object")
-        || map.contains_key("properties"))
-        && let Some(mut items) = map.remove("items")
-    {
-        tracing::warn!(
-            "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
-        );
-        let target_props = map
-            .entry("properties".to_string())
-            .or_insert_with(|| json!({}));
-        if let Some(target_map) = target_props.as_object_mut()
-            && let Some(source_map) = items.as_object_mut()
-        {
-            for (k, v) in std::mem::take(source_map) {
-                target_map.entry(k).or_insert(v);
-            }
+fn merge_items_into_properties(
+    properties_val: &mut Value,
+    items_val: &mut Value,
+) {
+    if let (Some(target_map), Some(source_map)) = (properties_val.as_object_mut(), items_val.as_object_mut()) {
+        for (k, v) in std::mem::take(source_map) {
+            target_map.entry(k).or_insert(v);
         }
     }
 }
 
-fn clean_object_properties_and_items(map: &mut serde_json::Map<String, Value>, depth: usize) {
-    if let Some(Value::Object(props)) = map.get_mut("properties") {
-        let mut dropped_keys = std::collections::HashSet::new();
-        props.retain(|k, v| {
-            if v.is_object() {
-                true
-            } else {
-                dropped_keys.insert(k.clone());
-                false
-            }
-        });
+fn normalize_object_schema(map: &mut serde_json::Map<String, Value>) {
+    let is_object_like = map.get("type").and_then(|t| t.as_str()) == Some("object")
+        || map.contains_key("properties");
+    if !is_object_like {
+        return;
+    }
+    let Some(mut items) = map.remove("items") else {
+        return;
+    };
 
-        let mut nullable_keys = std::collections::HashSet::new();
-        for (k, v) in props.iter_mut() {
-            if clean_json_schema_recursive(v, true, depth + 1) {
-                nullable_keys.insert(k.clone());
-            }
+    tracing::warn!(
+        "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
+    );
+    let target_props = map
+        .entry("properties".to_string())
+        .or_insert_with(|| json!({}));
+    merge_items_into_properties(target_props, &mut items);
+}
+
+fn prune_invalid_properties(props: &mut serde_json::Map<String, Value>) -> std::collections::HashSet<String> {
+    let mut dropped_keys = std::collections::HashSet::new();
+    props.retain(|k, v| {
+        if v.is_object() {
+            true
+        } else {
+            dropped_keys.insert(k.clone());
+            false
         }
+    });
+    dropped_keys
+}
 
-        if (!nullable_keys.is_empty() || !dropped_keys.is_empty())
-            && let Some(Value::Array(req_arr)) = map.get_mut("required")
-        {
-            req_arr.retain(|r| {
-                r.as_str()
-                    .is_none_or(|s| !nullable_keys.contains(s) && !dropped_keys.contains(s))
-            });
-            if req_arr.is_empty() {
-                map.remove("required");
-            }
-        }
-
-        if !map.contains_key("type") {
-            map.insert("type".to_string(), Value::String("object".to_string()));
+fn clean_and_collect_nullable(props: &mut serde_json::Map<String, Value>, depth: usize) -> std::collections::HashSet<String> {
+    let mut nullable_keys = std::collections::HashSet::new();
+    for (k, v) in props.iter_mut() {
+        if clean_json_schema_recursive(v, true, depth + 1) {
+            nullable_keys.insert(k.clone());
         }
     }
+    nullable_keys
+}
 
+fn update_required_for_dropped_or_nullable(
+    map: &mut serde_json::Map<String, Value>,
+    dropped_keys: &std::collections::HashSet<String>,
+    nullable_keys: &std::collections::HashSet<String>,
+) {
+    if nullable_keys.is_empty() && dropped_keys.is_empty() {
+        return;
+    }
+    let Some(Value::Array(req_arr)) = map.get_mut("required") else {
+        return;
+    };
+    req_arr.retain(|r| {
+        r.as_str()
+            .is_none_or(|s| !nullable_keys.contains(s) && !dropped_keys.contains(s))
+    });
+    if req_arr.is_empty() {
+        map.remove("required");
+    }
+}
+
+fn clean_properties(map: &mut serde_json::Map<String, Value>, depth: usize) {
+    let Some(Value::Object(props)) = map.get_mut("properties") else {
+        return;
+    };
+
+    let dropped_keys = prune_invalid_properties(props);
+    let nullable_keys = clean_and_collect_nullable(props, depth);
+    update_required_for_dropped_or_nullable(map, &dropped_keys, &nullable_keys);
+
+    map.entry("type".to_string())
+        .or_insert_with(|| Value::String("object".to_string()));
+}
+
+fn clean_items(map: &mut serde_json::Map<String, Value>, depth: usize) {
     if map.get("items").is_some_and(|i| !i.is_object()) {
         map.remove("items");
     }
     if let Some(items) = map.get_mut("items") {
         clean_json_schema_recursive(items, true, depth + 1);
-        if !map.contains_key("type") {
-            map.insert("type".to_string(), Value::String("array".to_string()));
-        }
+        map.entry("type".to_string())
+            .or_insert_with(|| Value::String("array".to_string()));
     }
+}
 
+fn clean_nested_non_schema_fields(map: &mut serde_json::Map<String, Value>, depth: usize) {
     if !map.contains_key("properties") && !map.contains_key("items") {
         for (k, v) in map.iter_mut() {
-            if k != "anyOf" && k != "oneOf" && k != "allOf" && k != "enum" && k != "type" {
+            if !matches!(k.as_str(), "anyOf" | "oneOf" | "allOf" | "enum" | "type") {
                 clean_json_schema_recursive(v, false, depth + 1);
             }
         }
     }
 }
 
-fn clean_unions_and_hints(map: &mut serde_json::Map<String, Value>, depth: usize) {
-    if let Some(Value::Array(any_of)) = map.get_mut("anyOf") {
-        for branch in any_of.iter_mut() {
-            clean_json_schema_recursive(branch, true, depth + 1);
-        }
-    }
-    if let Some(Value::Array(one_of)) = map.get_mut("oneOf") {
-        for branch in one_of.iter_mut() {
-            clean_json_schema_recursive(branch, true, depth + 1);
-        }
-    }
+fn clean_object_properties_and_items(map: &mut serde_json::Map<String, Value>, depth: usize) {
+    clean_properties(map, depth);
+    clean_items(map, depth);
+    clean_nested_non_schema_fields(map, depth);
+}
 
-    let union_to_merge = if let Some(Value::Array(any_of)) = map.get("anyOf") {
-        Some(any_of.as_slice())
-    } else if let Some(Value::Array(one_of)) = map.get("oneOf") {
-        Some(one_of.as_slice())
-    } else {
-        None
-    };
-
-    if let Some(union_array) = union_to_merge
-        && let Some((best_branch, all_types)) = extract_best_schema_from_union(union_array)
-    {
-        if let Value::Object(branch_obj) = best_branch {
-            for (k, v) in branch_obj {
-                if k == "properties" {
-                    if let Some(target_props) = map
-                        .entry("properties".to_string())
-                        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-                        .as_object_mut()
-                        && let Value::Object(source_props) = v
-                    {
-                        for (pk, pv) in source_props {
-                            target_props.entry(pk).or_insert(pv);
-                        }
-                    }
-                } else if k == "required" {
-                    if let Some(target_req) = map
-                        .entry("required".to_string())
-                        .or_insert_with(|| Value::Array(Vec::new()))
-                        .as_array_mut()
-                        && let Value::Array(source_req) = v
-                    {
-                        let mut seen: std::collections::HashSet<Value> =
-                            target_req.iter().cloned().collect();
-                        for rv in source_req {
-                            if seen.insert(rv.clone()) {
-                                target_req.push(rv);
-                            }
-                        }
-                    }
-                } else if !map.contains_key(&k) {
-                    map.insert(k, v);
-                }
+fn clean_union_branches(map: &mut serde_json::Map<String, Value>, depth: usize) {
+    for key in ["anyOf", "oneOf"] {
+        if let Some(Value::Array(arr)) = map.get_mut(key) {
+            for branch in arr.iter_mut() {
+                clean_json_schema_recursive(branch, true, depth + 1);
             }
         }
+    }
+}
 
-        if all_types.len() > 1 {
-            let type_hint = format!("Accepts: {}", all_types.join(" | "));
-            append_hint_to_description(map, &type_hint);
+fn merge_union_properties(map: &mut serde_json::Map<String, Value>, v: Value) {
+    if let (Some(target_props), Value::Object(source_props)) = (
+        map.entry("properties".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut(),
+        v,
+    ) {
+        for (pk, pv) in source_props {
+            target_props.entry(pk).or_insert(pv);
+        }
+    }
+}
+
+fn merge_union_required(map: &mut serde_json::Map<String, Value>, v: Value) {
+    if let (Some(target_req), Value::Array(source_req)) = (
+        map.entry("required".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut(),
+        v,
+    ) {
+        let mut seen: std::collections::HashSet<Value> = target_req.iter().cloned().collect();
+        for rv in source_req {
+            if seen.insert(rv.clone()) {
+                target_req.push(rv);
+            }
+        }
+    }
+}
+
+fn merge_union_branch(map: &mut serde_json::Map<String, Value>, branch_obj: serde_json::Map<String, Value>) {
+    for (k, v) in branch_obj {
+        match k.as_str() {
+            "properties" => merge_union_properties(map, v),
+            "required" => merge_union_required(map, v),
+            _ => {
+                map.entry(k).or_insert(v);
+            }
+        }
+    }
+}
+
+fn apply_union_type_hints(map: &mut serde_json::Map<String, Value>, all_types: &[String]) {
+    if all_types.len() > 1 {
+        let type_hint = format!("Accepts: {}", all_types.join(" | "));
+        append_hint_to_description(map, &type_hint);
+    }
+}
+
+fn clean_unions_and_hints(map: &mut serde_json::Map<String, Value>, depth: usize) {
+    clean_union_branches(map, depth);
+
+    let union_to_merge = map
+        .get("anyOf")
+        .or_else(|| map.get("oneOf"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.as_slice());
+
+    let Some(union_array) = union_to_merge else {
+        return;
+    };
+    let Some((best_branch, all_types)) = extract_best_schema_from_union(union_array) else {
+        return;
+    };
+
+    if let Value::Object(branch_obj) = best_branch {
+        merge_union_branch(map, branch_obj);
+    }
+    apply_union_type_hints(map, &all_types);
+}
+
+const ALLOWED_SCHEMA_FIELDS: &[&str] = &[
+    "type",
+    "description",
+    "properties",
+    "required",
+    "items",
+    "enum",
+    "title",
+];
+
+fn wrap_bare_properties_node(map: &mut serde_json::Map<String, Value>, depth: usize) {
+    let properties = std::mem::take(map);
+    map.insert("type".to_string(), Value::String("object".to_string()));
+    map.insert("properties".to_string(), Value::Object(properties));
+
+    if let Some(Value::Object(props_map)) = map.get_mut("properties") {
+        for v in props_map.values_mut() {
+            clean_json_schema_recursive(v, true, depth + 1);
+        }
+    }
+}
+
+fn sanitize_required_fields(map: &mut serde_json::Map<String, Value>) {
+    let Some(mut required_val) = map.remove("required") else {
+        return;
+    };
+    if let Some(req_arr) = required_val.as_array_mut() {
+        if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+            req_arr.retain(|k| k.as_str().is_some_and(|s| props.contains_key(s)));
+        } else {
+            req_arr.clear();
+        }
+    }
+    map.insert("required".to_string(), required_val);
+}
+
+fn infer_schema_type(map: &serde_json::Map<String, Value>) -> &'static str {
+    if map.contains_key("properties") {
+        "object"
+    } else if map.contains_key("items") {
+        "array"
+    } else {
+        "string"
+    }
+}
+
+fn inspect_type_name(s: &str, is_nullable: &mut bool, selected_type: &mut Option<String>) {
+    let lower = s.to_lowercase();
+    if lower == "null" {
+        *is_nullable = true;
+    } else if selected_type.is_none() {
+        *selected_type = Some(lower);
+    }
+}
+
+fn resolve_type_and_nullability(type_val: &Value, fallback: &str) -> (String, bool) {
+    let mut is_nullable = false;
+    let mut selected_type = None;
+
+    match type_val {
+        Value::String(s) => inspect_type_name(s, &mut is_nullable, &mut selected_type),
+        Value::Array(arr) => {
+            for item in arr.iter().filter_map(|i| i.as_str()) {
+                inspect_type_name(item, &mut is_nullable, &mut selected_type);
+            }
+        }
+        _ => {}
+    }
+
+    let final_type = selected_type.unwrap_or_else(|| fallback.to_string());
+    (final_type, is_nullable)
+}
+
+fn normalize_type_field(map: &mut serde_json::Map<String, Value>) -> bool {
+    if !map.contains_key("type") {
+        let default_type = if map.contains_key("enum") {
+            "string"
+        } else {
+            infer_schema_type(map)
+        };
+        map.insert("type".to_string(), Value::String(default_type.to_string()));
+    }
+
+    let fallback = infer_schema_type(map);
+    let Some(type_val) = map.get_mut("type") else {
+        return false;
+    };
+
+    let (resolved_type, is_nullable) = resolve_type_and_nullability(type_val, fallback);
+    *type_val = Value::String(resolved_type);
+    is_nullable
+}
+
+fn append_nullable_description(map: &mut serde_json::Map<String, Value>) {
+    let desc_val = map
+        .entry("description".to_string())
+        .or_insert_with(|| Value::String(String::new()));
+    if let Value::String(s) = desc_val
+        && !s.contains("nullable")
+    {
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s.push_str("(nullable)");
+    }
+}
+
+fn normalize_enum_items(map: &mut serde_json::Map<String, Value>) {
+    let Some(Value::Array(arr)) = map.get_mut("enum") else {
+        return;
+    };
+    for item in arr {
+        if !item.is_string() {
+            *item = Value::String(if item.is_null() {
+                "null".to_string()
+            } else {
+                item.to_string()
+            });
         }
     }
 }
@@ -331,29 +513,11 @@ fn sanitize_schema_fields(
     is_schema_node: bool,
     depth: usize,
 ) -> bool {
-    let allowed_fields = [
-        "type",
-        "description",
-        "properties",
-        "required",
-        "items",
-        "enum",
-        "title",
-    ];
-
-    let has_standard_keyword = map.keys().any(|k| allowed_fields.contains(&k.as_str()));
+    let has_standard_keyword = map.keys().any(|k| ALLOWED_SCHEMA_FIELDS.contains(&k.as_str()));
     let is_not_schema_payload =
         map.contains_key("functionCall") || map.contains_key("functionResponse");
     if is_schema_node && !has_standard_keyword && !map.is_empty() && !is_not_schema_payload {
-        let properties = std::mem::take(map);
-        map.insert("type".to_string(), Value::String("object".to_string()));
-        map.insert("properties".to_string(), Value::Object(properties));
-
-        if let Some(Value::Object(props_map)) = map.get_mut("properties") {
-            for v in props_map.values_mut() {
-                clean_json_schema_recursive(v, true, depth + 1);
-            }
-        }
+        wrap_bare_properties_node(map, depth);
     }
 
     let looks_like_schema = (is_schema_node || has_standard_keyword) && !is_not_schema_payload;
@@ -362,170 +526,119 @@ fn sanitize_schema_fields(
     }
 
     move_constraints_to_description(map);
-    map.retain(|k, _| allowed_fields.contains(&k.as_str()));
+    map.retain(|k, _| ALLOWED_SCHEMA_FIELDS.contains(&k.as_str()));
 
     if map.get("type").and_then(|t| t.as_str()) == Some("object") && !map.contains_key("properties")
     {
         map.insert("properties".to_string(), serde_json::json!({}));
     }
 
-    if let Some(mut required_val) = map.remove("required") {
-        if let Some(req_arr) = required_val.as_array_mut() {
-            if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
-                req_arr.retain(|k| k.as_str().is_some_and(|s| props.contains_key(s)));
-            } else {
-                req_arr.clear();
-            }
-        }
-        map.insert("required".to_string(), required_val);
-    }
-
-    if !map.contains_key("type") {
-        if map.contains_key("enum") {
-            map.insert("type".to_string(), Value::String("string".to_string()));
-        } else if map.contains_key("properties") {
-            map.insert("type".to_string(), Value::String("object".to_string()));
-        } else if map.contains_key("items") {
-            map.insert("type".to_string(), Value::String("array".to_string()));
-        }
-    }
-
-    let fallback = if map.contains_key("properties") {
-        "object"
-    } else if map.contains_key("items") {
-        "array"
-    } else {
-        "string"
-    };
-
-    let mut is_effectively_nullable = false;
-    if let Some(type_val) = map.get_mut("type") {
-        let mut selected_type = None;
-        match type_val {
-            Value::String(s) => {
-                let lower = s.to_lowercase();
-                if lower == "null" {
-                    is_effectively_nullable = true;
-                } else {
-                    selected_type = Some(lower);
-                }
-            }
-            Value::Array(arr) => {
-                for item in arr {
-                    if let Value::String(s) = item {
-                        let lower = s.to_lowercase();
-                        if lower == "null" {
-                            is_effectively_nullable = true;
-                        } else if selected_type.is_none() {
-                            selected_type = Some(lower);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        *type_val = Value::String(selected_type.unwrap_or_else(|| fallback.to_string()));
-    }
+    sanitize_required_fields(map);
+    let is_effectively_nullable = normalize_type_field(map);
 
     if is_effectively_nullable {
-        let desc_val = map
-            .entry("description".to_string())
-            .or_insert_with(|| Value::String(String::new()));
-        if let Value::String(s) = desc_val
-            && !s.contains("nullable")
-        {
-            if !s.is_empty() {
-                s.push(' ');
-            }
-            s.push_str("(nullable)");
-        }
+        append_nullable_description(map);
     }
 
-    if let Some(Value::Array(arr)) = map.get_mut("enum") {
-        for item in arr {
-            if !item.is_string() {
-                *item = Value::String(if item.is_null() {
-                    "null".to_string()
-                } else {
-                    item.to_string()
-                });
-            }
-        }
-    }
+    normalize_enum_items(map);
 
     is_effectively_nullable
 }
 
-/// [NEW] 合并 allOf 数组中的所有子 Schema
-fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
-    if let Some(Value::Array(all_of)) = map.remove("allOf") {
-        let mut merged_properties = serde_json::Map::new();
-        let mut merged_required = std::collections::HashSet::new();
-        let mut other_fields = serde_json::Map::new();
-
-        for sub_schema in all_of {
-            if let Value::Object(mut sub_map) = sub_schema {
-                // 合并属性
-                if let Some(Value::Object(props)) = sub_map.remove("properties") {
-                    for (k, v) in props {
-                        merged_properties.insert(k, v);
-                    }
-                }
-
-                // 合并 required
-                if let Some(Value::Array(reqs)) = sub_map.remove("required") {
-                    for req in reqs {
-                        if let Value::String(s) = req {
-                            merged_required.insert(s);
-                        }
-                    }
-                }
-
-                // 合并其余字段 (第一个出现的胜出)
-                for (k, v) in sub_map {
-                    if k != "allOf" && !other_fields.contains_key(&k) {
-                        other_fields.insert(k, v);
-                    }
-                }
-            }
+fn merge_all_of_sub_schema(
+    mut sub_map: serde_json::Map<String, Value>,
+    merged_properties: &mut serde_json::Map<String, Value>,
+    merged_required: &mut std::collections::HashSet<String>,
+    other_fields: &mut serde_json::Map<String, Value>,
+) {
+    if let Some(Value::Object(props)) = sub_map.remove("properties") {
+        for (k, v) in props {
+            merged_properties.insert(k, v);
         }
-
-        // 应用合并后的字段
-        for (k, v) in other_fields {
-            if !map.contains_key(&k) {
-                map.insert(k, v);
-            }
-        }
-
-        if !merged_properties.is_empty() {
-            let existing_props = map
-                .entry("properties".to_string())
-                .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            if let Value::Object(existing_map) = existing_props {
-                for (k, v) in merged_properties {
-                    existing_map.entry(k).or_insert(v);
-                }
-            }
-        }
-
-        if !merged_required.is_empty() {
-            let existing_reqs = map
-                .entry("required".to_string())
-                .or_insert_with(|| Value::Array(Vec::new()));
-            if let Value::Array(req_arr) = existing_reqs {
-                let mut current_reqs: std::collections::HashSet<String> = req_arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
-                    .collect();
-                for req in merged_required {
-                    if current_reqs.insert(req.clone()) {
-                        req_arr.push(Value::String(req));
-                    }
-                }
+    }
+    if let Some(Value::Array(reqs)) = sub_map.remove("required") {
+        for req in reqs {
+            if let Value::String(s) = req {
+                merged_required.insert(s);
             }
         }
     }
+    for (k, v) in sub_map {
+        if k != "allOf" && !other_fields.contains_key(&k) {
+            other_fields.insert(k, v);
+        }
+    }
+}
+
+fn merge_into_existing_properties(
+    map: &mut serde_json::Map<String, Value>,
+    merged_properties: serde_json::Map<String, Value>,
+) {
+    if merged_properties.is_empty() {
+        return;
+    }
+    let existing_props = map
+        .entry("properties".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Value::Object(existing_map) = existing_props {
+        for (k, v) in merged_properties {
+            existing_map.entry(k).or_insert(v);
+        }
+    }
+}
+
+fn merge_into_existing_required(
+    map: &mut serde_json::Map<String, Value>,
+    merged_required: std::collections::HashSet<String>,
+) {
+    if merged_required.is_empty() {
+        return;
+    }
+    let existing_reqs = map
+        .entry("required".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Value::Array(req_arr) = existing_reqs {
+        let mut current_reqs: std::collections::HashSet<String> = req_arr
+            .iter()
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+            .collect();
+        for req in merged_required {
+            if current_reqs.insert(req.clone()) {
+                req_arr.push(Value::String(req));
+            }
+        }
+    }
+}
+
+fn apply_merged_all_of(
+    map: &mut serde_json::Map<String, Value>,
+    merged_properties: serde_json::Map<String, Value>,
+    merged_required: std::collections::HashSet<String>,
+    other_fields: serde_json::Map<String, Value>,
+) {
+    for (k, v) in other_fields {
+        map.entry(k).or_insert(v);
+    }
+    merge_into_existing_properties(map, merged_properties);
+    merge_into_existing_required(map, merged_required);
+}
+
+/// [NEW] 合并 allOf 数组中的所有子 Schema
+fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
+    let Some(Value::Array(all_of)) = map.remove("allOf") else {
+        return;
+    };
+    let mut merged_properties = serde_json::Map::new();
+    let mut merged_required = std::collections::HashSet::new();
+    let mut other_fields = serde_json::Map::new();
+
+    for sub_schema in all_of {
+        if let Value::Object(sub_map) = sub_schema {
+            merge_all_of_sub_schema(sub_map, &mut merged_properties, &mut merged_required, &mut other_fields);
+        }
+    }
+
+    apply_merged_all_of(map, merged_properties, merged_required, other_fields);
 }
 
 /// [NEW] 将提示信息追加到 description 字段
@@ -544,23 +657,21 @@ fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: &s
     }
 }
 
+fn extract_constraint_hint(map: &serde_json::Map<String, Value>, field: &str, label: &str) -> Option<String> {
+    let val = map.get(field)?;
+    (!val.is_null()).then(|| {
+        let val_str = val.as_str().map_or_else(|| val.to_string(), std::string::ToString::to_string);
+        format!("{label}: {val_str}")
+    })
+}
+
 /// [NEW] 将约束字段转化为 description 提示
 /// 在删除约束字段前,将其语义信息保留在描述中,让模型能够理解约束
 fn move_constraints_to_description(map: &mut serde_json::Map<String, Value>) {
-    let mut hints = Vec::new();
-
-    for (field, label) in CONSTRAINT_FIELDS {
-        if let Some(val) = map.get(*field)
-            && !val.is_null()
-        {
-            let val_str = if let Some(s) = val.as_str() {
-                s.to_string()
-            } else {
-                val.to_string()
-            };
-            hints.push(format!("{label}: {val_str}"));
-        }
-    }
+    let hints: Vec<String> = CONSTRAINT_FIELDS
+        .iter()
+        .filter_map(|(field, label)| extract_constraint_hint(map, field, label))
+        .collect();
 
     if !hints.is_empty() {
         let constraint_hint = format!("[Constraint: {}]", hints.join(", "));
@@ -571,22 +682,17 @@ fn move_constraints_to_description(map: &mut serde_json::Map<String, Value>) {
 /// [NEW] 计算 Schema 分支的复杂度得分 (用于 anyOf/oneOf 择优)
 /// 评分标准: Object (3) > Array (2) > Scalar (1) > Null (0)
 fn score_schema_option(val: &Value) -> i32 {
-    if let Value::Object(obj) = val {
-        if obj.contains_key("properties")
-            || obj.get("type").and_then(|t| t.as_str()) == Some("object")
-        {
-            return 3;
-        }
-        if obj.contains_key("items") || obj.get("type").and_then(|t| t.as_str()) == Some("array") {
-            return 2;
-        }
-        if let Some(type_str) = obj.get("type").and_then(|t| t.as_str())
-            && type_str != "null"
-        {
-            return 1;
-        }
+    let Some(obj) = val.as_object() else {
+        return 0;
+    };
+    let type_str = obj.get("type").and_then(|t| t.as_str());
+    if obj.contains_key("properties") || type_str == Some("object") {
+        3
+    } else if obj.contains_key("items") || type_str == Some("array") {
+        2
+    } else {
+        i32::from(type_str.is_some_and(|t| t != "null"))
     }
-    0
 }
 
 /// [NEW] 从 anyOf/oneOf 联合类型数组中选取最佳非 null Schema 分支
@@ -618,23 +724,16 @@ fn extract_best_schema_from_union(union_array: &[Value]) -> Option<(Value, Vec<S
 
 /// [NEW] 获取 Schema 的类型名称
 fn get_schema_type_name(schema: &Value) -> Option<String> {
-    if let Value::Object(obj) = schema {
-        // 优先使用显式的 type 字段
-        if let Some(type_val) = obj.get("type")
-            && let Some(s) = type_val.as_str()
-        {
-            return Some(s.to_string());
-        }
-
-        // 根据结构推断类型
-        if obj.contains_key("properties") {
-            return Some("object".to_string());
-        }
-        if obj.contains_key("items") {
-            return Some("array".to_string());
-        }
+    let obj = schema.as_object()?;
+    if let Some(t) = obj.get("type").and_then(|t| t.as_str()) {
+        return Some(t.to_string());
     }
-
+    if obj.contains_key("properties") {
+        return Some("object".to_string());
+    }
+    if obj.contains_key("items") {
+        return Some("array".to_string());
+    }
     None
 }
 
@@ -660,17 +759,89 @@ pub fn fix_tool_call_args(args: &mut Value, schema: &Value) {
     }
 }
 
+fn fix_object_arg(value: &mut Value, nested_props: &serde_json::Map<String, Value>) {
+    let Some(value_obj) = value.as_object_mut() else {
+        return;
+    };
+    for (key, nested_value) in value_obj.iter_mut() {
+        if let Some(nested_schema) = nested_props.get(key) {
+            fix_single_arg_recursive(nested_value, nested_schema);
+        }
+    }
+}
+
+fn fix_array_arg(value: &mut Value, items_schema: &Value) {
+    let Some(arr) = value.as_array_mut() else {
+        return;
+    };
+    for item in arr {
+        fix_single_arg_recursive(item, items_schema);
+    }
+}
+
+fn is_preserved_string_number(s: &str) -> bool {
+    s.starts_with('0') && s.len() > 1 && !s.starts_with("0.")
+}
+
+fn coerce_to_number(value: &mut Value) {
+    let Some(s) = value.as_str() else {
+        return;
+    };
+    // [SAFETY] 保护具有前导零的版本号或代码 (如 "01", "007")，不应转为数字
+    if is_preserved_string_number(s) {
+        return;
+    }
+
+    if let Ok(i) = s.parse::<i64>() {
+        *value = Value::Number(serde_json::Number::from(i));
+    } else if let Some(n) = s.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+        *value = Value::Number(n);
+    }
+}
+
+fn coerce_str_to_boolean(s: &str) -> Option<bool> {
+    match s.to_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn coerce_to_boolean(value: &mut Value) {
+    if let Some(s) = value.as_str() {
+        if let Some(b) = coerce_str_to_boolean(s) {
+            *value = Value::Bool(b);
+        }
+    } else if let Some(n) = value.as_i64() {
+        if n == 1 {
+            *value = Value::Bool(true);
+        } else if n == 0 {
+            *value = Value::Bool(false);
+        }
+    }
+}
+
+fn coerce_to_string(value: &mut Value) {
+    // 非字符串 → 字符串 (防止客户端误传数字给文本字段)
+    if !value.is_string() && !value.is_null() && !value.is_object() && !value.is_array() {
+        *value = Value::String(value.to_string());
+    }
+}
+
+fn fix_scalar_arg(value: &mut Value, schema_type: &str) {
+    match schema_type {
+        "number" | "integer" => coerce_to_number(value),
+        "boolean" => coerce_to_boolean(value),
+        "string" => coerce_to_string(value),
+        _ => {}
+    }
+}
+
 /// 递归修正单个参数的类型
 fn fix_single_arg_recursive(value: &mut Value, schema: &Value) {
     // 1. 处理嵌套对象 (properties)
     if let Some(nested_props) = schema.get("properties").and_then(|p| p.as_object()) {
-        if let Some(value_obj) = value.as_object_mut() {
-            for (key, nested_value) in value_obj.iter_mut() {
-                if let Some(nested_schema) = nested_props.get(key) {
-                    fix_single_arg_recursive(nested_value, nested_schema);
-                }
-            }
-        }
+        fix_object_arg(value, nested_props);
         return;
     }
 
@@ -681,59 +852,14 @@ fn fix_single_arg_recursive(value: &mut Value, schema: &Value) {
         .unwrap_or("")
         .to_lowercase();
     if schema_type == "array" {
-        if let Some(items_schema) = schema.get("items")
-            && let Some(arr) = value.as_array_mut()
-        {
-            for item in arr {
-                fix_single_arg_recursive(item, items_schema);
-            }
+        if let Some(items_schema) = schema.get("items") {
+            fix_array_arg(value, items_schema);
         }
         return;
     }
 
     // 3. 处理基础类型修正
-    match schema_type.as_str() {
-        "number" | "integer" => {
-            // 字符串 → 数字
-            if let Some(s) = value.as_str() {
-                // [SAFETY] 保护具有前导零的版本号或代码 (如 "01", "007")，不应转为数字
-                if s.starts_with('0') && s.len() > 1 && !s.starts_with("0.") {
-                    return;
-                }
-
-                // 优先尝试解析为整数
-                if let Ok(i) = s.parse::<i64>() {
-                    *value = Value::Number(serde_json::Number::from(i));
-                } else if let Ok(f) = s.parse::<f64>()
-                    && let Some(n) = serde_json::Number::from_f64(f) {
-                        *value = Value::Number(n);
-                    }
-            }
-        }
-        "boolean" => {
-            // 字符串 → 布尔
-            if let Some(s) = value.as_str() {
-                match s.to_lowercase().as_str() {
-                    "true" | "1" | "yes" | "on" => *value = Value::Bool(true),
-                    "false" | "0" | "no" | "off" => *value = Value::Bool(false),
-                    _ => {}
-                }
-            } else if let Some(n) = value.as_i64() {
-                // 数字 1/0 -> 布尔
-                if n == 1 {
-                    *value = Value::Bool(true);
-                } else if n == 0 {
-                    *value = Value::Bool(false);
-                }
-            }
-        }
-        "string"
-            // 非字符串 → 字符串 (防止客户端误传数字给文本字段)
-            if !value.is_string() && !value.is_null() && !value.is_object() && !value.is_array() => {
-                *value = Value::String(value.to_string());
-            }
-        _ => {}
-    }
+    fix_scalar_arg(value, schema_type.as_str());
 }
 
 #[cfg(test)]

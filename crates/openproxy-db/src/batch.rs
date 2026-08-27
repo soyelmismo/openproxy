@@ -29,20 +29,13 @@ pub fn values_placeholders(num_rows: usize, num_cols: usize) -> String {
     if num_rows == 0 || num_cols == 0 {
         return String::new();
     }
-    let row_len = 3 * num_cols;
-    let mut out = String::with_capacity(num_rows * (row_len + 2));
+    let single_row = format!("({})", in_placeholders(num_cols));
+    let mut out = String::with_capacity(num_rows * (single_row.len() + 2));
     for r in 0..num_rows {
         if r > 0 {
             out.push_str(", ");
         }
-        out.push('(');
-        for c in 0..num_cols {
-            if c > 0 {
-                out.push_str(", ");
-            }
-            out.push('?');
-        }
-        out.push(')');
+        out.push_str(&single_row);
     }
     out
 }
@@ -107,6 +100,36 @@ where
     query_in_chunks_with_params(conn, sql_template, &[], items, chunk_size, map_row)
 }
 
+fn execute_chunk_query<T, R, F>(
+    conn: &Connection,
+    sql_template: &str,
+    prefix_params: &[&dyn rusqlite::ToSql],
+    chunk: &[T],
+    map_row: &mut F,
+    results: &mut Vec<R>,
+) -> rusqlite::Result<()>
+where
+    T: rusqlite::ToSql,
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
+{
+    let placeholders = in_placeholders(chunk.len());
+    let sql = sql_template.replace("{}", &placeholders);
+    let mut stmt = conn.prepare_cached(&sql)?;
+
+    let mut params: Vec<&dyn rusqlite::ToSql> =
+        Vec::with_capacity(prefix_params.len() + chunk.len());
+    params.extend_from_slice(prefix_params);
+    for item in chunk {
+        params.push(item as &dyn rusqlite::ToSql);
+    }
+
+    let mut rows = stmt.query(rusqlite::params_from_iter(params))?;
+    while let Some(row) = rows.next()? {
+        results.push(map_row(row)?);
+    }
+    Ok(())
+}
+
 /// Helper to query rows in chunks with additional prefix parameters.
 ///
 /// `sql_template` must contain `{}` which will be replaced by `?, ?, ...` placeholders.
@@ -133,21 +156,14 @@ where
     let mut results = Vec::with_capacity(items.len());
 
     for chunk in items.chunks(effective_chunk_size) {
-        let placeholders = in_placeholders(chunk.len());
-        let sql = sql_template.replace("{}", &placeholders);
-        let mut stmt = conn.prepare_cached(&sql)?;
-
-        let mut params: Vec<&dyn rusqlite::ToSql> =
-            Vec::with_capacity(prefix_params.len() + chunk.len());
-        params.extend_from_slice(prefix_params);
-        for item in chunk {
-            params.push(item as &dyn rusqlite::ToSql);
-        }
-
-        let mut rows = stmt.query(rusqlite::params_from_iter(params))?;
-        while let Some(row) = rows.next()? {
-            results.push(map_row(row)?);
-        }
+        execute_chunk_query(
+            conn,
+            sql_template,
+            prefix_params,
+            chunk,
+            &mut map_row,
+            &mut results,
+        )?;
     }
 
     Ok(results)
@@ -199,6 +215,27 @@ where
     )
 }
 
+fn execute_batch_insert_chunk<T, F>(
+    conn: &Connection,
+    prefix: &str,
+    table: &str,
+    columns: &[&str],
+    chunk: &[T],
+    suffix: Option<&str>,
+    row_fn: &mut F,
+) -> rusqlite::Result<usize>
+where
+    F: FnMut(&T, &mut Vec<rusqlite::types::Value>),
+{
+    let sql = build_insert_sql(prefix, table, columns, chunk.len(), suffix);
+    let mut params = Vec::with_capacity(chunk.len() * columns.len());
+    for item in chunk {
+        row_fn(item, &mut params);
+    }
+    let mut stmt = conn.prepare_cached(&sql)?;
+    stmt.execute(rusqlite::params_from_iter(params))
+}
+
 /// Performs chunked batch inserts, splitting `items` so that `chunk.len() * columns.len() <= SQLITE_MAX_VARIABLE_NUMBER`.
 ///
 /// Calls `row_fn` for each item to push values into the parameter list.
@@ -223,14 +260,15 @@ where
     let mut total_affected = 0;
 
     for chunk in items.chunks(max_rows_per_chunk) {
-        let sql = build_insert_sql(prefix, table, columns, chunk.len(), suffix);
-        let mut params = Vec::with_capacity(chunk.len() * num_cols);
-        for item in chunk {
-            row_fn(item, &mut params);
-        }
-        let mut stmt = conn.prepare_cached(&sql)?;
-        let count = stmt.execute(rusqlite::params_from_iter(params))?;
-        total_affected += count;
+        total_affected += execute_batch_insert_chunk(
+            conn,
+            prefix,
+            table,
+            columns,
+            chunk,
+            suffix,
+            &mut row_fn,
+        )?;
     }
 
     Ok(total_affected)

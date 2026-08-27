@@ -55,31 +55,46 @@ pub const LOSSY_TECHNIQUE: &str = "lite::smart_crusher_lossy";
 /// falling back to the lossy crush path. The output is only returned when
 /// it is strictly smaller than the input (per the lossless/lossy size
 /// guards), so the function is safe to call unconditionally on any string.
-pub fn crush_json_string(text: &str) -> Option<(String, &'static str)> {
-    let parsed: Value = match serde_json::from_str(text) {
-        Ok(v) => v,
-        Err(_) => return None,
+fn parse_object_array(text: &str) -> Option<Vec<Value>> {
+    let Value::Array(arr) = serde_json::from_str::<Value>(text).ok()? else {
+        return None;
     };
-    let arr = match parsed.as_array() {
-        Some(a) if a.len() >= MIN_ITEMS => a,
-        _ => return None,
-    };
-    if !arr.iter().all(serde_json::Value::is_object) {
+    if arr.len() < MIN_ITEMS || !arr.iter().all(Value::is_object) {
         return None;
     }
-    // Try lossless CSV-schema first.
-    if let Some(out) = try_lossless_csv(arr)
-        && out.len() * LOSSLESS_KEEP_DEN < text.len() * LOSSLESS_KEEP_NUM
-    {
-        return Some((out, LOSSLESS_TECHNIQUE));
+    Some(arr)
+}
+
+fn try_lossless_route(arr: &[Value], original_len: usize) -> Option<(String, &'static str)> {
+    let out = try_lossless_csv(arr)?;
+    if out.len() * LOSSLESS_KEEP_DEN < original_len * LOSSLESS_KEEP_NUM {
+        Some((out, LOSSLESS_TECHNIQUE))
+    } else {
+        None
     }
-    // Fall back to lossy crush.
-    if let Some(out) = try_lossy(arr)
-        && out.len() < text.len()
-    {
-        return Some((out, LOSSY_TECHNIQUE));
+}
+
+fn try_lossy_route(arr: &[Value], original_len: usize) -> Option<(String, &'static str)> {
+    let out = try_lossy(arr)?;
+    if out.len() < original_len {
+        Some((out, LOSSY_TECHNIQUE))
+    } else {
+        None
     }
-    None
+}
+
+/// Compress a single JSON array string. Returns `Some((compressed, technique))`
+/// if compression applied, or `None` otherwise.
+///
+/// This is the per-string entry point that powers the content router. It
+/// parses `text` as a JSON value, requires it to be an array of ≥
+/// `MIN_ITEMS` objects, and tries the lossless CSV-schema path before
+/// falling back to the lossy crush path. The output is only returned when
+/// it is strictly smaller than the input (per the lossless/lossy size
+/// guards), so the function is safe to call unconditionally on any string.
+pub fn crush_json_string(text: &str) -> Option<(String, &'static str)> {
+    let arr = parse_object_array(text)?;
+    try_lossless_route(&arr, text.len()).or_else(|| try_lossy_route(&arr, text.len()))
 }
 
 /// Compresses JSON tool result arrays. Operates on `role == "tool"` messages
@@ -136,20 +151,21 @@ fn all_fields<'a>(arr: &'a [Value]) -> Vec<&'a str> {
     fields.into_iter().collect()
 }
 
+fn object_has_sufficient_fields(obj: &serde_json::Map<String, Value>, fields: &[&str]) -> bool {
+    let present = fields.iter().filter(|f| obj.contains_key(**f)).count();
+    at_least(present, fields.len(), COVERAGE_NUM, COVERAGE_DEN)
+}
+
 /// ≥80% of items must contain ≥80% of `fields`.
 fn check_field_coverage(arr: &[Value], fields: &[&str]) -> bool {
     if fields.is_empty() || arr.is_empty() {
         return false;
     }
-    let mut items_passing = 0usize;
-    for item in arr {
-        if let Some(obj) = item.as_object() {
-            let present = fields.iter().filter(|f| obj.contains_key(**f)).count();
-            if at_least(present, fields.len(), COVERAGE_NUM, COVERAGE_DEN) {
-                items_passing += 1;
-            }
-        }
-    }
+    let items_passing = arr
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|obj| object_has_sufficient_fields(obj, fields))
+        .count();
     at_least(items_passing, arr.len(), COVERAGE_NUM, COVERAGE_DEN)
 }
 
@@ -168,22 +184,25 @@ fn csv_escape(s: &str) -> String {
 fn json_value_to_csv_cell(val: &Value) -> String {
     match val {
         Value::Null => String::new(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
         Value::String(s) => csv_escape(s),
-        // Nested objects/arrays: embed compact JSON, escaped as needed.
         Value::Array(_) | Value::Object(_) => csv_escape(&val.to_string()),
+        scalar => scalar.to_string(),
     }
+}
+
+fn format_csv_row(obj: &serde_json::Map<String, Value>, fields: &[&str]) -> String {
+    fields
+        .iter()
+        .map(|field| obj.get(*field).map_or_else(String::new, json_value_to_csv_cell))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Try the lossless CSV-schema path. Returns `None` if coverage fails or
 /// there are no fields.
 fn try_lossless_csv(arr: &[Value]) -> Option<String> {
     let fields = all_fields(arr);
-    if fields.is_empty() {
-        return None;
-    }
-    if !check_field_coverage(arr, &fields) {
+    if fields.is_empty() || !check_field_coverage(arr, &fields) {
         return None;
     }
     let mut out = String::with_capacity(arr.len() * 32);
@@ -192,15 +211,7 @@ fn try_lossless_csv(arr: &[Value]) -> Option<String> {
     for item in arr {
         let obj = item.as_object()?;
         out.push('\n');
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            if let Some(v) = obj.get(*field) {
-                out.push_str(&json_value_to_csv_cell(v));
-            }
-            // Missing field => empty cell.
-        }
+        out.push_str(&format_csv_row(obj, &fields));
     }
     Some(out)
 }
@@ -233,7 +244,7 @@ fn value_has_error_token(v: &Value) -> bool {
         Value::String(s) => string_has_error_token(s),
         Value::Array(a) => a.iter().any(value_has_error_token),
         Value::Object(o) => o.values().any(value_has_error_token),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+        _ => false,
     }
 }
 
@@ -244,31 +255,26 @@ fn item_has_error_token(item: &Value) -> bool {
         .is_some_and(|o| o.values().any(value_has_error_token))
 }
 
-/// Try the lossy crush path. Returns `None` if nothing would be dropped
-/// (i.e. every item ended up in the kept set after dedup + cap).
-fn try_lossy(arr: &[Value]) -> Option<String> {
+fn collect_lossy_indices(arr: &[Value]) -> BTreeSet<usize> {
     let n = arr.len();
     let first_n = ceil_div_times(n, LOSSY_FIRST_NUM, LOSSY_FIRST_DEN);
     let last_n = ceil_div_times(n, LOSSY_LAST_NUM, LOSSY_LAST_DEN);
 
-    // BTreeSet gives us deterministic, ascending iteration order so the
-    // dedup pass below preserves original array order.
-    let mut kept_indices: BTreeSet<usize> = BTreeSet::new();
-    kept_indices.extend(0..first_n.min(n));
-    let last_start = n.saturating_sub(last_n);
-    kept_indices.extend(last_start..n);
+    let mut indices: BTreeSet<usize> = BTreeSet::new();
+    indices.extend(0..first_n.min(n));
+    indices.extend(n.saturating_sub(last_n)..n);
     for (i, item) in arr.iter().enumerate() {
         if item_has_error_token(item) {
-            kept_indices.insert(i);
+            indices.insert(i);
         }
     }
-    // Keyword relevance: empty query for v1, so this is a no-op. When query
-    // keywords become available, insert matching indices here before dedup.
+    indices
+}
 
-    // Dedup by serialized JSON, preserving selection order.
+fn deduplicate_lossy_items(arr: &[Value], indices: &BTreeSet<usize>) -> Vec<Value> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut kept_items: Vec<Value> = Vec::new();
-    for &i in &kept_indices {
+    for &i in indices {
         if let Some(item) = arr.get(i) {
             let serialized = item.to_string();
             if seen.insert(serialized) {
@@ -276,11 +282,18 @@ fn try_lossy(arr: &[Value]) -> Option<String> {
             }
         }
     }
-
-    // Truncate to cap.
     if kept_items.len() > LOSSY_MAX_ITEMS {
         kept_items.truncate(LOSSY_MAX_ITEMS);
     }
+    kept_items
+}
+
+/// Try the lossy crush path. Returns `None` if nothing would be dropped
+/// (i.e. every item ended up in the kept set after dedup + cap).
+fn try_lossy(arr: &[Value]) -> Option<String> {
+    let n = arr.len();
+    let kept_indices = collect_lossy_indices(arr);
+    let kept_items = deduplicate_lossy_items(arr, &kept_indices);
 
     let kept = kept_items.len();
     let dropped = n.saturating_sub(kept);

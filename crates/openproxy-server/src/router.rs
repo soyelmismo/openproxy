@@ -49,9 +49,39 @@ use crate::{
 };
 
 pub fn build_router(state: AppState) -> Router {
-    // Public + chat routes assembled via handlers::public_api_routes.
     let public_api_routes = handlers::public_api_routes(&state);
+    let admin_routes = build_admin_router(&state);
 
+    Router::new()
+        .route(
+            "/",
+            get(|| async { axum::response::Redirect::temporary("/admin") }),
+        )
+        .route(
+            "/admin/",
+            get(|| async { axum::response::Redirect::temporary("/admin") }),
+        )
+        .route("/v1/health", get(health))
+        .merge(public_api_routes)
+        .nest("/admin", admin_routes)
+        .layer(crate::middleware::compression::transport_compression_layer())
+        .layer(middleware::from_fn(
+            crate::middleware::request_id::request_id,
+        ))
+        // MEDIUM fix (audit finding #8): axum's default body limit is
+        // 2 MiB, which is too small for a single legitimate prompt (some
+        // long-context requests attach tens of KiB of system prompt +
+        // tool definitions) and has no project-wide ceiling for the
+        // admin JSON extractors (POST /admin/api/combos/{id}/targets,
+        // handlers::admin::models::bulk_toggle_models, handlers::admin::combos::reorder_combo_targets, etc.). Raising to
+        // 32 MiB allows long-context chat while keeping a sane DoS
+        // ceiling. Streaming requests (SSE) are not affected — the
+        // limit applies to the request body, not the response.
+        .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
+        .with_state(state)
+}
+
+fn build_admin_router(state: &AppState) -> Router<AppState> {
     // Admin REST API. Every route here is mounted under `/admin/api/*`
     // (see `admin_routes` below). The auth middleware
     // (`admin_auth_middleware`) is layered on this sub-router ONLY —
@@ -106,7 +136,7 @@ pub fn build_router(state: AppState) -> Router {
     //   - `/admin/health`      — public (LB probes)
     //   - `/admin/oauth/callback` — public (browser callback)
     //   - everything else      — public (SPA shell + assets)
-    let admin_routes = Router::new()
+    Router::new()
         // `/admin` and `/admin/` both serve the SPA shell. axum 0.7+
         // treats trailing-slash and no-trailing-slash as different
         // paths, so we register both. (Note: axum 0.8 rejects empty-string
@@ -138,35 +168,7 @@ pub fn build_router(state: AppState) -> Router {
         // path-traversal guard + cache headers + extension parsing.
         .route("/i18n/{lang}", get(admin_ui::serve_i18n))
         .nest("/api", admin_api_routes)
-        .fallback(admin_ui::serve_asset);
-
-    Router::new()
-        .route(
-            "/",
-            get(|| async { axum::response::Redirect::temporary("/admin") }),
-        )
-        .route(
-            "/admin/",
-            get(|| async { axum::response::Redirect::temporary("/admin") }),
-        )
-        .route("/v1/health", get(health))
-        .merge(public_api_routes)
-        .nest("/admin", admin_routes)
-        .layer(crate::middleware::compression::transport_compression_layer())
-        .layer(middleware::from_fn(
-            crate::middleware::request_id::request_id,
-        ))
-        // MEDIUM fix (audit finding #8): axum's default body limit is
-        // 2 MiB, which is too small for a single legitimate prompt (some
-        // long-context requests attach tens of KiB of system prompt +
-        // tool definitions) and has no project-wide ceiling for the
-        // admin JSON extractors (POST /admin/api/combos/{id}/targets,
-        // handlers::admin::models::bulk_toggle_models, handlers::admin::combos::reorder_combo_targets, etc.). Raising to
-        // 32 MiB allows long-context chat while keeping a sane DoS
-        // ceiling. Streaming requests (SSE) are not affected — the
-        // limit applies to the request body, not the response.
-        .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
-        .with_state(state)
+        .fallback(admin_ui::serve_asset)
 }
 
 /// `GET /v1/health` — unauthenticated liveness probe.

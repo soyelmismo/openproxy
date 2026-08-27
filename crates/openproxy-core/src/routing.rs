@@ -26,38 +26,46 @@ use openproxy_db::combos;
 use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use rusqlite::{Connection, OptionalExtension};
 
+fn fetch_healthy_account_ids(conn: &Connection, provider_id: &ProviderId) -> Result<Vec<AccountId>> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC")
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+    let ids = stmt
+        .query_map(rusqlite::params![provider_id.as_str()], |r| {
+            r.get::<_, i64>(0).map(AccountId)
+        })
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+    Ok(ids)
+}
+
+fn expand_single_target(conn: &Connection, target: ComboTarget) -> Result<Vec<ComboTarget>> {
+    if target.account_id.is_some() || target.sub_combo_id.is_some() {
+        return Ok(vec![target]);
+    }
+    let account_ids = fetch_healthy_account_ids(conn, &target.provider_id)?;
+    if account_ids.is_empty() {
+        return Ok(vec![target]);
+    }
+    let targets = account_ids
+        .into_iter()
+        .map(|aid| {
+            let mut ct = target.clone();
+            ct.account_id = Some(aid);
+            ct
+        })
+        .collect();
+    Ok(targets)
+}
+
 pub fn expand_account_rotation(
     conn: &Connection,
     targets: Vec<ComboTarget>,
 ) -> Result<Vec<ComboTarget>> {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
-        if t.account_id.is_some() || t.sub_combo_id.is_some() {
-            out.push(t);
-            continue;
-        }
-        let mut stmt = conn
-            .prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC")
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let mut rows = stmt
-            .query(rusqlite::params![t.provider_id.as_str()])
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let mut count = 0;
-        while let Some(r) = rows
-            .next()
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
-        {
-            let mut ct = t.clone();
-            ct.account_id =
-                Some(AccountId(r.get::<_, i64>(0).map_err(|e| {
-                    openproxy_types::error::CoreError::Internal(e.to_string())
-                })?));
-            out.push(ct);
-            count += 1;
-        }
-        if count == 0 {
-            out.push(t);
-        }
+        out.extend(expand_single_target(conn, t)?);
     }
     Ok(out)
 }

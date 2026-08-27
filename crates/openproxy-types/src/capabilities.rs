@@ -27,13 +27,17 @@ impl ModelCapabilities {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.vision.is_none()
-            && self.tool_calling.is_none()
-            && self.reasoning.is_none()
-            && self.thinking.is_none()
-            && self.attachment.is_none()
-            && self.structured_output.is_none()
-            && self.temperature.is_none()
+        [
+            self.vision,
+            self.tool_calling,
+            self.reasoning,
+            self.thinking,
+            self.attachment,
+            self.structured_output,
+            self.temperature,
+        ]
+        .iter()
+        .all(Option::is_none)
     }
 
     pub fn to_json(&self) -> Option<String> {
@@ -147,19 +151,44 @@ pub fn infer_input_modalities_for_model(
     infer_input_modalities_for_model_lower(&lower, caps)
 }
 
+fn is_multimodal_embedding(lower: &str) -> bool {
+    const EMBED_VL_KW: &[&str] = &["vl", "multimodal", "embed-vl", "gemini-embedding-2"];
+    EMBED_VL_KW.iter().any(|k| lower.contains(k))
+}
+
+fn is_image_editing_model(lower: &str) -> bool {
+    const IMG_EDIT_KW: &[&str] = &["inpaint", "edit", "img2img", "controlnet", "variation"];
+    IMG_EDIT_KW.iter().any(|k| lower.contains(k))
+}
+
+fn is_native_audio_model(lower: &str) -> bool {
+    const AUDIO_CHAT_KW: &[&str] = &[
+        "gpt-4o-audio",
+        "gpt-4-audio",
+        "native-audio",
+        "stepaudio",
+    ];
+    AUDIO_CHAT_KW.iter().any(|k| lower.contains(k))
+}
+
+fn infer_chat_input_modalities(lower: &str, caps: &ModelCapabilities) -> Vec<&'static str> {
+    let has_vision = caps.vision.unwrap_or(false);
+    let has_audio = is_native_audio_model(lower);
+    match (has_vision, has_audio) {
+        (true, true) => vec!["text", "image", "audio"],
+        (true, false) => vec!["text", "image"],
+        (false, true) => vec!["text", "audio"],
+        (false, false) => vec!["text"],
+    }
+}
+
 fn infer_input_modalities_for_model_lower(
     lower: &str,
     caps: &ModelCapabilities,
 ) -> Vec<&'static str> {
-    let m_type = infer_model_type_lower(lower);
-
-    match m_type {
+    match infer_model_type_lower(lower) {
         "embedding" => {
-            if lower.contains("vl")
-                || lower.contains("multimodal")
-                || lower.contains("embed-vl")
-                || lower.contains("gemini-embedding-2")
-            {
+            if is_multimodal_embedding(lower) {
                 vec!["text", "image"]
             } else {
                 vec!["text"]
@@ -167,12 +196,7 @@ fn infer_input_modalities_for_model_lower(
         }
         "rerank" => vec!["text"],
         "image" => {
-            if lower.contains("inpaint")
-                || lower.contains("edit")
-                || lower.contains("img2img")
-                || lower.contains("controlnet")
-                || lower.contains("variation")
-            {
+            if is_image_editing_model(lower) {
                 vec!["text", "image"]
             } else {
                 vec!["text"]
@@ -185,23 +209,7 @@ fn infer_input_modalities_for_model_lower(
                 vec!["text"]
             }
         }
-        _ => {
-            if lower.contains("gpt-4o-audio")
-                || lower.contains("gpt-4-audio")
-                || lower.contains("native-audio")
-                || lower.contains("stepaudio")
-            {
-                if caps.vision.unwrap_or(false) {
-                    vec!["text", "image", "audio"]
-                } else {
-                    vec!["text", "audio"]
-                }
-            } else if caps.vision.unwrap_or(false) {
-                vec!["text", "image"]
-            } else {
-                vec!["text"]
-            }
-        }
+        _ => infer_chat_input_modalities(lower, caps),
     }
 }
 
@@ -210,31 +218,29 @@ pub fn infer_output_modalities(model_id: &str) -> Vec<&'static str> {
     infer_output_modalities_lower(&lower)
 }
 
-fn infer_output_modalities_lower(lower: &str) -> Vec<&'static str> {
-    let m_type = infer_model_type_lower(lower);
+fn infer_audio_output_modalities(lower: &str) -> Vec<&'static str> {
+    if STT_KEYWORDS.iter().any(|k| lower.contains(k)) {
+        vec!["text"]
+    } else {
+        vec!["audio"]
+    }
+}
 
-    match m_type {
+fn infer_chat_output_modalities(lower: &str) -> Vec<&'static str> {
+    if is_native_audio_model(lower) {
+        vec!["text", "audio"]
+    } else {
+        vec!["text"]
+    }
+}
+
+fn infer_output_modalities_lower(lower: &str) -> Vec<&'static str> {
+    match infer_model_type_lower(lower) {
         "embedding" => vec!["embedding"],
         "image" => vec!["image"],
-        "audio" => {
-            if STT_KEYWORDS.iter().any(|k| lower.contains(k)) {
-                vec!["text"]
-            } else {
-                vec!["audio"]
-            }
-        }
+        "audio" => infer_audio_output_modalities(lower),
         "rerank" => vec!["text"],
-        _ => {
-            if lower.contains("gpt-4o-audio")
-                || lower.contains("gpt-4-audio")
-                || lower.contains("native-audio")
-                || lower.contains("stepaudio")
-            {
-                vec!["text", "audio"]
-            } else {
-                vec!["text"]
-            }
-        }
+        _ => infer_chat_output_modalities(lower),
     }
 }
 
@@ -440,50 +446,54 @@ pub fn infer_model_type(model_id: &str) -> &'static str {
     infer_model_type_lower(&lower)
 }
 
-fn infer_model_type_lower(lower: &str) -> &'static str {
-    // 1. Rerank models (highest priority unambiguous keyword)
-    if RERANK_KEYWORDS.iter().any(|k| lower.contains(k)) {
-        return "rerank";
-    }
-
-    // 2. Embedding models
-    if EMBEDDING_KEYWORDS.iter().any(|k| lower.contains(k))
+fn is_embedding_model(lower: &str) -> bool {
+    EMBEDDING_KEYWORDS.iter().any(|k| lower.contains(k))
         || (lower.contains("embed")
             && !lower.contains("embedded-")
             && !lower.contains("embed_chat")
             && !lower.contains("embeddable"))
-    {
-        return "embedding";
-    }
+}
 
-    // 3. Multimodal Conversational LLMs Guard (prevents Gemini Flash, GPT-4o, Claude, etc. from matching audio/image)
-    if CHAT_GUARD_KEYWORDS.iter().any(|k| lower.contains(k)) {
-        if lower.contains("imagen-") || lower.contains("imagen/") || lower == "imagen" {
-            return "image";
-        }
-        return "chat";
+fn check_chat_guard_model(lower: &str) -> Option<&'static str> {
+    if !CHAT_GUARD_KEYWORDS.iter().any(|k| lower.contains(k)) {
+        return None;
     }
+    if lower.contains("imagen-") || lower.contains("imagen/") || lower == "imagen" {
+        Some("image")
+    } else {
+        Some("chat")
+    }
+}
 
-    // 4. Dedicated Audio models (TTS, STT, Music, Speech)
-    if AUDIO_KEYWORDS.iter().any(|k| lower.contains(k))
+fn is_audio_model(lower: &str) -> bool {
+    AUDIO_KEYWORDS.iter().any(|k| lower.contains(k))
         || lower.ends_with("-tts")
         || lower.ends_with("_tts")
         || lower.ends_with("/tts")
         || (lower.contains("telnyx-") && lower.contains("tts"))
-    {
-        return "audio";
-    }
+}
 
-    // 5. Dedicated Image models
+fn is_image_model(lower: &str) -> bool {
     if lower.contains("diffusiongemma") || lower.contains("sdft") {
-        return "chat";
+        return false;
     }
+    IMAGE_KEYWORDS.iter().any(|k| lower.contains(k)) || lower == "imagen"
+}
 
-    if IMAGE_KEYWORDS.iter().any(|k| lower.contains(k)) || lower == "imagen" {
-        return "image";
+fn infer_model_type_lower(lower: &str) -> &'static str {
+    if RERANK_KEYWORDS.iter().any(|k| lower.contains(k)) {
+        "rerank"
+    } else if is_embedding_model(lower) {
+        "embedding"
+    } else if let Some(guarded_type) = check_chat_guard_model(lower) {
+        guarded_type
+    } else if is_audio_model(lower) {
+        "audio"
+    } else if is_image_model(lower) {
+        "image"
+    } else {
+        "chat"
     }
-
-    "chat"
 }
 
 fn serialize_modalities(mods: &[&str]) -> String {

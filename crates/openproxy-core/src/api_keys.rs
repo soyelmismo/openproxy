@@ -58,15 +58,79 @@ pub struct ApiKey {
     pub created_by: Option<String>,
 }
 
+fn matches_model_spec(spec: &str, candidate: &str) -> bool {
+    if spec == "*" || spec == candidate {
+        return true;
+    }
+    if let Some(prefix) = spec.strip_suffix('*')
+        && candidate.starts_with(prefix)
+    {
+        return true;
+    }
+    if let Some(suffix) = spec.strip_prefix('*')
+        && candidate.ends_with(suffix)
+    {
+        return true;
+    }
+    false
+}
+
+fn model_matches_pattern(
+    pattern: &str,
+    model: &str,
+    bare_model: &str,
+    full_id: Option<&str>,
+) -> bool {
+    matches_model_spec(pattern, model)
+        || matches_model_spec(pattern, bare_model)
+        || full_id.is_some_and(|f| matches_model_spec(pattern, f))
+}
+
+fn is_provider_blacklisted(blacklisted: Option<&[String]>, provider: Option<&str>) -> bool {
+    if let (Some(bp), Some(p)) = (blacklisted, provider) {
+        bp.iter().any(|b| b == p || b == "*")
+    } else {
+        false
+    }
+}
+
+fn is_model_permitted_by_allowlist(
+    allowed_models: Option<&[String]>,
+    model: &str,
+    bare_model: &str,
+    full_id: Option<&str>,
+) -> bool {
+    let Some(allowed) = allowed_models else {
+        return true;
+    };
+    if allowed.is_empty() {
+        return true;
+    }
+    allowed
+        .iter()
+        .any(|m| model_matches_pattern(m, model, bare_model, full_id))
+}
+
+fn is_model_blocked_by_blacklist(
+    blacklisted_models: Option<&[String]>,
+    model: &str,
+    bare_model: &str,
+    full_id: Option<&str>,
+) -> bool {
+    let Some(blacklisted) = blacklisted_models else {
+        return false;
+    };
+    blacklisted
+        .iter()
+        .any(|b| model_matches_pattern(b, model, bare_model, full_id))
+}
+
 impl ApiKey {
     /// Returns whether the specified model is permitted by this key's
     /// `allowed_models`, `blacklisted_models`, and `blacklisted_providers`.
     pub fn is_model_allowed(&self, model: &str, provider_id: Option<&str>) -> bool {
-        let (prov_from_model, bare_model) = if let Some((p, m)) = model.split_once('/') {
-            (Some(p), m)
-        } else {
-            (None, model)
-        };
+        let (prov_from_model, bare_model) =
+            model.split_once('/').map_or((None, model), |(p, m)| (Some(p), m));
         let effective_prov = provider_id.or(prov_from_model);
         let full_id = effective_prov.and_then(|p| {
             if model.starts_with(&format!("{p}/")) {
@@ -76,57 +140,30 @@ impl ApiKey {
             }
         });
 
-        let matches_spec = |spec: &str, candidate: &str| -> bool {
-            if spec == "*" || spec == candidate {
-                return true;
-            }
-            if let Some(prefix) = spec.strip_suffix('*')
-                && candidate.starts_with(prefix)
-            {
-                return true;
-            }
-            if let Some(suffix) = spec.strip_prefix('*')
-                && candidate.ends_with(suffix)
-            {
-                return true;
-            }
-            false
-        };
-
-        let check_match = |pattern: &str| -> bool {
-            matches_spec(pattern, model)
-                || matches_spec(pattern, bare_model)
-                || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
-        };
-
-        // 1. Allowlist check (if set and non-empty)
-        if let Some(allowed) = &self.allowed_models
-            && !allowed.is_empty()
-        {
-            let matches_allowed = allowed.iter().any(|m| check_match(m));
-            if !matches_allowed {
-                return false;
-            }
+        // 1. Allowlist check
+        if !is_model_permitted_by_allowlist(
+            self.allowed_models.as_deref(),
+            model,
+            bare_model,
+            full_id.as_deref(),
+        ) {
+            return false;
         }
 
         // 2. Blacklisted providers check
-        if let Some(blacklisted_provs) = &self.blacklisted_providers {
-            if let Some(p) = provider_id
-                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
-            {
-                return false;
-            }
-            if let Some(p) = prov_from_model
-                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
-            {
-                return false;
-            }
+        if is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+            || is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
+        {
+            return false;
         }
 
         // 3. Blacklisted models check
-        if let Some(blacklisted) = &self.blacklisted_models
-            && blacklisted.iter().any(|b| check_match(b))
-        {
+        if is_model_blocked_by_blacklist(
+            self.blacklisted_models.as_deref(),
+            model,
+            bare_model,
+            full_id.as_deref(),
+        ) {
             return false;
         }
 
@@ -436,11 +473,12 @@ pub fn hard_delete(conn: &Connection, id: ApiKeyId) -> Result<()> {
 /// Issue a new plaintext and re-hash the row. The id and metadata
 /// are preserved; only `key_hash`, `key_prefix`, and the revocation
 /// state change. The previous plaintext is invalidated immediately.
-pub fn regenerate(conn: &Connection, id: ApiKeyId) -> Result<(ApiKey, String)> {
-    let plaintext = generate_plaintext();
-    let key_hash = hash_key(&plaintext);
-    let key_prefix: String = plaintext.chars().take(12).collect();
-
+fn update_key_hash_row(
+    conn: &Connection,
+    id: ApiKeyId,
+    key_hash: &str,
+    key_prefix: &str,
+) -> Result<()> {
     let affected = conn
         .execute(
             "UPDATE api_keys \
@@ -456,6 +494,18 @@ pub fn regenerate(conn: &Connection, id: ApiKeyId) -> Result<(ApiKey, String)> {
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
     }
+    Ok(())
+}
+
+/// Issue a new plaintext and re-hash the row. The id and metadata
+/// are preserved; only `key_hash`, `key_prefix`, and the revocation
+/// state change. The previous plaintext is invalidated immediately.
+pub fn regenerate(conn: &Connection, id: ApiKeyId) -> Result<(ApiKey, String)> {
+    let plaintext = generate_plaintext();
+    let key_hash = hash_key(&plaintext);
+    let key_prefix: String = plaintext.chars().take(12).collect();
+
+    update_key_hash_row(conn, id, &key_hash, &key_prefix)?;
 
     let row = get_by_id(conn, id)?
         .ok_or_else(|| CoreError::Internal("regenerated api_key vanished".into()))?;
@@ -507,6 +557,95 @@ pub struct UpdateParams<'a> {
     pub expires_at: Option<Option<&'a str>>,
 }
 
+#[allow(clippy::option_option)]
+fn serialize_optional_json<T: serde::Serialize>(
+    opt: Option<Option<&[T]>>,
+    name: &str,
+) -> Result<Option<Option<String>>> {
+    opt.map(|inner| {
+        inner
+            .map(|v| {
+                serde_json::to_string(v)
+                    .map_err(|e| CoreError::Parse(format!("serialize {name}: {e}")))
+            })
+            .transpose()
+    })
+    .transpose()
+}
+
+#[allow(clippy::option_option)]
+fn build_update_json_clauses(
+    scopes_json: Option<String>,
+    allowed_models_json: Option<Option<String>>,
+    allowed_combos_json: Option<Option<String>>,
+    blacklisted_providers_json: Option<Option<String>>,
+    blacklisted_models_json: Option<Option<String>>,
+    sets: &mut Vec<&'static str>,
+    bound: &mut Vec<Box<dyn rusqlite::ToSql>>,
+) {
+    if let Some(s) = scopes_json {
+        sets.push("scopes_json = ?");
+        bound.push(Box::new(s));
+    }
+    if let Some(om) = allowed_models_json {
+        sets.push("allowed_models_json = ?");
+        bound.push(Box::new(om));
+    }
+    if let Some(oc) = allowed_combos_json {
+        sets.push("allowed_combos_json = ?");
+        bound.push(Box::new(oc));
+    }
+    if let Some(bp) = blacklisted_providers_json {
+        sets.push("blacklisted_providers_json = ?");
+        bound.push(Box::new(bp));
+    }
+    if let Some(bm) = blacklisted_models_json {
+        sets.push("blacklisted_models_json = ?");
+        bound.push(Box::new(bm));
+    }
+}
+
+fn build_update_scalar_clauses(
+    params: UpdateParams<'_>,
+    sets: &mut Vec<&'static str>,
+    bound: &mut Vec<Box<dyn rusqlite::ToSql>>,
+) {
+    if let Some(label_value) = params.label {
+        sets.push("label = ?");
+        bound.push(Box::new(label_value.to_string()));
+    }
+    if let Some(active) = params.is_active {
+        sets.push("is_active = ?");
+        bound.push(Box::new(active as i64));
+        if !active {
+            sets.push("revoked_at = COALESCE(revoked_at, datetime('now'))");
+        } else {
+            sets.push("revoked_at = NULL");
+        }
+    }
+    if let Some(oe) = params.expires_at {
+        sets.push("expires_at = ?");
+        bound.push(Box::new(oe.map(|s| s.to_string())));
+    }
+}
+
+fn verify_api_key_exists(conn: &Connection, id: ApiKeyId) -> Result<()> {
+    let present: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM api_keys WHERE id = ?1",
+            params![id.0],
+            |r| r.get(0),
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("count api_key {}: {e}", id.0),
+            source: Some(std::sync::Arc::new(e)),
+        })?;
+    if present == 0 {
+        return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
+    }
+    Ok(())
+}
+
 pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Result<()> {
     if let Some(s) = params.scopes
         && s.is_empty()
@@ -515,125 +654,35 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
             "scopes must contain at least one entry".into(),
         ));
     }
-    let scopes_json: Option<String> = params
+    let scopes_json = params
         .scopes
         .map(|s| {
-            serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
+            serde_json::to_string(s)
+                .map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
         })
         .transpose()?;
-    let allowed_models_json: Option<Option<String>> = params
-        .allowed_models
-        .map(|inner| {
-            inner
-                .map(|v| {
-                    serde_json::to_string(v)
-                        .map_err(|e| CoreError::Parse(format!("serialize allowed_models: {e}")))
-                })
-                .transpose()
-        })
-        .transpose()?;
-    let allowed_combos_json: Option<Option<String>> = params
-        .allowed_combos
-        .map(|inner| {
-            inner
-                .map(|v| {
-                    serde_json::to_string(v)
-                        .map_err(|e| CoreError::Parse(format!("serialize allowed_combos: {e}")))
-                })
-                .transpose()
-        })
-        .transpose()?;
-    let blacklisted_providers_json: Option<Option<String>> = params
-        .blacklisted_providers
-        .map(|inner| {
-            inner
-                .map(|v| {
-                    serde_json::to_string(v).map_err(|e| {
-                        CoreError::Parse(format!("serialize blacklisted_providers: {e}"))
-                    })
-                })
-                .transpose()
-        })
-        .transpose()?;
-    let blacklisted_models_json: Option<Option<String>> = params
-        .blacklisted_models
-        .map(|inner| {
-            inner
-                .map(|v| {
-                    serde_json::to_string(v)
-                        .map_err(|e| CoreError::Parse(format!("serialize blacklisted_models: {e}")))
-                })
-                .transpose()
-        })
-        .transpose()?;
-    let expires_at_str: Option<Option<&str>> = params.expires_at;
+    let allowed_models_json = serialize_optional_json(params.allowed_models, "allowed_models")?;
+    let allowed_combos_json = serialize_optional_json(params.allowed_combos, "allowed_combos")?;
+    let blacklisted_providers_json =
+        serialize_optional_json(params.blacklisted_providers, "blacklisted_providers")?;
+    let blacklisted_models_json =
+        serialize_optional_json(params.blacklisted_models, "blacklisted_models")?;
 
-    // Build the dynamic SET clause. We only touch columns that the
-    // caller actually provided, so a no-op PATCH round-trips through
-    // the SQL with zero writes.
-    let mut sets: Vec<&'static str> = Vec::new();
-    let mut bound: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(label_value) = params.label {
-        sets.push("label = ?");
-        bound.push(Box::new(label_value.to_string()));
-    }
-    if let Some(s) = &scopes_json {
-        sets.push("scopes_json = ?");
-        bound.push(Box::new(s.to_owned()));
-    }
-    if let Some(om) = &allowed_models_json {
-        sets.push("allowed_models_json = ?");
-        bound.push(Box::new(om.to_owned()));
-    }
-    if let Some(oc) = &allowed_combos_json {
-        sets.push("allowed_combos_json = ?");
-        bound.push(Box::new(oc.to_owned()));
-    }
-    if let Some(bp) = &blacklisted_providers_json {
-        sets.push("blacklisted_providers_json = ?");
-        bound.push(Box::new(bp.to_owned()));
-    }
-    if let Some(bm) = &blacklisted_models_json {
-        sets.push("blacklisted_models_json = ?");
-        bound.push(Box::new(bm.to_owned()));
-    }
-    if let Some(active) = params.is_active {
-        sets.push("is_active = ?");
-        bound.push(Box::new(active as i64));
-        if !active {
-            // Audit-stamp the revoke time when the user disables a key
-            // from the dashboard. Mirror the soft-revoke path so the
-            // audit row is consistent regardless of which endpoint
-            // the operator used.
-            sets.push("revoked_at = COALESCE(revoked_at, datetime('now'))");
-        } else {
-            // Re-enabling a previously revoked key clears the audit
-            // stamp. Re-revoking later will re-stamp it.
-            sets.push("revoked_at = NULL");
-        }
-    }
-    if let Some(oe) = expires_at_str {
-        sets.push("expires_at = ?");
-        bound.push(Box::new(oe.map(|s| s.to_string())));
-    }
+    let mut sets = Vec::new();
+    let mut bound = Vec::new();
+    build_update_scalar_clauses(params, &mut sets, &mut bound);
+    build_update_json_clauses(
+        scopes_json,
+        allowed_models_json,
+        allowed_combos_json,
+        blacklisted_providers_json,
+        blacklisted_models_json,
+        &mut sets,
+        &mut bound,
+    );
 
     if sets.is_empty() {
-        // Nothing to do. Still verify the row exists so the caller
-        // gets a clear error for a missing id.
-        let present: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM api_keys WHERE id = ?1",
-                params![id.0],
-                |r| r.get(0),
-            )
-            .map_err(|e| CoreError::Database {
-                message: format!("count api_key {}: {e}", id.0),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
-        if present == 0 {
-            return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
-        }
-        return Ok(());
+        return verify_api_key_exists(conn, id);
     }
 
     let sql = format!("UPDATE api_keys SET {} WHERE id = ?", sets.join(", "));
@@ -668,29 +717,31 @@ pub struct UsageSummary {
     pub last_used_at: Option<String>,
 }
 
+fn fetch_key_usage_stats(conn: &Connection, id: ApiKeyId) -> Result<(i64, i64, i64, f64)> {
+    conn.query_row(
+        "SELECT \
+             COUNT(*), \
+             COUNT(DISTINCT request_id), \
+             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END), \
+             COALESCE(SUM(cost_usd), 0.0) \
+         FROM usage WHERE api_key_id = ?1",
+        params![id.0],
+        |r| {
+            let total: i64 = r.get(0)?;
+            let unique: i64 = r.get(1)?;
+            let errors: Option<i64> = r.get(2)?;
+            let cost: f64 = r.get(3)?;
+            Ok((total, unique, errors.unwrap_or(0), cost))
+        },
+    )
+    .map_err(|e| CoreError::Database {
+        message: format!("usage_summary for api_key {}: {e}", id.0),
+        source: Some(std::sync::Arc::new(e)),
+    })
+}
+
 pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
-    // total_rows + unique_requests + errors + cost, scoped to this key.
-    let row = conn
-        .query_row(
-            "SELECT \
-                 COUNT(*), \
-                 COUNT(DISTINCT request_id), \
-                 SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END), \
-                 COALESCE(SUM(cost_usd), 0.0) \
-             FROM usage WHERE api_key_id = ?1",
-            params![id.0],
-            |r| {
-                let total: i64 = r.get(0)?;
-                let unique: i64 = r.get(1)?;
-                let errors: Option<i64> = r.get(2)?;
-                let cost: f64 = r.get(3)?;
-                Ok((total, unique, errors.unwrap_or(0), cost))
-            },
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!("usage_summary for api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+    let row = fetch_key_usage_stats(conn, id)?;
     let last_used_at: Option<String> = conn
         .query_row(
             "SELECT last_used_at FROM api_keys WHERE id = ?1",
@@ -702,7 +753,7 @@ pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
             message: format!("select last_used_at for api_key {}: {e}", id.0),
             source: Some(std::sync::Arc::new(e)),
         })?
-        .flatten(); // outer None (row gone) → None; inner None (column NULL) → None.
+        .flatten();
 
     Ok(UsageSummary {
         total_rows: row.0.max(0) as u64,
@@ -716,6 +767,36 @@ pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
 // ---------------------------------------------------------------------------
 // Row mapper
 // ---------------------------------------------------------------------------
+
+fn parse_required_json<T: serde::de::DeserializeOwned>(
+    raw: &str,
+    col_idx: usize,
+    desc: &str,
+) -> rusqlite::Result<T> {
+    serde_json::from_str(raw).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            col_idx,
+            rusqlite::types::Type::Text,
+            Box::new(SimpleErr(format!("decode {desc}: {e}"))),
+        )
+    })
+}
+
+fn parse_optional_json<T: serde::de::DeserializeOwned>(
+    raw: Option<String>,
+    col_idx: usize,
+    desc: &str,
+) -> rusqlite::Result<Option<T>> {
+    match raw {
+        Some(s) if !s.is_empty() => Ok(Some(parse_required_json(&s, col_idx, desc)?)),
+        _ => Ok(None),
+    }
+}
+
+fn parse_json_filter(raw: Option<String>) -> Option<Vec<String>> {
+    raw.filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
 
 /// Map a single SELECT row into an `ApiKey`. Shared by `get_by_id`,
 /// `get_by_hash`, and `list`.
@@ -740,41 +821,11 @@ fn row_to_api_key(row: &Row<'_>) -> rusqlite::Result<ApiKey> {
     let blacklisted_providers_json: Option<String> = row.get(13)?;
     let blacklisted_models_json: Option<String> = row.get(14)?;
 
-    let scopes: Vec<String> = serde_json::from_str(&scopes_json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            4,
-            rusqlite::types::Type::Text,
-            Box::new(SimpleErr(format!("decode scopes_json: {e}"))),
-        )
-    })?;
-    let allowed_models = match allowed_models_json {
-        Some(s) if !s.is_empty() => Some(serde_json::from_str(&s).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(SimpleErr(format!("decode allowed_models_json: {e}"))),
-            )
-        })?),
-        _ => None,
-    };
-    let allowed_combos = match allowed_combos_json {
-        Some(s) if !s.is_empty() => Some(serde_json::from_str(&s).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                6,
-                rusqlite::types::Type::Text,
-                Box::new(SimpleErr(format!("decode allowed_combos_json: {e}"))),
-            )
-        })?),
-        _ => None,
-    };
-    let blacklisted_providers = match blacklisted_providers_json {
-        Some(s) if !s.is_empty() => serde_json::from_str(&s).ok(),
-        _ => None,
-    };
-    let blacklisted_models = match blacklisted_models_json {
-        Some(s) if !s.is_empty() => serde_json::from_str(&s).ok(),
-        _ => None,
-    };
+    let scopes: Vec<String> = parse_required_json(&scopes_json, 4, "scopes_json")?;
+    let allowed_models = parse_optional_json(allowed_models_json, 5, "allowed_models_json")?;
+    let allowed_combos = parse_optional_json(allowed_combos_json, 6, "allowed_combos_json")?;
+    let blacklisted_providers = parse_json_filter(blacklisted_providers_json);
+    let blacklisted_models = parse_json_filter(blacklisted_models_json);
 
     Ok(ApiKey {
         id: ApiKeyId(id),

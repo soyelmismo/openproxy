@@ -1,5 +1,5 @@
 use super::{
-    ApiError, AppState, CoreError, Deserialize, ProviderId, refresh_oauth_if_needed,
+    AccountId, ApiError, AppState, CoreError, Deserialize, ProviderId, refresh_oauth_if_needed,
     resolve_adapter, seed,
 };
 use axum::{
@@ -187,104 +187,51 @@ pub(crate) fn spawn_background_provider_refresh(
     });
 }
 
-pub(crate) async fn run_provider_refresh(
-    s: AppState,
-    provider_id_str: &str,
-    q: ProviderRefreshQuery,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let provider = ProviderId::new(provider_id_str);
-    let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
-
-    // 1. Find the adapter. Check built-in adapters first, then
-    //    fall back to constructing a CustomAdapter from the DB row.
-    let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
-        Ok(a) => a,
-        Err(e) => return Err(ApiError(e)),
+async fn resolve_refresh_key_and_label(
+    s: &AppState,
+    provider: &ProviderId,
+    selected_account_id: Option<AccountId>,
+) -> Result<(String, String), ApiError> {
+    let Some(account_id) = selected_account_id else {
+        return Ok((String::new(), String::new()));
     };
 
-    // 2. Provider has no /models endpoint and no custom fetch_models
-    //    implementation: no rows to refresh, return an empty result
-    //    with a note rather than a 5xx.  Providers like Antigravity
-    //    return None for models_url() but override fetch_models() to
-    //    discover models via a different API, so we let them through
-    //    here and let refresh_models() call fetch_models() directly.
-    //    (The guard below is intentionally removed — fetch_models is
-    //    always invoked by core_admin::refresh_models regardless.)
-
-    // 3. Resolve a healthy/degraded account for this provider.
-    let selected_account_id =
-        match crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q) {
-            Ok((Some(account_id), _)) => Some(account_id),
-            Ok((None, _)) => None,
-            Err(e) => return Err(e),
+    let (account, api_key_res) = {
+        let r = s.db_pool().reader();
+        let a = core_accounts::get(&r, account_id, s.master_key().as_ref())
+            .map_err(ApiError)?
+            .ok_or_else(|| ApiError(CoreError::AccountNotFound(account_id.0)))?;
+        let key_res = if a.auth_type != "oauth" {
+            core_accounts::decrypt_api_key(&r, account_id, s.master_key().as_ref())
+                .map_err(ApiError)
+        } else {
+            Ok(String::new())
         };
-
-    // 4. Decrypt or refresh the selected credential. Drop DB guards
-    //    before awaiting refresh; adapter.fetch_models() below then
-    //    receives a plaintext token/key and no SQLite guard crosses await.
-    let api_key = match selected_account_id {
-        Some(account_id) => {
-            let account = {
-                let r = s.db_pool().reader();
-                match core_accounts::get(&r, account_id, s.master_key().as_ref()) {
-                    Ok(Some(a)) => a,
-                    Ok(None) => {
-                        return Err(ApiError(CoreError::AccountNotFound(account_id.0)));
-                    }
-                    Err(e) => return Err(ApiError(e)),
-                }
-            };
-            if account.auth_type == "oauth" {
-                refresh_oauth_if_needed(&s, account, &provider).await
-            } else {
-                let r = s.db_pool().reader();
-                match core_accounts::decrypt_api_key(&r, account_id, s.master_key().as_ref()) {
-                    Ok(k) => k,
-                    Err(e) => return Err(ApiError(e)),
-                }
-            }
-        }
-        None => String::new(),
+        (a, key_res)
     };
 
-    // Resolve account label for CloudFlare / label-based providers.
-    let account_label = match selected_account_id {
-        Some(account_id) => {
-            let r = s.db_pool().reader();
-            match core_accounts::get(&r, account_id, s.master_key().as_ref()) {
-                Ok(Some(a)) => a.label.unwrap_or_default(),
-                _ => String::new(),
-            }
-        }
-        None => String::new(),
+    let label = account.label.clone().unwrap_or_default();
+    let api_key = if account.auth_type == "oauth" {
+        refresh_oauth_if_needed(s, account, provider).await
+    } else {
+        api_key_res?
     };
 
-    // 5. Open a fresh connection for the upsert. See the doc on
-    //    `core_admin::refresh_models` for the `Send` rationale: an owned
-    //    `Connection` is the only way to keep the outer future
-    //    `Send` across an `await`.
-    let conn_for_refresh = match s.db_pool().open_connection() {
-        Ok(c) => c,
-        Err(e) => return Err(ApiError(e)),
-    };
+    Ok((api_key, label))
+}
 
-    // 6. Run the refresh. This is the only `await` on the upstream
-    //    HTTP call; everything else is sync DB work.
-    let upsert = match core_admin::refresh_models(
-        conn_for_refresh,
-        &provider,
-        &api_key,
-        &adapter,
-        s.upstream_client(),
-        ttl_seconds,
-        &account_label,
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => return Err(ApiError(e)),
-    };
+fn apply_provider_auto_activation(
+    s: &AppState,
+    provider: &ProviderId,
+) -> Result<u64, ApiError> {
+    let w = s.db_pool().writer();
+    let p = core_providers::get(&w, provider)?;
+    let keyword = p.and_then(|pp| pp.auto_activate_keyword);
+    let n = openproxy_db::models::apply_auto_activation(&w, provider, keyword.as_deref())?;
+    Ok(n)
+}
 
+fn spawn_favicon_fetch_if_needed(s: &AppState, provider: &ProviderId) {
     let pid_clone = provider.clone();
     let upstream_clone = std::sync::Arc::clone(s.upstream_client());
     let pool_clone = std::sync::Arc::clone(s.db_pool());
@@ -305,27 +252,49 @@ pub(crate) async fn run_provider_refresh(
             .await;
         }
     });
+}
 
-    // 7. Auto-activation pass. The provider may have a substring
-    //    `auto_activate_keyword` set; if so, every non-custom row
-    //    gets `active` flipped to whether its `model_id` contains the
-    //    keyword. When no keyword is set, all non-custom rows are
-    //    switched on. This is a "refresh also re-applies the rule"
-    //    semantic: an operator who disables a non-custom row by hand
-    //    and then triggers a refresh will see it come back on, which
-    //    matches the spec's expectation.
-    let activated = match (|| -> openproxy_types::Result<u64> {
-        // Re-load the provider so we see the up-to-date keyword;
-        // doing this in a fresh writer keeps the lock short.
-        let w = s.db_pool().writer();
-        let p = core_providers::get(&w, &provider)?;
-        let keyword = p.and_then(|pp| pp.auto_activate_keyword);
-        let keyword_ref = keyword.as_deref();
-        openproxy_db::models::apply_auto_activation(&w, &provider, keyword_ref)
-    })() {
-        Ok(n) => n,
+pub(crate) async fn run_provider_refresh(
+    s: AppState,
+    provider_id_str: &str,
+    q: ProviderRefreshQuery,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let provider = ProviderId::new(provider_id_str);
+    let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
+
+    let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
+        Ok(a) => a,
         Err(e) => return Err(ApiError(e)),
     };
+
+    let (selected_account_id, _) =
+        crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q)?;
+
+    let (api_key, account_label) =
+        resolve_refresh_key_and_label(&s, &provider, selected_account_id).await?;
+
+    let conn_for_refresh = match s.db_pool().open_connection() {
+        Ok(c) => c,
+        Err(e) => return Err(ApiError(e)),
+    };
+
+    let upsert = match core_admin::refresh_models(
+        conn_for_refresh,
+        &provider,
+        &api_key,
+        &adapter,
+        s.upstream_client(),
+        ttl_seconds,
+        &account_label,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return Err(ApiError(e)),
+    };
+
+    spawn_favicon_fetch_if_needed(&s, &provider);
+    let activated = apply_provider_auto_activation(&s, &provider)?;
 
     Ok(Json(serde_json::json!({
         "provider": provider_id_str,

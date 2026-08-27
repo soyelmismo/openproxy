@@ -34,6 +34,15 @@ pub struct NewProvider<'a> {
     pub rate_limit_scope: RateLimitScope,
 }
 
+fn map_create_provider_error(e: rusqlite::Error, id: &ProviderId) -> CoreError {
+    let msg = e.to_string();
+    if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
+        CoreError::Validation("provider id already exists".into())
+    } else {
+        openproxy_db::error::map_db_error_ctx(format!("insert provider {id}"))(e)
+    }
+}
+
 /// Insert a new provider. The DB enforces uniqueness on `id` (PRIMARY KEY)
 /// and validates `auth_type` / `format` against the CHECK constraints; a
 /// duplicate id surfaces here as `CoreError::Validation`.
@@ -48,7 +57,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
         auto_activate_keyword,
         rate_limit_scope,
     } = new;
-    let result = conn.execute(
+    conn.execute(
         "INSERT INTO providers(id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, rate_limit_scope) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
@@ -61,23 +70,9 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
             auto_activate_keyword,
             rate_limit_scope.as_str(),
         ],
-    );
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            // SQLite raises a UNIQUE/PRIMARY KEY failure for duplicate ids.
-            // We surface it as a validation error per the spec for `create`.
-            let msg = e.to_string();
-            if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
-                Err(CoreError::Validation("provider id already exists".into()))
-            } else {
-                Err(openproxy_db::error::map_db_error_ctx(format!(
-                    "insert provider {id}"
-                ))(e))
-            }
-        }
-    }
+    )
+    .map_err(|e| map_create_provider_error(e, id))?;
+    Ok(())
 }
 
 /// Look up a single provider by id. Returns `Ok(None)` when absent.
@@ -207,6 +202,13 @@ pub fn extract_domain(base_url: &str) -> Option<String> {
     }
 }
 
+fn is_compound_tld(second_to_last: &str, last: &str) -> bool {
+    matches!(
+        second_to_last,
+        "co" | "com" | "org" | "net" | "gov" | "edu"
+    ) && last.len() == 2
+}
+
 /// Extract apex/root domain from host (e.g. "api.fireworks.ai" -> "fireworks.ai").
 pub fn extract_apex_domain(host: &str) -> String {
     let parts: Vec<&str> = host.split('.').collect();
@@ -215,14 +217,7 @@ pub fn extract_apex_domain(host: &str) -> String {
     }
     let second_to_last = parts[parts.len() - 2];
     let last = parts[parts.len() - 1];
-    let is_compound_tld = (second_to_last == "co"
-        || second_to_last == "com"
-        || second_to_last == "org"
-        || second_to_last == "net"
-        || second_to_last == "gov"
-        || second_to_last == "edu")
-        && last.len() == 2;
-    if is_compound_tld && parts.len() >= 3 {
+    if is_compound_tld(second_to_last, last) && parts.len() >= 3 {
         parts[parts.len() - 3..].join(".")
     } else {
         parts[parts.len() - 2..].join(".")
@@ -344,58 +339,61 @@ pub struct UpdateProviderParams<'a> {
 /// * `None` — column is not part of this update (no-op).
 /// * `Some(None)` — set the column to `NULL` (clears any existing value).
 /// * `Some(Some(s))` — set the column to the literal string `s`.
-pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'_>) -> Result<()> {
-    let UpdateProviderParams {
-        name,
-        base_url,
-        extra_headers_json,
-        auto_activate_keyword,
-        use_proxies,
-        proxy_rotation_errors,
-        proxy_rotation_mode,
-        rate_limit_scope,
-    } = params;
-    // Build the SET clause dynamically so we only touch the supplied columns.
-    // Each branch adds a fragment plus its bound value to `bound_values`.
-    let mut sets: Vec<&'static str> = Vec::new();
-    let mut bound_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    if let Some(v) = name {
+fn build_provider_update_clauses(
+    params: &UpdateProviderParams<'_>,
+    sets: &mut Vec<&'static str>,
+    bound_values: &mut Vec<Box<dyn rusqlite::ToSql>>,
+) {
+    if let Some(v) = params.name {
         sets.push("name = ?");
         bound_values.push(Box::new(v.to_string()));
     }
-    if let Some(v) = base_url {
+    if let Some(v) = params.base_url {
         sets.push("base_url = ?");
         bound_values.push(Box::new(v.to_string()));
     }
-    if let Some(v) = extra_headers_json {
+    if let Some(v) = params.extra_headers_json {
         sets.push("extra_headers_json = ?");
         bound_values.push(Box::new(v.map(std::string::ToString::to_string)));
     }
-    if let Some(v) = auto_activate_keyword {
+    if let Some(v) = params.auto_activate_keyword {
         sets.push("auto_activate_keyword = ?");
         bound_values.push(Box::new(v.map(std::string::ToString::to_string)));
     }
-    if let Some(v) = use_proxies {
+    if let Some(v) = params.use_proxies {
         sets.push("use_proxies = ?");
         bound_values.push(Box::new(i64::from(v)));
     }
-    if let Some(v) = proxy_rotation_errors {
+    if let Some(v) = params.proxy_rotation_errors {
         sets.push("proxy_rotation_errors = ?");
         bound_values.push(Box::new(v.to_string()));
     }
-    if let Some(v) = proxy_rotation_mode {
+    if let Some(v) = params.proxy_rotation_mode {
         sets.push("proxy_rotation_mode = ?");
         bound_values.push(Box::new(v.to_string()));
     }
-    if let Some(v) = rate_limit_scope {
+    if let Some(v) = params.rate_limit_scope {
         sets.push("rate_limit_scope = ?");
         bound_values.push(Box::new(v.as_str().to_string()));
     }
+}
+
+/// Partial update: only the fields the caller supplies are touched.
+/// `auth_type` and `format` are intentionally not updatable here — they are
+/// structural and changing them mid-flight would invalidate routing state.
+/// CHECK constraints in the schema validate `auth_type` / `format` on read.
+///
+/// `auto_activate_keyword` and `extra_headers_json` use a three-state encoding so the caller can
+/// distinguish "leave it alone" from "set it to NULL":
+/// * `None` — column is not part of this update (no-op).
+/// * `Some(None)` — set the column to `NULL` (clears any existing value).
+/// * `Some(Some(s))` — set the column to the literal string `s`.
+pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'_>) -> Result<()> {
+    let mut sets = Vec::new();
+    let mut bound_values = Vec::new();
+    build_provider_update_clauses(&params, &mut sets, &mut bound_values);
 
     if sets.is_empty() {
-        // Nothing to update. Don't issue a no-op UPDATE; just verify the row
-        // exists so the caller gets a consistent "missing id" signal.
         if get(conn, id)?.is_none() {
             return Err(CoreError::ProviderNotFound(id.to_string()));
         }
@@ -403,14 +401,8 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
     }
 
     let sql = format!("UPDATE providers SET {} WHERE id = ?", sets.join(", "));
-
-    // The id is bound last; promote it to an owned String so the borrow
-    // lives for the duration of `execute`.
     let id_owned = id.as_str().to_string();
-    let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::new();
-    for b in &bound_values {
-        bound.push(b.as_ref());
-    }
+    let mut bound: Vec<&dyn rusqlite::ToSql> = bound_values.iter().map(|b| b.as_ref()).collect();
     bound.push(&id_owned);
 
     let affected = conn
@@ -441,6 +433,19 @@ pub fn update_current_proxy(
     Ok(())
 }
 
+fn parse_from_sql<T, F>(val: &str, col: usize, parser: F) -> rusqlite::Result<T>
+where
+    F: FnOnce(&str) -> std::result::Result<T, String>,
+{
+    parser(val).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            col,
+            rusqlite::types::Type::Text,
+            Box::new(FromStrError(e)),
+        )
+    })
+}
+
 /// Map a single SELECT row into a `Provider`. Shared by `get`, `list`,
 /// and `list_active`. The expected column order is the SELECT in each
 /// of those three queries — column index `7` is the `active` flag.
@@ -448,8 +453,8 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let id: String = row.get(0)?;
     let name: String = row.get(1)?;
     let base_url: String = row.get(2)?;
-    let auth_type: String = row.get(3)?;
-    let format: String = row.get(4)?;
+    let auth_type_str: String = row.get(3)?;
+    let format_str: String = row.get(4)?;
     let extra_headers_json: Option<String> = row.get(5)?;
     let auto_activate_keyword: Option<String> = row.get(6)?;
     let active: i64 = row.get(7)?;
@@ -458,38 +463,12 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let use_proxies: i64 = row.get(9)?;
     let current_proxy_id: Option<String> = row.get(10)?;
     let proxy_rotation_errors: String = row.get(11)?;
-    let rate_limit_scope: String = row.get(12)?;
+    let rate_limit_scope_str: String = row.get(12)?;
 
-    // The DB's CHECK constraints guarantee these parse, so a Validation
-    // error here would indicate schema/data corruption, not a user mistake.
-    // Map to a rusqlite error so the caller surfaces it as Database.
-    let auth_type = AuthType::parse(&auth_type).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
-    let format = ProviderFormat::parse(&format).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            4,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
-    let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            12,
-            rusqlite::types::Type::Text,
-            Box::new(FromStrError(e)),
-        )
-    })?;
+    let auth_type = parse_from_sql(&auth_type_str, 3, AuthType::parse)?;
+    let format = parse_from_sql(&format_str, 4, ProviderFormat::parse)?;
+    let rate_limit_scope = parse_from_sql(&rate_limit_scope_str, 12, RateLimitScope::parse)?;
 
-    // `active` is a 0/1 INTEGER; anything other than 1 is treated as
-    // inactive. The schema's CHECK constraint prevents other values at
-    // the DB level, so a non-0/1 reading indicates on-disk corruption
-    // — the same mapping is used by `accounts::HealthStatus` and
-    // `models::set_active`.
     let active = active != 0;
     let use_proxies = use_proxies != 0;
     let proxy_rotation_mode: String = row.get(13)?;

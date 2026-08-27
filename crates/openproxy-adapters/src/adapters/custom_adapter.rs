@@ -72,6 +72,77 @@ impl CustomAdapter {
     }
 }
 
+fn auth_header_for_type<'a>(
+    auth_type: AdapterAuthType,
+    api_key: &'a str,
+    bearer_buf: &'a str,
+) -> Option<(&'static str, &'a str)> {
+    if api_key.is_empty() {
+        return None;
+    }
+    match auth_type {
+        AdapterAuthType::Bearer | AdapterAuthType::OAuth | AdapterAuthType::None => {
+            Some(("Authorization", bearer_buf))
+        }
+        AdapterAuthType::XApiKey => Some(("x-api-key", api_key)),
+        AdapterAuthType::GoogApiKey => Some(("x-goog-api-key", api_key)),
+    }
+}
+
+fn build_custom_headers<'a>(
+    auth_type: AdapterAuthType,
+    api_key: &'a str,
+    bearer_buf: &'a str,
+    extra_headers: &'a [(String, String)],
+) -> Vec<(&'a str, &'a str)> {
+    let mut headers = Vec::with_capacity(1 + extra_headers.len());
+    if let Some((k, v)) = auth_header_for_type(auth_type, api_key, bearer_buf) {
+        headers.push((k, v));
+    }
+    for (k, v) in extra_headers {
+        headers.push((k.as_str(), v.as_str()));
+    }
+    headers
+}
+
+fn parse_custom_openai_models(
+    body: &serde_json::Value,
+    target_format: TargetFormat,
+) -> Option<Vec<DiscoveredModel>> {
+    let arr = body.get("data")?.as_array()?;
+    let models = arr
+        .iter()
+        .filter_map(|raw| {
+            let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
+            Some(build_discovered_model_with(entry.id, target_format))
+        })
+        .collect();
+    Some(models)
+}
+
+fn parse_custom_gemini_models(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
+    let arr = body.get("models")?.as_array()?;
+    let models = arr
+        .iter()
+        .filter_map(|m| {
+            let full_name = m.get("name")?.as_str()?;
+            let id = full_name.strip_prefix("models/").unwrap_or(full_name);
+            let display_name = m
+                .get("displayName")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            Some(build_discovered_model_full(
+                id.to_string(),
+                display_name,
+                TargetFormat::Gemini,
+                None,
+                None,
+            ))
+        })
+        .collect();
+    Some(models)
+}
+
 impl ProviderAdapter for CustomAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -93,25 +164,13 @@ impl ProviderAdapter for CustomAdapter {
             ))
         })?;
 
-        // Build headers: auth header + extra headers configured for this provider.
         let bearer_auth = format!("Bearer {api_key}");
-        let mut headers: Vec<(&str, &str)> =
-            Vec::with_capacity(1 + self.config.extra_headers.len());
-        if !api_key.is_empty() {
-            match self.config.auth_type {
-                AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                    headers.push(("Authorization", bearer_auth.as_str()));
-                }
-                AdapterAuthType::XApiKey => headers.push(("x-api-key", api_key)),
-                AdapterAuthType::GoogApiKey => headers.push(("x-goog-api-key", api_key)),
-                AdapterAuthType::None => {
-                    headers.push(("Authorization", bearer_auth.as_str()));
-                }
-            }
-        }
-        for (k, v) in &self.config.extra_headers {
-            headers.push((k.as_str(), v.as_str()));
-        }
+        let headers = build_custom_headers(
+            self.config.auth_type,
+            api_key,
+            &bearer_auth,
+            &self.config.extra_headers,
+        );
 
         let body = upstream_get_json(upstream_client, &url, &headers)
             .await
@@ -119,40 +178,13 @@ impl ProviderAdapter for CustomAdapter {
                 CoreError::UpstreamConnection(format!("{} /models: {e}", self.config.id))
             })?;
 
-        // Try OpenAI format first: {"data": [{"id": "...", ...}]}
-        if let Some(arr) = body.get("data").and_then(|v| v.as_array()) {
-            let target_format = self.config.format.default_target_format();
-
-            let models: Vec<DiscoveredModel> = arr
-                .iter()
-                .filter_map(|raw| {
-                    let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-                    Some(build_discovered_model_with(entry.id, target_format))
-                })
-                .collect();
+        if let Some(models) =
+            parse_custom_openai_models(&body, self.config.format.default_target_format())
+        {
             return Ok(models);
         }
 
-        // Try Gemini format: {"models": [{"name": "models/...", ...}]}
-        if let Some(arr) = body.get("models").and_then(|v| v.as_array()) {
-            let models: Vec<DiscoveredModel> = arr
-                .iter()
-                .filter_map(|m| {
-                    let full_name = m.get("name").and_then(|v| v.as_str())?;
-                    let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-                    let display_name = m
-                        .get("displayName")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string);
-                    Some(build_discovered_model_full(
-                        id.to_string(),
-                        display_name,
-                        TargetFormat::Gemini,
-                        None,
-                        None,
-                    ))
-                })
-                .collect();
+        if let Some(models) = parse_custom_gemini_models(&body) {
             return Ok(models);
         }
 

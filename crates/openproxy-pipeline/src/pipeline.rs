@@ -234,27 +234,25 @@ pub fn is_upstream_health_issue(err: &CoreError) -> bool {
     }
 }
 
+fn parse_retry_after_seconds(trimmed: &str) -> Option<u64> {
+    let secs = trimmed.parse::<f64>().ok()?;
+    (secs.is_finite() && secs >= 0.0).then_some((secs * 1000.0) as u64)
+}
+
+fn parse_retry_after_date(trimmed: &str) -> Option<u64> {
+    let parsed = chrono::DateTime::parse_from_rfc2822(trimmed).ok()?;
+    let now = chrono::Utc::now();
+    let target = parsed.with_timezone(&chrono::Utc);
+    let diff_ms = (target - now).num_milliseconds().max(0) as u64;
+    Some(diff_ms)
+}
+
 pub fn parse_retry_after_ms(val: &str) -> Option<u64> {
     let trimmed = val.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(secs) = trimmed.parse::<f64>() {
-        if !secs.is_finite() || secs < 0.0 {
-            return None;
-        }
-        let ms = (secs * 1000.0) as u64;
-        return Some(ms);
-    }
-    if let Ok(parsed) = chrono::DateTime::parse_from_rfc2822(trimmed) {
-        let now = chrono::Utc::now();
-        if parsed.with_timezone(&chrono::Utc) <= now {
-            return Some(0);
-        }
-        let diff = parsed.with_timezone(&chrono::Utc) - now;
-        return Some(diff.num_milliseconds() as u64);
-    }
-    None
+    parse_retry_after_seconds(trimmed).or_else(|| parse_retry_after_date(trimmed))
 }
 
 #[cfg(test)]

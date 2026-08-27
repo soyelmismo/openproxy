@@ -39,183 +39,23 @@ impl CredentialManager {
         master_key: &MasterKey,
         oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
     ) -> Vec<ResolvedTarget> {
-        let ResolutionMaps {
-            models_map,
-            accounts_map,
-            kiro_map,
-            antigravity_map,
-            providers_map,
-        } = maps;
         let mut resolved = Vec::with_capacity(eligible.len());
         for t in eligible {
-            let Some(model_row_id) = t.model_row_id else {
-                let err = CoreError::Internal(format!(
-                    "execute_single called on a sub-combo target (id={})",
-                    t.id.0
-                ));
-                tracing::error!(error=%err);
+            let Some(model) = resolve_target_model(&t, maps.models_map) else {
                 continue;
             };
 
-            let model = match models_map.get(&model_row_id.0) {
-                Some(m) => m.clone(),
-                None => {
-                    let err = CoreError::ModelNotFound {
-                        provider: "<unknown>".into(),
-                        model: format!("row_id={}", model_row_id.0),
-                    };
-                    tracing::error!(error=%err);
-                    continue;
-                }
-            };
-
-            let (api_key, api_key_label, custom_meta) = match t.account_id {
+            let creds = match t.account_id {
                 Some(account_id) => {
-                    let Some(raw_account) = accounts_map.get(&account_id.0) else {
-                        tracing::error!(
-                            "account {} not found during decryption phase",
-                            account_id.0
-                        );
-                        continue;
-                    };
-
-                    let (key, has_api_key) = match &raw_account.api_key_encrypted {
-                        Some(b) => match master_key.decrypt(b) {
-                            Ok(k) => (k, true),
-                            Err(e) => {
-                                tracing::error!(error=%e, "failed to decrypt api key");
-                                continue;
-                            }
-                        },
-                        None => (String::new(), false),
-                    };
-
-                    let adapters = openproxy_adapters::adapters::builtin_adapters();
-                    let requires_oauth = adapters
-                        .iter()
-                        .find(|a| a.id().as_str() == t.provider_id.as_str())
-                        .is_some_and(|a| a.metadata().requires_oauth);
-
-                    if !has_api_key && !requires_oauth {
-                        tracing::error!("account {} has no API key (OAuth account?)", account_id.0);
-                        continue;
-                    }
-                    let label = raw_account.label.clone();
-
-                    let custom_meta = if requires_oauth {
-                        let access_token = match &raw_account.access_token_encrypted {
-                            Some(b) => match master_key.decrypt(b) {
-                                Ok(k) => k,
-                                Err(e) => {
-                                    tracing::error!(error=%e, "failed to decrypt access token");
-                                    continue;
-                                }
-                            },
-                            None => {
-                                tracing::error!(
-                                    "no access token found for account {}",
-                                    account_id.0
-                                );
-                                continue;
-                            }
-                        };
-
-                        let maybe_refresh: Option<String> = if oauth_registry.is_some() {
-                            if crate::oauth::pipeline_token_needs_refresh(
-                                raw_account.expires_at.as_deref(),
-                                t.provider_id.as_str(),
-                                &adapters,
-                            ) {
-                                if let Some(rt_enc) = &raw_account.refresh_token_encrypted {
-                                    master_key.decrypt(rt_enc).ok()
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                        let (
-                            kiro_region,
-                            kiro_profile_arn,
-                            antigravity_project,
-                            antigravity_metadata,
-                            codex_workspace_id,
-                        ) = match t.provider_id.as_str() {
-                            "kiro" => {
-                                let meta = kiro_map.get(&account_id.0);
-                                (
-                                    meta.and_then(|m| m.region.clone()),
-                                    meta.and_then(|m| m.profile_arn.clone()),
-                                    None,
-                                    None,
-                                    None,
-                                )
-                            }
-                            "antigravity" => {
-                                let proj =
-                                    antigravity_map.get(&account_id.0).cloned().or_else(|| {
-                                        Self::antigravity_project_from_account(raw_account)
-                                    });
-
-                                let metadata = raw_account.oauth_provider_specific.clone();
-
-                                (None, None, proj, metadata, None)
-                            }
-                            "codex" => {
-                                let workspace_id = raw_account
-                                    .oauth_provider_specific
-                                    .as_deref()
-                                    .and_then(|raw| {
-                                        serde_json::from_str::<serde_json::Value>(raw).ok()
-                                    })
-                                    .and_then(|meta| {
-                                        meta.get("workspaceId")
-                                            .or_else(|| meta.get("workspace_id"))
-                                            .and_then(|v| v.as_str())
-                                            .filter(|v| !v.is_empty())
-                                            .map(ToString::to_string)
-                                    });
-                                (None, None, None, None, workspace_id)
-                            }
-                            _ => (None, None, None, None, None),
-                        };
-
-                        Some(CustomProviderMeta {
-                            access_token,
-                            maybe_refresh,
-                            kiro_region,
-                            kiro_profile_arn,
-                            antigravity_project,
-                            antigravity_metadata,
-                            codex_workspace_id,
-                        })
-                    } else {
-                        None
-                    };
-
-                    (key, label, custom_meta)
+                    resolve_account_credentials(&t, account_id.0, maps, master_key, oauth_registry)
                 }
-                None => {
-                    let auth_type = providers_map
-                        .get(&t.provider_id.0)
-                        .map(std::string::String::as_str);
-                    if auth_type == Some("none")
-                        || openproxy_adapters::adapters::is_anonymous_fallback(&t.provider_id.0)
-                    {
-                        (String::new(), None, None)
-                    } else {
-                        tracing::error!(
-                            "combo_target {} has no account_id after expansion",
-                            t.id.0
-                        );
-                        continue;
-                    }
-                }
+                None => resolve_anonymous_credentials(&t, maps.providers_map),
             };
+
+            let Some((api_key, api_key_label, custom_meta)) = creds else {
+                continue;
+            };
+
             resolved.push(ResolvedTarget {
                 target: t,
                 model,
@@ -226,6 +66,224 @@ impl CredentialManager {
         }
         resolved
     }
+}
+
+fn resolve_target_model(
+    t: &ComboTarget,
+    models_map: &HashMap<i64, Model>,
+) -> Option<Model> {
+    let Some(model_row_id) = t.model_row_id else {
+        let err = CoreError::Internal(format!(
+            "execute_single called on a sub-combo target (id={})",
+            t.id.0
+        ));
+        tracing::error!(error=%err);
+        return None;
+    };
+
+    match models_map.get(&model_row_id.0) {
+        Some(m) => Some(m.clone()),
+        None => {
+            let err = CoreError::ModelNotFound {
+                provider: "<unknown>".into(),
+                model: format!("row_id={}", model_row_id.0),
+            };
+            tracing::error!(error=%err);
+            None
+        }
+    }
+}
+
+fn resolve_anonymous_credentials(
+    t: &ComboTarget,
+    providers_map: &HashMap<String, String>,
+) -> Option<(String, Option<String>, Option<CustomProviderMeta>)> {
+    let auth_type = providers_map
+        .get(&t.provider_id.0)
+        .map(std::string::String::as_str);
+    if auth_type == Some("none")
+        || openproxy_adapters::adapters::is_anonymous_fallback(&t.provider_id.0)
+    {
+        Some((String::new(), None, None))
+    } else {
+        tracing::error!(
+            "combo_target {} has no account_id after expansion",
+            t.id.0
+        );
+        None
+    }
+}
+
+#[derive(Default)]
+struct ProviderCustomFields {
+    kiro_region: Option<String>,
+    kiro_profile_arn: Option<String>,
+    antigravity_project: Option<String>,
+    antigravity_metadata: Option<String>,
+    codex_workspace_id: Option<String>,
+}
+
+fn extract_provider_custom_meta(
+    raw_account: &RawAccount,
+    provider_id: &str,
+    account_id: i64,
+    maps: &ResolutionMaps<'_>,
+) -> ProviderCustomFields {
+    match provider_id {
+        "kiro" => {
+            let meta = maps.kiro_map.get(&account_id);
+            ProviderCustomFields {
+                kiro_region: meta.and_then(|m| m.region.clone()),
+                kiro_profile_arn: meta.and_then(|m| m.profile_arn.clone()),
+                ..Default::default()
+            }
+        }
+        "antigravity" => {
+            let proj = maps.antigravity_map.get(&account_id).cloned().or_else(|| {
+                CredentialManager::antigravity_project_from_account(raw_account)
+            });
+            let metadata = raw_account.oauth_provider_specific.clone();
+            ProviderCustomFields {
+                antigravity_project: proj,
+                antigravity_metadata: metadata,
+                ..Default::default()
+            }
+        }
+        "codex" => {
+            let workspace_id = raw_account
+                .oauth_provider_specific
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .and_then(|meta| {
+                    meta.get("workspaceId")
+                        .or_else(|| meta.get("workspace_id"))
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.is_empty())
+                        .map(ToString::to_string)
+                });
+            ProviderCustomFields {
+                codex_workspace_id: workspace_id,
+                ..Default::default()
+            }
+        }
+        _ => ProviderCustomFields::default(),
+    }
+}
+
+fn resolve_oauth_refresh(
+    raw_account: &RawAccount,
+    provider_id: &str,
+    master_key: &MasterKey,
+    oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
+    adapters: &[openproxy_adapters::adapters::ProviderAdapterEnum],
+) -> Option<String> {
+    oauth_registry?;
+    if !crate::oauth::pipeline_token_needs_refresh(
+        raw_account.expires_at.as_deref(),
+        provider_id,
+        adapters,
+    ) {
+        return None;
+    }
+    raw_account
+        .refresh_token_encrypted
+        .as_ref()
+        .and_then(|rt_enc| master_key.decrypt(rt_enc).ok())
+}
+
+fn resolve_account_oauth_meta(
+    raw_account: &RawAccount,
+    t: &ComboTarget,
+    account_id: i64,
+    maps: &ResolutionMaps<'_>,
+    master_key: &MasterKey,
+    oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
+    adapters: &[openproxy_adapters::adapters::ProviderAdapterEnum],
+) -> Option<CustomProviderMeta> {
+    let access_token = match &raw_account.access_token_encrypted {
+        Some(b) => match master_key.decrypt(b) {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::error!(error=%e, "failed to decrypt access token");
+                return None;
+            }
+        },
+        None => {
+            tracing::error!("no access token found for account {}", account_id);
+            return None;
+        }
+    };
+
+    let maybe_refresh = resolve_oauth_refresh(
+        raw_account,
+        t.provider_id.as_str(),
+        master_key,
+        oauth_registry,
+        adapters,
+    );
+    let fields =
+        extract_provider_custom_meta(raw_account, t.provider_id.as_str(), account_id, maps);
+
+    Some(CustomProviderMeta {
+        access_token,
+        maybe_refresh,
+        kiro_region: fields.kiro_region,
+        kiro_profile_arn: fields.kiro_profile_arn,
+        antigravity_project: fields.antigravity_project,
+        antigravity_metadata: fields.antigravity_metadata,
+        codex_workspace_id: fields.codex_workspace_id,
+    })
+}
+
+fn resolve_account_credentials(
+    t: &ComboTarget,
+    account_id: i64,
+    maps: &ResolutionMaps<'_>,
+    master_key: &MasterKey,
+    oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
+) -> Option<(String, Option<String>, Option<CustomProviderMeta>)> {
+    let raw_account = maps.accounts_map.get(&account_id).or_else(|| {
+        tracing::error!("account {} not found during decryption phase", account_id);
+        None
+    })?;
+
+    let (key, has_api_key) = match &raw_account.api_key_encrypted {
+        Some(b) => match master_key.decrypt(b) {
+            Ok(k) => (k, true),
+            Err(e) => {
+                tracing::error!(error=%e, "failed to decrypt api key");
+                return None;
+            }
+        },
+        None => (String::new(), false),
+    };
+
+    let adapters = openproxy_adapters::adapters::builtin_adapters();
+    let requires_oauth = adapters
+        .iter()
+        .find(|a| a.id().as_str() == t.provider_id.as_str())
+        .is_some_and(|a| a.metadata().requires_oauth);
+
+    if !has_api_key && !requires_oauth {
+        tracing::error!("account {} has no API key (OAuth account?)", account_id);
+        return None;
+    }
+
+    let custom_meta = if requires_oauth {
+        Some(resolve_account_oauth_meta(
+            raw_account,
+            t,
+            account_id,
+            maps,
+            master_key,
+            oauth_registry,
+            &adapters,
+        )?)
+    } else {
+        None
+    };
+
+    Some((key, raw_account.label.clone(), custom_meta))
 }
 
 #[cfg(test)]

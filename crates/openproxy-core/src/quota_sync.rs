@@ -108,6 +108,55 @@ pub fn start_quota_sync_scheduler_with_cancel(
     Some(cancel)
 }
 
+fn get_supported_providers(adapters: &Arc<RwLock<Arc<Vec<ProviderAdapterEnum>>>>) -> Vec<String> {
+    let ads = adapters.read();
+    ads.iter()
+        .filter(|a| a.metadata().quota_refresh_supported)
+        .map(|a| a.id().to_string())
+        .collect()
+}
+
+async fn fetch_accounts_to_sync(
+    db_pool: &Arc<DbPool>,
+    master_key: &Arc<MasterKey>,
+    supported_providers: Vec<String>,
+) -> Vec<AccountId> {
+    let db_pool = Arc::clone(db_pool);
+    let master_key = Arc::clone(master_key);
+    tokio::task::spawn_blocking(move || {
+        let conn = db_pool.reader();
+        let mut target_accounts = Vec::new();
+        for provider_str in &supported_providers {
+            let pid = crate::ids::ProviderId::new(provider_str.as_str());
+            if let Ok(accs) = accounts::list(&conn, Some(&pid), &master_key) {
+                for acc in accs {
+                    if acc.health_status != accounts::HealthStatus::Unhealthy {
+                        target_accounts.push(acc.id);
+                    }
+                }
+            }
+        }
+        target_accounts
+    })
+    .await
+    .unwrap_or_default()
+}
+
+async fn wait_quota_sync_delay(delay_ms: u64, cancel_token: Option<&CancellationToken>) -> bool {
+    if delay_ms == 0 {
+        return false;
+    }
+    if let Some(token) = cancel_token {
+        tokio::select! {
+            () = token.cancelled() => true,
+            () = sleep(Duration::from_millis(delay_ms)) => false,
+        }
+    } else {
+        sleep(Duration::from_millis(delay_ms)).await;
+        false
+    }
+}
+
 async fn run_quota_sync_cycle(
     db_pool: &Arc<DbPool>,
     config: &AppConfig,
@@ -119,54 +168,22 @@ async fn run_quota_sync_cycle(
 ) {
     tracing::debug!("[QuotaSync] Starting cycle");
 
-    // 1. Identify which providers support quota fetching
-    let supported_providers: Vec<String> = {
-        let ads = adapters.read();
-        ads.iter()
-            .filter(|a| a.metadata().quota_refresh_supported)
-            .map(|a| a.id().to_string())
-            .collect()
-    };
-
+    let supported_providers = get_supported_providers(adapters);
     if supported_providers.is_empty() {
         return;
     }
 
-    // 2. Fetch all healthy accounts for these providers
-    let accounts_to_sync: Vec<AccountId> = {
-        let db_pool = Arc::clone(db_pool);
-        let master_key = Arc::clone(master_key);
-        let supported_providers_list = supported_providers.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = db_pool.reader();
-            let mut target_accounts = Vec::new();
-            for provider_str in &supported_providers_list {
-                let pid = crate::ids::ProviderId::new(provider_str.as_str());
-                if let Ok(accs) = accounts::list(&conn, Some(&pid), &master_key) {
-                    for acc in accs {
-                        if acc.health_status != accounts::HealthStatus::Unhealthy {
-                            target_accounts.push(acc.id);
-                        }
-                    }
-                }
-            }
-            target_accounts
-        })
-        .await
-        .unwrap_or_default()
-    };
+    let accounts_to_sync =
+        fetch_accounts_to_sync(db_pool, master_key, supported_providers.clone()).await;
 
     let delay_ms = config.quota_sync.delay_between_accounts_ms;
-
-    // 3. Process each account with a delay
     let supported_refs: Vec<&str> = supported_providers
         .iter()
         .map(std::string::String::as_str)
         .collect();
+
     for account_id in accounts_to_sync {
-        if let Some(token) = cancel_token
-            && token.is_cancelled()
-        {
+        if cancel_token.is_some_and(|t| t.is_cancelled()) {
             break;
         }
 
@@ -186,15 +203,8 @@ async fn run_quota_sync_cycle(
             );
         }
 
-        if delay_ms > 0 {
-            if let Some(token) = cancel_token {
-                tokio::select! {
-                    () = token.cancelled() => break,
-                    () = sleep(Duration::from_millis(delay_ms)) => {}
-                }
-            } else {
-                sleep(Duration::from_millis(delay_ms)).await;
-            }
+        if wait_quota_sync_delay(delay_ms, cancel_token).await {
+            break;
         }
     }
 

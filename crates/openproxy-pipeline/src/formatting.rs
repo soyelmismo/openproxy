@@ -141,15 +141,8 @@ impl TargetFormatter for ResponsesFormatter {
         let mut obj = req.openai_request.extra.clone();
         obj.insert("model".to_string(), Value::String(resolved_model));
 
-        let mut system_instructions = None;
-        let mut messages_without_system = Vec::new();
-        for msg in messages_ref {
-            if msg.role == "system" && system_instructions.is_none() {
-                system_instructions = Some(content_to_text(msg.content.as_ref()));
-            } else {
-                messages_without_system.push(msg);
-            }
-        }
+        let (system_instructions, messages_without_system) =
+            extract_system_and_messages(messages_ref);
 
         obj.insert(
             "input".to_string(),
@@ -169,226 +162,288 @@ impl TargetFormatter for ResponsesFormatter {
         if let Some(top_p) = req.openai_request.top_p {
             obj.insert("top_p".to_string(), json!(top_p));
         }
-        if let Some(tools) = &req.openai_request.tools {
-            let mut flat_tools = Vec::with_capacity(tools.len());
-            for tool in tools {
-                let mut flat_tool = tool.clone();
-                if let Some(obj) = flat_tool.as_object_mut() {
-                    let is_function = obj.get("type").and_then(|v| v.as_str()) == Some("function");
-                    if is_function
-                        && let Some(mut func) = obj.remove("function")
-                        && let Some(func_obj) = func.as_object_mut()
-                    {
-                        if let Some(name) = func_obj.remove("name") {
-                            obj.insert("name".to_string(), name);
-                        }
-                        if let Some(desc) = func_obj.remove("description") {
-                            obj.insert("description".to_string(), desc);
-                        }
-                        if let Some(params) = func_obj.remove("parameters") {
-                            obj.insert("parameters".to_string(), params);
-                        }
-                    }
-                }
-                flat_tools.push(flat_tool);
-            }
-            obj.insert("tools".to_string(), Value::Array(flat_tools));
+        if let Some(tools) = format_responses_tools(req.openai_request.tools.as_deref()) {
+            obj.insert("tools".to_string(), tools);
         }
-        if let Some(tool_choice) = &req.openai_request.tool_choice {
-            let mut flat_choice = tool_choice.clone();
-            if let Some(obj) = flat_choice.as_object_mut()
-                && obj.get("type").and_then(|v| v.as_str()) == Some("function")
-                && let Some(mut func) = obj.remove("function")
-                && let Some(func_obj) = func.as_object_mut()
-                && let Some(name) = func_obj.remove("name")
-            {
-                obj.insert("name".to_string(), name);
-            }
-            obj.insert("tool_choice".to_string(), flat_choice);
+        if let Some(choice) = format_responses_tool_choice(req.openai_request.tool_choice.as_ref()) {
+            obj.insert("tool_choice".to_string(), choice);
         }
 
-        // Codex Responses API strict schema: strip Chat Completions parameters that cause 400s
-        obj.remove("max_tokens");
-        obj.remove("max_output_tokens");
-        obj.remove("truncation");
-        obj.remove("background");
-        obj.remove("prompt_cache_retention");
-        obj.remove("safety_identifier");
-        obj.remove("user");
-        obj.remove("stream_options");
-
-        let effort_val = obj.remove("reasoning_effort");
-        let effort = effort_val
-            .as_ref()
-            .and_then(|v| v.as_str())
-            .map(normalize_effort)
-            .or(effort_from_model);
-        if let Some(effort) = effort.filter(|v| *v != "none") {
-            obj.insert(
-                "reasoning".to_string(),
-                json!({
-                    "effort": effort,
-                    "summary": "auto"
-                }),
-            );
-        }
-        if matches!(
-            obj.get("service_tier").and_then(|v| v.as_str()),
-            Some("fast")
-        ) {
-            obj.insert(
-                "service_tier".to_string(),
-                Value::String("priority".to_string()),
-            );
-        }
+        strip_responses_disallowed_keys(&mut obj);
+        apply_responses_reasoning_and_tier(&mut obj, effort_from_model);
 
         let instructions_str = obj
             .get("instructions")
             .and_then(|v| v.as_str())
             .unwrap_or("Follow the developer instructions in the conversation.");
-
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(instructions_str.as_bytes());
-        if let Some(tools) = &req.openai_request.tools
-            && let Ok(tools_str) = serde_json::to_string(tools)
-        {
-            hasher.update(tools_str.as_bytes());
-        }
-        let hash = hasher.finalize();
-        use std::fmt::Write;
-        let mut pck = String::with_capacity(28);
-        pck.push_str("pck_");
-        for b in &hash[..12] {
-            let _ = write!(pck, "{b:02x}");
-        }
+        let pck = compute_responses_prompt_cache_key(
+            instructions_str,
+            req.openai_request.tools.as_deref(),
+        );
         obj.insert("prompt_cache_key".to_string(), Value::String(pck));
 
-        match serde_json::to_vec(&Value::Object(obj)) {
-            Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!(
-                "serialize responses request: {e}"
-            ))),
+        serde_json::to_vec(&Value::Object(obj))
+            .map(bytes::Bytes::from)
+            .map_err(|e| CoreError::Parse(format!("serialize responses request: {e}")))
+    }
+}
+
+fn extract_system_and_messages(
+    messages_ref: &[OpenAIMessage],
+) -> (Option<String>, Vec<&OpenAIMessage>) {
+    let mut system_instructions = None;
+    let mut messages_without_system = Vec::new();
+    for msg in messages_ref {
+        if msg.role == "system" && system_instructions.is_none() {
+            system_instructions = Some(content_to_text(msg.content.as_ref()));
+        } else {
+            messages_without_system.push(msg);
         }
+    }
+    (system_instructions, messages_without_system)
+}
+
+fn format_responses_tools(tools: Option<&[Value]>) -> Option<Value> {
+    let tools = tools?;
+    let mut flat_tools = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let mut flat_tool = tool.clone();
+        if let Some(obj) = flat_tool.as_object_mut()
+            && obj.get("type").and_then(|v| v.as_str()) == Some("function")
+            && let Some(mut func) = obj.remove("function")
+            && let Some(func_obj) = func.as_object_mut()
+        {
+            if let Some(name) = func_obj.remove("name") {
+                obj.insert("name".to_string(), name);
+            }
+            if let Some(desc) = func_obj.remove("description") {
+                obj.insert("description".to_string(), desc);
+            }
+            if let Some(params) = func_obj.remove("parameters") {
+                obj.insert("parameters".to_string(), params);
+            }
+        }
+        flat_tools.push(flat_tool);
+    }
+    Some(Value::Array(flat_tools))
+}
+
+fn format_responses_tool_choice(tool_choice: Option<&Value>) -> Option<Value> {
+    let tool_choice = tool_choice?;
+    let mut flat_choice = tool_choice.clone();
+    if let Some(obj) = flat_choice.as_object_mut()
+        && obj.get("type").and_then(|v| v.as_str()) == Some("function")
+        && let Some(mut func) = obj.remove("function")
+        && let Some(func_obj) = func.as_object_mut()
+        && let Some(name) = func_obj.remove("name")
+    {
+        obj.insert("name".to_string(), name);
+    }
+    Some(flat_choice)
+}
+
+fn strip_responses_disallowed_keys(obj: &mut serde_json::Map<String, Value>) {
+    const DISALLOWED: &[&str] = &[
+        "max_tokens",
+        "max_output_tokens",
+        "truncation",
+        "background",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "user",
+        "stream_options",
+    ];
+    for key in DISALLOWED {
+        obj.remove(*key);
+    }
+}
+
+fn apply_responses_reasoning_and_tier(
+    obj: &mut serde_json::Map<String, Value>,
+    effort_from_model: Option<&'static str>,
+) {
+    let effort_val = obj.remove("reasoning_effort");
+    let effort = effort_val
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .map(normalize_effort)
+        .or(effort_from_model);
+    if let Some(effort) = effort.filter(|v| *v != "none") {
+        obj.insert(
+            "reasoning".to_string(),
+            json!({
+                "effort": effort,
+                "summary": "auto"
+            }),
+        );
+    }
+    if matches!(
+        obj.get("service_tier").and_then(|v| v.as_str()),
+        Some("fast")
+    ) {
+        obj.insert(
+            "service_tier".to_string(),
+            Value::String("priority".to_string()),
+        );
+    }
+}
+
+fn compute_responses_prompt_cache_key(
+    instructions_str: &str,
+    tools: Option<&[Value]>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    let mut hasher = Sha256::new();
+    hasher.update(instructions_str.as_bytes());
+    if let Some(tools) = tools
+        && let Ok(tools_str) = serde_json::to_string(tools)
+    {
+        hasher.update(tools_str.as_bytes());
+    }
+    let hash = hasher.finalize();
+    let mut pck = String::with_capacity(28);
+    pck.push_str("pck_");
+    for b in &hash[..12] {
+        let _ = write!(pck, "{b:02x}");
+    }
+    pck
+}
+
+fn parse_data_image_url(url: &str) -> Value {
+    if let Some((mime_part, data_part)) = url.split_once(',') {
+        let mime = mime_part
+            .strip_prefix("data:")
+            .and_then(|s| s.strip_suffix(";base64"))
+            .unwrap_or("image/jpeg");
+        json!({
+            "type": "input_image",
+            "image": data_part,
+            "mime_type": mime
+        })
+    } else {
+        json!({
+            "type": "input_image",
+            "image_url": url
+        })
+    }
+}
+
+fn convert_image_url_part(item: &Value) -> Option<Value> {
+    let url_obj = item.get("image_url")?.as_object()?;
+    let url = url_obj.get("url")?.as_str().unwrap_or("");
+    if url.starts_with("data:image/") {
+        Some(parse_data_image_url(url))
+    } else {
+        Some(json!({
+            "type": "input_image",
+            "image_url": url
+        }))
+    }
+}
+
+fn convert_image_source_part(item: &Value) -> Option<Value> {
+    let source = item.get("source")?.as_object()?;
+    let data = source.get("data").and_then(|v| v.as_str()).unwrap_or("");
+    let media_type = source
+        .get("media_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("image/jpeg");
+    Some(json!({
+        "type": "input_image",
+        "image": data,
+        "mime_type": media_type
+    }))
+}
+
+fn convert_content_item_to_part(item: &Value, text_type: &str) -> Option<Value> {
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+    match item_type {
+        "text" | "input_text" | "output_text" => {
+            let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            Some(json!({ "type": text_type, "text": text }))
+        }
+        "image_url" => convert_image_url_part(item),
+        "image" => convert_image_source_part(item),
+        _ => None,
+    }
+}
+
+fn convert_msg_content_to_parts(content: Option<&Value>, text_type: &str) -> Vec<Value> {
+    match content {
+        Some(Value::String(text)) => vec![json!({ "type": text_type, "text": text })],
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|item| convert_content_item_to_part(item, text_type))
+            .collect(),
+        Some(value) => vec![json!({ "type": text_type, "text": value.to_string() })],
+        None => vec![json!({ "type": text_type, "text": "" })],
+    }
+}
+
+fn convert_msg_tool_calls(tool_calls: &[Value], input_items: &mut Vec<Value>) {
+    for call in tool_calls {
+        let call_id = call
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("call_xyz")
+            .to_string();
+        let func_name = call
+            .get("function")
+            .and_then(|v| v.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let func_args = call
+            .get("function")
+            .and_then(|v| v.get("arguments"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("{}")
+            .to_string();
+
+        input_items.push(json!({
+            "type": "function_call",
+            "call_id": call_id,
+            "name": func_name,
+            "arguments": func_args
+        }));
+    }
+}
+
+fn convert_single_message_to_responses_input(msg: &OpenAIMessage, input_items: &mut Vec<Value>) {
+    if msg.role == "tool" {
+        let call_id = msg.tool_call_id.as_deref().unwrap_or("call_xyz");
+        let content_str = content_to_text(msg.content.as_ref());
+        input_items.push(json!({
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": content_str
+        }));
+        return;
+    }
+
+    let text_type = if msg.role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
+
+    let parts = convert_msg_content_to_parts(msg.content.as_ref(), text_type);
+    input_items.push(json!({
+        "role": msg.role,
+        "content": parts
+    }));
+
+    if let Some(tool_calls) = &msg.tool_calls {
+        convert_msg_tool_calls(tool_calls, input_items);
     }
 }
 
 fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
     let mut input_items = Vec::new();
-
     for msg in messages {
-        if msg.role == "tool" {
-            let call_id = msg.tool_call_id.as_deref().unwrap_or("call_xyz");
-            let content_str = content_to_text(msg.content.as_ref());
-            input_items.push(json!({
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": content_str
-            }));
-            continue;
-        }
-
-        let text_type = if msg.role == "assistant" {
-            "output_text"
-        } else {
-            "input_text"
-        };
-
-        let mut parts = Vec::new();
-        match &msg.content {
-            Some(Value::String(text)) => {
-                parts.push(json!({ "type": text_type, "text": text }));
-            }
-            Some(Value::Array(arr)) => {
-                for item in arr {
-                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-                    if item_type == "text"
-                        || item_type == "input_text"
-                        || item_type == "output_text"
-                    {
-                        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                        parts.push(json!({ "type": text_type, "text": text }));
-                    } else if item_type == "image_url" {
-                        if let Some(url_obj) = item.get("image_url").and_then(|v| v.as_object()) {
-                            let url = url_obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                            if url.starts_with("data:image/") {
-                                if let Some((mime_part, data_part)) = url.split_once(',') {
-                                    let mime = mime_part
-                                        .strip_prefix("data:")
-                                        .and_then(|s| s.strip_suffix(";base64"))
-                                        .unwrap_or("image/jpeg");
-                                    parts.push(json!({
-                                        "type": "input_image",
-                                        "image": data_part,
-                                        "mime_type": mime
-                                    }));
-                                }
-                            } else {
-                                parts.push(json!({
-                                    "type": "input_image",
-                                    "image_url": url
-                                }));
-                            }
-                        }
-                    } else if item_type == "image"
-                        && let Some(source) = item.get("source").and_then(|v| v.as_object())
-                    {
-                        let data = source.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                        let media_type = source
-                            .get("media_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("image/jpeg");
-                        parts.push(json!({
-                            "type": "input_image",
-                            "image": data,
-                            "mime_type": media_type
-                        }));
-                    }
-                }
-            }
-            Some(value) => {
-                parts.push(json!({ "type": text_type, "text": value.to_string() }));
-            }
-            None => {
-                parts.push(json!({ "type": text_type, "text": "" }));
-            }
-        }
-
-        input_items.push(json!({
-            "role": msg.role,
-            "content": parts
-        }));
-
-        if let Some(tool_calls) = &msg.tool_calls {
-            for call in tool_calls {
-                let call_id = call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("call_xyz")
-                    .to_string();
-                let func_name = call
-                    .get("function")
-                    .and_then(|v| v.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let func_args = call
-                    .get("function")
-                    .and_then(|v| v.get("arguments"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("{}")
-                    .to_string();
-
-                input_items.push(json!({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": func_name,
-                    "arguments": func_args
-                }));
-            }
-        }
+        convert_single_message_to_responses_input(msg, &mut input_items);
     }
-
     Value::Array(input_items)
 }
 
@@ -419,7 +474,6 @@ fn normalize_effort(value: &str) -> &'static str {
     match value {
         "max" | "xhigh" => "xhigh",
         "high" => "high",
-        "medium" => "medium",
         "low" => "low",
         "none" => "none",
         _ => "medium",

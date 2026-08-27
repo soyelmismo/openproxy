@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId};
-use rusqlite::{Connection, OptionalExtension, ToSql, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Row, ToSql, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -26,13 +26,16 @@ pub struct UsageFilter {
 impl UsageFilter {
     /// Returns `true` if no filter is set.
     fn is_empty(&self) -> bool {
-        self.from.is_none()
-            && self.to.is_none()
-            && self.provider_id.is_none()
-            && self.model_id.is_none()
-            && self.account_id.is_none()
-            && self.combo_id.is_none()
-            && self.api_key_id.is_none()
+        let filters = [
+            self.from.is_some(),
+            self.to.is_some(),
+            self.provider_id.is_some(),
+            self.model_id.is_some(),
+            self.account_id.is_some(),
+            self.combo_id.is_some(),
+            self.api_key_id.is_some(),
+        ];
+        !filters.into_iter().any(|active| active)
     }
 }
 
@@ -186,6 +189,49 @@ struct BuiltWhere {
     params: Vec<Box<dyn ToSql>>,
 }
 
+fn push_date_filters(
+    from: Option<&str>,
+    to: Option<&str>,
+    clauses: &mut Vec<&'static str>,
+    params: &mut Vec<Box<dyn ToSql>>,
+) {
+    if let Some(from) = from {
+        clauses.push("datetime(created_at) >= datetime(?)");
+        params.push(Box::new(from.to_owned()));
+    }
+    if let Some(to) = to {
+        clauses.push("datetime(created_at) < datetime(?)");
+        params.push(Box::new(to.to_owned()));
+    }
+}
+
+fn push_entity_filters(
+    f: &UsageFilter,
+    clauses: &mut Vec<&'static str>,
+    params: &mut Vec<Box<dyn ToSql>>,
+) {
+    if let Some(pid) = &f.provider_id {
+        clauses.push("provider_id = ?");
+        params.push(Box::new(pid.0.clone()));
+    }
+    if let Some(mid) = &f.model_id {
+        clauses.push("upstream_model_id = ?");
+        params.push(Box::new(mid.to_owned()));
+    }
+    if let Some(aid) = f.account_id {
+        clauses.push("account_id = ?");
+        params.push(Box::new(aid.0));
+    }
+    if let Some(cid) = f.combo_id {
+        clauses.push("combo_id = ?");
+        params.push(Box::new(cid.0));
+    }
+    if let Some(kid) = f.api_key_id {
+        clauses.push("api_key_id = ?");
+        params.push(Box::new(kid.0));
+    }
+}
+
 impl BuiltWhere {
     fn from_filter(f: &UsageFilter) -> Self {
         if f.is_empty() {
@@ -198,49 +244,10 @@ impl BuiltWhere {
         let mut clauses: Vec<&'static str> = Vec::new();
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
-        // IMPORTANT: wrap both `created_at` and the bound in `datetime(...)`.
-        // `created_at` is written by SQLite's `datetime('now')` and stored as
-        // `"YYYY-MM-DD HH:MM:SS"` (space separator), but the filter bounds come
-        // in as RFC-3339 `"YYYY-MM-DDTHH:MM:SSZ"` (T separator, Z suffix).
-        // SQLite TEXT comparison is byte-wise: `' '` (0x20) sorts before `'T'`
-        // (0x54), so a raw `created_at >= ?` against an RFC-3339 bound would
-        // be FALSE for every row and the query would return 0 rows (which is
-        // exactly the dashboard "all zeros" bug). Wrapping both sides in
-        // `datetime(...)` makes SQLite parse them as real datetimes before
-        // comparing, regardless of the textual format. The prune functions
-        // below already do the same thing — this just brings the read-side
-        // analytics queries in line with them.
-        if let Some(from) = &f.from {
-            clauses.push("datetime(created_at) >= datetime(?)");
-            params.push(Box::new(from.to_owned()));
-        }
-        if let Some(to) = &f.to {
-            clauses.push("datetime(created_at) < datetime(?)");
-            params.push(Box::new(to.to_owned()));
-        }
-        if let Some(pid) = &f.provider_id {
-            clauses.push("provider_id = ?");
-            params.push(Box::new(pid.0.clone()));
-        }
-        if let Some(mid) = &f.model_id {
-            clauses.push("upstream_model_id = ?");
-            params.push(Box::new(mid.to_owned()));
-        }
-        if let Some(aid) = f.account_id {
-            clauses.push("account_id = ?");
-            params.push(Box::new(aid.0));
-        }
-        if let Some(cid) = f.combo_id {
-            clauses.push("combo_id = ?");
-            params.push(Box::new(cid.0));
-        }
-        if let Some(kid) = f.api_key_id {
-            clauses.push("api_key_id = ?");
-            params.push(Box::new(kid.0));
-        }
+        push_date_filters(f.from.as_deref(), f.to.as_deref(), &mut clauses, &mut params);
+        push_entity_filters(f, &mut clauses, &mut params);
 
         let joined = clauses.join(" AND ");
-        // joined is non-empty because is_empty() returned false above.
         let mut sql = String::with_capacity(joined.len() + 7);
         sql.push_str("WHERE ");
         sql.push_str(&joined);
@@ -261,6 +268,49 @@ fn to_params(v: &[Box<dyn ToSql>]) -> Vec<&dyn ToSql> {
 // ---------------------------------------------------------------------------
 // Public queries
 // ---------------------------------------------------------------------------
+
+fn get_u64_col(row: &Row<'_>, idx: usize, field: &'static str) -> rusqlite::Result<u64> {
+    as_u64(row.get(idx)?, field)
+}
+
+fn row_to_usage_summary(row: &Row<'_>) -> rusqlite::Result<UsageSummary> {
+    let unique_requests: i64 = row.get(0)?;
+    let total_rows: i64 = row.get(1)?;
+    let total_attempts: i64 = row.get(2)?;
+    let winners: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
+    let losers: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+    let errors: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+    let total_prompt_tokens: i64 = row.get(6)?;
+    let total_completion_tokens: i64 = row.get(7)?;
+    let total_cached_tokens: i64 = row.get(8)?;
+    let total_cost_usd: f64 = row.get(9)?;
+    let avg_ttft_ms: Option<f64> = row.get(10)?;
+    let avg_total_ms: f64 = row.get(11)?;
+    let rows_with_null_pricing: i64 = row.get::<_, Option<i64>>(12)?.unwrap_or(0);
+    let avg_success_connect_ms: Option<f64> = row.get(13)?;
+    let avg_success_ttft_ms: Option<f64> = row.get(14)?;
+    let avg_success_total_ms: Option<f64> = row.get(15)?;
+
+    Ok(UsageSummary {
+        unique_requests: as_u64(unique_requests, "unique_requests")?,
+        total_rows: as_u64(total_rows, "total_rows")?,
+        total_attempts: as_u64(total_attempts, "total_attempts")?,
+        winners: as_u64(winners, "winners")?,
+        losers: as_u64(losers, "losers")?,
+        errors: as_u64(errors, "errors")?,
+        total_prompt_tokens,
+        total_completion_tokens,
+        total_cached_tokens,
+        total_cost_usd,
+        avg_ttft_ms,
+        avg_total_ms,
+        avg_success_connect_ms,
+        avg_success_ttft_ms,
+        avg_success_total_ms,
+        rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
+        avg_compression_savings_pct: row.get(16)?,
+    })
+}
 
 /// Aggregate summary over all rows matching `f`.
 pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
@@ -294,51 +344,25 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
 
     let params_slice = to_params(&w.params);
     let summary = stmt
-        .query_row(params_from_iter(params_slice), |row| {
-            let unique_requests: i64 = row.get(0)?;
-            let total_rows: i64 = row.get(1)?;
-            let total_attempts: i64 = row.get(2)?;
-            // SUM(...) over an empty result set yields NULL in SQLite, not 0,
-            // so we accept Option<i64> and substitute 0. COALESCE only helps
-            // for nullable columns (prompt_tokens, cost_usd), not for the
-            // SUM(CASE WHEN...) zero-row edge case.
-            let winners: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
-            let losers: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
-            let errors: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
-            let total_prompt_tokens: i64 = row.get(6)?;
-            let total_completion_tokens: i64 = row.get(7)?;
-            let total_cached_tokens: i64 = row.get(8)?;
-            let total_cost_usd: f64 = row.get(9)?;
-            let avg_ttft_ms: Option<f64> = row.get(10)?;
-            let avg_total_ms: f64 = row.get(11)?;
-            let rows_with_null_pricing: i64 = row.get::<_, Option<i64>>(12)?.unwrap_or(0);
-            let avg_success_connect_ms: Option<f64> = row.get(13)?;
-            let avg_success_ttft_ms: Option<f64> = row.get(14)?;
-            let avg_success_total_ms: Option<f64> = row.get(15)?;
-
-            Ok(UsageSummary {
-                unique_requests: as_u64(unique_requests, "unique_requests")?,
-                total_rows: as_u64(total_rows, "total_rows")?,
-                total_attempts: as_u64(total_attempts, "total_attempts")?,
-                winners: as_u64(winners, "winners")?,
-                losers: as_u64(losers, "losers")?,
-                errors: as_u64(errors, "errors")?,
-                total_prompt_tokens,
-                total_completion_tokens,
-                total_cached_tokens,
-                total_cost_usd,
-                avg_ttft_ms,
-                avg_total_ms,
-                avg_success_connect_ms,
-                avg_success_ttft_ms,
-                avg_success_total_ms,
-                rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
-                avg_compression_savings_pct: row.get(16)?,
-            })
-        })
+        .query_row(params_from_iter(params_slice), row_to_usage_summary)
         .map_err(openproxy_db::error::map_db_error)?;
 
     Ok(summary)
+}
+
+fn row_to_by_model(row: &Row<'_>) -> rusqlite::Result<ByModelRow> {
+    Ok(ByModelRow {
+        provider_id: ProviderId::new(row.get::<_, String>(0)?),
+        upstream_model_id: row.get(1)?,
+        unique_requests: get_u64_col(row, 2, "unique_requests")?,
+        total_rows: get_u64_col(row, 3, "total_rows")?,
+        winners: get_u64_col(row, 4, "winners")?,
+        total_prompt_tokens: row.get(5)?,
+        total_completion_tokens: row.get(6)?,
+        total_cached_tokens: row.get(7)?,
+        total_cost_usd: row.get(8)?,
+        avg_compression_savings_pct: row.get(9)?,
+    })
 }
 
 /// Per-(provider, model) breakdown. Ordered by total cost descending.
@@ -368,33 +392,33 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
 
     let params_slice = to_params(&w.params);
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let provider_id: String = row.get(0)?;
-            let upstream_model_id: String = row.get(1)?;
-            let unique_requests: i64 = row.get(2)?;
-            let total_rows: i64 = row.get(3)?;
-            let winners: i64 = row.get(4)?;
-            let total_prompt_tokens: i64 = row.get(5)?;
-            let total_completion_tokens: i64 = row.get(6)?;
-            let total_cached_tokens: i64 = row.get(7)?;
-            let total_cost_usd: f64 = row.get(8)?;
-
-            Ok(ByModelRow {
-                provider_id: ProviderId::new(provider_id),
-                upstream_model_id,
-                unique_requests: as_u64(unique_requests, "unique_requests")?,
-                total_rows: as_u64(total_rows, "total_rows")?,
-                winners: as_u64(winners, "winners")?,
-                total_prompt_tokens,
-                total_completion_tokens,
-                total_cached_tokens,
-                total_cost_usd,
-                avg_compression_savings_pct: row.get(9)?,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_by_model)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_model")
+}
+
+fn row_to_by_provider(row: &Row<'_>) -> rusqlite::Result<ByProviderRow> {
+    let provider_id: String = row.get(0)?;
+    let unique_requests: i64 = row.get(1)?;
+    let total_rows: i64 = row.get(2)?;
+    let winners: i64 = row.get(3)?;
+    let total_prompt_tokens: i64 = row.get(4)?;
+    let total_completion_tokens: i64 = row.get(5)?;
+    let total_cached_tokens: i64 = row.get(6)?;
+    let total_cost_usd: f64 = row.get(7)?;
+
+    Ok(ByProviderRow {
+        provider_id,
+        unique_requests: as_u64(unique_requests, "unique_requests")?,
+        total_rows: as_u64(total_rows, "total_rows")?,
+        winners: as_u64(winners, "winners")?,
+        total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
+        total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+        total_cached_tokens: as_u64(total_cached_tokens, "total_cached_tokens")?,
+        total_cost_usd,
+        avg_compression_savings_pct: row.get(8)?,
+    })
 }
 
 /// Per-`provider_id` breakdown. Ordered by total cost descending so the
@@ -429,31 +453,7 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
 
     let params_slice = to_params(&w.params);
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let provider_id: String = row.get(0)?;
-            let unique_requests: i64 = row.get(1)?;
-            let total_rows: i64 = row.get(2)?;
-            let winners: i64 = row.get(3)?;
-            let total_prompt_tokens: i64 = row.get(4)?;
-            let total_completion_tokens: i64 = row.get(5)?;
-            let total_cached_tokens: i64 = row.get(6)?;
-            let total_cost_usd: f64 = row.get(7)?;
-
-            Ok(ByProviderRow {
-                provider_id,
-                unique_requests: as_u64(unique_requests, "unique_requests")?,
-                total_rows: as_u64(total_rows, "total_rows")?,
-                winners: as_u64(winners, "winners")?,
-                total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
-                total_completion_tokens: as_u64(
-                    total_completion_tokens,
-                    "total_completion_tokens",
-                )?,
-                total_cached_tokens: as_u64(total_cached_tokens, "total_cached_tokens")?,
-                total_cost_usd,
-                avg_compression_savings_pct: row.get(8)?,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_by_provider)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_provider")
@@ -467,6 +467,18 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
 /// `winners` is intentionally omitted — the monthly view is for cost /
 /// token tracking, not race outcomes. Use [`by_provider`] if you need
 /// winner counts.
+fn row_to_monthly_by_provider(row: &Row<'_>) -> rusqlite::Result<MonthlyByProviderRow> {
+    Ok(MonthlyByProviderRow {
+        provider_id: row.get(0)?,
+        month: row.get(1)?,
+        unique_requests: get_u64_col(row, 2, "unique_requests")?,
+        total_rows: get_u64_col(row, 3, "total_rows")?,
+        total_prompt_tokens: get_u64_col(row, 4, "total_prompt_tokens")?,
+        total_completion_tokens: get_u64_col(row, 5, "total_completion_tokens")?,
+        total_cost_usd: row.get(6)?,
+    })
+}
+
 pub fn monthly_by_provider(
     conn: &Connection,
     f: &UsageFilter,
@@ -493,31 +505,30 @@ pub fn monthly_by_provider(
 
     let params_slice = to_params(&w.params);
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let provider_id: String = row.get(0)?;
-            let month: String = row.get(1)?;
-            let unique_requests: i64 = row.get(2)?;
-            let total_rows: i64 = row.get(3)?;
-            let total_prompt_tokens: i64 = row.get(4)?;
-            let total_completion_tokens: i64 = row.get(5)?;
-            let total_cost_usd: f64 = row.get(6)?;
-
-            Ok(MonthlyByProviderRow {
-                provider_id,
-                month,
-                unique_requests: as_u64(unique_requests, "unique_requests")?,
-                total_rows: as_u64(total_rows, "total_rows")?,
-                total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
-                total_completion_tokens: as_u64(
-                    total_completion_tokens,
-                    "total_completion_tokens",
-                )?,
-                total_cost_usd,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_monthly_by_provider)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "monthly_by_provider")
+}
+
+fn row_to_by_day(row: &Row<'_>) -> rusqlite::Result<ByDayRow> {
+    let date: String = row.get(0)?;
+    let unique_requests: i64 = row.get(1)?;
+    let total_rows: i64 = row.get(2)?;
+    let total_prompt_tokens: i64 = row.get(3)?;
+    let total_completion_tokens: i64 = row.get(4)?;
+    let total_cost_usd: f64 = row.get(5)?;
+    let errors: i64 = row.get(6)?;
+
+    Ok(ByDayRow {
+        date,
+        unique_requests: as_u64(unique_requests, "unique_requests")?,
+        total_rows: as_u64(total_rows, "total_rows")?,
+        total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
+        total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+        total_cost_usd,
+        errors: as_u64(errors, "errors")?,
+    })
 }
 
 /// Per-day usage totals for charting. Groups by
@@ -547,31 +558,40 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
 
     let params_slice = to_params(&w.params);
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let date: String = row.get(0)?;
-            let unique_requests: i64 = row.get(1)?;
-            let total_rows: i64 = row.get(2)?;
-            let total_prompt_tokens: i64 = row.get(3)?;
-            let total_completion_tokens: i64 = row.get(4)?;
-            let total_cost_usd: f64 = row.get(5)?;
-            let errors: i64 = row.get(6)?;
-
-            Ok(ByDayRow {
-                date,
-                unique_requests: as_u64(unique_requests, "unique_requests")?,
-                total_rows: as_u64(total_rows, "total_rows")?,
-                total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
-                total_completion_tokens: as_u64(
-                    total_completion_tokens,
-                    "total_completion_tokens",
-                )?,
-                total_cost_usd,
-                errors: as_u64(errors, "errors")?,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_by_day)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_day")
+}
+
+fn parse_account_id_from_db(account_id: Option<i64>) -> rusqlite::Result<AccountId> {
+    let aid = account_id.unwrap_or(-1);
+    if aid == 0 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr("account_id must be non-zero".into())),
+        ));
+    }
+    Ok(AccountId::new(aid))
+}
+
+fn row_to_by_account(row: &Row<'_>) -> rusqlite::Result<ByAccountRow> {
+    let account_id: Option<i64> = row.get(0)?;
+    let provider_id: String = row.get(1)?;
+    let unique_requests: i64 = row.get(2)?;
+    let total_rows: i64 = row.get(3)?;
+    let errors: i64 = row.get(4)?;
+    let total_cost_usd: f64 = row.get(5)?;
+
+    Ok(ByAccountRow {
+        account_id: parse_account_id_from_db(account_id)?,
+        provider_id: ProviderId::new(provider_id),
+        unique_requests: as_u64(unique_requests, "unique_requests")?,
+        total_rows: as_u64(total_rows, "total_rows")?,
+        errors: as_u64(errors, "errors")?,
+        total_cost_usd,
+    })
 }
 
 /// Per-(account, provider) breakdown. Ordered by total cost descending.
@@ -602,40 +622,32 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
 
     let params_slice = to_params(&w.params);
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let account_id: Option<i64> = row.get(0)?;
-            let provider_id: String = row.get(1)?;
-            let unique_requests: i64 = row.get(2)?;
-            let total_rows: i64 = row.get(3)?;
-            let errors: i64 = row.get(4)?;
-            let total_cost_usd: f64 = row.get(5)?;
-
-            // `account_id` is nullable in the schema. The group-by collapses
-            // NULLs into a single bucket in SQLite, so an account-less row
-            // is possible. Surface it as a stable synthetic id of -1 so
-            // downstream JSON has a numeric value, but keep the provider
-            // id alongside so callers can disambiguate.
-            let aid = account_id.unwrap_or(-1);
-            if aid == 0 {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr("account_id must be non-zero".into())),
-                ));
-            }
-
-            Ok(ByAccountRow {
-                account_id: AccountId::new(aid),
-                provider_id: ProviderId::new(provider_id),
-                unique_requests: as_u64(unique_requests, "unique_requests")?,
-                total_rows: as_u64(total_rows, "total_rows")?,
-                errors: as_u64(errors, "errors")?,
-                total_cost_usd,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_by_account)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_account")
+}
+
+fn parse_status_code_u16(status_code: i64, col_idx: usize) -> rusqlite::Result<u16> {
+    if !(0..=i64::from(u16::MAX)).contains(&status_code) {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            col_idx,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr(format!(
+                "status_code out of u16 range: {status_code}"
+            ))),
+        ));
+    }
+    Ok(status_code as u16)
+}
+
+fn row_to_by_status(row: &Row<'_>) -> rusqlite::Result<ByStatusRow> {
+    let status_code: i64 = row.get(0)?;
+    let count: i64 = row.get(1)?;
+    Ok(ByStatusRow {
+        status_code: parse_status_code_u16(status_code, 0)?,
+        count: as_u64(count, "count")?,
+    })
 }
 
 /// Per-`status_code` count. Ordered by count descending so the busiest code
@@ -656,26 +668,30 @@ pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>>
 
     let params_slice = to_params(&w.params);
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let status_code: i64 = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            Ok(ByStatusRow {
-                status_code: status_code as u16,
-                count: as_u64(count, "count")?,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_by_status)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_status")
+}
+
+fn row_to_error_row(row: &Row<'_>) -> rusqlite::Result<ErrorRow> {
+    let request_id: String = row.get(0)?;
+    let trace_id: String = row.get(1)?;
+    let provider_id: String = row.get(2)?;
+    let upstream_model_id: String = row.get(3)?;
+    let status_code: i64 = row.get(4)?;
+    let error_msg_redacted: Option<String> = row.get(5)?;
+    let created_at: String = row.get(6)?;
+
+    Ok(ErrorRow {
+        request_id,
+        trace_id,
+        provider_id: ProviderId::new(provider_id),
+        upstream_model_id,
+        status_code: parse_status_code_u16(status_code, 4)?,
+        error_msg_redacted,
+        created_at,
+    })
 }
 
 /// Recent error rows (`status_code >= 400`), newest first, capped at `limit`.
@@ -719,33 +735,7 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
         .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
-        .query_map(params_from_iter(params_slice), |row| {
-            let request_id: String = row.get(0)?;
-            let trace_id: String = row.get(1)?;
-            let provider_id: String = row.get(2)?;
-            let upstream_model_id: String = row.get(3)?;
-            let status_code: i64 = row.get(4)?;
-            let error_msg_redacted: Option<String> = row.get(5)?;
-            let created_at: String = row.get(6)?;
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            Ok(ErrorRow {
-                request_id,
-                trace_id,
-                provider_id: ProviderId::new(provider_id),
-                upstream_model_id,
-                status_code: status_code as u16,
-                error_msg_redacted,
-                created_at,
-            })
-        })
+        .query_map(params_from_iter(params_slice), row_to_error_row)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "errors")
@@ -1371,6 +1361,124 @@ pub fn row_for_broadcast_by_id(
     }
 }
 
+fn parse_json_from_row<T: serde::de::DeserializeOwned>(raw: Option<String>) -> Option<T> {
+    raw.and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
+    let id: i64 = row.get(0)?;
+    let request_id: String = row.get(1)?;
+    let trace_id: String = row.get(2)?;
+    let attempt: i64 = row.get(3)?;
+    let provider_id: String = row.get(4)?;
+    let account_id: Option<i64> = row.get(5)?;
+    let combo_id: Option<i64> = row.get(6)?;
+    let combo_target_id: Option<i64> = row.get(7)?;
+    let model_row_id: Option<i64> = row.get(8)?;
+    let upstream_model_id: String = row.get(9)?;
+    let prompt_tokens: Option<i64> = row.get(10)?;
+    let completion_tokens: Option<i64> = row.get(11)?;
+    let connect_ms: Option<i64> = row.get(12)?;
+    let ttft_ms: Option<i64> = row.get(13)?;
+    let total_ms: i64 = row.get(14)?;
+    let tokens_per_sec: Option<f64> = row.get(15)?;
+    let status_code: i64 = row.get(16)?;
+    let error_msg: Option<String> = row.get(17)?;
+    let error_msg_redacted: Option<String> = row.get(18)?;
+    let race_total: i64 = row.get(19)?;
+    let race_attempts: i64 = row.get(20)?;
+    let race_lost: i64 = row.get(21)?;
+    let api_key_id: Option<i64> = row.get(22)?;
+    let created_at: String = row.get(23)?;
+    let is_streaming: i64 = row.get(24)?;
+    let stream_complete: i64 = row.get(25)?;
+    let mut col_idx = 26;
+    let request_body_json = parse_json_from_row(row.get(col_idx)?);
+    col_idx += 1;
+    let response_body_json = parse_json_from_row(row.get(col_idx)?);
+    col_idx += 1;
+    let request_headers = parse_json_from_row(row.get(col_idx)?);
+    col_idx += 1;
+    let response_headers = parse_json_from_row(row.get(col_idx)?);
+    col_idx += 1;
+    let error_message: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let client_response: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let prompt_tokens_estimated: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let completion_tokens_estimated: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let endpoint_kind_str: String = row.get(col_idx)?;
+    col_idx += 1;
+    let proxy_url: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let proxy_status: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let is_proxy_rotated: i64 = row.get(col_idx)?;
+
+    if !(0..=i64::from(u16::MAX)).contains(&status_code) {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            16,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr(format!(
+                "status_code out of u16 range: {status_code}"
+            ))),
+        ));
+    }
+    if total_ms < 0 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            14,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr(format!(
+                "total_ms unexpectedly negative: {total_ms}"
+            ))),
+        ));
+    }
+    let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
+
+    Ok(UsageDetailRow {
+        id: UsageId(id),
+        request_id,
+        trace_id,
+        attempt,
+        provider_id: ProviderId::new(provider_id),
+        account_id: account_id.map(AccountId),
+        combo_id: combo_id.map(ComboId),
+        combo_target_id: combo_target_id.map(ComboTargetId),
+        model_row_id: model_row_id.map(ModelRowId),
+        upstream_model_id,
+        prompt_tokens,
+        completion_tokens,
+        connect_ms,
+        ttft_ms,
+        total_ms,
+        tokens_per_sec,
+        status_code: status_code as u16,
+        error_msg,
+        error_msg_redacted,
+        request_body_json,
+        response_body_json,
+        request_headers,
+        response_headers,
+        race_total,
+        race_attempts,
+        race_lost: race_lost != 0,
+        is_streaming: is_streaming != 0,
+        stream_complete: stream_complete != 0,
+        created_at,
+        api_key_id: api_key_id.map(ApiKeyId),
+        error_message,
+        client_response: client_response != 0,
+        prompt_tokens_estimated: prompt_tokens_estimated != 0,
+        completion_tokens_estimated: completion_tokens_estimated != 0,
+        proxy_url,
+        proxy_status,
+        is_proxy_rotated: is_proxy_rotated != 0,
+        endpoint_kind,
+    })
+}
+
 /// Return one full `usage` row by id.
 pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>> {
     let mut stmt = conn
@@ -1391,125 +1499,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
         .map_err(openproxy_db::error::map_db_error)?;
 
     let row = stmt
-        .query_row(params![id], |row| {
-            let id: i64 = row.get(0)?;
-            let request_id: String = row.get(1)?;
-            let trace_id: String = row.get(2)?;
-            let attempt: i64 = row.get(3)?;
-            let provider_id: String = row.get(4)?;
-            let account_id: Option<i64> = row.get(5)?;
-            let combo_id: Option<i64> = row.get(6)?;
-            let combo_target_id: Option<i64> = row.get(7)?;
-            let model_row_id: Option<i64> = row.get(8)?;
-            let upstream_model_id: String = row.get(9)?;
-            let prompt_tokens: Option<i64> = row.get(10)?;
-            let completion_tokens: Option<i64> = row.get(11)?;
-            let connect_ms: Option<i64> = row.get(12)?;
-            let ttft_ms: Option<i64> = row.get(13)?;
-            let total_ms: i64 = row.get(14)?;
-            let tokens_per_sec: Option<f64> = row.get(15)?;
-            let status_code: i64 = row.get(16)?;
-            let error_msg: Option<String> = row.get(17)?;
-            let error_msg_redacted: Option<String> = row.get(18)?;
-            let race_total: i64 = row.get(19)?;
-            let race_attempts: i64 = row.get(20)?;
-            let race_lost: i64 = row.get(21)?;
-            let api_key_id: Option<i64> = row.get(22)?;
-            let created_at: String = row.get(23)?;
-            let is_streaming: i64 = row.get(24)?;
-            let stream_complete: i64 = row.get(25)?;
-            let mut col_idx = 26;
-            let request_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_message: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let client_response: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let endpoint_kind_str: String = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_url: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_status: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let is_proxy_rotated: i64 = row.get(col_idx)?;
-
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    16,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            if total_ms < 0 {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    14,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {total_ms}"
-                    ))),
-                ));
-            }
-            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-
-            Ok(UsageDetailRow {
-                id: UsageId(id),
-                request_id,
-                trace_id,
-                attempt,
-                provider_id: ProviderId::new(provider_id),
-                account_id: account_id.map(AccountId),
-                combo_id: combo_id.map(ComboId),
-                combo_target_id: combo_target_id.map(ComboTargetId),
-                model_row_id: model_row_id.map(ModelRowId),
-                upstream_model_id,
-                prompt_tokens,
-                completion_tokens,
-                connect_ms,
-                ttft_ms,
-                total_ms,
-                tokens_per_sec,
-                status_code: status_code as u16,
-                error_msg,
-                error_msg_redacted,
-                request_body_json,
-                response_body_json,
-                request_headers,
-                response_headers,
-                race_total,
-                race_attempts,
-                race_lost: race_lost != 0,
-                is_streaming: is_streaming != 0,
-                stream_complete: stream_complete != 0,
-                created_at,
-                api_key_id: api_key_id.map(ApiKeyId),
-                error_message,
-                client_response: client_response != 0,
-                prompt_tokens_estimated: prompt_tokens_estimated != 0,
-                completion_tokens_estimated: completion_tokens_estimated != 0,
-                proxy_url,
-                proxy_status,
-                is_proxy_rotated: is_proxy_rotated != 0,
-                endpoint_kind,
-            })
-        })
+        .query_row(params![id], row_to_usage_detail)
         .optional()
         .map_err(openproxy_db::error::map_db_error)?;
 
@@ -1538,125 +1528,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
         .map_err(openproxy_db::error::map_db_error)?;
 
     let row = stmt
-        .query_row(params![trace_id], |row| {
-            let id: i64 = row.get(0)?;
-            let request_id: String = row.get(1)?;
-            let trace_id: String = row.get(2)?;
-            let attempt: i64 = row.get(3)?;
-            let provider_id: String = row.get(4)?;
-            let account_id: Option<i64> = row.get(5)?;
-            let combo_id: Option<i64> = row.get(6)?;
-            let combo_target_id: Option<i64> = row.get(7)?;
-            let model_row_id: Option<i64> = row.get(8)?;
-            let upstream_model_id: String = row.get(9)?;
-            let prompt_tokens: Option<i64> = row.get(10)?;
-            let completion_tokens: Option<i64> = row.get(11)?;
-            let connect_ms: Option<i64> = row.get(12)?;
-            let ttft_ms: Option<i64> = row.get(13)?;
-            let total_ms: i64 = row.get(14)?;
-            let tokens_per_sec: Option<f64> = row.get(15)?;
-            let status_code: i64 = row.get(16)?;
-            let error_msg: Option<String> = row.get(17)?;
-            let error_msg_redacted: Option<String> = row.get(18)?;
-            let race_total: i64 = row.get(19)?;
-            let race_attempts: i64 = row.get(20)?;
-            let race_lost: i64 = row.get(21)?;
-            let api_key_id: Option<i64> = row.get(22)?;
-            let created_at: String = row.get(23)?;
-            let is_streaming: i64 = row.get(24)?;
-            let stream_complete: i64 = row.get(25)?;
-            let mut col_idx = 26;
-            let request_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_message: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let client_response: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let endpoint_kind_str: String = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_url: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_status: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let is_proxy_rotated: i64 = row.get(col_idx)?;
-
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    16,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            if total_ms < 0 {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    14,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {total_ms}"
-                    ))),
-                ));
-            }
-            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-
-            Ok(UsageDetailRow {
-                id: UsageId(id),
-                request_id,
-                trace_id,
-                attempt,
-                provider_id: ProviderId::new(provider_id),
-                account_id: account_id.map(AccountId),
-                combo_id: combo_id.map(ComboId),
-                combo_target_id: combo_target_id.map(ComboTargetId),
-                model_row_id: model_row_id.map(ModelRowId),
-                upstream_model_id,
-                prompt_tokens,
-                completion_tokens,
-                connect_ms,
-                ttft_ms,
-                total_ms,
-                tokens_per_sec,
-                status_code: status_code as u16,
-                error_msg,
-                error_msg_redacted,
-                request_body_json,
-                response_body_json,
-                request_headers,
-                response_headers,
-                race_total,
-                race_attempts,
-                race_lost: race_lost != 0,
-                is_streaming: is_streaming != 0,
-                stream_complete: stream_complete != 0,
-                created_at,
-                api_key_id: api_key_id.map(ApiKeyId),
-                error_message,
-                client_response: client_response != 0,
-                prompt_tokens_estimated: prompt_tokens_estimated != 0,
-                completion_tokens_estimated: completion_tokens_estimated != 0,
-                proxy_url,
-                proxy_status,
-                is_proxy_rotated: is_proxy_rotated != 0,
-                endpoint_kind,
-            })
-        })
+        .query_row(params![trace_id], row_to_usage_detail)
         .optional()
         .map_err(openproxy_db::error::map_db_error)?;
 

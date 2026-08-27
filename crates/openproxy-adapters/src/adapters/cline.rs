@@ -52,6 +52,38 @@ impl ClineAdapter {
 
 crate::adapters::derive_default_from_new!(ClineAdapter);
 
+fn make_cline_model_id(mut id: String, is_free: bool) -> String {
+    if is_free && !id.ends_with(":free") && !id.contains("-free") {
+        id.push_str(":free");
+    }
+    id
+}
+
+fn map_cline_entry(entry: ClineModelEntry, is_free: bool) -> DiscoveredModel {
+    let id = make_cline_model_id(entry.id, is_free);
+    let caps = openproxy_types::ModelCapabilities {
+        vision: Some(true),
+        tool_calling: Some(true),
+        reasoning: Some(true),
+        thinking: Some(true),
+        attachment: None,
+        structured_output: None,
+        temperature: None,
+    };
+    DiscoveredModel {
+        model_id: ModelId::new(id),
+        display_name: Some(entry.name),
+        target_format: TargetFormat::Openai,
+        context_length: Some(128_000),
+        max_output_tokens: Some(8_192),
+        input_modalities: None,
+        output_modalities: None,
+        model_type: Some("chat".to_string()),
+        family: None,
+        capabilities: Some(caps),
+    }
+}
+
 impl ProviderAdapter for ClineAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -95,48 +127,22 @@ impl ProviderAdapter for ClineAdapter {
             .map_err(openproxy_types::error::CoreError::UpstreamConnection)?;
 
         let payload: ClineRecommendedModels =
-            <ClineRecommendedModels as serde::Deserialize>::deserialize(&body).map_err(|e| {
+            serde_json::from_value(body).map_err(|e| {
                 openproxy_types::error::CoreError::Parse(format!("cline parse error: {e}"))
             })?;
 
-        let mut discovered = Vec::new();
-
-        let mut add_models = |entries: Vec<ClineModelEntry>, is_free: bool| {
-            for entry in entries {
-                let mut id = entry.id;
-                if is_free && !id.ends_with(":free") && !id.contains("-free") {
-                    id.push_str(":free");
-                }
-
-                // Fallback capabilities for unknown models
-                let caps = openproxy_types::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: Some(true),
-                    thinking: Some(true),
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                };
-
-                discovered.push(DiscoveredModel {
-                    model_id: ModelId::new(id),
-                    display_name: Some(entry.name),
-                    target_format: TargetFormat::Openai,
-                    context_length: Some(128_000), // Defaulting context
-                    max_output_tokens: Some(8_192),
-                    input_modalities: None,
-                    output_modalities: None,
-                    model_type: Some("chat".to_string()),
-                    family: None,
-                    capabilities: Some(caps),
-                });
-            }
-        };
-
-        add_models(payload.recommended, false);
-        add_models(payload.free, true);
-        add_models(payload.cline_pass, false);
+        let discovered = payload
+            .recommended
+            .into_iter()
+            .map(|e| map_cline_entry(e, false))
+            .chain(payload.free.into_iter().map(|e| map_cline_entry(e, true)))
+            .chain(
+                payload
+                    .cline_pass
+                    .into_iter()
+                    .map(|e| map_cline_entry(e, false)),
+            )
+            .collect();
 
         Ok(discovered)
     }
@@ -152,22 +158,31 @@ impl ProviderAdapter for ClineAdapter {
             .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
 
         if let Some(obj) = val.as_object_mut() {
-            if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model")
-                && let Some(stripped) = model_str
-                    .strip_suffix(":free")
-                    .or_else(|| model_str.strip_suffix("-free"))
-            {
-                *model_str = stripped.to_string();
-            }
-            // Cline backend ALWAYS requires stream: true, else it returns HTTP 500 "empty response content"
-            if obj.get("stream").is_none_or(serde_json::Value::is_boolean) {
-                obj.insert("stream".to_string(), serde_json::Value::Bool(true));
-            }
+            patch_cline_request_object(obj);
         }
 
         let new_body = serde_json::to_vec(&val)
             .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
         Ok(bytes::Bytes::from(new_body))
+    }
+}
+
+fn normalize_cline_model_name(model_str: &mut String) {
+    if let Some(stripped) = model_str
+        .strip_suffix(":free")
+        .or_else(|| model_str.strip_suffix("-free"))
+    {
+        *model_str = stripped.to_string();
+    }
+}
+
+fn patch_cline_request_object(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model") {
+        normalize_cline_model_name(model_str);
+    }
+    // Cline backend ALWAYS requires stream: true, else it returns HTTP 500 "empty response content"
+    if obj.get("stream").is_none_or(serde_json::Value::is_boolean) {
+        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
     }
 }
 

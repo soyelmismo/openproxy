@@ -111,6 +111,34 @@ pub fn create_ticket(
 /// short-circuits to `Consumed` before the `expires_at` check so a
 /// redeem-then-replay shows the same `Consumed` state regardless of
 /// whether the upstream's TTL has passed.
+fn map_ticket_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceTicket> {
+    let account_id: Option<i64> = r.get(4)?;
+    Ok(DeviceTicket {
+        id: r.get(0)?,
+        provider: r.get(1)?,
+        device_code: r.get(2)?,
+        user_code: r.get(3)?,
+        account_id: account_id.map(AccountId),
+        expires_at: r.get(5)?,
+        consumed_at: r.get(6)?,
+    })
+}
+
+fn classify_ticket_status(ticket: DeviceTicket) -> TicketStatus {
+    if ticket.consumed_at.is_some() {
+        return TicketStatus::Consumed;
+    }
+    match chrono::DateTime::parse_from_rfc3339(&ticket.expires_at) {
+        Ok(dt) if dt > chrono::Utc::now() => TicketStatus::Active(ticket),
+        _ => TicketStatus::Expired,
+    }
+}
+
+/// Look up a ticket by `device_code` and classify its status. The
+/// single-use invariant lives here: `consumed_at IS NOT NULL`
+/// short-circuits to `Consumed` before the `expires_at` check so a
+/// redeem-then-replay shows the same `Consumed` state regardless of
+/// whether the upstream's TTL has passed.
 pub fn lookup_active(conn: &Connection, device_code: &str) -> Result<TicketStatus> {
     let row = conn
         .query_row(
@@ -119,45 +147,12 @@ pub fn lookup_active(conn: &Connection, device_code: &str) -> Result<TicketStatu
                FROM oauth_device_tickets
               WHERE device_code = ?1",
             params![device_code],
-            |r| {
-                let account_id: Option<i64> = r.get(4)?;
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    account_id.map(AccountId),
-                    r.get::<_, String>(5)?,
-                    r.get::<_, Option<String>>(6)?,
-                ))
-            },
+            map_ticket_row,
         )
         .optional()
         .map_err(openproxy_db::error::map_db_error)?;
-    let Some((id, provider, device_code, user_code, account_id, expires_at, consumed_at)) = row
-    else {
-        return Ok(TicketStatus::Unknown);
-    };
-    if consumed_at.is_some() {
-        return Ok(TicketStatus::Consumed);
-    }
-    // Parse `expires_at` with chrono (LOW fix #15 generalized) so we
-    // compare wall-clocks, not lex order — a stale row with a
-    // zero-padded but otherwise broken format would otherwise be
-    // ambiguous.
-    match chrono::DateTime::parse_from_rfc3339(&expires_at) {
-        Ok(dt) if dt <= chrono::Utc::now() => Ok(TicketStatus::Expired),
-        Ok(_) => Ok(TicketStatus::Active(DeviceTicket {
-            id,
-            provider,
-            device_code,
-            user_code,
-            account_id,
-            expires_at,
-            consumed_at,
-        })),
-        Err(_) => Ok(TicketStatus::Expired),
-    }
+
+    Ok(row.map_or(TicketStatus::Unknown, classify_ticket_status))
 }
 
 /// Mark a ticket as consumed. Returns the row id of the updated row

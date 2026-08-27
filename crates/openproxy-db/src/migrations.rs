@@ -19,17 +19,88 @@ struct Migration {
 
 include!(concat!(env!("OUT_DIR"), "/migrations_generated.rs"));
 
-/// Apply pending migrations on `conn`.
-pub fn run(conn: &mut Connection) -> Result<()> {
-    ensure_tracking_table(conn)?;
-
+fn collect_pending_migrations(conn: &Connection) -> Result<Vec<&'static Migration>> {
     let applied = load_applied_versions(conn)?;
-    let mut pending: Vec<&Migration> = MIGRATIONS
+    let mut pending: Vec<&'static Migration> = MIGRATIONS
         .iter()
         .filter(|m| !applied.contains(&m.version))
         .collect();
     pending.sort_by_key(|m| m.version);
+    Ok(pending)
+}
 
+fn set_pragma_foreign_keys(conn: &Connection, enabled: bool) -> Result<()> {
+    let sql = if enabled {
+        "PRAGMA foreign_keys = ON"
+    } else {
+        "PRAGMA foreign_keys = OFF"
+    };
+    conn.execute_batch(sql).map_err(|e| CoreError::Migration {
+        version: 0,
+        message: format!("{sql}: {e}"),
+    })
+}
+
+fn build_versions_insert_sql(pending: &[&Migration]) -> String {
+    let mut insert_sql = String::with_capacity(64 + pending.len() * 12);
+    insert_sql.push_str("INSERT OR IGNORE INTO schema_migrations(version) VALUES ");
+    for (i, m) in pending.iter().enumerate() {
+        if i > 0 {
+            insert_sql.push(',');
+        }
+        let _ = write!(&mut insert_sql, "({})", m.version);
+    }
+    insert_sql
+}
+
+fn apply_migration_batch(conn: &mut Connection, pending: &[&Migration]) -> Result<()> {
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| CoreError::Migration {
+            version: 0,
+            message: format!("begin tx: {e}"),
+        })?;
+
+    for m in pending {
+        tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
+            version: m.version,
+            message: format!("{}: {}", m.name, e),
+        })?;
+    }
+
+    let insert_sql = build_versions_insert_sql(pending);
+    tx.execute_batch(&insert_sql).map_err(|e| CoreError::Migration {
+        version: 0,
+        message: format!("insert into schema_migrations: {e}"),
+    })?;
+
+    tx.commit().map_err(|e| CoreError::Migration {
+        version: 0,
+        message: format!("commit: {e}"),
+    })?;
+
+    Ok(())
+}
+
+fn run_migrations_with_fk_guard(
+    conn: &mut Connection,
+    pending: &[&Migration],
+    needs_fk_off: bool,
+) -> Result<()> {
+    if !needs_fk_off {
+        return apply_migration_batch(conn, pending);
+    }
+    set_pragma_foreign_keys(conn, false)?;
+    let res = apply_migration_batch(conn, pending);
+    let fk_res = set_pragma_foreign_keys(conn, true);
+    res.and(fk_res)
+}
+
+/// Apply pending migrations on `conn`.
+pub fn run(conn: &mut Connection) -> Result<()> {
+    ensure_tracking_table(conn)?;
+
+    let pending = collect_pending_migrations(conn)?;
     if pending.is_empty() {
         return Ok(());
     }
@@ -37,68 +108,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
     let needs_fk_off = pending
         .iter()
         .any(|m| m.sql.contains("PRAGMA foreign_keys = OFF"));
-    if needs_fk_off {
-        conn.execute_batch("PRAGMA foreign_keys = OFF")
-            .map_err(|e| CoreError::Migration {
-                version: 0,
-                message: format!("PRAGMA foreign_keys = OFF: {e}"),
-            })?;
-    }
-
-    let res = (|| -> Result<()> {
-        let tx = conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|e| CoreError::Migration {
-                version: 0,
-                message: format!("begin tx: {e}"),
-            })?;
-
-        let mut insert_sql = String::with_capacity(1024);
-        insert_sql.push_str("INSERT OR IGNORE INTO schema_migrations(version) VALUES ");
-        let mut first = true;
-
-        for m in &pending {
-            tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
-                version: m.version,
-                message: format!("{}: {}", m.name, e),
-            })?;
-
-            if !first {
-                insert_sql.push(',');
-            }
-            write!(&mut insert_sql, "({})", m.version).expect("write to string failed");
-            first = false;
-        }
-
-        // Since pending is checked to be non-empty above `if pending.is_empty() { return Ok(()); }`
-        // there's no need to check here. But let's just make it completely infallible statically on `first`.
-        if !first {
-            tx.execute_batch(&insert_sql)
-                .map_err(|e| CoreError::Migration {
-                    version: 0,
-                    message: format!("insert into schema_migrations: {e}"),
-                })?;
-        }
-
-        tx.commit().map_err(|e| CoreError::Migration {
-            version: 0,
-            message: format!("commit: {e}"),
-        })?;
-
-        Ok(())
-    })();
-
-    if needs_fk_off {
-        let fk_res =
-            conn.execute_batch("PRAGMA foreign_keys = ON")
-                .map_err(|e| CoreError::Migration {
-                    version: 0,
-                    message: format!("PRAGMA foreign_keys = ON: {e}"),
-                });
-        res.and(fk_res)?;
-    } else {
-        res?;
-    }
+    run_migrations_with_fk_guard(conn, &pending, needs_fk_off)?;
 
     let _ = crate::cost::backfill_usage_pricing(conn);
 

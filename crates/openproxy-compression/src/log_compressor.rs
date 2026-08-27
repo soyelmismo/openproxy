@@ -44,25 +44,34 @@ enum LogFormat {
 
 /// Line classification used internally for scoring/selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
 enum LineKind {
-    Other,
-    Error,
-    Warning,
-    Summary,
-    Header,
-    StackTrace,
+    Other = 0,
+    Error = 1,
+    Warning = 2,
+    Summary = 3,
+    Header = 4,
+    StackTrace = 5,
 }
 
 impl LineKind {
     fn score(self) -> f32 {
-        match self {
-            LineKind::Error => 1.0,
-            LineKind::StackTrace => 0.9,
-            LineKind::Summary => 0.8,
-            LineKind::Warning => 0.7,
-            LineKind::Header => 0.5,
-            LineKind::Other => 0.0,
-        }
+        const SCORES: [f32; 6] = [0.0, 1.0, 0.7, 0.8, 0.5, 0.9];
+        SCORES[self as usize]
+    }
+}
+
+fn compress_single_msg(msg: &mut OpenAIMessage) -> Option<&'static str> {
+    if msg.role != "tool" && msg.role != "assistant" {
+        return None;
+    }
+    let text = msg.content.as_ref()?.as_str()?;
+    let compressed = compress_log_content(text)?;
+    if compressed.len() < text.len() {
+        msg.content = Some(Value::String(compressed));
+        Some(TECHNIQUE)
+    } else {
+        None
     }
 }
 
@@ -72,23 +81,7 @@ impl LineKind {
 /// test-related patterns). Returns the technique name (`"lite::log_compressor"`)
 /// once per message that was actually compressed.
 pub fn compress_logs(msgs: &mut Messages) -> Vec<&'static str> {
-    let mut applied = Vec::new();
-    for msg in msgs.iter_mut() {
-        // Only tool results and assistant messages can contain build output.
-        if msg.role != "tool" && msg.role != "assistant" {
-            continue;
-        }
-        let Some(text) = msg.content.as_ref().and_then(|c| c.as_str()) else {
-            continue;
-        };
-        if let Some(compressed) = compress_log_content(text)
-            && compressed.len() < text.len()
-        {
-            msg.content = Some(Value::String(compressed));
-            applied.push(TECHNIQUE);
-        }
-    }
-    applied
+    msgs.iter_mut().filter_map(compress_single_msg).collect()
 }
 
 /// Compress a single log content string. Returns `Some((compressed, technique))`
@@ -105,32 +98,28 @@ pub fn compress_log_string(text: &str) -> Option<(String, &'static str)> {
         .map(|c| (c, TECHNIQUE))
 }
 
-/// Compress a single content string. Returns `None` if not compressible
-/// (too short, no log format, no scoreable lines, or no lines selected).
-fn compress_log_content(text: &str) -> Option<String> {
-    let lines: Vec<&str> = text.lines().collect();
+fn validate_and_score(lines: &[&str]) -> Option<Vec<LineKind>> {
     if lines.len() < MIN_LOG_LINES {
         return None;
     }
-    // Must look like a build/test log.
-    let _format = detect_format(&lines)?;
-    // Score each line.
+    let _format = detect_format(lines)?;
     let kinds: Vec<LineKind> = lines.iter().map(|l| classify_line(l)).collect();
-    if !kinds.iter().any(|k| k.score() > 0.0) {
-        return None;
+    if kinds.iter().any(|k| k.score() > 0.0) {
+        Some(kinds)
+    } else {
+        None
     }
-    let selected = select_lines(&lines, &kinds);
-    if selected.is_empty() {
-        return None;
-    }
+}
+
+fn format_selected_lines(lines: &[&str], selected: &[usize]) -> String {
     let total = lines.len();
     let kept = selected.len();
-    let mut out = String::with_capacity(text.len() / 2);
+    let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum::<usize>() / 2);
     if kept < total {
         let _ = writeln!(out, "[#log_compressed: kept {kept} of {total} lines]");
     }
     let mut first = true;
-    for &idx in &selected {
+    for &idx in selected {
         if let Some(line) = lines.get(idx) {
             if !first {
                 out.push('\n');
@@ -139,148 +128,139 @@ fn compress_log_content(text: &str) -> Option<String> {
             first = false;
         }
     }
-    Some(out)
+    out
+}
+
+/// Compress a single content string. Returns `None` if not compressible
+/// (too short, no log format, no scoreable lines, or no lines selected).
+fn compress_log_content(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let kinds = validate_and_score(&lines)?;
+    let selected = select_lines(&lines, &kinds);
+    if selected.is_empty() {
+        return None;
+    }
+    Some(format_selected_lines(&lines, &selected))
+}
+
+fn is_pytest_log(head: &[&str]) -> bool {
+    head.iter().any(|l| {
+        l.contains("===== test session starts =====")
+            || l.contains("PASSED")
+            || l.contains("FAILED")
+            || l.contains("SKIPPED")
+            || l.contains("ERROR")
+    })
+}
+
+fn is_npm_jest_log(head: &[&str]) -> bool {
+    head.iter().any(|l| {
+        l.starts_with("PASS ")
+            || l.starts_with("FAIL ")
+            || l.contains("Test Suites:")
+            || l.contains("Tests:")
+    })
+}
+
+fn is_cargo_log(head: &[&str]) -> bool {
+    head.iter().any(|l| {
+        (l.starts_with("running ") && l.contains(" test"))
+            || l.contains("test result:")
+            || l.starts_with("Compiling")
+            || l.starts_with("Finished")
+    })
+}
+
+fn is_make_target_header(l: &str) -> bool {
+    if let Some(end) = l.find("]:")
+        && let Some(n) = l.strip_prefix("make[")
+    {
+        let target = &n[..end - "make[".len()];
+        !target.is_empty() && target.chars().all(|c| c.is_ascii_digit())
+    } else {
+        false
+    }
+}
+
+fn is_make_log(head: &[&str]) -> bool {
+    head.iter().any(|l| {
+        is_make_target_header(l)
+            || l.contains("Entering directory")
+            || l.contains("Leaving directory")
+    })
+}
+
+fn is_generic_log(head: &[&str]) -> bool {
+    const GENERIC_TOKENS: &[&str] = &["error", "fail", "warn", "traceback", "panic", "exception"];
+    head.iter()
+        .filter(|l| GENERIC_TOKENS.iter().any(|t| contains_case_insensitive_ascii(l, t)))
+        .count()
+        >= 5
 }
 
 /// Detect log format from the first 50 lines.
 fn detect_format(lines: &[&str]) -> Option<LogFormat> {
     let head = &lines[..lines.len().min(50)];
-
-    // Pytest
-    for l in head {
-        if l.contains("===== test session starts =====") {
-            return Some(LogFormat::Pytest);
-        }
+    if is_pytest_log(head) {
+        Some(LogFormat::Pytest)
+    } else if is_npm_jest_log(head) {
+        Some(LogFormat::NpmJest)
+    } else if is_cargo_log(head) {
+        Some(LogFormat::Cargo)
+    } else if is_make_log(head) {
+        Some(LogFormat::Make)
+    } else if is_generic_log(head) {
+        Some(LogFormat::Generic)
+    } else {
+        None
     }
-    let pytest_markers = head
-        .iter()
-        .filter(|l| {
-            l.contains("PASSED")
-                || l.contains("FAILED")
-                || l.contains("SKIPPED")
-                || l.contains("ERROR")
-        })
-        .count();
-    if pytest_markers >= 1 {
-        return Some(LogFormat::Pytest);
-    }
-
-    // Npm/Jest
-    for l in head {
-        if l.starts_with("PASS ")
-            || l.starts_with("FAIL ")
-            || l.contains("Test Suites:")
-            || l.contains("Tests:")
-        {
-            return Some(LogFormat::NpmJest);
-        }
-    }
-
-    // Cargo
-    for l in head {
-        if l.starts_with("running ") && l.contains(" test") {
-            return Some(LogFormat::Cargo);
-        }
-        if l.contains("test result:") {
-            return Some(LogFormat::Cargo);
-        }
-        if l.starts_with("Compiling") || l.starts_with("Finished") {
-            return Some(LogFormat::Cargo);
-        }
-    }
-
-    // Make
-    for l in head {
-        if l.starts_with("make[") {
-            // Validate make[N]: structure (N is digits).
-            if let Some(end) = l.find("]:") {
-                let n = &l["make[".len()..end];
-                if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
-                    return Some(LogFormat::Make);
-                }
-            }
-        }
-        if l.contains("Entering directory") || l.contains("Leaving directory") {
-            return Some(LogFormat::Make);
-        }
-    }
-
-    // Generic: ≥5 lines match error/fail/warn/traceback/panic/exception.
-    let generic_matches = head
-        .iter()
-        .filter(|l| {
-            const GENERIC_TOKENS: &[&str] =
-                &["error", "fail", "warn", "traceback", "panic", "exception"];
-            GENERIC_TOKENS
-                .iter()
-                .any(|t| contains_case_insensitive_ascii(l, t))
-        })
-        .count();
-    if generic_matches >= 5 {
-        return Some(LogFormat::Generic);
-    }
-
-    None
 }
 
-/// Classify a single line into a `LineKind`.
-fn classify_line(line: &str) -> LineKind {
-    // StackTrace: indented and starts with one of the patterns
-    // (at ..., File "...", frame #N, #NN).
-    let trimmed_start = line.trim_start_matches([' ', '\t']);
-    let is_indented = trimmed_start.len() < line.len();
-    if is_indented {
-        if trimmed_start.starts_with("at ")
-            || trimmed_start.starts_with("File \"")
-            || trimmed_start.starts_with("frame #")
-        {
-            return LineKind::StackTrace;
-        }
-        // #NN pattern: '#' followed by at least one digit.
-        if let Some(rest) = trimmed_start.strip_prefix('#')
-            && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
-        {
-            return LineKind::StackTrace;
-        }
+fn is_stack_trace_line(line: &str) -> bool {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    if trimmed.len() >= line.len() {
+        return false;
     }
-
-    // Error: contains an error token (case-insensitive substring).
-    // Substring match is intentional — "FAILED", "ValueError", "runtime error"
-    // all carry error semantics for log compression purposes.
-    if contains_error_token(line) {
-        return LineKind::Error;
-    }
-
-    // Warning: "warn" (case-insensitive).
-    if contains_case_insensitive_ascii(line, "warn") {
-        return LineKind::Warning;
-    }
-
-    // Summary: test result markers or lowercase passed/failed counts.
-    // Note: "passed"/"failed" are matched case-sensitively (lowercase) so
-    // that pytest uppercase PASSED/FAILED test-status lines do not get
-    // misclassified as summaries — they're classified as Errors above
-    // via the "fail" substring (or remain Other if they're PASSED lines).
-    if line.contains("test result:")
-        || line.contains("Test Suites:")
-        || line.contains("Tests:")
-        || line.contains("passed")
-        || line.contains("failed")
+    if trimmed.starts_with("at ")
+        || trimmed.starts_with("File \"")
+        || trimmed.starts_with("frame #")
     {
-        return LineKind::Summary;
+        return true;
     }
+    trimmed
+        .strip_prefix('#')
+        .is_some_and(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
 
-    // Header: section markers or compilation/runner banners.
-    if line.contains("=====")
+fn is_summary_line(line: &str) -> bool {
+    const SUMMARY_MARKERS: &[&str] =
+        &["test result:", "Test Suites:", "Tests:", "passed", "failed"];
+    SUMMARY_MARKERS.iter().any(|m| line.contains(m))
+}
+
+fn is_header_line(line: &str) -> bool {
+    line.contains("=====")
         || line.contains("-----")
         || line.contains("######")
         || line.starts_with("Running")
         || line.starts_with("Compiling")
-    {
-        return LineKind::Header;
-    }
+}
 
-    LineKind::Other
+/// Classify a single line into a `LineKind`.
+fn classify_line(line: &str) -> LineKind {
+    if is_stack_trace_line(line) {
+        LineKind::StackTrace
+    } else if contains_error_token(line) {
+        LineKind::Error
+    } else if contains_case_insensitive_ascii(line, "warn") {
+        LineKind::Warning
+    } else if is_summary_line(line) {
+        LineKind::Summary
+    } else if is_header_line(line) {
+        LineKind::Header
+    } else {
+        LineKind::Other
+    }
 }
 
 fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> bool {
@@ -304,18 +284,8 @@ fn contains_error_token(line: &str) -> bool {
         .any(|t| contains_case_insensitive_ascii(line, t))
 }
 
-/// Select line indices to keep, applying the selection algorithm:
-/// 1. Errors (+ context lines after each), capped at MAX_ERRORS.
-/// 2. Stack trace runs, each capped at STACK_TRACE_MAX_LINES, at most
-///    MAX_STACK_TRACES runs.
-/// 3. Top MAX_WARNINGS warnings, deduped by normalized message prefix.
-/// 4. All Summary + Header lines.
-/// 5. Sort, dedup, truncate to MAX_TOTAL_LINES.
-fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
+fn collect_error_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
     let n = kinds.len();
-    let mut selected: BTreeSet<usize> = BTreeSet::new();
-
-    // 1. Errors + context.
     let mut error_count = 0;
     for (i, kind) in kinds.iter().enumerate() {
         if *kind == LineKind::Error {
@@ -331,8 +301,10 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
             }
         }
     }
+}
 
-    // 2. Stack traces (contiguous runs).
+fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
+    let n = kinds.len();
     let mut traces_collected = 0;
     let mut i = 0;
     while i < n {
@@ -353,8 +325,13 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
             i += 1;
         }
     }
+}
 
-    // 3. Warnings (top MAX_WARNINGS, deduped).
+fn collect_warning_indices(
+    lines: &[&str],
+    kinds: &[LineKind],
+    selected: &mut BTreeSet<usize>,
+) {
     let mut warning_seen: HashSet<String> = HashSet::new();
     let mut warnings_kept = 0;
     for (i, (kind, line)) in kinds.iter().zip(lines.iter()).enumerate() {
@@ -366,15 +343,30 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
             }
         }
     }
+}
 
-    // 4. All Summary + Header lines.
+fn collect_summary_and_header_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
     for (i, kind) in kinds.iter().enumerate() {
         if *kind == LineKind::Summary || *kind == LineKind::Header {
             selected.insert(i);
         }
     }
+}
 
-    // 5. Sort, dedup, truncate.
+/// Select line indices to keep, applying the selection algorithm:
+/// 1. Errors (+ context lines after each), capped at MAX_ERRORS.
+/// 2. Stack trace runs, each capped at STACK_TRACE_MAX_LINES, at most
+///    MAX_STACK_TRACES runs.
+/// 3. Top MAX_WARNINGS warnings, deduped by normalized message prefix.
+/// 4. All Summary + Header lines.
+/// 5. Sort, dedup, truncate to MAX_TOTAL_LINES.
+fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
+    let mut selected: BTreeSet<usize> = BTreeSet::new();
+    collect_error_indices(kinds, &mut selected);
+    collect_stack_trace_indices(kinds, &mut selected);
+    collect_warning_indices(lines, kinds, &mut selected);
+    collect_summary_and_header_indices(kinds, &mut selected);
+
     let mut result: Vec<usize> = selected.into_iter().collect();
     result.truncate(MAX_TOTAL_LINES);
     result
@@ -404,6 +396,48 @@ fn dedup_key(line: &str) -> String {
     }
 }
 
+fn scan_hex_run(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) == Some(&'0') && chars.get(i + 1) == Some(&'x') {
+        let mut j = i + 2;
+        while j < chars.len() && chars[j].is_ascii_hexdigit() {
+            j += 1;
+        }
+        if j > i + 2 {
+            return Some(j);
+        }
+    }
+    None
+}
+
+fn scan_digit_run(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
+        let mut j = i;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        return Some(j);
+    }
+    None
+}
+
+fn scan_path_run(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) == Some(&'/') {
+        let mut j = i;
+        while j < chars.len() {
+            let cc = chars[j];
+            if cc.is_ascii_alphanumeric() || cc == '/' || cc == '.' || cc == '_' || cc == '-' {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if j > i + 1 {
+            return Some(j);
+        }
+    }
+    None
+}
+
 /// Normalize the trailing region of a dedup key: replace digit runs, hex
 /// literals, and filesystem paths with `*`. Operates on `char`s so it's
 /// UTF-8 safe.
@@ -412,49 +446,16 @@ fn normalize_trailing(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < chars.len() {
-        let c = chars[i];
-        // Hex literal: 0x[0-9a-fA-F]+
-        if c == '0' && i + 1 < chars.len() && chars[i + 1] == 'x' {
-            let mut j = i + 2;
-            while j < chars.len() && chars[j].is_ascii_hexdigit() {
-                j += 1;
-            }
-            if j > i + 2 {
-                out.push('*');
-                i = j;
-                continue;
-            }
-        }
-        // Digit run.
-        if c.is_ascii_digit() {
-            let mut j = i;
-            while j < chars.len() && chars[j].is_ascii_digit() {
-                j += 1;
-            }
+        if let Some(next_i) = scan_hex_run(&chars, i)
+            .or_else(|| scan_digit_run(&chars, i))
+            .or_else(|| scan_path_run(&chars, i))
+        {
             out.push('*');
-            i = j;
-            continue;
+            i = next_i;
+        } else {
+            out.push(chars[i]);
+            i += 1;
         }
-        // Path: '/' followed by one or more path chars (word char, /, ., -, _).
-        if c == '/' {
-            let mut j = i;
-            while j < chars.len() {
-                let cc = chars[j];
-                if cc.is_ascii_alphanumeric() || cc == '/' || cc == '.' || cc == '_' || cc == '-' {
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            if j > i + 1 {
-                out.push('*');
-                i = j;
-                continue;
-            }
-        }
-        // Regular char.
-        out.push(c);
-        i += 1;
     }
     out
 }

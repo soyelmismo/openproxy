@@ -39,34 +39,13 @@ declare_openai_adapter!(
             .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {e}")))?;
 
             let payload: OllamaTagsResponse =
-                <OllamaTagsResponse as serde::Deserialize>::deserialize(&body)
+                serde_json::from_value(body)
                     .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {e}")))?;
 
             let out = payload
                 .models
                 .into_iter()
-                .map(|m| {
-                    let id = m.name.unwrap_or_default();
-                    let family = openproxy_types::capabilities::infer_family(&id);
-                    let display_name = m.display_name.or_else(|| Some(id.clone()));
-                    let m_type = openproxy_types::capabilities::infer_model_type(&id);
-                    let caps = openproxy_types::capabilities::infer_capabilities(&id);
-                    let in_mods =
-                        openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
-                    let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
-                    DiscoveredModel {
-                        model_id: ModelId::new(id),
-                        display_name,
-                        target_format: TargetFormat::Openai,
-                        context_length: None,
-                        max_output_tokens: None,
-                        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
-                        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
-                        model_type: Some(m_type.to_string()),
-                        family,
-                        capabilities: Some(caps),
-                    }
-                })
+                .map(map_ollama_tag_entry)
                 .collect();
             Ok(out)
         }
@@ -85,4 +64,26 @@ struct OllamaTagEntry {
     name: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
+}
+
+fn map_ollama_tag_entry(m: OllamaTagEntry) -> DiscoveredModel {
+    let id = m.name.unwrap_or_default();
+    let family = openproxy_types::capabilities::infer_family(&id);
+    let display_name = m.display_name.or_else(|| Some(id.clone()));
+    let m_type = openproxy_types::capabilities::infer_model_type(&id);
+    let caps = openproxy_types::capabilities::infer_capabilities(&id);
+    let in_mods = openproxy_types::capabilities::infer_input_modalities_for_model(&id, &caps);
+    let out_mods = openproxy_types::capabilities::infer_output_modalities(&id);
+    DiscoveredModel {
+        model_id: ModelId::new(id),
+        display_name,
+        target_format: TargetFormat::Openai,
+        context_length: None,
+        max_output_tokens: None,
+        input_modalities: Some(in_mods.into_iter().map(String::from).collect()),
+        output_modalities: Some(out_mods.into_iter().map(String::from).collect()),
+        model_type: Some(m_type.to_string()),
+        family,
+        capabilities: Some(caps),
+    }
 }

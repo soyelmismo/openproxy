@@ -231,78 +231,99 @@ pub struct GeminiUsageMetadata {
     pub cached_content_token_count: Option<u32>,
 }
 
-pub fn normalize_audio_mime(format: &str) -> String {
-    match format.to_lowercase().trim_start_matches('.') {
-        "wav" | "x-wav" | "wave" => "audio/wav".to_string(),
-        "mp3" | "mpeg" => "audio/mp3".to_string(),
-        "m4a" | "aac" => "audio/m4a".to_string(),
-        "ogg" | "opus" => "audio/ogg".to_string(),
-        "flac" | "x-flac" => "audio/flac".to_string(),
-        "aiff" | "x-aiff" => "audio/aiff".to_string(),
-        "pcm" => "audio/pcm".to_string(),
-        s if s.starts_with("audio/") => s.to_string(),
-        _ => "audio/mp3".to_string(),
+fn map_audio_extension(ext: &str) -> Option<&'static str> {
+    match ext {
+        "wav" | "x-wav" | "wave" => Some("audio/wav"),
+        "mp3" | "mpeg" => Some("audio/mp3"),
+        "m4a" | "aac" => Some("audio/m4a"),
+        "ogg" | "opus" => Some("audio/ogg"),
+        "flac" | "x-flac" => Some("audio/flac"),
+        "aiff" | "x-aiff" => Some("audio/aiff"),
+        "pcm" => Some("audio/pcm"),
+        _ => None,
     }
+}
+
+pub fn normalize_audio_mime(format: &str) -> String {
+    let lower = format.to_lowercase();
+    let ext = lower.trim_start_matches('.');
+    if let Some(mime) = map_audio_extension(ext) {
+        mime.to_string()
+    } else if ext.starts_with("audio/") {
+        ext.to_string()
+    } else {
+        "audio/mp3".to_string()
+    }
+}
+
+fn parse_data_uri(url: &str) -> Option<GeminiInlineData> {
+    let stripped = url.strip_prefix("data:")?;
+    let (mime_type, rest) = stripped.split_once(';')?;
+    let (_, data) = rest.split_once(',')?;
+    Some(GeminiInlineData {
+        mime_type: mime_type.to_string(),
+        data: data.to_string(),
+    })
+}
+
+fn parse_image_part_inline(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<GeminiInlineData> {
+    let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
+    parse_data_uri(url)
+}
+
+fn parse_audio_url_part_inline(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<GeminiInlineData> {
+    let audio_obj = obj.get("audio_url")?.as_object()?;
+    let url = audio_obj.get("url")?.as_str()?;
+    if let Some(inline) = parse_data_uri(url) {
+        return Some(inline);
+    }
+    let mime = audio_obj
+        .get("mime_type")
+        .or_else(|| audio_obj.get("mimeType"))
+        .or_else(|| audio_obj.get("format"))
+        .and_then(|v| v.as_str())
+        .map_or_else(|| "audio/mp3".to_string(), normalize_audio_mime);
+    Some(GeminiInlineData {
+        mime_type: mime,
+        data: url.to_string(),
+    })
+}
+
+fn parse_input_audio_part_inline(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<GeminiInlineData> {
+    let audio_obj = obj
+        .get("input_audio")
+        .or_else(|| obj.get("audio"))?
+        .as_object()?;
+    let data_raw = audio_obj.get("data")?.as_str()?;
+    let format_raw = audio_obj
+        .get("format")
+        .or_else(|| audio_obj.get("mime_type"))
+        .or_else(|| audio_obj.get("mimeType"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("mp3");
+    let mime_type = normalize_audio_mime(format_raw);
+    let data = if let Some(stripped) = data_raw.strip_prefix("data:") {
+        let (_, rest) = stripped.split_once(',')?;
+        rest.to_string()
+    } else {
+        data_raw.to_string()
+    };
+    Some(GeminiInlineData { mime_type, data })
 }
 
 pub fn parse_media_part_to_inline_data(part: &serde_json::Value) -> Option<GeminiInlineData> {
     let obj = part.as_object()?;
     let typ = obj.get("type").and_then(|v| v.as_str())?;
     match typ {
-        "image_url" => {
-            let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
-            let stripped = url.strip_prefix("data:")?;
-            let (mime_type, rest) = stripped.split_once(';')?;
-            let (_, data) = rest.split_once(',')?;
-            Some(GeminiInlineData {
-                mime_type: mime_type.to_string(),
-                data: data.to_string(),
-            })
-        }
-        "audio_url" => {
-            let audio_obj = obj.get("audio_url")?.as_object()?;
-            let url = audio_obj.get("url")?.as_str()?;
-            if let Some(stripped) = url.strip_prefix("data:") {
-                let (mime_type, rest) = stripped.split_once(';')?;
-                let (_, data) = rest.split_once(',')?;
-                Some(GeminiInlineData {
-                    mime_type: mime_type.to_string(),
-                    data: data.to_string(),
-                })
-            } else {
-                let mime = audio_obj
-                    .get("mime_type")
-                    .or_else(|| audio_obj.get("mimeType"))
-                    .or_else(|| audio_obj.get("format"))
-                    .and_then(|v| v.as_str())
-                    .map_or_else(|| "audio/mp3".to_string(), normalize_audio_mime);
-                Some(GeminiInlineData {
-                    mime_type: mime,
-                    data: url.to_string(),
-                })
-            }
-        }
-        "input_audio" | "audio" => {
-            let audio_obj = obj
-                .get("input_audio")
-                .or_else(|| obj.get("audio"))?
-                .as_object()?;
-            let data_raw = audio_obj.get("data")?.as_str()?;
-            let format_raw = audio_obj
-                .get("format")
-                .or_else(|| audio_obj.get("mime_type"))
-                .or_else(|| audio_obj.get("mimeType"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("mp3");
-            let mime_type = normalize_audio_mime(format_raw);
-            let data = if let Some(stripped) = data_raw.strip_prefix("data:") {
-                let (_, rest) = stripped.split_once(',')?;
-                rest.to_string()
-            } else {
-                data_raw.to_string()
-            };
-            Some(GeminiInlineData { mime_type, data })
-        }
+        "image_url" => parse_image_part_inline(obj),
+        "audio_url" => parse_audio_url_part_inline(obj),
+        "input_audio" | "audio" => parse_input_audio_part_inline(obj),
         _ => None,
     }
 }
@@ -311,23 +332,24 @@ pub fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<Gemini
     parse_media_part_to_inline_data(part)
 }
 
+fn map_single_content_part(part: &serde_json::Value) -> GeminiPart {
+    if let Some(inline_data) = parse_media_part_to_inline_data(part) {
+        return GeminiPart {
+            inline_data: Some(inline_data),
+            ..Default::default()
+        };
+    }
+    GeminiPart {
+        text: Some(openproxy_types::extract_content_part_text(part)),
+        ..Default::default()
+    }
+}
+
 fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<GeminiPart> {
     match content {
-        Some(serde_json::Value::Array(parts)) => parts
-            .iter()
-            .map(|part| {
-                if let Some(inline_data) = parse_media_part_to_inline_data(part) {
-                    return GeminiPart {
-                        inline_data: Some(inline_data),
-                        ..Default::default()
-                    };
-                }
-                GeminiPart {
-                    text: Some(openproxy_types::extract_content_part_text(part)),
-                    ..Default::default()
-                }
-            })
-            .collect(),
+        Some(serde_json::Value::Array(parts)) => {
+            parts.iter().map(map_single_content_part).collect()
+        }
         Some(serde_json::Value::String(s)) => vec![GeminiPart {
             text: Some(s.clone()),
             ..Default::default()
@@ -343,52 +365,8 @@ fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<G
     }
 }
 
-pub fn openai_to_gemini(
-    req: &openproxy_types::OpenAIRequest,
-    override_messages: &[openproxy_types::OpenAIMessage],
-) -> GeminiRequest {
-    let mut system_parts: Vec<String> = Vec::new();
-    let mut contents: Vec<GeminiContent> = Vec::with_capacity(override_messages.len());
-
-    for m in override_messages {
-        match m.role.as_str() {
-            "system" => system_parts.push(m.extract_text()),
-            "user" => {
-                contents.push(GeminiContent {
-                    role: "user".to_string(),
-                    parts: message_content_to_gemini_parts(m.content.as_ref()),
-                });
-            }
-            "assistant" => {
-                contents.push(GeminiContent {
-                    role: "model".to_string(),
-                    parts: message_content_to_gemini_parts(m.content.as_ref()),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    let system_instruction = if system_parts.is_empty() {
-        None
-    } else {
-        Some(GeminiContent {
-            role: "system".to_string(),
-            parts: vec![GeminiPart {
-                text: Some(system_parts.join("\n\n")),
-                ..Default::default()
-            }],
-        })
-    };
-
-    let generation_config = GeminiGenerationConfig {
-        max_output_tokens: req.max_tokens.or(Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS)),
-        temperature: req.temperature,
-        top_p: req.top_p,
-        stop_sequences: req.stop.clone(),
-    };
-
-    let safety_settings = Some(vec![
+fn build_default_gemini_safety_settings() -> Vec<GeminiSafetySetting> {
+    vec![
         GeminiSafetySetting {
             category: "HARM_CATEGORY_HARASSMENT".to_string(),
             threshold: "BLOCK_NONE".to_string(),
@@ -409,13 +387,64 @@ pub fn openai_to_gemini(
             category: "HARM_CATEGORY_CIVIC_INTEGRITY".to_string(),
             threshold: "BLOCK_NONE".to_string(),
         },
-    ]);
+    ]
+}
+
+fn partition_messages_for_gemini(
+    messages: &[openproxy_types::OpenAIMessage],
+) -> (Option<GeminiContent>, Vec<GeminiContent>) {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut contents: Vec<GeminiContent> = Vec::with_capacity(messages.len());
+
+    for m in messages {
+        match m.role.as_str() {
+            "system" => system_parts.push(m.extract_text()),
+            "user" => contents.push(GeminiContent {
+                role: "user".to_string(),
+                parts: message_content_to_gemini_parts(m.content.as_ref()),
+            }),
+            "assistant" => contents.push(GeminiContent {
+                role: "model".to_string(),
+                parts: message_content_to_gemini_parts(m.content.as_ref()),
+            }),
+            _ => {}
+        }
+    }
+
+    let system_instruction = if system_parts.is_empty() {
+        None
+    } else {
+        Some(GeminiContent {
+            role: "system".to_string(),
+            parts: vec![GeminiPart {
+                text: Some(system_parts.join("\n\n")),
+                ..Default::default()
+            }],
+        })
+    };
+
+    (system_instruction, contents)
+}
+
+/// Convert an OpenAI-format chat completion request to Gemini format.
+pub fn openai_to_gemini(
+    req: &openproxy_types::OpenAIRequest,
+    override_messages: &[openproxy_types::OpenAIMessage],
+) -> GeminiRequest {
+    let (system_instruction, contents) = partition_messages_for_gemini(override_messages);
+
+    let generation_config = GeminiGenerationConfig {
+        temperature: req.temperature,
+        top_p: req.top_p,
+        max_output_tokens: req.max_tokens.or(Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS)),
+        stop_sequences: req.stop.clone(),
+    };
 
     GeminiRequest {
         contents,
         system_instruction,
         generation_config: Some(generation_config),
-        safety_settings,
+        safety_settings: Some(build_default_gemini_safety_settings()),
     }
 }
 

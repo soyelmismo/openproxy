@@ -157,17 +157,58 @@ impl CancellationToken {
     /// lane sent the first token). This closes the cancellation window
     /// — losers' HTTP connections are dropped at the transport level,
     /// stopping upstream token generation immediately.
+fn is_initially_cancelled(
+    rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
+    race_token: &CancellationToken,
+) -> bool {
+    rx.borrow_and_update().is_some() || race_token.is_cancelled()
+}
+
+fn spawn_cancel_forwarder(
+    mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
+    mut cancel_rx: watch::Receiver<bool>,
+    inner: CancellationToken,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = rx.changed() => {
+                    if res.is_err() || rx.borrow().is_some() {
+                        inner.cancel();
+                        return;
+                    }
+                }
+                res = cancel_rx.changed() => {
+                    if res.is_err() || *cancel_rx.borrow() {
+                        inner.cancel();
+                        return;
+                    }
+                }
+            }
+        }
+    });
+}
+
+    /// Build a combined token that flips to "cancelled" when EITHER the
+    /// `watch::Receiver<bool>` transitions to `true` OR the provided
+    /// `CancellationToken` is cancelled.
+    ///
+    /// Use this for race lanes: the lane's upstream call is cancelled
+    /// when the client disconnects **or** when the race is lost (another
+    /// lane sent the first token). This closes the cancellation window
+    /// — losers' HTTP connections are dropped at the transport level,
+    /// stopping upstream token generation immediately.
     pub fn from_watch_and_token(
         mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
         race_token: &CancellationToken,
     ) -> Self {
         let token = Self::new();
-        if rx.borrow_and_update().is_some() || race_token.is_cancelled() {
+        if Self::is_initially_cancelled(&mut rx, race_token) {
             token.cancel();
             return token;
         }
         let inner = CancellationToken::clone(&token);
-        let mut cancel_rx = race_token.inner.cancel_tx.subscribe();
+        let cancel_rx = race_token.inner.cancel_tx.subscribe();
         // Close TOCTOU: if cancelled between is_cancelled() above and
         // subscribe(), the initial value is already true but changed()
         // won't fire for it.  Re-check explicitly.
@@ -175,24 +216,7 @@ impl CancellationToken {
             inner.cancel();
             return token;
         }
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    res = rx.changed() => {
-                        if res.is_err() || rx.borrow().is_some() {
-                            inner.cancel();
-                            return;
-                        }
-                    }
-                    res = cancel_rx.changed() => {
-                        if res.is_err() || *cancel_rx.borrow() {
-                            inner.cancel();
-                            return;
-                        }
-                    }
-                }
-            }
-        });
+        Self::spawn_cancel_forwarder(rx, cancel_rx, inner);
         token
     }
 }

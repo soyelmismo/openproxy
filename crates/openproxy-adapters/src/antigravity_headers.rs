@@ -135,6 +135,16 @@ pub fn oauth_user_agent() -> String {
     format!("vscode/1.X.X (Antigravity/{})", version())
 }
 
+fn insert_header_str(headers: &mut http::HeaderMap, name: &'static str, val: &str) {
+    if let Ok(v) = HeaderValue::from_str(val) {
+        headers.insert(name, v);
+    }
+}
+
+fn is_valid_project_id(pid: &str) -> bool {
+    !pid.is_empty() && pid != "test-project" && pid != "project-id"
+}
+
 /// Inject all Antigravity client-identity headers into an
 /// `http::HeaderMap`. The caller is responsible for setting
 /// `Authorization` and `Content-Type` separately.
@@ -143,37 +153,14 @@ pub fn oauth_user_agent() -> String {
 /// set to the project ID (required for the API to route the request
 /// to the correct Cloud Code project).
 pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Option<&str>) {
-    // User-Agent
-    if let Ok(v) = HeaderValue::from_str(&user_agent()) {
-        headers.insert(http::header::USER_AGENT, v);
-    }
-
-    // x-client-name
+    insert_header_str(headers, http::header::USER_AGENT.as_str(), &user_agent());
     headers.insert("x-client-name", HeaderValue::from_static("antigravity"));
+    insert_header_str(headers, "x-client-version", version());
+    insert_header_str(headers, "x-machine-id", machine_id());
+    insert_header_str(headers, "x-vscode-sessionid", session_id());
 
-    // x-client-version
-    if let Ok(v) = HeaderValue::from_str(version()) {
-        headers.insert("x-client-version", v);
-    }
-
-    // x-machine-id (persistent per-machine fingerprint)
-    if let Ok(v) = HeaderValue::from_str(machine_id()) {
-        headers.insert("x-machine-id", v);
-    }
-
-    // x-vscode-sessionid (per-launch session)
-    if let Ok(v) = HeaderValue::from_str(session_id()) {
-        headers.insert("x-vscode-sessionid", v);
-    }
-
-    // x-goog-user-project (when project_id is known and non-empty)
-    if let Some(pid) = project_id
-        && !pid.is_empty()
-        && pid != "test-project"
-        && pid != "project-id"
-        && let Ok(v) = HeaderValue::from_str(pid)
-    {
-        headers.insert("x-goog-user-project", v);
+    if let Some(pid) = project_id.filter(|p| is_valid_project_id(p)) {
+        insert_header_str(headers, "x-goog-user-project", pid);
     }
 }
 

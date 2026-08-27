@@ -44,6 +44,69 @@ impl AtomesusAdapter {
 
 crate::adapters::derive_default_from_new!(AtomesusAdapter);
 
+fn extract_message_content(msg: &serde_json::Value) -> String {
+    if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
+        return text.to_string();
+    }
+    if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+        let parts: Vec<&str> = arr
+            .iter()
+            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .collect();
+        return parts.join("\n");
+    }
+    String::new()
+}
+
+fn append_role_content(full_prompt: &mut String, role: &str, content: &str) {
+    if content.is_empty() {
+        return;
+    }
+    if !full_prompt.is_empty() {
+        full_prompt.push_str("\n\n");
+    }
+    match role {
+        "system" => {
+            let _ = write!(full_prompt, "[System Instructions]\n{content}");
+        }
+        "assistant" => {
+            let _ = write!(full_prompt, "[Assistant]\n{content}");
+        }
+        _ => full_prompt.push_str(content),
+    }
+}
+
+fn build_atomesus_full_prompt(v: &serde_json::Value) -> String {
+    if let Some(messages) = v.get("messages").and_then(|m| m.as_array()) {
+        let mut full_prompt = String::new();
+        for msg in messages {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+            let content = extract_message_content(msg);
+            append_role_content(&mut full_prompt, role, &content);
+        }
+        full_prompt
+    } else {
+        v.get("prompt")
+            .and_then(|p| p.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+}
+
+fn infer_atomesus_mode_and_model(model: &ModelId) -> (&'static str, &str) {
+    let mode = if model.as_str().ends_with("-fast") {
+        "fast"
+    } else {
+        "thinking"
+    };
+    let model_str = model.as_str();
+    let upstream_model = model_str
+        .strip_suffix("-fast")
+        .or_else(|| model_str.strip_suffix("-thinking"))
+        .unwrap_or(model_str);
+    (mode, upstream_model)
+}
+
 impl ProviderAdapter for AtomesusAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -65,53 +128,8 @@ impl ProviderAdapter for AtomesusAdapter {
             return Ok(body);
         }
 
-        let mut full_prompt = String::new();
-        if let Some(messages) = v.get("messages").and_then(|m| m.as_array()) {
-            for msg in messages {
-                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-                let content = if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
-                    text.to_string()
-                } else if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
-                    let mut text_parts = Vec::new();
-                    for part in arr {
-                        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                            text_parts.push(t);
-                        }
-                    }
-                    text_parts.join("\n")
-                } else {
-                    String::new()
-                };
-
-                if !content.is_empty() {
-                    if !full_prompt.is_empty() {
-                        full_prompt.push_str("\n\n");
-                    }
-                    if role == "system" {
-                        let _ = write!(full_prompt, "[System Instructions]\n{content}");
-                    } else if role == "assistant" {
-                        let _ = write!(full_prompt, "[Assistant]\n{content}");
-                    } else {
-                        full_prompt.push_str(&content);
-                    }
-                }
-            }
-        } else if let Some(prompt) = v.get("prompt").and_then(|p| p.as_str()) {
-            full_prompt = prompt.to_string();
-        }
-
-        let mode = if model.as_str().ends_with("-fast") {
-            "fast"
-        } else {
-            "thinking"
-        };
-
-        // Map model_id -> upstream model id
-        let model_str = model.as_str();
-        let upstream_model = model_str
-            .strip_suffix("-fast")
-            .or_else(|| model_str.strip_suffix("-thinking"))
-            .unwrap_or(model_str);
+        let full_prompt = build_atomesus_full_prompt(&v);
+        let (mode, upstream_model) = infer_atomesus_mode_and_model(model);
 
         let atomesus_payload = serde_json::json!({
             "message": full_prompt,

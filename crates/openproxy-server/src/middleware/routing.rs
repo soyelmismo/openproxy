@@ -64,6 +64,94 @@ pub async fn routing_middleware(
     Ok(next.run(req).await)
 }
 
+fn resolve_raw_routing_plan(
+    state: &AppState,
+    legacy_combo_name: Option<&str>,
+    model: &str,
+) -> Result<RoutingPlan, ApiError> {
+    let w = state.db_pool().writer();
+    if let Some(name) = legacy_combo_name {
+        match openproxy_db::combos::get_combo_by_name(&w, name)? {
+            Some(combo) => {
+                let targets = openproxy_db::combos::list_targets(&w, combo.id)?;
+                Ok(RoutingPlan::Combo {
+                    combo_id: combo.id,
+                    combo_name: combo.name,
+                    strategy: combo.strategy,
+                    race_size: combo.race_size,
+                    targets,
+                })
+            }
+            None => Err(ApiError(CoreError::ComboNotFound(0))),
+        }
+    } else {
+        Ok(routing::resolve(&w, model)?)
+    }
+}
+
+fn filter_combo_targets_by_auth(
+    state: &AppState,
+    targets: &mut Vec<ComboTarget>,
+    auth: &ValidatedApiToken,
+) -> Result<(), ApiError> {
+    let r = state.db_pool().reader();
+    targets.retain(|target| {
+        if !auth.is_provider_allowed(target.provider_id.as_str()) {
+            return false;
+        }
+        if let Some(row_id) = target.model_row_id {
+            let model = openproxy_core::models::get_by_row_id(&r, row_id)
+                .ok()
+                .flatten();
+            if let Some(m) = model
+                && !auth.is_model_allowed(
+                    m.model_id.as_str(),
+                    Some(target.provider_id.as_str()),
+                )
+            {
+                return false;
+            }
+        }
+        true
+    });
+
+    if targets.is_empty() {
+        return Err(ApiError(CoreError::Auth(
+            "all upstream targets in combo are restricted for this key".to_string(),
+        )));
+    }
+    Ok(())
+}
+
+fn apply_auth_restrictions_to_plan(
+    state: &AppState,
+    plan: &mut RoutingPlan,
+    auth: &ValidatedApiToken,
+) -> Result<bool, ApiError> {
+    let RoutingPlan::Combo {
+        combo_id, targets, ..
+    } = plan
+    else {
+        return Ok(false);
+    };
+
+    if !auth.is_combo_allowed(combo_id.0) {
+        return Err(ApiError(CoreError::Auth(
+            "combo not allowed for this key".to_string(),
+        )));
+    }
+
+    let has_restrictions = auth.blacklisted_providers.is_some()
+        || auth.blacklisted_models.is_some()
+        || auth.allowed_models.as_ref().is_some_and(|a| !a.is_empty());
+
+    if has_restrictions {
+        filter_combo_targets_by_auth(state, targets, auth)?;
+    }
+
+    Ok(has_restrictions)
+}
+
 fn resolve_routing_plan(
     state: &AppState,
     headers: &HeaderMap,
@@ -74,74 +162,11 @@ fn resolve_routing_plan(
         .get("x-openproxy-combo")
         .and_then(|v| v.to_str().ok());
 
-    let mut plan = {
-        let w = state.db_pool().writer();
-        if let Some(name) = legacy_combo_name {
-            match openproxy_db::combos::get_combo_by_name(&w, name)? {
-                Some(combo) => {
-                    let targets = openproxy_db::combos::list_targets(&w, combo.id)?;
-                    RoutingPlan::Combo {
-                        combo_id: combo.id,
-                        combo_name: combo.name,
-                        strategy: combo.strategy,
-                        race_size: combo.race_size,
-                        targets,
-                    }
-                }
-                None => return Err(ApiError(CoreError::ComboNotFound(0))),
-            }
-        } else {
-            routing::resolve(&w, &openai_req.model)?
-        }
+    let mut plan = resolve_raw_routing_plan(state, legacy_combo_name, &openai_req.model)?;
+    let has_restrictions = match auth_result {
+        Some(auth) => apply_auth_restrictions_to_plan(state, &mut plan, auth)?,
+        None => false,
     };
-
-    let mut has_restrictions = false;
-    if let RoutingPlan::Combo {
-        combo_id, targets, ..
-    } = &mut plan
-        && let Some(auth) = auth_result
-    {
-        if !auth.is_combo_allowed(combo_id.0) {
-            return Err(ApiError(CoreError::Auth(
-                "combo not allowed for this key".to_string(),
-            )));
-        }
-
-        let has_blacklist =
-            auth.blacklisted_providers.is_some() || auth.blacklisted_models.is_some();
-        let has_allowlist = auth.allowed_models.as_ref().is_some_and(|a| !a.is_empty());
-
-        if has_blacklist || has_allowlist {
-            has_restrictions = true;
-            let r = state.db_pool().reader();
-            let mut filtered_targets = Vec::with_capacity(targets.len());
-            for target in targets.drain(..) {
-                if !auth.is_provider_allowed(target.provider_id.as_str()) {
-                    continue;
-                }
-                if let Some(row_id) = target.model_row_id {
-                    let model = openproxy_core::models::get_by_row_id(&r, row_id)
-                        .ok()
-                        .flatten();
-                    if let Some(m) = model
-                        && !auth.is_model_allowed(
-                            m.model_id.as_str(),
-                            Some(target.provider_id.as_str()),
-                        )
-                    {
-                        continue;
-                    }
-                }
-                filtered_targets.push(target);
-            }
-            if filtered_targets.is_empty() {
-                return Err(ApiError(CoreError::Auth(
-                    "all upstream targets in combo are restricted for this key".to_string(),
-                )));
-            }
-            *targets = filtered_targets;
-        }
-    }
 
     Ok((plan, has_restrictions))
 }

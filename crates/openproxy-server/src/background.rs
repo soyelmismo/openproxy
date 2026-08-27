@@ -227,32 +227,32 @@ impl BackgroundService for FreeProxiesSyncService {
         }
 
         loop {
-            tracing::info!("running scheduled background proxy sync");
-            let mut next_sleep = interval_hours * 3600;
-
-            match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&self.db_pool)).await
-            {
-                Ok(summary) => {
-                    tracing::info!(added = summary.added, "background proxy sync completed");
-                    if summary.fetched == 0 {
-                        tracing::warn!("0 proxies fetched, retrying in 5 minutes");
-                        next_sleep = 300;
-                    } else {
-                        openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(
-                            &self.db_pool,
-                        ));
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("background proxy sync failed: {}", e);
-                    next_sleep = 300;
-                }
-            }
+            let next_sleep = sync_proxies_iteration(&self.db_pool, interval_hours).await;
 
             tokio::select! {
                 () = cancel.cancelled() => break,
                 () = tokio::time::sleep(Duration::from_secs(next_sleep)) => {}
             }
+        }
+    }
+}
+
+async fn sync_proxies_iteration(db_pool: &Arc<openproxy_db::DbPool>, interval_hours: u64) -> u64 {
+    tracing::info!("running scheduled background proxy sync");
+    match openproxy_core::free_proxies::sync_all_providers(Arc::clone(db_pool)).await {
+        Ok(summary) => {
+            tracing::info!(added = summary.added, "background proxy sync completed");
+            if summary.fetched == 0 {
+                tracing::warn!("0 proxies fetched, retrying in 5 minutes");
+                300
+            } else {
+                openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(db_pool));
+                interval_hours * 3600
+            }
+        }
+        Err(e) => {
+            tracing::error!("background proxy sync failed: {e}");
+            300
         }
     }
 }
@@ -392,7 +392,12 @@ mod tests {
         });
 
         // Let the service run for a short duration
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        for _ in 0..20 {
+            if count.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         assert!(count.load(Ordering::SeqCst) > 0);
 
         // Signal graceful shutdown

@@ -55,12 +55,15 @@ impl TextCompressor for LiteRtkCompressor {
 
 impl TextCompressor for CompressionMode {
     fn compress(&self, messages: &mut Vec<OpenAIMessage>) -> Vec<String> {
-        match self {
-            CompressionMode::Off => Vec::new(),
-            CompressionMode::Lite => LiteCompressor.compress(messages),
-            CompressionMode::Rtk => RtkCompressor.compress(messages),
-            CompressionMode::LiteRtk => LiteRtkCompressor.compress(messages),
+        if *self == CompressionMode::Off {
+            return Vec::new();
         }
+        let compressor: &dyn TextCompressor = match self {
+            CompressionMode::Lite => &LiteCompressor,
+            CompressionMode::Rtk => &RtkCompressor,
+            _ => &LiteRtkCompressor,
+        };
+        compressor.compress(messages)
     }
 }
 

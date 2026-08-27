@@ -81,15 +81,21 @@ use tower_service::Service;
 
 use super::phases::UpstreamPhase;
 
+fn is_v4_private_or_reserved(v4: std::net::Ipv4Addr) -> bool {
+    v4.octets()[0] == 0 || v4.is_loopback() || v4.is_private() || v4.is_link_local()
+}
+
+fn is_v6_private_or_reserved(v6: &std::net::Ipv6Addr) -> bool {
+    v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local()
+}
+
 /// Returns `true` for private, reserved, loopback, and link-local IP
 /// addresses that should never be the target of an upstream HTTP request
 /// (SSRF protection).
 pub fn is_private_or_reserved(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            v4.octets()[0] == 0 || v4.is_loopback() || v4.is_private() || v4.is_link_local()
-        }
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+        IpAddr::V4(v4) => is_v4_private_or_reserved(*v4),
+        IpAddr::V6(v6) => is_v6_private_or_reserved(v6),
     }
 }
 
@@ -444,123 +450,64 @@ impl Service<Uri> for PhasedConnector {
     }
 }
 
-/// The actual connect future. Pulled out as a free function so the
-/// `Service::call` signature stays simple.
-async fn run_phased_connect(
-    uri: Uri,
-    is_https: bool,
-    timeouts: PhasedTimeouts,
-) -> Result<PhasedConnection, Box<dyn std::error::Error + Send + Sync>> {
-    // ---- Connect budget (accumulative) --------------------------------
-    // CRITICAL FIX: the connect phases (DNS + Dial + TLS) share a SINGLE
-    // accumulative budget derived from `connect_ms` (the largest of
-    // dns/dial/tls). Each phase gets only the REMAINING time from the
-    // budget, NOT a fresh `timeouts.dns` / `timeouts.dial` / `timeouts.tls`
-    // window from zero.
-    //
-    // BUG: the previous code used `tokio::time::timeout(timeouts.dns, ...)`,
-    // `tokio::time::timeout(timeouts.dial, ...)`, `tokio::time::timeout(timeouts.tls, ...)`
-    // — each with its OWN independent window. If DNS took 3.5s, Dial got
-    // a fresh 7s window (not 7s - 3.5s = 3.5s), and TLS got another fresh
-    // 7s window. The total connect time could be up to 17.5s even though
-    // the global `connect_ms` was 7000ms. This caused "client disconnected"
-    // errors at ~11s because the client (or an intermediate proxy) timed
-    // out waiting for the first byte while openproxy was still in the TLS
-    // handshake.
-    //
-    // The fix: compute a single `connect_deadline` = start + max(dns, dial, tls).
-    // Each phase's timeout is `connect_deadline - now` (clamped to >= 1ms).
-    // This ensures the TOTAL connect time never exceeds the configured
-    // `connect_ms` budget, regardless of how the time is split across
-    // phases.
-    let connect_start = std::time::Instant::now();
-    let connect_budget = timeouts.dns.max(timeouts.dial).max(timeouts.tls);
-    let connect_deadline = connect_start + connect_budget;
-
-    // ---- Parse the URI ---------------------------------------------------
-    let (host, port) = match parse_authority(&uri) {
-        Ok(v) => v,
-        Err(msg) => {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Dns,
-                kind: PhasedErrorKind::InvalidUri(msg),
-            }));
-        }
-    };
-
-    // ---- Resolve Proxy Config --------------------------------------------
+fn resolve_call_proxy_config(
+) -> Result<Option<ProxyConfig>, Box<dyn std::error::Error + Send + Sync>> {
     let proxy_opt = CALL_PROXY
         .try_with(std::clone::Clone::clone)
         .unwrap_or(None);
-    let mut proxy_config_opt = None;
     if let Some(ref proxy_url) = proxy_opt {
-        match parse_proxy_url(proxy_url) {
-            Ok(cfg) => proxy_config_opt = Some(cfg),
-            Err(e) => {
-                return Err(Box::new(PhasedConnectorError {
+        parse_proxy_url(proxy_url)
+            .map(Some)
+            .map_err(|e| {
+                Box::new(PhasedConnectorError {
                     phase: UpstreamPhase::Dns,
                     kind: PhasedErrorKind::InvalidUri(format!("Invalid proxy config: {e}")),
-                }));
-            }
-        }
+                }) as Box<dyn std::error::Error + Send + Sync>
+            })
+    } else {
+        Ok(None)
     }
+}
 
-    let dial_host: &str = if let Some(ref proxy) = proxy_config_opt {
-        &proxy.host
-    } else {
-        &host
-    };
-    let dial_port = if let Some(ref proxy) = proxy_config_opt {
-        proxy.port
-    } else {
-        port
-    };
+async fn dns_phase(
+    dial_host: &str,
+    dial_port: u16,
+    connect_deadline: std::time::Instant,
+    dns_timeout_config: Duration,
+) -> Result<Vec<SocketAddr>, PhasedConnectorError> {
+    if let Some(literal) = parse_literal_ip(dial_host, dial_port) {
+        return Ok(vec![literal]);
+    }
+    let dns_remaining = connect_deadline
+        .checked_duration_since(std::time::Instant::now())
+        .unwrap_or(Duration::from_millis(0));
+    let dns_timeout = dns_timeout_config.min(dns_remaining);
+    if dns_timeout.is_zero() {
+        return Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dns,
+            kind: PhasedErrorKind::Timeout,
+        });
+    }
+    match tokio::time::timeout(dns_timeout, resolve_host(dial_host, dial_port)).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dns,
+            kind: PhasedErrorKind::Io(e),
+        }),
+        Err(_) => Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dns,
+            kind: PhasedErrorKind::Timeout,
+        }),
+    }
+}
 
-    // ---- Phase 1: DNS ---------------------------------------------------
-    // If `dial_host` is already a literal IP, skip DNS (and attribute any
-    // later timeout to `Dial`, not `Dns`).
-    let addrs: Vec<SocketAddr> = if let Some(literal) = parse_literal_ip(dial_host, dial_port) {
-        vec![literal]
-    } else {
-        let dns_remaining = connect_deadline
-            .checked_duration_since(std::time::Instant::now())
-            .unwrap_or(std::time::Duration::from_millis(0));
-        let dns_timeout = timeouts.dns.min(dns_remaining);
-        if dns_timeout.is_zero() {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Dns,
-                kind: PhasedErrorKind::Timeout,
-            }));
-        }
-        match tokio::time::timeout(dns_timeout, resolve_host(dial_host, dial_port)).await {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Dns,
-                    kind: PhasedErrorKind::Io(e),
-                }));
-            }
-            Err(_) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Dns,
-                    kind: PhasedErrorKind::Timeout,
-                }));
-            }
-        }
-    };
-
-    // ---- SSRF filter: skip private / reserved addresses --------------------
-    // Cloud metadata endpoints (169.254.169.254), loopback, RFC-1918,
-    // and link-local ranges must never be the target of an upstream request.
-    //
-    // In test builds the filter is disabled so integration tests can use
-    // localhost mock servers without being blocked.
+fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, PhasedConnectorError> {
     let allow_private = cfg!(test)
         || cfg!(feature = "ssrf-bypass")
         || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
             .is_ok_and(|v| v == "true" || v == "1");
 
-    let addrs: Vec<SocketAddr> = if allow_private {
+    if allow_private {
         if cfg!(test) {
             tracing::debug!("SSRF: filter disabled in test build");
         } else {
@@ -568,189 +515,221 @@ async fn run_phased_connect(
                 "SSRF: private upstream connections allowed via OPENPROXY_ALLOW_PRIVATE_UPSTREAMS"
             );
         }
-        addrs
-    } else {
-        let filtered: Vec<SocketAddr> = addrs
-            .into_iter()
-            .filter(|a| {
-                if is_private_or_reserved(&a.ip()) {
-                    tracing::warn!(addr = %a, "SSRF: skipping private/reserved address");
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect();
+        return Ok(addrs);
+    }
 
-        if filtered.is_empty() {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Dial,
-                kind: PhasedErrorKind::Io(io::Error::other(
-                    "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
-                )),
-            }));
-        }
-        filtered
-    };
+    let filtered: Vec<SocketAddr> = addrs
+        .into_iter()
+        .filter(|a| {
+            if is_private_or_reserved(&a.ip()) {
+                tracing::warn!(addr = %a, "SSRF: skipping private/reserved address");
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
 
-    // ---- Phase 2: Dial --------------------------------------------------
-    // Try the addresses in order. The first one that succeeds wins; if
-    // all fail with I/O errors, return the last one. A connect-budget
-    // expiry on any single attempt is reported as `Timeout(Dial)` so
-    // a stuck connect is correctly attributed.
+    if filtered.is_empty() {
+        return Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Io(io::Error::other(
+                "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
+            )),
+        });
+    }
+    Ok(filtered)
+}
+
+async fn dial_phase(
+    addrs: Vec<SocketAddr>,
+    connect_deadline: std::time::Instant,
+    dial_timeout_config: Duration,
+) -> Result<TcpStream, PhasedConnectorError> {
     let mut last_err: Option<io::Error> = None;
-    let mut stream: Option<TcpStream> = None;
     for addr in addrs {
         let dial_remaining = connect_deadline
             .checked_duration_since(std::time::Instant::now())
-            .unwrap_or(std::time::Duration::from_millis(0));
-        let dial_timeout = timeouts.dial.min(dial_remaining);
+            .unwrap_or(Duration::from_millis(0));
+        let dial_timeout = dial_timeout_config.min(dial_remaining);
         if dial_timeout.is_zero() {
-            return Err(Box::new(PhasedConnectorError {
+            return Err(PhasedConnectorError {
                 phase: UpstreamPhase::Dial,
                 kind: PhasedErrorKind::Timeout,
-            }));
+            });
         }
         match tokio::time::timeout(dial_timeout, TcpStream::connect(addr)).await {
-            Ok(Ok(s)) => {
-                stream = Some(s);
-                break;
-            }
+            Ok(Ok(s)) => return Ok(s),
             Ok(Err(e)) => last_err = Some(e),
             Err(_) => {
-                return Err(Box::new(PhasedConnectorError {
+                return Err(PhasedConnectorError {
                     phase: UpstreamPhase::Dial,
                     kind: PhasedErrorKind::Timeout,
-                }));
-            }
-        }
-    }
-    let Some(mut stream) = stream else {
-        return Err(Box::new(PhasedConnectorError {
-            phase: UpstreamPhase::Dial,
-            kind: PhasedErrorKind::Io(
-                last_err.unwrap_or_else(|| io::Error::other("no addresses to dial")),
-            ),
-        }));
-    };
-
-    // ---- Proxy Handshake Tunnel -----------------------------------------
-    if let Some(ref proxy_config) = proxy_config_opt {
-        let dial_remaining = connect_deadline
-            .checked_duration_since(std::time::Instant::now())
-            .unwrap_or(std::time::Duration::from_millis(0));
-        if dial_remaining.is_zero() {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Dial,
-                kind: PhasedErrorKind::Timeout,
-            }));
-        }
-
-        match tokio::time::timeout(
-            dial_remaining,
-            run_proxy_tunnel(stream, proxy_config, &host, port),
-        )
-        .await
-        {
-            Ok(Ok(s)) => {
-                stream = s;
-            }
-            Ok(Err(e)) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Dial,
-                    kind: PhasedErrorKind::Io(io::Error::other(format!(
-                        "Proxy handshake failed: {e}"
-                    ))),
-                }));
-            }
-            Err(_) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Dial,
-                    kind: PhasedErrorKind::Timeout,
-                }));
-            }
-        }
-    }
-
-    // Best-effort nodelay + TCP keepalive. Failure here is not fatal
-    // (a slow consumer is hyper's problem, not ours).
-    //
-    // Bug fix (SendRequest at 6-9ms): TCP keepalive probes detect
-    // stale connections at the kernel level. Without keepalive, a
-    // connection that the server closed silently (no FIN/RST
-    // received) looks healthy to the client until the next write
-    // fails. With keepalive, the kernel probes every 30s (idle) and
-    // drops the socket after 3 failed probes (~90s), so hyper's pool
-    // never hands out a stale connection.
-    let _ = stream.set_nodelay(true);
-    {
-        let sock = socket2::SockRef::from(&stream);
-        let keepalive = socket2::TcpKeepalive::new()
-            .with_time(std::time::Duration::from_secs(30))
-            .with_interval(std::time::Duration::from_secs(10));
-        let _ = sock.set_tcp_keepalive(&keepalive);
-    }
-
-    // ---- Phase 3: TLS ---------------------------------------------------
-    // Real `tokio-rustls` handshake. The connector is process-wide
-    // (rustls `ClientConfig` is `Arc`-backed). The handshake is bounded
-    // by the REMAINING connect budget (not a fresh `timeouts.tls` window);
-    // a stalled or rejected TLS handshake surfaces as `Timeout(Tls)` or
-    // `Io(Tls)`.
-    if is_https {
-        let server_name = match ServerName::try_from(host) {
-            Ok(n) => n,
-            Err(e) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Tls,
-                    kind: PhasedErrorKind::InvalidUri(format!("bad SNI host: {e}")),
-                }));
-            }
-        };
-        let connector = tls_connector();
-        let tls_remaining = connect_deadline
-            .checked_duration_since(std::time::Instant::now())
-            .unwrap_or(std::time::Duration::from_millis(0));
-        let tls_timeout = timeouts.tls.min(tls_remaining);
-        if tls_timeout.is_zero() {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Tls,
-                kind: PhasedErrorKind::Timeout,
-            }));
-        }
-        match tokio::time::timeout(tls_timeout, connector.connect(server_name, stream)).await {
-            Ok(Ok(tls_stream)) => {
-                // Bug fix: read the ALPN-negotiated protocol from the
-                // rustls ClientConnection BEFORE wrapping the stream
-                // in TokioIo (which hides the inner type). If the
-                // server picked `h2`, we set `negotiated_h2 = true`
-                // so `connected()` can tell hyper-util to use the
-                // HTTP/2 parser. Without this, hyper-util defaults
-                // to HTTP/1.1 and fails with `invalid HTTP version
-                // parsed` when the server responds in HTTP/2.
-                let (_, client_conn) = tls_stream.get_ref();
-                let negotiated_h2 = client_conn.alpn_protocol().is_some_and(|p| p == b"h2");
-                return Ok(PhasedConnection::Tls {
-                    io: Box::new(TokioIo::new(tls_stream)),
-                    negotiated_h2,
                 });
             }
-            Ok(Err(e)) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Tls,
-                    kind: PhasedErrorKind::Io(e),
-                }));
-            }
-            Err(_) => {
-                return Err(Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Tls,
-                    kind: PhasedErrorKind::Timeout,
-                }));
-            }
         }
     }
+    Err(PhasedConnectorError {
+        phase: UpstreamPhase::Dial,
+        kind: PhasedErrorKind::Io(
+            last_err.unwrap_or_else(|| io::Error::other("no addresses to dial")),
+        ),
+    })
+}
 
-    Ok(PhasedConnection::Plain(TokioIo::new(stream)))
+async fn proxy_tunnel_phase(
+    stream: TcpStream,
+    proxy_config_opt: Option<&ProxyConfig>,
+    host: &str,
+    port: u16,
+    connect_deadline: std::time::Instant,
+) -> Result<TcpStream, PhasedConnectorError> {
+    let Some(proxy_config) = proxy_config_opt else {
+        return Ok(stream);
+    };
+
+    let dial_remaining = connect_deadline
+        .checked_duration_since(std::time::Instant::now())
+        .unwrap_or(Duration::from_millis(0));
+    if dial_remaining.is_zero() {
+        return Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Timeout,
+        });
+    }
+
+    match tokio::time::timeout(
+        dial_remaining,
+        run_proxy_tunnel(stream, proxy_config, host, port),
+    )
+    .await
+    {
+        Ok(Ok(s)) => Ok(s),
+        Ok(Err(e)) => Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Io(io::Error::other(format!(
+                "Proxy handshake failed: {e}"
+            ))),
+        }),
+        Err(_) => Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Timeout,
+        }),
+    }
+}
+
+fn configure_tcp_stream(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let sock = socket2::SockRef::from(stream);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10));
+    let _ = sock.set_tcp_keepalive(&keepalive);
+}
+
+async fn tls_phase(
+    stream: TcpStream,
+    host: &str,
+    connect_deadline: std::time::Instant,
+    tls_timeout_config: Duration,
+) -> Result<PhasedConnection, PhasedConnectorError> {
+    let server_name = ServerName::try_from(host.to_string()).map_err(|e| PhasedConnectorError {
+        phase: UpstreamPhase::Tls,
+        kind: PhasedErrorKind::InvalidUri(format!("bad SNI host: {e}")),
+    })?;
+    let connector = tls_connector();
+    let tls_remaining = connect_deadline
+        .checked_duration_since(std::time::Instant::now())
+        .unwrap_or(Duration::from_millis(0));
+    let tls_timeout = tls_timeout_config.min(tls_remaining);
+    if tls_timeout.is_zero() {
+        return Err(PhasedConnectorError {
+            phase: UpstreamPhase::Tls,
+            kind: PhasedErrorKind::Timeout,
+        });
+    }
+    match tokio::time::timeout(tls_timeout, connector.connect(server_name, stream)).await {
+        Ok(Ok(tls_stream)) => {
+            let (_, client_conn) = tls_stream.get_ref();
+            let negotiated_h2 = client_conn.alpn_protocol().is_some_and(|p| p == b"h2");
+            Ok(PhasedConnection::Tls {
+                io: Box::new(TokioIo::new(tls_stream)),
+                negotiated_h2,
+            })
+        }
+        Ok(Err(e)) => Err(PhasedConnectorError {
+            phase: UpstreamPhase::Tls,
+            kind: PhasedErrorKind::Io(e),
+        }),
+        Err(_) => Err(PhasedConnectorError {
+            phase: UpstreamPhase::Tls,
+            kind: PhasedErrorKind::Timeout,
+        }),
+    }
+}
+
+fn resolve_dial_target<'a>(
+    proxy: Option<&'a ProxyConfig>,
+    host: &'a str,
+    port: u16,
+) -> (&'a str, u16) {
+    match proxy {
+        Some(proxy) => (proxy.host.as_str(), proxy.port),
+        None => (host, port),
+    }
+}
+
+async fn establish_raw_tcp_stream(
+    dial_host: &str,
+    dial_port: u16,
+    connect_deadline: std::time::Instant,
+    timeouts: PhasedTimeouts,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+    let addrs = dns_phase(dial_host, dial_port, connect_deadline, timeouts.dns).await?;
+    let filtered_addrs = filter_ssrf_addresses(addrs)?;
+    Ok(dial_phase(filtered_addrs, connect_deadline, timeouts.dial).await?)
+}
+
+/// The actual connect future. Pulled out as a free function so the
+/// `Service::call` signature stays simple.
+async fn run_phased_connect(
+    uri: Uri,
+    is_https: bool,
+    timeouts: PhasedTimeouts,
+) -> Result<PhasedConnection, Box<dyn std::error::Error + Send + Sync>> {
+    let connect_start = std::time::Instant::now();
+    let connect_budget = timeouts.dns.max(timeouts.dial).max(timeouts.tls);
+    let connect_deadline = connect_start + connect_budget;
+
+    let (host, port) = parse_authority(&uri).map_err(|msg| {
+        Box::new(PhasedConnectorError {
+            phase: UpstreamPhase::Dns,
+            kind: PhasedErrorKind::InvalidUri(msg),
+        })
+    })?;
+
+    let proxy_config_opt = resolve_call_proxy_config()?;
+    let (dial_host, dial_port) = resolve_dial_target(proxy_config_opt.as_ref(), &host, port);
+
+    let stream =
+        establish_raw_tcp_stream(dial_host, dial_port, connect_deadline, timeouts).await?;
+    let stream = proxy_tunnel_phase(
+        stream,
+        proxy_config_opt.as_ref(),
+        &host,
+        port,
+        connect_deadline,
+    )
+    .await?;
+    configure_tcp_stream(&stream);
+
+    if is_https {
+        tls_phase(stream, &host, connect_deadline, timeouts.tls)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    } else {
+        Ok(PhasedConnection::Plain(TokioIo::new(stream)))
+    }
 }
 
 /// `host:port` -> (host, port) with sensible defaults. Returns an
@@ -782,47 +761,22 @@ fn parse_literal_ip(host: &str, port: u16) -> Option<SocketAddr> {
     }
 }
 
-/// Resolve `host:port` to one or more `SocketAddr`s using tokio's
-/// async DNS, with a simple in-memory cache (5m TTL) to avoid
-/// hitting getaddrinfo on every fresh dial.
-async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-    // Check the DNS cache first. Keyed on (host, port).
-    // TTL: 300 seconds (5 minutes).
-    // The cache is a process-wide DashMap; entries are (addrs, expiry).
-    // On cache hit, return the cached addrs if not expired.
-    // On cache miss or expiry, fall through to tokio::net::lookup_host.
-    //
-    // LEAK FIX: a background sweep (started on first insert) evicts
-    // expired entries every 5 minutes. Without this, the cache grows
-    // unbounded as the process sees new hosts (provider rotation,
-    // CDN shards, etc.) — each entry is ~200 bytes but over weeks of
-    static DNS_CACHE: std::sync::LazyLock<
-        dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
-    > = std::sync::LazyLock::new(dashmap::DashMap::new);
-    static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    const DNS_TTL: std::time::Duration = std::time::Duration::from_mins(5);
+static DNS_CACHE: std::sync::LazyLock<
+    dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
+> = std::sync::LazyLock::new(dashmap::DashMap::new);
+static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+const DNS_TTL: std::time::Duration = std::time::Duration::from_mins(5);
 
-    let cache = &*DNS_CACHE;
-    let cache_key = format!("{host}:{port}");
-    let now = std::time::Instant::now();
-
-    if let Some(entry) = cache.get(&cache_key)
-        && now < entry.1
-    {
-        return Ok(entry.0.clone());
+fn get_cached_dns(cache_key: &str) -> Option<Vec<SocketAddr>> {
+    let entry = DNS_CACHE.get(cache_key)?;
+    if std::time::Instant::now() < entry.1 {
+        Some(entry.0.clone())
+    } else {
+        None
     }
+}
 
-    // Cache miss or expired — do the actual DNS lookup.
-    let lookup = format!("{host}:{port}");
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(lookup).await?.collect();
-    // Cache the result (even if empty — an empty result for 60s is
-    // better than hammering getaddrinfo on a misconfigured host).
-    cache.insert(cache_key, (addrs.clone(), now + DNS_TTL));
-
-    // Start the background eviction sweep on the first successful
-    // insert. The sweep runs every 5 minutes and drops entries whose
-    // TTL has expired. Idempotent via `OnceLock` on the sweep-started
-    // flag — only the first caller spawns the task.
+fn ensure_dns_sweep_started() {
     SWEEP_STARTED.get_or_init(|| {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_mins(5));
@@ -839,6 +793,22 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
             }
         });
     });
+}
+
+/// Resolve `host:port` to one or more `SocketAddr`s using tokio's
+/// async DNS, with a simple in-memory cache (5m TTL) to avoid
+/// hitting getaddrinfo on every fresh dial.
+async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    let cache_key = format!("{host}:{port}");
+    if let Some(cached) = get_cached_dns(&cache_key) {
+        return Ok(cached);
+    }
+
+    let lookup = format!("{host}:{port}");
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(lookup).await?.collect();
+    let now = std::time::Instant::now();
+    DNS_CACHE.insert(cache_key, (addrs.clone(), now + DNS_TTL));
+    ensure_dns_sweep_started();
 
     Ok(addrs)
 }
@@ -892,6 +862,12 @@ struct ProxyConfig {
     auth: Option<String>,
 }
 
+fn extract_proxy_auth(uri: &http::Uri) -> Option<String> {
+    let a = uri.authority()?;
+    let (user_pass, _) = a.as_str().split_once('@')?;
+    Some(user_pass.to_string())
+}
+
 fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     let uri: http::Uri = url
         .parse()
@@ -907,11 +883,7 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     let port = uri
         .port_u16()
         .ok_or_else(|| "Missing proxy port".to_string())?;
-    let auth = uri.authority().and_then(|a| {
-        a.as_str()
-            .split_once('@')
-            .map(|(user_pass, _)| user_pass.to_string())
-    });
+    let auth = extract_proxy_auth(&uri);
 
     Ok(ProxyConfig {
         scheme,
@@ -921,145 +893,193 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     })
 }
 
-async fn run_proxy_tunnel(
+fn socks5_build_connect_req(dest_host: &str, dest_port: u16) -> Vec<u8> {
+    let dest_host_bytes = dest_host.as_bytes();
+    if let Ok(ip) = dest_host.parse::<std::net::Ipv4Addr>() {
+        let mut req = Vec::with_capacity(10);
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x01]);
+        req.extend_from_slice(&ip.octets());
+        req.extend_from_slice(&dest_port.to_be_bytes());
+        req
+    } else if let Ok(ip) = dest_host.parse::<std::net::Ipv6Addr>() {
+        let mut req = Vec::with_capacity(22);
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x04]);
+        req.extend_from_slice(&ip.octets());
+        req.extend_from_slice(&dest_port.to_be_bytes());
+        req
+    } else {
+        let mut req = Vec::with_capacity(7 + dest_host_bytes.len());
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, dest_host_bytes.len() as u8]);
+        req.extend(dest_host_bytes);
+        req.extend_from_slice(&dest_port.to_be_bytes());
+        req
+    }
+}
+
+async fn socks5_read_bound_addr(
+    stream: &mut TcpStream,
+    addr_type: u8,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncReadExt;
+    match addr_type {
+        0x01 => {
+            let mut buf = [0u8; 6];
+            stream.read_exact(&mut buf).await?;
+        }
+        0x04 => {
+            let mut buf = [0u8; 18];
+            stream.read_exact(&mut buf).await?;
+        }
+        0x03 => {
+            let len = stream.read_u8().await?;
+            let mut buf = vec![0u8; len as usize + 2];
+            stream.read_exact(&mut buf).await?;
+        }
+        _ => return Err(io::Error::other("Invalid SOCKS5 address type").into()),
+    }
+    Ok(())
+}
+
+async fn socks5_greeting(
+    stream: &mut TcpStream,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    stream.write_all(&[0x05, 0x01, 0x00]).await?;
+    let mut greeting_resp = [0u8; 2];
+    stream.read_exact(&mut greeting_resp).await?;
+    if greeting_resp[0] != 0x05 || greeting_resp[1] != 0x00 {
+        return Err(io::Error::other("SOCKS5 authentication required or unsupported").into());
+    }
+    Ok(())
+}
+
+async fn socks5_connect_command(
+    stream: &mut TcpStream,
+    dest_host: &str,
+    dest_port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let req = socks5_build_connect_req(dest_host, dest_port);
+    stream.write_all(&req).await?;
+
+    let mut resp_header = [0u8; 4];
+    stream.read_exact(&mut resp_header).await?;
+    if resp_header[0] != 0x05 || resp_header[1] != 0x00 {
+        return Err(io::Error::other(format!(
+            "SOCKS5 connection failed: status={}",
+            resp_header[1]
+        ))
+        .into());
+    }
+
+    socks5_read_bound_addr(stream, resp_header[3]).await?;
+    Ok(())
+}
+
+async fn socks5_tunnel(
     mut stream: TcpStream,
-    proxy: &ProxyConfig,
+    dest_host: &str,
+    dest_port: u16,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+    socks5_greeting(&mut stream).await?;
+    socks5_connect_command(&mut stream, dest_host, dest_port).await?;
+    Ok(stream)
+}
+
+async fn socks4_tunnel(
+    mut stream: TcpStream,
     dest_host: &str,
     dest_port: u16,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    match proxy.scheme.as_str() {
-        "socks5" => {
-            // 1. Greeting
-            stream.write_all(&[0x05, 0x01, 0x00]).await?;
-            let mut greeting_resp = [0u8; 2];
-            stream.read_exact(&mut greeting_resp).await?;
-            if greeting_resp[0] != 0x05 || greeting_resp[1] != 0x00 {
-                return Err(
-                    io::Error::other("SOCKS5 authentication required or unsupported").into(),
-                );
-            }
+    let ip = dest_host.parse::<std::net::Ipv4Addr>().map_err(|_| {
+        io::Error::other(
+            "SOCKS4 only supports literal IPv4 destination hosts (use SOCKS5 for hostname resolution)",
+        )
+    })?;
 
-            // 2. Connect request
-            let dest_host_bytes = dest_host.as_bytes();
-            if let Ok(ip) = dest_host.parse::<std::net::Ipv4Addr>() {
-                let mut req = Vec::with_capacity(10);
-                req.extend_from_slice(&[0x05, 0x01, 0x00, 0x01]);
-                req.extend_from_slice(&ip.octets());
-                req.extend_from_slice(&dest_port.to_be_bytes());
-                stream.write_all(&req).await?;
-            } else if let Ok(ip) = dest_host.parse::<std::net::Ipv6Addr>() {
-                let mut req = Vec::with_capacity(22);
-                req.extend_from_slice(&[0x05, 0x01, 0x00, 0x04]);
-                req.extend_from_slice(&ip.octets());
-                req.extend_from_slice(&dest_port.to_be_bytes());
-                stream.write_all(&req).await?;
-            } else {
-                let mut req = Vec::with_capacity(7 + dest_host_bytes.len());
-                req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, dest_host_bytes.len() as u8]);
-                req.extend(dest_host_bytes);
-                req.extend_from_slice(&dest_port.to_be_bytes());
-                stream.write_all(&req).await?;
-            }
+    let mut req = Vec::with_capacity(9);
+    req.extend_from_slice(&[0x04, 0x01]);
+    req.extend_from_slice(&dest_port.to_be_bytes());
+    req.extend_from_slice(&ip.octets());
+    req.push(0x00);
+    stream.write_all(&req).await?;
 
-            // 3. Connect response
-            let mut resp_header = [0u8; 4];
-            stream.read_exact(&mut resp_header).await?;
-            if resp_header[0] != 0x05 || resp_header[1] != 0x00 {
-                return Err(io::Error::other(format!(
-                    "SOCKS5 connection failed: status={}",
-                    resp_header[1]
-                ))
-                .into());
-            }
+    let mut resp = [0u8; 8];
+    stream.read_exact(&mut resp).await?;
+    if resp[0] != 0x00 || resp[1] != 0x5a {
+        return Err(io::Error::other(format!(
+            "SOCKS4 connection rejected: code={}",
+            resp[1]
+        ))
+        .into());
+    }
+    Ok(stream)
+}
 
-            // Read address part of the response
-            match resp_header[3] {
-                0x01 => {
-                    // IPv4
-                    let mut buf = [0u8; 6];
-                    stream.read_exact(&mut buf).await?;
-                }
-                0x04 => {
-                    // IPv6
-                    let mut buf = [0u8; 18];
-                    stream.read_exact(&mut buf).await?;
-                }
-                0x03 => {
-                    // Domain
-                    let len = stream.read_u8().await?;
-                    let mut buf = vec![0u8; len as usize + 2];
-                    stream.read_exact(&mut buf).await?;
-                }
-                _ => return Err(io::Error::other("Invalid SOCKS5 address type").into()),
-            }
+async fn read_http_connect_headers(
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncReadExt;
+    let mut headers_buf = Vec::new();
+    let mut byte_buf = [0u8; 1];
+    loop {
+        stream.read_exact(&mut byte_buf).await?;
+        headers_buf.push(byte_buf[0]);
+        if headers_buf.ends_with(b"\r\n\r\n") {
+            return Ok(headers_buf);
         }
-        "socks4" => {
-            let ip = dest_host.parse::<std::net::Ipv4Addr>().map_err(|_| {
-                io::Error::other("SOCKS4 only supports literal IPv4 destination hosts (use SOCKS5 for hostname resolution)")
-            })?;
-
-            let mut req = Vec::with_capacity(9);
-            req.extend_from_slice(&[0x04, 0x01]);
-            req.extend_from_slice(&dest_port.to_be_bytes());
-            req.extend_from_slice(&ip.octets());
-            req.push(0x00);
-            stream.write_all(&req).await?;
-
-            let mut resp = [0u8; 8];
-            stream.read_exact(&mut resp).await?;
-            if resp[0] != 0x00 || resp[1] != 0x5a {
-                return Err(io::Error::other(format!(
-                    "SOCKS4 connection rejected: code={}",
-                    resp[1]
-                ))
-                .into());
-            }
-        }
-        "http" | "https" => {
-            let auth_header = if let Some(ref auth) = proxy.auth {
-                use base64::Engine;
-                let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
-                format!("Proxy-Authorization: Basic {encoded}\r\n")
-            } else {
-                String::new()
-            };
-            let request = format!(
-                "CONNECT {dest_host}:{dest_port} HTTP/1.1\r\nHost: {dest_host}:{dest_port}\r\nProxy-Connection: Keep-Alive\r\n{auth_header}\r\n"
-            );
-            stream.write_all(request.as_bytes()).await?;
-
-            let mut headers_buf = Vec::new();
-            let mut byte_buf = [0u8; 1];
-            loop {
-                stream.read_exact(&mut byte_buf).await?;
-                headers_buf.push(byte_buf[0]);
-                if headers_buf.ends_with(b"\r\n\r\n") {
-                    break;
-                }
-                if headers_buf.len() > 8192 {
-                    return Err(io::Error::other("HTTP CONNECT response headers too long").into());
-                }
-            }
-
-            let resp_str = String::from_utf8_lossy(&headers_buf);
-            let first_line = resp_str.lines().next().unwrap_or("");
-            if !first_line.contains(" 200 ") {
-                return Err(io::Error::other(format!(
-                    "HTTP CONNECT proxy returned error: {first_line}"
-                ))
-                .into());
-            }
-        }
-        _ => {
-            return Err(
-                io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into(),
-            );
+        if headers_buf.len() > 8192 {
+            return Err(io::Error::other("HTTP CONNECT response headers too long").into());
         }
     }
+}
 
+async fn http_connect_tunnel(
+    mut stream: TcpStream,
+    proxy: &ProxyConfig,
+    dest_host: &str,
+    dest_port: u16,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncWriteExt;
+
+    let auth_header = if let Some(ref auth) = proxy.auth {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
+        format!("Proxy-Authorization: Basic {encoded}\r\n")
+    } else {
+        String::new()
+    };
+    let request = format!(
+        "CONNECT {dest_host}:{dest_port} HTTP/1.1\r\nHost: {dest_host}:{dest_port}\r\nProxy-Connection: Keep-Alive\r\n{auth_header}\r\n"
+    );
+    stream.write_all(request.as_bytes()).await?;
+
+    let headers_buf = read_http_connect_headers(&mut stream).await?;
+    let resp_str = String::from_utf8_lossy(&headers_buf);
+    let first_line = resp_str.lines().next().unwrap_or("");
+    if !first_line.contains(" 200 ") {
+        return Err(io::Error::other(format!(
+            "HTTP CONNECT proxy returned error: {first_line}"
+        ))
+        .into());
+    }
     Ok(stream)
+}
+
+async fn run_proxy_tunnel(
+    stream: TcpStream,
+    proxy: &ProxyConfig,
+    dest_host: &str,
+    dest_port: u16,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+    match proxy.scheme.as_str() {
+        "socks5" => socks5_tunnel(stream, dest_host, dest_port).await,
+        "socks4" => socks4_tunnel(stream, dest_host, dest_port).await,
+        "http" | "https" => http_connect_tunnel(stream, proxy, dest_host, dest_port).await,
+        _ => Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into()),
+    }
 }
 
 #[cfg(test)]

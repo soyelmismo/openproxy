@@ -75,33 +75,33 @@ where
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            if list.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(list))
-            }
+            Ok((!list.is_empty()).then_some(list))
         }
 
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
         where
             A: serde::de::SeqAccess<'de>,
         {
-            let mut list = Vec::new();
-            while let Some(elem) = seq.next_element::<String>()? {
-                let trimmed = elem.trim().to_string();
-                if !trimmed.is_empty() {
-                    list.push(trimmed);
-                }
-            }
-            if list.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(list))
-            }
+            let list = collect_non_empty_seq(seq)?;
+            Ok((!list.is_empty()).then_some(list))
         }
     }
 
     deserializer.deserialize_option(StringOrVecVisitor)
+}
+
+fn collect_non_empty_seq<'de, A>(mut seq: A) -> Result<Vec<String>, A::Error>
+where
+    A: serde::de::SeqAccess<'de>,
+{
+    let mut list = Vec::new();
+    while let Some(elem) = seq.next_element::<String>()? {
+        let trimmed = elem.trim();
+        if !trimmed.is_empty() {
+            list.push(trimmed.to_string());
+        }
+    }
+    Ok(list)
 }
 
 fn default_image_model() -> String {

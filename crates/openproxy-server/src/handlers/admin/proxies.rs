@@ -73,16 +73,13 @@ pub async fn sync_proxies(
     Ok(Json(summary))
 }
 
-pub async fn create_custom_proxy(
-    DbWriter(w): DbWriter,
-    Json(body): Json<CreateCustomProxyInput>,
-) -> Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> {
-    if body.host.trim().is_empty() || body.port == 0 {
+fn validate_custom_proxy_input(body: &CreateCustomProxyInput) -> Result<(), ApiError> {
+    let host_str = body.host.trim();
+    if host_str.is_empty() || body.port == 0 {
         return Err(ApiError(CoreError::Validation(
             "host and port are required".into(),
         )));
     }
-    let host_str = body.host.trim();
     if let Ok(ip) = host_str.parse::<std::net::IpAddr>()
         && is_private_or_reserved(&ip)
     {
@@ -90,6 +87,14 @@ pub async fn create_custom_proxy(
             "host '{host_str}' resolves to a private/reserved IP and is not allowed"
         ))));
     }
+    Ok(())
+}
+
+pub async fn create_custom_proxy(
+    DbWriter(w): DbWriter,
+    Json(body): Json<CreateCustomProxyInput>,
+) -> Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> {
+    validate_custom_proxy_input(&body)?;
     let p = openproxy_core::free_proxies::add_custom_proxy(
         &w,
         body.host.trim(),

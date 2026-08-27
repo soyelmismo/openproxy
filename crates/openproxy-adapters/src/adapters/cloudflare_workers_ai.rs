@@ -168,36 +168,42 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         // multipart array.
 
         view.temperature = None;
+        clean_extra_fields(&mut view.extra);
+        flatten_multipart_messages(&mut view.messages);
+    }
+}
 
-        // Remove unsupported/null fields from extra
-        let has_nulls = view.extra.values().any(serde_json::Value::is_null);
-        let has_disabled = view.extra.contains_key("disabled");
-        if has_nulls || has_disabled {
-            let extra_mut = view.extra.to_mut();
-            extra_mut.remove("disabled");
-            extra_mut.retain(|_, v| !v.is_null());
-        }
+fn clean_extra_fields(extra: &mut std::borrow::Cow<serde_json::Map<String, serde_json::Value>>) {
+    let has_nulls = extra.values().any(serde_json::Value::is_null);
+    let has_disabled = extra.contains_key("disabled");
+    if has_nulls || has_disabled {
+        let extra_mut = extra.to_mut();
+        extra_mut.remove("disabled");
+        extra_mut.retain(|_, v| !v.is_null());
+    }
+}
 
-        // Flatten multipart content arrays to plain strings
-        let needs_flattening = view
-            .messages
-            .iter()
-            .any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
-        if needs_flattening {
-            let messages_mut = view.messages.to_mut();
-            for msg in messages_mut.iter_mut() {
-                if let Some(serde_json::Value::Array(parts)) = &msg.content {
-                    let text = parts
-                        .iter()
-                        .find_map(|part| {
-                            part.get("text")
-                                .and_then(|t| t.as_str())
-                                .or_else(|| part.get("content").and_then(|c| c.as_str()))
-                        })
-                        .unwrap_or("")
-                        .to_string();
-                    msg.content = Some(serde_json::Value::String(text));
-                }
+fn extract_first_text_part(parts: &[serde_json::Value]) -> String {
+    parts
+        .iter()
+        .find_map(|part| {
+            part.get("text")
+                .and_then(|t| t.as_str())
+                .or_else(|| part.get("content").and_then(|c| c.as_str()))
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn flatten_multipart_messages(messages: &mut std::borrow::Cow<[openproxy_types::OpenAIMessage]>) {
+    let needs_flattening = messages
+        .iter()
+        .any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
+    if needs_flattening {
+        let messages_mut = messages.to_mut();
+        for msg in messages_mut.iter_mut() {
+            if let Some(serde_json::Value::Array(parts)) = &msg.content {
+                msg.content = Some(serde_json::Value::String(extract_first_text_part(parts)));
             }
         }
     }

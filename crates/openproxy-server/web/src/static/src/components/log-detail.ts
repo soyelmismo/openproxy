@@ -86,20 +86,99 @@ function statusPillClass(s: string | null | undefined): string {
   return "warn";
 }
 
+function truncateText(text: string, maxLen = 150): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + `… [truncated, ${text.length - maxLen} chars]`;
+}
+
+function pruneTextBlock(block: unknown, maxLen = 150): unknown {
+  if (!block || typeof block !== "object" || Array.isArray(block)) return block;
+  const b = { ...(block as Record<string, unknown>) };
+  if (typeof b["text"] === "string" && b["text"].length > maxLen) {
+    b["text"] = truncateText(b["text"], maxLen);
+  }
+  return b;
+}
+
+function pruneMessageContent(content: unknown, maxLen = 150): unknown {
+  if (typeof content === "string") {
+    return truncateText(content, maxLen);
+  }
+  if (Array.isArray(content)) {
+    return (content as unknown[]).map((part) => pruneTextBlock(part, maxLen));
+  }
+  return content;
+}
+
+function pruneSingleMessage(msg: unknown): unknown {
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return msg;
+  const m = { ...(msg as Record<string, unknown>) };
+  m["content"] = pruneMessageContent(m["content"]);
+  return m;
+}
+
+function pruneMessagesArray(arr: unknown[]): unknown[] {
+  const MAX_MESSAGES = 10;
+  if (arr.length > MAX_MESSAGES) {
+    const head = arr.slice(0, 5).map(pruneSingleMessage);
+    const tail = arr.slice(arr.length - 2).map(pruneSingleMessage);
+    return [...head, `… [${arr.length - 7} messages omitted, total ${arr.length} items]`, ...tail];
+  }
+  return arr.map(pruneSingleMessage);
+}
+
+function pruneSystemField(item: unknown, depth: number): unknown {
+  if (typeof item === "string") {
+    return truncateText(item);
+  }
+  if (Array.isArray(item)) {
+    return (item as unknown[]).map((block) => pruneTextBlock(block));
+  }
+  return pruneValueForDisplay(item, depth + 1);
+}
+
+function tryParseJsonString(val: string): unknown | null {
+  const trimmed = val.trim();
+  const isJsonEnclosed =
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"));
+  if (!isJsonEnclosed) return null;
+  try {
+    return JSON.parse(val);
+  } catch (_e) {
+    return null;
+  }
+}
+
+function pruneObjectForDisplay(obj: Record<string, unknown>, depth: number): Record<string, unknown> {
+  const res: Record<string, unknown> = {};
+  const keys = Object.keys(obj);
+  const normalKeys = keys.filter((k) => k !== "messages" && k !== "request_body_json");
+  const orderedKeys = [
+    ...normalKeys,
+    ...(keys.includes("request_body_json") ? ["request_body_json"] : []),
+    ...(keys.includes("messages") ? ["messages"] : []),
+  ];
+
+  for (const key of orderedKeys) {
+    const item = obj[key];
+    if (key === "messages" && Array.isArray(item)) {
+      res[key] = pruneMessagesArray(item as unknown[]);
+    } else if (key === "system") {
+      res[key] = pruneSystemField(item, depth);
+    } else {
+      res[key] = pruneValueForDisplay(item, depth + 1);
+    }
+  }
+  return res;
+}
+
 function pruneValueForDisplay(val: unknown, depth = 0): unknown {
   if (depth > 10 || val == null) return val;
 
   if (typeof val === "string") {
-    const trimmed = val.trim();
-    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-      try {
-        const parsed = JSON.parse(val);
-        return pruneValueForDisplay(parsed, depth + 1);
-      } catch (_e) {
-        // Fallthrough
-      }
-    }
-    return val;
+    const parsed = tryParseJsonString(val);
+    return parsed !== null ? pruneValueForDisplay(parsed, depth + 1) : val;
   }
 
   if (Array.isArray(val)) {
@@ -107,76 +186,7 @@ function pruneValueForDisplay(val: unknown, depth = 0): unknown {
   }
 
   if (typeof val === "object") {
-    const obj = val as Record<string, unknown>;
-    let res: Record<string, unknown> = {};
-
-    const keys = Object.keys(obj);
-    const normalKeys = keys.filter((k) => k !== "messages" && k !== "request_body_json");
-    const orderedKeys = [
-      ...normalKeys,
-      ...(keys.includes("request_body_json") ? ["request_body_json"] : []),
-      ...(keys.includes("messages") ? ["messages"] : [])
-    ];
-
-    for (const key of orderedKeys) {
-      const item = obj[key];
-      if (key === "messages" && Array.isArray(item)) {
-        const MAX_MSG_LEN = 150;
-        const MAX_MESSAGES = 10;
-        const arr = item as unknown[];
-        const pruneMsg = (msg: unknown) => {
-          if (msg && typeof msg === "object" && !Array.isArray(msg)) {
-            const m = { ...(msg as Record<string, unknown>) };
-            const content = m["content"];
-            if (typeof content === "string" && content.length > MAX_MSG_LEN) {
-              m["content"] = content.slice(0, MAX_MSG_LEN) + `… [truncated, ${content.length - MAX_MSG_LEN} chars]`;
-            } else if (Array.isArray(content)) {
-              m["content"] = (content as unknown[]).map((part) => {
-                if (part && typeof part === "object" && !Array.isArray(part)) {
-                  const p = { ...(part as Record<string, unknown>) };
-                  if (typeof p["text"] === "string" && p["text"].length > MAX_MSG_LEN) {
-                    p["text"] = p["text"].slice(0, MAX_MSG_LEN) + `… [truncated, ${p["text"].length - MAX_MSG_LEN} chars]`;
-                  }
-                  return p;
-                }
-                return part;
-              });
-            }
-            return m;
-          }
-          return msg;
-        };
-
-        if (arr.length > MAX_MESSAGES) {
-          const head = arr.slice(0, 5).map(pruneMsg);
-          const tail = arr.slice(arr.length - 2).map(pruneMsg);
-          res[key] = [...head, `… [${arr.length - 7} messages omitted, total ${arr.length} items]`, ...tail];
-        } else {
-          res[key] = arr.map(pruneMsg);
-        }
-      } else if (key === "system") {
-        const MAX_MSG_LEN = 150;
-        if (typeof item === "string" && item.length > MAX_MSG_LEN) {
-          res[key] = item.slice(0, MAX_MSG_LEN) + `… [truncated, ${item.length - MAX_MSG_LEN} chars]`;
-        } else if (Array.isArray(item)) {
-          res[key] = (item as unknown[]).map((block) => {
-            if (block && typeof block === "object" && !Array.isArray(block)) {
-              const b = { ...(block as Record<string, unknown>) };
-              if (typeof b["text"] === "string" && b["text"].length > MAX_MSG_LEN) {
-                b["text"] = b["text"].slice(0, MAX_MSG_LEN) + `… [truncated, ${b["text"].length - MAX_MSG_LEN} chars]`;
-              }
-              return b;
-            }
-            return block;
-          });
-        } else {
-          res[key] = pruneValueForDisplay(item, depth + 1);
-        }
-      } else {
-        res[key] = pruneValueForDisplay(item, depth + 1);
-      }
-    }
-    return res;
+    return pruneObjectForDisplay(val as Record<string, unknown>, depth);
   }
 
   return val;
@@ -235,6 +245,98 @@ interface ToolCall {
   function: { name: string; arguments: unknown };
 }
 
+function isMeaningfulProperty(val: unknown): boolean {
+  if (val == null) return false;
+  if (typeof val === "string") return val.length > 0;
+  if (typeof val === "object" && !Array.isArray(val)) {
+    return Object.keys(val as object).length > 0;
+  }
+  return true;
+}
+
+function collectFilteredProperties(
+  source: Record<string, unknown>,
+  ignoredKeys: Set<string>,
+  prefix = "",
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(source)) {
+    if (ignoredKeys.has(k) || !isMeaningfulProperty(val)) continue;
+    result[`${prefix}${k}`] = val;
+  }
+  return result;
+}
+
+function extractSingleToolCall(raw: unknown): ToolCall | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const tc = raw as Record<string, unknown>;
+  const fn = tc["function"];
+  if (!fn || typeof fn !== "object" || Array.isArray(fn)) return null;
+  const fnObj = fn as Record<string, unknown>;
+  const name: unknown = fnObj["name"];
+  if (typeof name !== "string") return null;
+
+  const tcCall: ToolCall = { function: { name, arguments: fnObj["arguments"] ?? null } };
+  if (typeof tc["id"] === "string") tcCall.id = tc["id"];
+  if (typeof tc["type"] === "string") tcCall.type = tc["type"];
+  return tcCall;
+}
+
+function extractToolCalls(rawToolCalls: unknown): ToolCall[] {
+  if (!Array.isArray(rawToolCalls)) return [];
+  const calls: ToolCall[] = [];
+  for (const raw of rawToolCalls) {
+    const call = extractSingleToolCall(raw);
+    if (call) calls.push(call);
+  }
+  return calls;
+}
+
+function extractReasoning(messageObj: Record<string, unknown> | null): string | null {
+  if (!messageObj) return null;
+  const candidates: unknown[] = [
+    messageObj["reasoning_content"],
+    messageObj["reasoning"],
+    messageObj["reasoning_text"],
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function extractMessageContent(
+  choiceMessage: Record<string, unknown> | null,
+  choice: Record<string, unknown>,
+): string | null {
+  let message: string | null = null;
+  if (choiceMessage != null) {
+    const c: unknown = choiceMessage["content"];
+    if (typeof c === "string") {
+      message = c;
+    } else if (c == null) {
+      const d: unknown = choice["delta"];
+      if (d && typeof d === "object" && !Array.isArray(d)) {
+        const dc: unknown = (d as Record<string, unknown>)["content"];
+        if (typeof dc === "string") message = dc;
+      }
+      if (message == null) {
+        const t: unknown = choice["text"];
+        if (typeof t === "string" && t.length > 0) message = t;
+      }
+    }
+  } else {
+    const t: unknown = choice["text"];
+    if (typeof t === "string" && t.length > 0) message = t;
+  }
+  return message && message.length > 0 ? message : null;
+}
+
+const TOP_LEVEL_RESPONSE_IGNORED_KEYS = new Set(["choices"]);
+const CHOICE_RESPONSE_IGNORED_KEYS = new Set(["message", "delta", "text"]);
+
 /** Try to recognize an OpenAI chat-completion shape. Returns null if
  *  the value is not a recognized chat-completion (so the caller can
  *  fall through to a "Raw response" block). Only ever called with
@@ -258,129 +360,33 @@ function parseOpenAiChatResponse(value: unknown): {
   toolCalls: ToolCall[];
   otherProperties: Record<string, unknown> | null;
 } | null {
-  if (value == null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) return null;
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
   if (!Array.isArray(v["choices"]) || v["choices"].length < 1) return null;
+
   const firstChoice = v["choices"][0];
   if (firstChoice == null || typeof firstChoice !== "object" || Array.isArray(firstChoice)) return null;
   const choice = firstChoice as Record<string, unknown>;
+
   const messageObj = choice["message"] ?? choice["delta"] ?? null;
   const choiceMessage: Record<string, unknown> | null =
     messageObj != null && typeof messageObj === "object" && !Array.isArray(messageObj)
       ? (messageObj as Record<string, unknown>)
       : null;
 
-  // Message: read from `message.content`, falling back to `text`, then
-  // to `delta.content` (for partially-accumulated streaming responses
-  // where finish() may have left content as null). Empty-string
-  // content is valid (the assistant chose not to reply) — treat it
-  // as non-null so the formatted blocks render instead of the raw
-  // fallback.
-  let message: string | null = null;
-  if (choiceMessage != null) {
-    const c: unknown = choiceMessage["content"];
-    if (typeof c === "string") {
-      message = c;
-    } else if (c == null) {
-      // Try delta.content and response-level text as fallbacks.
-      const d: unknown = choice["delta"];
-      if (d && typeof d === "object" && !Array.isArray(d)) {
-        const dc: unknown = (d as Record<string, unknown>)["content"];
-        if (typeof dc === "string") message = dc;
-      }
-      if (message == null) {
-        const t: unknown = choice["text"];
-        if (typeof t === "string" && t.length > 0) message = t;
-      }
-    }
-  } else {
-    const t: unknown = choice["text"];
-    if (typeof t === "string" && t.length > 0) message = t;
-  }
-  // Only show non-empty messages — empty string content means "the
-  // model replied with no text", which is information we surface via
-  // finish_reason / tool_calls, not via an empty Message block.
-  if (message != null && message.length === 0) message = null;
+  const message = extractMessageContent(choiceMessage, choice);
+  const reasoning = extractReasoning(choiceMessage);
+  const toolCalls = choiceMessage != null ? extractToolCalls(choiceMessage["tool_calls"]) : [];
 
-  // Reasoning: try reasoning_content -> reasoning -> reasoning_text.
-  let reasoning: string | null = null;
-  if (choiceMessage != null) {
-    const candidates: unknown[] = [
-      choiceMessage["reasoning_content"],
-      choiceMessage["reasoning"],
-      choiceMessage["reasoning_text"],
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === "string" && candidate.length > 0) {
-        reasoning = candidate;
-        break;
-      }
-    }
-  }
+  const otherProperties: Record<string, unknown> = {
+    ...collectFilteredProperties(v, TOP_LEVEL_RESPONSE_IGNORED_KEYS),
+    ...collectFilteredProperties(choice, CHOICE_RESPONSE_IGNORED_KEYS, "choice."),
+  };
+  const otherPropsNonNull = Object.keys(otherProperties).length > 0 ? otherProperties : null;
 
-  // Tool calls: must be an array of objects with a function.
-  const toolCalls: ToolCall[] = [];
-  if (choiceMessage != null && Array.isArray(choiceMessage["tool_calls"])) {
-    for (const raw of choiceMessage["tool_calls"] as unknown[]) {
-      if (raw == null || typeof raw !== "object" || Array.isArray(raw)) continue;
-      const tc = raw as Record<string, unknown>;
-      const fn = tc["function"];
-      if (fn == null || typeof fn !== "object" || Array.isArray(fn)) continue;
-      const fnObj = fn as Record<string, unknown>;
-      const name: unknown = fnObj["name"];
-      if (typeof name !== "string") continue;
-      const tcCall: ToolCall = { function: { name, arguments: fnObj["arguments"] ?? null } };
-      const idStr: unknown = tc["id"];
-      if (typeof idStr === "string") tcCall.id = idStr;
-      const typeStr: unknown = tc["type"];
-      if (typeof typeStr === "string") tcCall.type = typeStr;
-      toolCalls.push(tcCall);
-    }
+  if (message == null && reasoning == null && toolCalls.length === 0 && otherPropsNonNull == null) {
+    return null;
   }
-
-  // Collect "other properties" — everything in the response object
-  // EXCEPT the structured fields we already extracted. This includes:
-  //   - top-level: id, object, created, model, usage,
-  //     system_fingerprint, service_tier, …
-  //   - choice-level: index, finish_reason, logprobs, …
-  // We surface them in a collapsible "Other properties" block so the
-  // operator can see at a glance that the request completed (via
-  // finish_reason) and what it cost (via usage), even when content
-  // and tool_calls are both empty.
-  const otherProperties: Record<string, unknown> = {};
-  // Top-level keys except `choices` (which we render structurally).
-  for (const [k, val] of Object.entries(v)) {
-    if (k === "choices") continue;
-    if (val == null) continue;
-    // Skip empty objects / empty strings — they add noise without
-    // adding signal.
-    if (typeof val === "string" && val.length === 0) continue;
-    if (typeof val === "object" && val !== null && !Array.isArray(val)
-      && Object.keys(val as object).length === 0) continue;
-    otherProperties[k] = val;
-  }
-  // Choice-level keys except `message` / `delta` (rendered
-  // structurally) and `text` (folded into `message` above).
-  for (const [k, val] of Object.entries(choice)) {
-    if (k === "message" || k === "delta" || k === "text") continue;
-    if (val == null) continue;
-    if (typeof val === "string" && val.length === 0) continue;
-    if (typeof val === "object" && val !== null && !Array.isArray(val)
-      && Object.keys(val as object).length === 0) continue;
-    // Namespaced so they don't collide with top-level keys of the
-    // same name (e.g. `index`).
-    otherProperties[`choice.${k}`] = val;
-  }
-  const otherPropsNonNull = Object.keys(otherProperties).length > 0
-    ? otherProperties
-    : null;
-
-  // If we got neither message, reasoning, tool calls, NOR other
-  // properties, this is not a chat-completion we recognize — fall
-  // through.
-  if (message == null && reasoning == null
-    && toolCalls.length === 0 && otherPropsNonNull == null) return null;
   return { message, reasoning, toolCalls, otherProperties: otherPropsNonNull };
 }
 
@@ -557,6 +563,127 @@ function renderRawResponseBodyBlock(rawBody: string): TemplateResult {
  *        though there IS a body to inspect. Passed from the caller
  *        which reads `is_streaming && !stream_complete` (and the
  *        `partial` marker inside the JSON, when present). */
+function detectPartialResponse(response: unknown, isPartial?: boolean): boolean {
+  if (isPartial === true) return true;
+  if (typeof response !== "object" || response === null || Array.isArray(response)) return false;
+  const choices = (response as Record<string, unknown>)["choices"];
+  if (!Array.isArray(choices) || choices.length === 0) return false;
+  const c0 = choices[0] as Record<string, unknown> | undefined;
+  if (!c0 || typeof c0 !== "object") return false;
+  const msg = (c0["message"] ?? c0["delta"]) as Record<string, unknown> | undefined;
+  if (!msg || typeof msg !== "object") return false;
+  return msg["partial"] === true;
+}
+
+function extractRawResponseBody(response: unknown): string | null {
+  if (typeof response !== "object" || response === null || Array.isArray(response)) return null;
+  const r = response as Record<string, unknown>;
+  if (typeof r["raw_response_body"] === "string") return r["raw_response_body"];
+
+  const choices = r["choices"];
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+  const c0 = choices[0];
+  if (!c0 || typeof c0 !== "object" || Array.isArray(c0)) return null;
+  const choice = c0 as Record<string, unknown>;
+  const msg = choice["message"] ?? choice["delta"] ?? null;
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return null;
+  const m = msg as Record<string, unknown>;
+  return typeof m["raw_response_body"] === "string" ? m["raw_response_body"] : null;
+}
+
+function computeTtlExpiryHint(createdAt?: string, ttlSec = 300, bodyName = "response bodies"): string {
+  if (createdAt == null || createdAt === "—") return "";
+  const created = new Date(createdAt).getTime();
+  if (Number.isNaN(created)) return "";
+  const ageSec = (Date.now() - created) / 1000;
+  if (ageSec <= ttlSec) return "";
+  return ` This log is ${Math.round(ageSec / 60)} min old — ${bodyName} are pruned after the recording TTL (5 min default).`;
+}
+
+function renderParsedResponseBlocks(
+  parsed: { message: string | null; reasoning: string | null; toolCalls: ToolCall[]; otherProperties: Record<string, unknown> | null },
+  response: unknown,
+): TemplateResult[] {
+  const blocks: TemplateResult[] = [];
+  if (parsed.message != null) {
+    blocks.push(renderMessageBlock(parsed.message));
+  }
+  if (parsed.reasoning != null) {
+    blocks.push(renderReasoningBlock(parsed.reasoning));
+  }
+  for (let i = 0; i < parsed.toolCalls.length; i++) {
+    const tc = parsed.toolCalls[i];
+    if (tc != null) blocks.push(renderToolCallBlock(tc, i));
+  }
+  if (parsed.otherProperties != null) {
+    const otherBlock = renderOtherPropertiesBlock(parsed.otherProperties);
+    if (otherBlock != null) blocks.push(otherBlock);
+  }
+  blocks.push(renderRawResponseBlock(response));
+  return blocks;
+}
+
+function extractFallbackResponseData(response: unknown): {
+  content: string | null;
+  reasoning: string | null;
+  toolCalls: ToolCall[];
+  otherProperties: Record<string, unknown> | null;
+} {
+  if (typeof response !== "object" || response === null || Array.isArray(response)) {
+    return { content: null, reasoning: null, toolCalls: [], otherProperties: null };
+  }
+  const obj = response as Record<string, unknown>;
+  let content: string | null = null;
+  let reasoning: string | null = null;
+  let toolCalls: ToolCall[] = [];
+  let otherProperties: Record<string, unknown> | null = null;
+
+  const choices: unknown = obj["choices"];
+  if (Array.isArray(choices) && choices.length > 0) {
+    const c0 = choices[0] as Record<string, unknown> | undefined;
+    if (c0 && typeof c0 === "object") {
+      const msg = (c0["message"] ?? c0["delta"]) as Record<string, unknown> | undefined;
+      if (msg && typeof msg === "object") {
+        if (typeof msg["content"] === "string" && msg["content"].length > 0) {
+          content = msg["content"];
+        }
+        reasoning = extractReasoning(msg);
+        if (Array.isArray(msg["tool_calls"])) {
+          toolCalls = extractToolCalls(msg["tool_calls"]);
+        }
+      }
+      const choiceProps = collectFilteredProperties(c0, CHOICE_RESPONSE_IGNORED_KEYS, "choice.");
+      if (Object.keys(choiceProps).length > 0) {
+        otherProperties = { ...(otherProperties ?? {}), ...choiceProps };
+      }
+    }
+  }
+
+  const topLevelProps = collectFilteredProperties(obj, TOP_LEVEL_RESPONSE_IGNORED_KEYS);
+  if (Object.keys(topLevelProps).length > 0) {
+    otherProperties = { ...(otherProperties ?? {}), ...topLevelProps };
+  }
+
+  return { content, reasoning, toolCalls, otherProperties };
+}
+
+function renderFallbackResponseBlocks(response: unknown): TemplateResult[] {
+  const { content, reasoning, toolCalls, otherProperties } = extractFallbackResponseData(response);
+  const blocks: TemplateResult[] = [];
+  if (content != null) blocks.push(renderMessageBlock(content));
+  if (reasoning != null) blocks.push(renderReasoningBlock(reasoning));
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i];
+    if (tc != null) blocks.push(renderToolCallBlock(tc, i));
+  }
+  if (otherProperties != null && Object.keys(otherProperties).length > 0) {
+    const otherBlock = renderOtherPropertiesBlock(otherProperties);
+    if (otherBlock != null) blocks.push(otherBlock);
+  }
+  blocks.push(renderRawResponseBlock(response));
+  return blocks;
+}
+
 function renderResponseTab(
   response: unknown,
   streamingHint?: boolean,
@@ -568,69 +695,19 @@ function renderResponseTab(
     let placeholder = streamingHint
       ? "Response body not captured (streaming request may have been interrupted)."
       : NO_RESPONSE_PLACEHOLDER_TEXT;
-    // Bug fix: same expiry hint as the request tab — if the row is
-    // older than the recording TTL, the response body was pruned.
-    if (createdAt != null && createdAt !== "—") {
-      const created = new Date(createdAt).getTime();
-      if (!Number.isNaN(created)) {
-        const ageSec = (Date.now() - created) / 1000;
-        if (ageSec > 300) {
-          placeholder += ` This log is ${Math.round(ageSec / 60)} min old — response bodies are pruned after the recording TTL (5 min default).`;
-        }
-      }
-    }
+    placeholder += computeTtlExpiryHint(createdAt);
     return html`<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
       <p class="muted log-detail-placeholder">${placeholder}</p>
     </section>`;
   }
 
-  // Detect the `partial` marker inside the JSON itself (set by the
-  // backend's `ResponseAccumulator::mark_partial()`). This is the
-  // authoritative signal — even if the caller didn't pass
-  // `isPartial`, we can detect it from the response body.
-  let partialFromJson = false;
-  if (typeof response === "object" && response !== null && !Array.isArray(response)) {
-    const choices = (response as Record<string, unknown>)["choices"];
-    if (Array.isArray(choices) && choices.length > 0) {
-      const c0 = choices[0] as Record<string, unknown> | undefined;
-      if (c0 && typeof c0 === "object") {
-        const msg = (c0["message"] ?? c0["delta"]) as Record<string, unknown> | undefined;
-        if (msg && typeof msg === "object") {
-          const p: unknown = msg["partial"];
-          if (p === true) partialFromJson = true;
-        }
-      }
-    }
-  }
-  const showPartialBanner = isPartial === true || partialFromJson;
+  const showPartialBanner = detectPartialResponse(response, isPartial);
   const partialBanner: TemplateResult | null = showPartialBanner
     ? html`<div class="log-detail-partial-banner">⚠ Partial response — stream was interrupted before completion. The content below is what was received up to the point of failure.</div>`
     : null;
 
-  let rawResponseBody: string | null = null;
-  if (typeof response === "object" && response !== null && !Array.isArray(response)) {
-    const r = response as Record<string, unknown>;
-    if (typeof r["raw_response_body"] === "string") {
-      rawResponseBody = r["raw_response_body"];
-    } else {
-      const choices = r["choices"];
-      if (Array.isArray(choices) && choices.length > 0) {
-        const c0 = choices[0];
-        if (c0 && typeof c0 === "object" && !Array.isArray(c0)) {
-          const choice = c0 as Record<string, unknown>;
-          const msg = choice["message"] ?? choice["delta"] ?? null;
-          if (msg && typeof msg === "object" && !Array.isArray(msg)) {
-            const m = msg as Record<string, unknown>;
-            if (typeof m["raw_response_body"] === "string") {
-              rawResponseBody = m["raw_response_body"];
-            }
-          }
-        }
-      }
-    }
-  }
-
+  const rawResponseBody = extractRawResponseBody(response);
   const rawResponseBodyBlock: TemplateResult | null = rawResponseBody
     ? renderRawResponseBodyBlock(rawResponseBody)
     : null;
@@ -639,10 +716,12 @@ function renderResponseTab(
   // value; on failure, show the raw string in a collapsible.
   if (typeof response === "string") {
     let parsed: Record<string, unknown> | null = null;
-    let parsedOk = false;
-    try { parsed = JSON.parse(response) as Record<string, unknown>; parsedOk = true; }
-    catch (_e: unknown) { parsedOk = false; }
-    if (parsedOk && parsed != null && typeof parsed === "object") {
+    try {
+      parsed = JSON.parse(response) as Record<string, unknown>;
+    } catch (_e: unknown) {
+      parsed = null;
+    }
+    if (parsed != null && typeof parsed === "object") {
       return renderResponseTab(parsed, streamingHint, createdAt, isPartial);
     }
     return html`<section class="log-detail-section" data-log-tab="response">
@@ -655,134 +734,263 @@ function renderResponseTab(
 
   // Try to recognize an OpenAI chat-completion shape.
   const parsed = parseOpenAiChatResponse(response);
-  if (parsed != null) {
-    const blocks: TemplateResult[] = [];
-    // Message (content) — only if non-empty.
-    if (parsed.message != null) {
-      blocks.push(renderMessageBlock(parsed.message));
-    }
-    // Reasoning — only if non-empty.
-    if (parsed.reasoning != null) {
-      blocks.push(renderReasoningBlock(parsed.reasoning));
-    }
-    // Each tool call as its own top-level collapsible (collapsed by
-    // default). Previously these were nested under a parent
-    // "Tool calls (N)" collapsible, which forced the operator to
-    // expand two levels to see any tool call's arguments.
-    for (let i = 0; i < parsed.toolCalls.length; i++) {
-      const tc = parsed.toolCalls[i];
-      if (tc != null) blocks.push(renderToolCallBlock(tc, i));
-    }
-    // Other properties (id, model, usage, finish_reason, …).
-    if (parsed.otherProperties != null) {
-      const otherBlock = renderOtherPropertiesBlock(parsed.otherProperties);
-      if (otherBlock != null) blocks.push(otherBlock);
-    }
-    // Raw response — always present, collapsed by default. The
-    // operator can expand it to see the original JSON when the
-    // structured extraction missed something.
-    blocks.push(renderRawResponseBlock(response));
-    return html`<section class="log-detail-section" data-log-tab="response">
-      <h4>Response</h4>
-      ${partialBanner}
-      ${rawResponseBodyBlock}
-      ${blocks}
-    </section>`;
-  }
+  const blocks = parsed != null
+    ? renderParsedResponseBlocks(parsed, response)
+    : renderFallbackResponseBlocks(response);
 
-  // Fallback: not a recognized chat-completion shape. Try to
-  // extract content / reasoning / tool_calls from the raw object
-  // via the same logic as parseOpenAiChatResponse but without the
-  // strict shape check, then always show the raw response at the
-  // end.
-  let rawContent: string | null = null;
-  let rawReasoning: string | null = null;
-  let rawToolCalls: ToolCall[] = [];
-  let rawOtherProperties: Record<string, unknown> | null = null;
-  if (typeof response === "object" && response !== null && !Array.isArray(response)) {
-    const obj = response as Record<string, unknown>;
-    // Try choices[0].message.content or delta.content at top level.
-    const choices: unknown = obj["choices"];
-    if (Array.isArray(choices) && choices.length > 0) {
-      const c0 = choices[0] as Record<string, unknown> | undefined;
-      if (c0 && typeof c0 === "object") {
-        const msg = (c0["message"] ?? c0["delta"]) as Record<string, unknown> | undefined;
-        if (msg && typeof msg === "object") {
-          const content: unknown = msg["content"];
-          if (typeof content === "string" && content.length > 0) rawContent = content;
-          const rc: unknown = msg["reasoning_content"];
-          if (typeof rc === "string" && rc.length > 0) rawReasoning = rc;
-          else {
-            const r: unknown = msg["reasoning"];
-            if (typeof r === "string" && r.length > 0) rawReasoning = r;
-          }
-          // Extract tool calls from the message/delta object.
-          if (Array.isArray(msg["tool_calls"])) {
-            for (const raw of msg["tool_calls"] as unknown[]) {
-              if (raw == null || typeof raw !== "object" || Array.isArray(raw)) continue;
-              const tc = raw as Record<string, unknown>;
-              const fn = tc["function"];
-              if (fn == null || typeof fn !== "object" || Array.isArray(fn)) continue;
-              const fnObj = fn as Record<string, unknown>;
-              const name: unknown = fnObj["name"];
-              if (typeof name !== "string") continue;
-              const tcCall: ToolCall = { function: { name, arguments: fnObj["arguments"] ?? null } };
-              const idStr: unknown = tc["id"];
-              if (typeof idStr === "string") tcCall.id = idStr;
-              const typeStr: unknown = tc["type"];
-              if (typeof typeStr === "string") tcCall.type = typeStr;
-              rawToolCalls.push(tcCall);
-            }
-          }
-        }
-        // Collect choice-level "other properties" (finish_reason, etc.)
-        const choiceProps: Record<string, unknown> = {};
-        for (const [k, val] of Object.entries(c0)) {
-          if (k === "message" || k === "delta" || k === "text") continue;
-          if (val == null) continue;
-          if (typeof val === "string" && val.length === 0) continue;
-          if (typeof val === "object" && val !== null && !Array.isArray(val)
-            && Object.keys(val as object).length === 0) continue;
-          choiceProps[`choice.${k}`] = val;
-        }
-        if (Object.keys(choiceProps).length > 0) {
-          rawOtherProperties = { ...(rawOtherProperties ?? {}), ...choiceProps };
-        }
-      }
-    }
-    // Collect top-level "other properties" (id, model, usage, etc.)
-    const topLevelProps: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(obj)) {
-      if (k === "choices") continue;
-      if (val == null) continue;
-      if (typeof val === "string" && val.length === 0) continue;
-      if (typeof val === "object" && val !== null && !Array.isArray(val)
-        && Object.keys(val as object).length === 0) continue;
-      topLevelProps[k] = val;
-    }
-    if (Object.keys(topLevelProps).length > 0) {
-      rawOtherProperties = { ...(rawOtherProperties ?? {}), ...topLevelProps };
-    }
-  }
-  const blocks: TemplateResult[] = [];
-  if (rawContent != null) blocks.push(renderMessageBlock(rawContent));
-  if (rawReasoning != null) blocks.push(renderReasoningBlock(rawReasoning));
-  for (let i = 0; i < rawToolCalls.length; i++) {
-    const tc = rawToolCalls[i];
-    if (tc != null) blocks.push(renderToolCallBlock(tc, i));
-  }
-  if (rawOtherProperties != null && Object.keys(rawOtherProperties).length > 0) {
-    const otherBlock = renderOtherPropertiesBlock(rawOtherProperties);
-    if (otherBlock != null) blocks.push(otherBlock);
-  }
-  // Always show the raw response as the last block.
-  blocks.push(renderRawResponseBlock(response));
   return html`<section class="log-detail-section" data-log-tab="response">
     <h4>Response</h4>
     ${partialBanner}
     ${rawResponseBodyBlock}
     ${blocks}
   </section>`;
+}
+
+const ROLE_CLASS_MAP: Record<string, string> = {
+  system: "log-detail-role-system",
+  assistant: "log-detail-role-assistant",
+  user: "log-detail-role-user",
+  tool: "log-detail-role-tool",
+};
+
+function getRoleBadgeClass(role: string): string {
+  return ROLE_CLASS_MAP[role] ?? "";
+}
+
+function isEmptyValue(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v === "string" && v.trim() === "") return true;
+  if (Array.isArray(v) && v.length === 0) return true;
+  if (typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0) return true;
+  return false;
+}
+
+function isPrimitive(v: unknown): boolean {
+  const t = typeof v;
+  return v == null || t === "string" || t === "number" || t === "boolean";
+}
+
+function metaText(v: unknown): string {
+  if (Array.isArray(v)) {
+    return v.length === 0 ? "empty" : (v.length === 1 ? "1 item" : `${v.length} items`);
+  }
+  if (v != null && typeof v === "object") {
+    const keys = Object.keys(v as object).length;
+    return keys === 0 ? "empty" : (keys === 1 ? "1 key" : `${keys} keys`);
+  }
+  return "";
+}
+
+function extractAnthropicToolStats(content: unknown): {
+  toolUses: number;
+  toolResults: number;
+  resultIds: string[];
+} {
+  let toolUses = 0;
+  let toolResults = 0;
+  const resultIds: string[] = [];
+
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block && typeof block === "object") {
+        const b = block as Record<string, unknown>;
+        if (b["type"] === "tool_use") toolUses++;
+        if (b["type"] === "tool_result") {
+          toolResults++;
+          if (typeof b["tool_use_id"] === "string") resultIds.push(b["tool_use_id"]);
+        }
+      }
+    }
+  }
+
+  return { toolUses, toolResults, resultIds };
+}
+
+function formatMessageExtras(
+  name: unknown,
+  toolCallId: unknown,
+  toolCalls: unknown,
+  toolUses: number,
+  toolResults: number,
+  resultIds: string[],
+): string[] {
+  const extras: string[] = [];
+  if (typeof name === "string") extras.push(name);
+  if (typeof toolCallId === "string") extras.push(`tool_call_id: ${toolCallId}`);
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) extras.push(`${toolCalls.length} tool call(s)`);
+  if (toolUses > 0) extras.push(`${toolUses} tool call(s)`);
+  if (toolResults > 0) {
+    let resStr = `${toolResults} tool result(s)`;
+    if (resultIds.length > 0) {
+      const ids = resultIds.map((id) => id.split("-")[0] + "…").join(", ");
+      resStr += ` (${ids})`;
+    }
+    extras.push(resStr);
+  }
+  return extras;
+}
+
+function extractMessagePreview(content: unknown, toolUses: number, toolResults: number): string {
+  if (typeof content === "string") {
+    return content.length > 80 ? content.slice(0, 80) + "…" : content;
+  }
+  if (Array.isArray(content)) {
+    const textBlock = content.find(
+      (b) => b && typeof b === "object" && b["type"] === "text" && typeof b["text"] === "string",
+    ) as Record<string, unknown> | undefined;
+    if (textBlock && typeof textBlock["text"] === "string") {
+      const text = textBlock["text"];
+      return text.length > 80 ? text.slice(0, 80) + "…" : text;
+    }
+    if (toolUses > 0) return "[tool_use]";
+    if (toolResults > 0) return "[tool_result]";
+    const s = JSON.stringify(content);
+    return s.length > 80 ? s.slice(0, 80) + "…" : s;
+  }
+  if (content != null) {
+    const s = JSON.stringify(content);
+    return s.length > 80 ? s.slice(0, 80) + "…" : s;
+  }
+  return "";
+}
+
+function renderSingleMessageCollapsible(raw: unknown, index: number): TemplateResult {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return html`<details class="log-detail-collapsible">
+      <summary>Message #${index + 1}</summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(raw)}</pre>
+    </details>`;
+  }
+  const msg = raw as Record<string, unknown>;
+  const role: string = typeof msg["role"] === "string" ? msg["role"] : "unknown";
+  const content = msg["content"];
+  const roleClass = getRoleBadgeClass(role);
+
+  const { toolUses, toolResults, resultIds } = extractAnthropicToolStats(content);
+  const extras = formatMessageExtras(
+    msg["name"],
+    msg["tool_call_id"],
+    msg["tool_calls"],
+    toolUses,
+    toolResults,
+    resultIds,
+  );
+  const extraStr: TemplateResult | null = extras.length > 0
+    ? html` <span class="log-detail-key-meta">${extras.join(" · ")}</span>`
+    : null;
+
+  const preview = extractMessagePreview(content, toolUses, toolResults);
+  const previewStr: TemplateResult | null = preview.length > 0
+    ? html` <span class="log-detail-msg-preview">${preview}</span>`
+    : null;
+
+  return html`<details class="log-detail-collapsible">
+    <summary><span class="log-detail-role ${roleClass}">${role}</span>${extraStr}${previewStr}</summary>
+    <pre class="json-viewer log-detail-collapsible-body">${formatJson(msg)}</pre>
+  </details>`;
+}
+
+function renderSingleToolDefinition(tool: unknown, index: number): TemplateResult {
+  if (tool == null || typeof tool !== "object" || Array.isArray(tool)) {
+    return html`<details class="log-detail-collapsible">
+      <summary>Tool #${index + 1}</summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(tool)}</pre>
+    </details>`;
+  }
+  const t = tool as Record<string, unknown>;
+  const toolType: string = typeof t["type"] === "string" ? t["type"] : "function";
+  const fn = t["function"] as Record<string, unknown> | undefined;
+  const name: string = fn && typeof fn["name"] === "string" ? fn["name"] : `#${index + 1}`;
+  const description: unknown = fn?.["description"];
+  const parameters: unknown = fn?.["parameters"];
+  const strict: unknown = fn?.["strict"];
+  const parts: TemplateResult[] = [];
+  if (description != null && !isEmptyValue(description)) {
+    parts.push(html`<details class="log-detail-collapsible">
+      <summary>Description</summary>
+      <pre class="json-viewer log-detail-collapsible-body">${typeof description === "string" ? description : JSON.stringify(description, null, 2)}</pre>
+    </details>`);
+  }
+  if (parameters != null && !isEmptyValue(parameters)) {
+    parts.push(html`<details class="log-detail-collapsible">
+      <summary>Parameters</summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(parameters)}</pre>
+    </details>`);
+  }
+  if (strict != null && !isEmptyValue(strict)) {
+    parts.push(html`<details class="log-detail-collapsible">
+      <summary>Strict</summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(strict)}</pre>
+    </details>`);
+  }
+  const extraKeys = Object.keys(t).filter((k) => k !== "type" && k !== "function");
+  for (const ek of extraKeys) {
+    const ev = t[ek];
+    if (!isEmptyValue(ev)) {
+      parts.push(html`<details class="log-detail-collapsible">
+        <summary>${ek}</summary>
+        <pre class="json-viewer log-detail-collapsible-body">${formatJson(ev)}</pre>
+      </details>`);
+    }
+  }
+  return html`<details class="log-detail-collapsible" ?open=${index === 0}>
+    <summary><span class="log-detail-tool-call-name">${toolType}</span> <span class="log-detail-key-meta">${name}</span></summary>
+    ${parts}
+  </details>`;
+}
+
+function renderObjectRequestBody(obj: Record<string, unknown>): TemplateResult[] {
+  const rendered = new Set<string>();
+  const blocks: TemplateResult[] = [];
+
+  for (const key of PINNED_REQUEST_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+    const value = obj[key];
+    if (isEmptyValue(value)) continue;
+
+    if (key === "tools" && Array.isArray(value) && value.length > 0) {
+      const toolBlocks: TemplateResult[] = (value as unknown[]).map((t, i) => renderSingleToolDefinition(t, i));
+      blocks.push(html`<details class="log-detail-collapsible" open>
+        <summary><span class="log-detail-key log-detail-key-pinned">tools</span> <span class="log-detail-key-meta">${value.length} tool(s)</span></summary>
+        <div class="log-detail-messages">${toolBlocks}</div>
+      </details>`);
+      rendered.add(key);
+      continue;
+    }
+
+    if (key === "messages" && Array.isArray(value) && value.length > 0) {
+      const msgBlocks: TemplateResult[] = (value as unknown[]).map((raw, i) => renderSingleMessageCollapsible(raw, i));
+      blocks.push(html`<details class="log-detail-collapsible" open>
+        <summary><span class="log-detail-key log-detail-key-pinned">messages</span> <span class="log-detail-key-meta">${value.length} message(s)</span></summary>
+        <div class="log-detail-messages">${msgBlocks}</div>
+      </details>`);
+      rendered.add(key);
+      continue;
+    }
+
+    const open = isPrimitive(value);
+    const meta = metaText(value);
+    const metaSpan: TemplateResult | null = meta.length > 0
+      ? html` <span class="log-detail-key-meta">${meta}</span>`
+      : null;
+    blocks.push(html`<details class="log-detail-collapsible" ?open=${open}>
+      <summary><span class="log-detail-key log-detail-key-pinned">${key}</span>${metaSpan}</summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
+    </details>`);
+    rendered.add(key);
+  }
+
+  for (const key of Object.keys(obj)) {
+    if (rendered.has(key)) continue;
+    const value = obj[key];
+    if (isEmptyValue(value)) continue;
+    blocks.push(html`<details class="log-detail-collapsible">
+      <summary><span class="log-detail-key">${key}</span></summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
+    </details>`);
+  }
+
+  return blocks;
 }
 
 /** Render the Request tab. Returns the full
@@ -804,11 +1012,6 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
       && !Array.isArray(requestBody) && Object.keys(requestBody as object).length === 0
       && JSON.stringify(requestBody) === "{}");
   if (!hasRequestBody) {
-    // Bug fix: distinguish "never recorded" from "expired by TTL".
-    // The recording TTL default is 300s (5 min). If the row is
-    // older than that, the body was pruned by the background
-    // sweep; the operator should know this so they don't think
-    // the dashboard is broken.
     let expiryHint = "";
     if (createdAt != null && createdAt !== "—") {
       const created = new Date(createdAt).getTime();
@@ -837,218 +1040,7 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
 
   // Object body (non-array): per-key collapsibles.
   if (body != null && typeof body === "object" && !Array.isArray(body)) {
-    const obj = body as Record<string, unknown>;
-    const rendered = new Set<string>();
-    const blocks: TemplateResult[] = [];
-
-    const isEmptyValue = (v: unknown): boolean => {
-      if (v == null) return true;
-      if (typeof v === "string" && v.trim() === "") return true;
-      if (Array.isArray(v) && v.length === 0) return true;
-      if (typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0) return true;
-      return false;
-    };
-    const isPrimitive = (v: unknown): boolean => {
-      const t = typeof v;
-      return v == null || t === "string" || t === "number" || t === "boolean";
-    };
-    const metaText = (v: unknown): string => {
-      if (Array.isArray(v)) {
-        return v.length === 0 ? "empty" : (v.length === 1 ? "1 item" : `${v.length} items`);
-      }
-      if (v != null && typeof v === "object") {
-        const keys = Object.keys(v as object).length;
-        return keys === 0 ? "empty" : (keys === 1 ? "1 key" : `${keys} keys`);
-      }
-      return "";
-    };
-
-    /** Render a single tool definition (from `tools[]`) */
-    const renderToolBlock = (tool: unknown, index: number): TemplateResult => {
-      if (tool == null || typeof tool !== "object" || Array.isArray(tool)) {
-        return html`<details class="log-detail-collapsible">
-          <summary>Tool #${index + 1}</summary>
-          <pre class="json-viewer log-detail-collapsible-body">${formatJson(tool)}</pre>
-        </details>`;
-      }
-      const t = tool as Record<string, unknown>;
-      const toolType: string = typeof t["type"] === "string" ? t["type"] : "function";
-      const fn = t["function"] as Record<string, unknown> | undefined;
-      const name: string = fn && typeof fn["name"] === "string" ? fn["name"] : `#${index + 1}`;
-      const description: unknown = fn?.["description"];
-      const parameters: unknown = fn?.["parameters"];
-      const strict: unknown = fn?.["strict"];
-      const parts: TemplateResult[] = [];
-      if (description != null && !isEmptyValue(description)) {
-        parts.push(html`<details class="log-detail-collapsible">
-          <summary>Description</summary>
-          <pre class="json-viewer log-detail-collapsible-body">${typeof description === "string" ? description : JSON.stringify(description, null, 2)}</pre>
-        </details>`);
-      }
-      if (parameters != null && !isEmptyValue(parameters)) {
-        parts.push(html`<details class="log-detail-collapsible">
-          <summary>Parameters</summary>
-          <pre class="json-viewer log-detail-collapsible-body">${formatJson(parameters)}</pre>
-        </details>`);
-      }
-      if (strict != null && !isEmptyValue(strict)) {
-        parts.push(html`<details class="log-detail-collapsible">
-          <summary>Strict</summary>
-          <pre class="json-viewer log-detail-collapsible-body">${formatJson(strict)}</pre>
-        </details>`);
-      }
-      const extraKeys = Object.keys(t).filter((k) => k !== "type" && k !== "function");
-      for (const ek of extraKeys) {
-        const ev = t[ek];
-        if (!isEmptyValue(ev)) {
-          parts.push(html`<details class="log-detail-collapsible">
-            <summary>${ek}</summary>
-            <pre class="json-viewer log-detail-collapsible-body">${formatJson(ev)}</pre>
-          </details>`);
-        }
-      }
-      return html`<details class="log-detail-collapsible" ?open=${index === 0}>
-        <summary><span class="log-detail-tool-call-name">${toolType}</span> <span class="log-detail-key-meta">${name}</span></summary>
-        ${parts}
-      </details>`;
-    };
-
-    for (const key of PINNED_REQUEST_KEYS) {
-      if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-      const value = obj[key];
-
-      // Skip empty values (null, empty string, empty array, empty object).
-      if (isEmptyValue(value)) continue;
-
-      // Special handling for "tools": render each tool definition as
-      // its own collapsible with name, description, parameters.
-      if (key === "tools" && Array.isArray(value) && value.length > 0) {
-        const toolBlocks: TemplateResult[] = (value as unknown[]).map((t, i) => renderToolBlock(t, i));
-        blocks.push(html`<details class="log-detail-collapsible" open>
-          <summary><span class="log-detail-key log-detail-key-pinned">tools</span> <span class="log-detail-key-meta">${value.length} tool(s)</span></summary>
-          <div class="log-detail-messages">${toolBlocks}</div>
-        </details>`);
-        rendered.add(key);
-        continue;
-      }
-
-      // Special handling for "messages": render each message as an
-      // individual collapsible with its role in the summary.
-      if (key === "messages" && Array.isArray(value) && value.length > 0) {
-        const msgBlocks: TemplateResult[] = (value as unknown[]).map((raw, i) => {
-          if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
-            return html`<details class="log-detail-collapsible">
-              <summary>Message #${i + 1}</summary>
-              <pre class="json-viewer log-detail-collapsible-body">${formatJson(raw)}</pre>
-            </details>`;
-          }
-          const msg = raw as Record<string, unknown>;
-          const role: string = typeof msg["role"] === "string" ? msg["role"] : "unknown";
-          const content = msg["content"];
-          const toolCallId = msg["tool_call_id"];
-          const toolCalls = msg["tool_calls"];
-          const name = msg["name"];
-          // Build a compact summary line.
-          const roleClass = role === "system" ? "log-detail-role-system"
-            : role === "assistant" ? "log-detail-role-assistant"
-              : role === "user" ? "log-detail-role-user"
-                : role === "tool" ? "log-detail-role-tool"
-                  : "";
-          let anthropicToolUses = 0;
-          let anthropicToolResults = 0;
-          let anthropicToolResultIds: string[] = [];
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block && typeof block === "object") {
-                const b = block as Record<string, unknown>;
-                if (b["type"] === "tool_use") anthropicToolUses++;
-                if (b["type"] === "tool_result") {
-                  anthropicToolResults++;
-                  if (typeof b["tool_use_id"] === "string") anthropicToolResultIds.push(b["tool_use_id"]);
-                }
-              }
-            }
-          }
-
-          const extras: string[] = [];
-          if (typeof name === "string") extras.push(name);
-          if (typeof toolCallId === "string") extras.push(`tool_call_id: ${toolCallId}`);
-          if (Array.isArray(toolCalls) && toolCalls.length > 0) extras.push(`${toolCalls.length} tool call(s)`);
-
-          if (anthropicToolUses > 0) extras.push(`${anthropicToolUses} tool call(s)`);
-          if (anthropicToolResults > 0) {
-            let resStr = `${anthropicToolResults} tool result(s)`;
-            if (anthropicToolResultIds.length > 0) {
-              const ids = anthropicToolResultIds.map(id => id.split("-")[0] + "…").join(", ");
-              resStr += ` (${ids})`;
-            }
-            extras.push(resStr);
-          }
-
-          const extraStr: TemplateResult | null = extras.length > 0
-            ? html` <span class="log-detail-key-meta">${extras.join(" · ")}</span>`
-            : null;
-          // Content preview: first 80 chars of the content string.
-          let preview = "";
-          if (typeof content === "string") {
-            preview = content.length > 80 ? content.slice(0, 80) + "…" : content;
-          } else if (Array.isArray(content)) {
-            const textBlock = content.find(b => b && typeof b === "object" && b["type"] === "text" && typeof b["text"] === "string") as Record<string, unknown> | undefined;
-            if (textBlock) {
-              const text = textBlock["text"] as string;
-              preview = text.length > 80 ? text.slice(0, 80) + "…" : text;
-            } else if (anthropicToolUses > 0) {
-              preview = "[tool_use]";
-            } else if (anthropicToolResults > 0) {
-              preview = "[tool_result]";
-            } else {
-              const s = JSON.stringify(content);
-              preview = s.length > 80 ? s.slice(0, 80) + "…" : s;
-            }
-          } else if (content != null) {
-            const s = JSON.stringify(content);
-            preview = s.length > 80 ? s.slice(0, 80) + "…" : s;
-          }
-          const previewStr: TemplateResult | null = preview.length > 0
-            ? html` <span class="log-detail-msg-preview">${preview}</span>`
-            : null;
-          return html`<details class="log-detail-collapsible">
-            <summary><span class="log-detail-role ${roleClass}">${role}</span>${extraStr}${previewStr}</summary>
-            <pre class="json-viewer log-detail-collapsible-body">${formatJson(msg)}</pre>
-          </details>`;
-        });
-        blocks.push(html`<details class="log-detail-collapsible" open>
-          <summary><span class="log-detail-key log-detail-key-pinned">messages</span> <span class="log-detail-key-meta">${value.length} message(s)</span></summary>
-          <div class="log-detail-messages">${msgBlocks}</div>
-        </details>`);
-        rendered.add(key);
-        continue;
-      }
-
-      const open = isPrimitive(value);
-      const meta = metaText(value);
-      const metaSpan: TemplateResult | null = meta.length > 0
-        ? html` <span class="log-detail-key-meta">${meta}</span>`
-        : null;
-      blocks.push(html`<details class="log-detail-collapsible" ?open=${open}>
-        <summary><span class="log-detail-key log-detail-key-pinned">${key}</span>${metaSpan}</summary>
-        <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
-      </details>`);
-      rendered.add(key);
-    }
-
-    // Remaining keys in original insertion order. Skip empty values
-    // (null, empty string, empty array, empty object).
-    for (const key of Object.keys(obj)) {
-      if (rendered.has(key)) continue;
-      const value = obj[key];
-      if (isEmptyValue(value)) continue;
-      blocks.push(html`<details class="log-detail-collapsible">
-        <summary><span class="log-detail-key">${key}</span></summary>
-        <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
-      </details>`);
-    }
-
+    const blocks = renderObjectRequestBody(body as Record<string, unknown>);
     return html`<section class="log-detail-section" data-log-tab="request">
       <h4>Request</h4>
       ${blocks}

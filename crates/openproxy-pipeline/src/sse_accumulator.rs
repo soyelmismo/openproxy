@@ -84,88 +84,74 @@ pub fn extract_reasoning_content(payload: &str) -> Option<&str> {
 /// Returns `Some(normalized_json)` when the payload contains non-standard
 /// reasoning fields. Returns `None` when the payload is already clean
 /// (no change needed), avoiding an allocation on the fast path.
-pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
-    // Fast check: bail out immediately if no non-standard reasoning fields.
-    //
-    // PERF (single-scan guard): both target patterns (`"reasoning":` and
-    // `"reasoning_details":`) contain the substring `reasoning`, as does
-    // the standard `"reasoning_content":` field. If `payload` lacks the
-    // substring `reasoning` at all, none of these can be present, so we
-    // can return `None` after ONE `memchr` scan instead of the 2-3
-    // `contains()` scans the original code did per chunk.
-    //
-    // On a 1 KiB payload this drops ~300ns/chunk to ~100ns/chunk; for a
-    // 500-chunk response that's ~150µs -> ~50µs of pure scanning. The
-    // subsequent `contains()` calls below only run on the ~5-10% of
-    // chunks that actually carry reasoning fields.
+fn should_check_reasoning_fields(payload: &str) -> bool {
     if !payload.contains("reasoning") {
-        return None;
+        return false;
     }
-    let has_reasoning =
-        payload.contains("\"reasoning\":") && !payload.contains("\"reasoning_content\":");
-    let has_details = payload.contains("\"reasoning_details\":");
-    if !has_reasoning && !has_details {
-        return None;
-    }
+    (payload.contains("\"reasoning\":") && !payload.contains("\"reasoning_content\":"))
+        || payload.contains("\"reasoning_details\":")
+}
 
-    // Parse, modify, re-serialize.
-    // This is the slow path but only hits chunks that carry non-standard
-    // reasoning — typically a small fraction of total streaming chunks.
-    let mut v: serde_json::Value = serde_json::from_str(payload).ok()?;
-    if let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut())
-        && let Some(choice) = choices.first_mut()
-        && let Some(delta) = choice.get_mut("delta")
-        && let Some(obj) = delta.as_object_mut()
+fn convert_reasoning_field(obj: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(reasoning) = obj.remove("reasoning") else {
+        return false;
+    };
+    if let Some(text) = reasoning.as_str()
+        && !text.is_empty()
+        && !obj.contains_key("reasoning_content")
     {
-        // Handle `reasoning` → `reasoning_content`.
-        //
-        // Priority: `reasoning` (string) wins over
-        // `reasoning_details[]` when both are present,
-        // because some providers (e.g. NVIDIA) send the
-        // SAME text in both fields and merging them
-        // would duplicate the content.
-        let reasoning_was_present = if let Some(reasoning) = obj.remove("reasoning") {
-            if let Some(text) = reasoning.as_str()
-                && !text.is_empty()
-                && !obj.contains_key("reasoning_content")
-            {
-                obj.insert(
-                    "reasoning_content".to_string(),
-                    serde_json::Value::String(text.to_string()),
-                );
-            }
-            true
-        } else {
-            false
-        };
-
-        // Always strip `reasoning_details` (non-standard
-        // array format). Only merge into `reasoning_content`
-        // when `reasoning` was absent — when both fields
-        // carry the same text, merging duplicates it.
-        if let Some(details) = obj.remove("reasoning_details")
-            && !reasoning_was_present
-            && let Some(arr) = details.as_array()
-        {
-            let combined: String = arr
-                .iter()
-                .filter_map(|d| d.get("text").and_then(|t| t.as_str()))
-                .collect();
-            if !combined.is_empty() {
-                if let Some(existing) = obj.get_mut("reasoning_content")
-                    && let Some(s) = existing.as_str()
-                {
-                    let new = format!("{s}{combined}");
-                    *existing = serde_json::Value::String(new);
-                } else {
-                    obj.insert(
-                        "reasoning_content".to_string(),
-                        serde_json::Value::String(combined),
-                    );
-                }
-            }
-        }
+        obj.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
     }
+    true
+}
+
+fn merge_reasoning_details(obj: &mut serde_json::Map<String, Value>, details: serde_json::Value) {
+    let Some(arr) = details.as_array() else {
+        return;
+    };
+    let combined: String = arr
+        .iter()
+        .filter_map(|d| d.get("text").and_then(|t| t.as_str()))
+        .collect();
+    if combined.is_empty() {
+        return;
+    }
+    if let Some(existing) = obj.get_mut("reasoning_content")
+        && let Some(s) = existing.as_str()
+    {
+        *existing = serde_json::Value::String(format!("{s}{combined}"));
+    } else {
+        obj.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(combined),
+        );
+    }
+}
+
+fn apply_reasoning_normalizations(obj: &mut serde_json::Map<String, Value>) {
+    let reasoning_was_present = convert_reasoning_field(obj);
+    if let Some(details) = obj.remove("reasoning_details")
+        && !reasoning_was_present
+    {
+        merge_reasoning_details(obj, details);
+    }
+}
+
+pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
+    if !should_check_reasoning_fields(payload) {
+        return None;
+    }
+
+    let mut v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let choices = v.get_mut("choices")?.as_array_mut()?;
+    let choice = choices.first_mut()?;
+    let delta = choice.get_mut("delta")?;
+    let obj = delta.as_object_mut()?;
+
+    apply_reasoning_normalizations(obj);
     serde_json::to_string(&v).ok()
 }
 
@@ -198,7 +184,7 @@ pub enum AnthropicToolEvent {
 /// A single accumulated tool call (Anthropic or OpenAI). For OpenAI the
 /// `arguments` field is a JSON-encoded string per the OpenAI spec. For
 /// Anthropic it's the concatenation of `partial_json` fragments.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AccumulatedToolCall {
     pub id: String,
     pub name: String,
@@ -315,73 +301,122 @@ impl ResponseAccumulator {
     pub fn raw_response_body(&self) -> &str {
         &self.raw_response_body
     }
+}
 
-    /// Attempt to extract an upstream error message from the accumulated
-    /// `raw_response_body`. Some providers (notably OpenRouter) send
-    /// errors inline in an SSE `data:` chunk with `"choices":[]` and an
-    /// `"error":{...}` object instead of returning a non-2xx HTTP status.
-    ///
-    /// Returns `Some((status_code, message))` if an inline error was
-    /// found, `None` otherwise. This is intentionally cheap: it does a
-    /// quick `contains()` guard before any JSON parsing, so the cost on
-    /// the happy path (no inline error) is a single memchr scan.
-    ///
-    /// Example upstream error chunk:
-    /// ```json
-    /// {"id":"gen-...","choices":[],"error":{"code":502,
-    ///   "message":"Upstream error from Nvidia: ResourceExhausted"}}
-    /// ```
+#[derive(serde::Deserialize)]
+struct ToolCallProbeOuter<'a> {
+    #[serde(borrow)]
+    choices: Option<Vec<ToolCallProbeChoice<'a>>>,
+}
+#[derive(serde::Deserialize)]
+struct ToolCallProbeChoice<'a> {
+    #[serde(borrow)]
+    delta: Option<ToolCallProbeDelta<'a>>,
+}
+#[derive(serde::Deserialize)]
+struct ToolCallProbeDelta<'a> {
+    #[serde(borrow)]
+    tool_calls: Option<Vec<ToolCallProbe<'a>>>,
+}
+#[derive(serde::Deserialize)]
+struct ToolCallProbe<'a> {
+    index: Option<usize>,
+    #[serde(borrow)]
+    id: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    function: Option<ToolCallFunctionProbe<'a>>,
+}
+#[derive(serde::Deserialize)]
+struct ToolCallFunctionProbe<'a> {
+    #[serde(borrow)]
+    name: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    arguments: Option<std::borrow::Cow<'a, str>>,
+}
+
+fn parse_tool_call_probe(payload: &str) -> Option<Vec<ToolCallProbe<'_>>> {
+    if !payload.contains("\"tool_calls\"") {
+        return None;
+    }
+    let v = serde_json::from_slice::<ToolCallProbeOuter<'_>>(payload.as_bytes()).ok()?;
+    v.choices
+        .and_then(|c| c.into_iter().next())
+        .and_then(|c| c.delta)
+        .and_then(|d| d.tool_calls)
+}
+
+fn parse_upstream_error_payload(json_str: &str) -> Option<(u16, String)> {
+    #[derive(serde::Deserialize)]
+    struct UpstreamErrorProbe<'a> {
+        choices: Option<Vec<serde_json::Value>>,
+        #[serde(borrow)]
+        error: Option<ErrorObjProbe<'a>>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ErrorObjProbe<'a> {
+        code: Option<u64>,
+        #[serde(borrow)]
+        message: Option<std::borrow::Cow<'a, str>>,
+    }
+    let v = serde_json::from_slice::<UpstreamErrorProbe<'_>>(json_str.as_bytes()).ok()?;
+    if !v.choices.is_none_or(|c| c.is_empty()) {
+        return None;
+    }
+    let error_obj = v.error?;
+    let code = error_obj.code.unwrap_or(502) as u16;
+    let message = error_obj
+        .message
+        .as_deref()
+        .unwrap_or("unknown upstream error in SSE stream")
+        .to_string();
+    Some((code, message))
+}
+
+fn extract_error_from_line(line: &str) -> Option<(u16, String)> {
+    let json_str = line
+        .strip_prefix("data: ")
+        .or_else(|| line.strip_prefix("data:"))
+        .unwrap_or(line)
+        .trim();
+    if !json_str.starts_with('{') {
+        return None;
+    }
+    parse_upstream_error_payload(json_str)
+}
+
+impl ResponseAccumulator {
     pub fn extract_upstream_error_from_raw(&self) -> Option<(u16, String)> {
-        // Fast guard: skip JSON parsing unless the raw body looks like
-        // it contains an inline error. This keeps the cost at ~100ns
-        // on the normal path (no error).
         if !self.raw_response_body.contains("\"error\":") {
             return None;
         }
+        self.raw_response_body.lines().find_map(extract_error_from_line)
+    }
 
-        // The raw_response_body may contain multiple lines (each a
-        // raw SSE line). Scan each line for a JSON object with an
-        // error field.
-        for line in self.raw_response_body.lines() {
-            // Strip `data: ` prefix if present.
-            let json_str = line
-                .strip_prefix("data: ")
-                .or_else(|| line.strip_prefix("data:"))
-                .unwrap_or(line)
-                .trim();
-            if !json_str.starts_with('{') {
-                continue;
-            }
-            #[derive(serde::Deserialize)]
-            struct UpstreamErrorProbe<'a> {
-                choices: Option<Vec<serde_json::Value>>,
-                #[serde(borrow)]
-                error: Option<ErrorObjProbe<'a>>,
-            }
-            #[derive(serde::Deserialize)]
-            struct ErrorObjProbe<'a> {
-                code: Option<u64>,
-                #[serde(borrow)]
-                message: Option<std::borrow::Cow<'a, str>>,
-            }
-            if let Ok(v) = serde_json::from_slice::<UpstreamErrorProbe<'_>>(json_str.as_bytes()) {
-                // Check for empty choices (or absent choices) + error object.
-                let has_empty_choices = v.choices.is_none_or(|c| c.is_empty());
-                if !has_empty_choices {
-                    continue;
-                }
-                if let Some(error_obj) = v.error {
-                    let code = error_obj.code.unwrap_or(502) as u16;
-                    let message = error_obj
-                        .message
-                        .as_deref()
-                        .unwrap_or("unknown upstream error in SSE stream")
-                        .to_string();
-                    return Some((code, message));
-                }
-            }
+    fn append_delta_content_if_present(&mut self, payload: &str) {
+        let Some(content) = extract_delta_content(payload) else {
+            return;
+        };
+        let additional = content.len();
+        if self.total_bytes + additional > MAX_ACCUMULATED_BYTES {
+            self.truncated = true;
+            return;
         }
-        None
+        self.content.push_str(content);
+        self.total_bytes += additional;
+    }
+
+    fn append_delta_tool_calls_if_present(&mut self, payload: &str) {
+        let Some(tool_calls) = parse_tool_call_probe(payload) else {
+            return;
+        };
+
+        for tc in tool_calls {
+            let index = tc.index.unwrap_or(0);
+            let id = tc.id.as_deref();
+            let name = tc.function.as_ref().and_then(|f| f.name.as_deref());
+            let arguments = tc.function.as_ref().and_then(|f| f.arguments.as_deref());
+            self.update_openai_tool_call_delta(index, id, name, arguments);
+        }
     }
 
     /// Append an OpenAI-format raw payload string (e.g. the JSON inside
@@ -393,61 +428,8 @@ impl ResponseAccumulator {
         if self.truncated {
             return;
         }
-        if let Some(content) = extract_delta_content(payload) {
-            let additional = content.len();
-            if self.total_bytes + additional > MAX_ACCUMULATED_BYTES {
-                self.truncated = true;
-                return;
-            }
-            self.content.push_str(content);
-            self.total_bytes += additional;
-        }
-        #[derive(serde::Deserialize)]
-        struct ToolCallProbeOuter<'a> {
-            #[serde(borrow)]
-            choices: Option<Vec<ToolCallProbeChoice<'a>>>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ToolCallProbeChoice<'a> {
-            #[serde(borrow)]
-            delta: Option<ToolCallProbeDelta<'a>>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ToolCallProbeDelta<'a> {
-            #[serde(borrow)]
-            tool_calls: Option<Vec<ToolCallProbe<'a>>>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ToolCallProbe<'a> {
-            index: Option<usize>,
-            #[serde(borrow)]
-            id: Option<std::borrow::Cow<'a, str>>,
-            #[serde(borrow)]
-            function: Option<ToolCallFunctionProbe<'a>>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ToolCallFunctionProbe<'a> {
-            #[serde(borrow)]
-            name: Option<std::borrow::Cow<'a, str>>,
-            #[serde(borrow)]
-            arguments: Option<std::borrow::Cow<'a, str>>,
-        }
-
-        if payload.contains("\"tool_calls\"")
-            && let Ok(v) = serde_json::from_slice::<ToolCallProbeOuter<'_>>(payload.as_bytes())
-            && let Some(choices) = v.choices
-            && let Some(choice) = choices.first()
-            && let Some(delta) = &choice.delta
-            && let Some(tool_calls) = &delta.tool_calls
-        {
-            for tc in tool_calls {
-                let index = tc.index.unwrap_or(0);
-                let id = tc.id.as_deref();
-                let name = tc.function.as_ref().and_then(|f| f.name.as_deref());
-                let arguments = tc.function.as_ref().and_then(|f| f.arguments.as_deref());
-                self.update_openai_tool_call_delta(index, id, name, arguments);
-            }
-        }
+        self.append_delta_content_if_present(payload);
+        self.append_delta_tool_calls_if_present(payload);
     }
 
     /// Append a string to the reasoning accumulator. Used for o1-style
@@ -483,7 +465,9 @@ impl ResponseAccumulator {
         }
     }
 
-    /// Append a tool call delta from OpenAI's `delta.tool_calls[]`.
+    /// Update an OpenAI-format tool call delta at `index`. If `id` or
+    /// `name` are present, they are set. `arguments` are appended to
+    /// any existing arguments for that tool call index.
     pub fn update_openai_tool_call_delta(
         &mut self,
         index: usize,
@@ -492,23 +476,23 @@ impl ResponseAccumulator {
         arguments: Option<&str>,
     ) {
         while self.tool_calls.len() <= index {
-            self.tool_calls.push(AccumulatedToolCall {
-                id: String::new(),
-                name: String::new(),
-                arguments: String::new(),
-            });
+            self.tool_calls.push(AccumulatedToolCall::default());
         }
         let tc = &mut self.tool_calls[index];
-        if let Some(id_val) = id {
-            tc.id.clear();
-            tc.id.push_str(id_val);
+        if let Some(id) = id {
+            tc.id = id.to_string();
         }
-        if let Some(name_val) = name {
-            tc.name.clear();
-            tc.name.push_str(name_val);
+        if let Some(name) = name {
+            tc.name = name.to_string();
         }
-        if let Some(args_val) = arguments {
-            tc.arguments.push_str(args_val);
+        if let Some(args) = arguments {
+            let additional = args.len();
+            if self.total_bytes + additional > MAX_ACCUMULATED_BYTES {
+                self.truncated = true;
+                return;
+            }
+            tc.arguments.push_str(args);
+            self.total_bytes += additional;
         }
     }
 
@@ -556,26 +540,7 @@ impl ResponseAccumulator {
         self.truncated
     }
 
-    /// Build the final OpenAI-style response JSON value. The shape
-    /// round-trips through `OpenAIResponse` (translation.rs:80-89):
-    /// `reasoning_content` and `tool_calls` go into `message.extra`
-    /// (the `#[serde(flatten)]` catch-all on `OpenAIMessage`).
-    pub fn finish(&self, chunk_id: &str, created: u64, model: &str) -> Value {
-        // Content is already assembled incrementally in `append_openai_raw`
-        // — no JSON re-parsing needed. This bounded by MAX_ACCUMULATED_BYTES
-        // (16 MiB) and runs ONCE at the end of the stream — not per chunk.
-        let content = &self.content;
-
-        // Build the message object. `reasoning_content` and `tool_calls`
-        // go into `extra` (the flatten catch-all) because `OpenAIMessage`
-        // has no typed fields for them.
-        let mut message = Map::new();
-        message.insert("role".to_string(), Value::String("assistant".to_string()));
-        if content.is_empty() {
-            message.insert("content".to_string(), Value::Null);
-        } else {
-            message.insert("content".to_string(), Value::String(content.to_owned()));
-        }
+    fn build_finish_extra(&self) -> Map<String, Value> {
         let mut extra = Map::new();
         if let Some(reasoning) = &self.reasoning {
             extra.insert(
@@ -604,11 +569,6 @@ impl ResponseAccumulator {
             extra.insert("truncated".to_string(), Value::Bool(true));
         }
         if self.partial {
-            // Marker so the dashboard can show a "Partial response —
-            // stream was interrupted" banner. The pipeline sets this
-            // via `mark_partial()` on the failure paths (client
-            // disconnect, race lost, sink error, etc.) before
-            // calling `finish()`.
             extra.insert("partial".to_string(), Value::Bool(true));
         }
         if !self.raw_response_body.is_empty() {
@@ -617,21 +577,42 @@ impl ResponseAccumulator {
                 Value::String(self.raw_response_body.clone()),
             );
         }
+        extra
+    }
 
+    fn build_finish_message(&self) -> Map<String, Value> {
+        let mut message = Map::new();
+        message.insert("role".to_string(), Value::String("assistant".to_string()));
+        let content_val = if self.content.is_empty() {
+            Value::Null
+        } else {
+            Value::String(self.content.to_owned())
+        };
+        message.insert("content".to_string(), content_val);
+        for (k, v) in self.build_finish_extra() {
+            message.insert(k, v);
+        }
+        message
+    }
+
+    fn build_finish_choice(&self) -> Map<String, Value> {
         let mut choice = Map::new();
         choice.insert("index".to_string(), Value::Number(0u64.into()));
-        let mut message_with_extra = message;
-        for (k, v) in extra {
-            message_with_extra.insert(k, v);
-        }
-        choice.insert("message".to_string(), Value::Object(message_with_extra));
+        choice.insert("message".to_string(), Value::Object(self.build_finish_message()));
         choice.insert(
             "finish_reason".to_string(),
             self.stop_reason
                 .as_ref()
                 .map_or(Value::Null, |s| Value::String(s.to_owned())),
         );
+        choice
+    }
 
+    /// Build the final OpenAI-style response JSON value. The shape
+    /// round-trips through `OpenAIResponse` (translation.rs:80-89):
+    /// `reasoning_content` and `tool_calls` go into `message.extra`
+    /// (the `#[serde(flatten)]` catch-all on `OpenAIMessage`).
+    pub fn finish(&self, chunk_id: &str, created: u64, model: &str) -> Value {
         let mut response = Map::new();
         response.insert("id".to_string(), Value::String(chunk_id.to_string()));
         response.insert(
@@ -642,7 +623,7 @@ impl ResponseAccumulator {
         response.insert("model".to_string(), Value::String(model.to_string()));
         response.insert(
             "choices".to_string(),
-            Value::Array(vec![Value::Object(choice)]),
+            Value::Array(vec![Value::Object(self.build_finish_choice())]),
         );
         if let Some(usage) = &self.usage {
             response.insert(

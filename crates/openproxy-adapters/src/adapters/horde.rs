@@ -123,6 +123,75 @@ struct HordeGenerationPayload {
     source_processing: Option<String>,
 }
 
+fn map_horde_cluster_model(
+    item: &serde_json::Value,
+    is_image: bool,
+) -> Option<(u64, u64, DiscoveredModel)> {
+    let name = item.get("name")?.as_str()?.to_string();
+    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+
+    let (family, out_mods, m_type) = if is_image {
+        (Some(infer_horde_family(&name)), vec!["image".into()], "image")
+    } else {
+        (
+            openproxy_types::capabilities::infer_family(&name).or_else(|| Some("instruct".into())),
+            vec!["text".into()],
+            "chat",
+        )
+    };
+
+    let display_name = if count > 0 && eta != u64::MAX {
+        Some(format!("{name} ({count}w, ~{eta}s)"))
+    } else if count > 0 {
+        Some(format!("{name} ({count}w)"))
+    } else {
+        Some(name.clone())
+    };
+
+    Some((
+        count,
+        eta,
+        DiscoveredModel {
+            model_id: ModelId::new(name),
+            display_name,
+            target_format: TargetFormat::Openai,
+            context_length: None,
+            max_output_tokens: None,
+            input_modalities: Some(vec!["text".into()]),
+            output_modalities: Some(out_mods),
+            model_type: Some(m_type.into()),
+            family,
+            capabilities: None,
+        },
+    ))
+}
+
+async fn fetch_horde_cluster_models(
+    upstream_client: &Arc<UpstreamClient>,
+    base_url: &str,
+    header_refs: &[(&str, &str)],
+    model_type: &'static str,
+) -> Vec<DiscoveredModel> {
+    let url = format!("{base_url}/status/models?type={model_type}");
+    let Ok(json_val) =
+        crate::adapters::upstream_get_json(upstream_client, &url, header_refs).await
+    else {
+        return Vec::new();
+    };
+    let Some(arr) = json_val.as_array() else {
+        return Vec::new();
+    };
+    let is_image = model_type == "image";
+    let mut models: Vec<(u64, u64, DiscoveredModel)> = arr
+        .iter()
+        .filter_map(|item| map_horde_cluster_model(item, is_image))
+        .collect();
+
+    models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    models.into_iter().map(|(_, _, m)| m).collect()
+}
+
 impl ProviderAdapter for HordeAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -191,99 +260,22 @@ impl ProviderAdapter for HordeAdapter {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        let mut discovered = Vec::new();
-
-        // 1. Fetch text models from AI Horde live cluster metrics
-        let text_url = format!("{}/status/models?type=text", self.config.base_url);
-        if let Ok(json_val) =
-            crate::adapters::upstream_get_json(upstream_client, &text_url, &header_refs).await
-            && let Some(arr) = json_val.as_array()
-        {
-            let mut text_models: Vec<(u64, u64, DiscoveredModel)> = arr
-                .iter()
-                .filter_map(|item| {
-                    let name = item.get("name")?.as_str()?.to_string();
-                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-
-                    let family = openproxy_types::capabilities::infer_family(&name)
-                        .or_else(|| Some("instruct".into()));
-
-                    let display_name = if count > 0 && eta != u64::MAX {
-                        Some(format!("{name} ({count}w, ~{eta}s)"))
-                    } else if count > 0 {
-                        Some(format!("{name} ({count}w)"))
-                    } else {
-                        Some(name.clone())
-                    };
-
-                    Some((
-                        count,
-                        eta,
-                        DiscoveredModel {
-                            model_id: ModelId::new(name),
-                            display_name,
-                            target_format: TargetFormat::Openai,
-                            context_length: None,
-                            max_output_tokens: None,
-                            input_modalities: Some(vec!["text".into()]),
-                            output_modalities: Some(vec!["text".into()]),
-                            model_type: Some("chat".into()),
-                            family,
-                            capabilities: None,
-                        },
-                    ))
-                })
-                .collect();
-
-            text_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-            discovered.extend(text_models.into_iter().map(|(_, _, m)| m));
-        }
-
-        // 2. Fetch image generation models from AI Horde API
-        let image_url = format!("{}/status/models?type=image", self.config.base_url);
-        if let Ok(json_val) =
-            crate::adapters::upstream_get_json(upstream_client, &image_url, &header_refs).await
-            && let Some(arr) = json_val.as_array()
-        {
-            let mut image_models: Vec<(u64, u64, DiscoveredModel)> = arr
-                .iter()
-                .filter_map(|item| {
-                    let name = item.get("name")?.as_str()?.to_string();
-                    let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-
-                    let family = infer_horde_family(&name);
-                    let display_name = if count > 0 && eta != u64::MAX {
-                        Some(format!("{name} ({count}w, ~{eta}s)"))
-                    } else if count > 0 {
-                        Some(format!("{name} ({count}w)"))
-                    } else {
-                        Some(name.clone())
-                    };
-
-                    Some((
-                        count,
-                        eta,
-                        DiscoveredModel {
-                            model_id: ModelId::new(name),
-                            display_name,
-                            target_format: TargetFormat::Openai,
-                            context_length: None,
-                            max_output_tokens: None,
-                            input_modalities: Some(vec!["text".into()]),
-                            output_modalities: Some(vec!["image".into()]),
-                            model_type: Some("image".into()),
-                            family: Some(family),
-                            capabilities: None,
-                        },
-                    ))
-                })
-                .collect();
-
-            image_models.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-            discovered.extend(image_models.into_iter().map(|(_, _, m)| m));
-        }
+        let mut discovered = fetch_horde_cluster_models(
+            upstream_client,
+            &self.config.base_url,
+            &header_refs,
+            "text",
+        )
+        .await;
+        discovered.extend(
+            fetch_horde_cluster_models(
+                upstream_client,
+                &self.config.base_url,
+                &header_refs,
+                "image",
+            )
+            .await,
+        );
 
         // 3. Synthetic Vision / Interrogation model
         discovered.push(DiscoveredModel {
@@ -335,6 +327,49 @@ impl ProviderAdapter for HordeAdapter {
     }
 }
 
+async fn query_horde_user(
+    upstream: &Arc<UpstreamClient>,
+    base_url: &str,
+    key: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    let url = format!("{base_url}/find_user");
+    let mut req = UpstreamRequest::get(url);
+    if let Ok(v) = http::HeaderValue::from_str(key) {
+        req.headers
+            .insert(http::header::HeaderName::from_static("apikey"), v);
+    }
+    if let Ok(v) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
+        req.headers
+            .insert(http::header::HeaderName::from_static("client-agent"), v);
+    }
+    req.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+
+    let cancel = CancellationToken::new();
+    let response = upstream
+        .call(req, TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| format!("network: {e}"))?;
+
+    if !response.status.is_success() {
+        let status = response.status.as_u16();
+        let body = response.collect().await.unwrap_or_default();
+        let snippet = String::from_utf8_lossy(&body)
+            .chars()
+            .take(200)
+            .collect::<String>();
+        return Err(format!("HTTP {status}: {snippet}"));
+    }
+
+    let body = response
+        .collect()
+        .await
+        .map_err(|e| format!("collect: {e}"))?;
+    serde_json::from_slice(&body).map_err(|e| format!("parse: {e}"))
+}
+
 impl HordeAdapter {
     async fn fetch_horde_quota_local(
         &self,
@@ -347,49 +382,12 @@ impl HordeAdapter {
             api_key.trim()
         };
 
-        let url = format!("{}/find_user", self.config.base_url);
-        let mut req = UpstreamRequest::get(url);
-        if let Ok(v) = http::HeaderValue::from_str(key) {
-            req.headers
-                .insert(http::header::HeaderName::from_static("apikey"), v);
-        }
-        if let Ok(v) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
-        {
-            req.headers
-                .insert(http::header::HeaderName::from_static("client-agent"), v);
-        }
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-
-        let cancel = CancellationToken::new();
-        let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
-                    fetch_error: Some(format!("network: {e}")),
-                    model_details: None,
-                });
-            }
-        };
-
-        if !response.status.is_success() {
-            let status = response.status.as_u16();
-            let body = response.collect().await.unwrap_or_default();
-            let snippet = String::from_utf8_lossy(&body)
-                .chars()
-                .take(200)
-                .collect::<String>();
-            return Ok(openproxy_types::AccountQuota {
+        match query_horde_user(upstream, &self.config.base_url, key).await {
+            Ok(json) => Ok(parse_horde_quota(
+                &json,
+                &openproxy_types::quota::now_unix_secs_str(),
+            )),
+            Err(err) => Ok(openproxy_types::AccountQuota {
                 session_used: None,
                 session_limit: None,
                 session_reset_at: None,
@@ -398,51 +396,10 @@ impl HordeAdapter {
                 weekly_reset_at: None,
                 plan_name: None,
                 last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
-                fetch_error: Some(format!("HTTP {status}: {snippet}")),
+                fetch_error: Some(err),
                 model_details: None,
-            });
+            }),
         }
-
-        let body = match response.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
-                    fetch_error: Some(format!("collect: {e}")),
-                    model_details: None,
-                });
-            }
-        };
-
-        let json: serde_json::Value = match serde_json::from_slice(&body) {
-            Ok(b) => b,
-            Err(e) => {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
-                    fetch_error: Some(format!("parse: {e}")),
-                    model_details: None,
-                });
-            }
-        };
-
-        Ok(parse_horde_quota(
-            &json,
-            &openproxy_types::quota::now_unix_secs_str(),
-        ))
     }
 
     /// Build a Horde `/generate/async` JSON payload.
@@ -461,72 +418,23 @@ impl HordeAdapter {
         denoising_strength: Option<f32>,
     ) -> Result<Bytes> {
         let (width, height) = parse_dimensions(req.size.as_deref(), req.aspect_ratio.as_deref());
-
         let parsed = parse_prompt_directives(&req.prompt);
-
-        let mut all_negatives = Vec::new();
-        let mut seen_negatives = HashSet::new();
-        if let Some(ref neg) = req.negative_prompt {
-            let clean_neg = clean_residual_prompt(neg);
-            if !clean_neg.is_empty() {
-                seen_negatives.insert(clean_neg.clone());
-                all_negatives.push(clean_neg);
-            }
-        }
-        for n in &parsed.negative_prompts {
-            let clean_n = clean_residual_prompt(n);
-            if !clean_n.is_empty() && seen_negatives.insert(clean_n.clone()) {
-                all_negatives.push(clean_n);
-            }
-        }
-
-        let mut prompt = parsed.clean_prompt.clone();
-        if !all_negatives.is_empty() {
-            prompt.push_str(" ### ");
-            prompt.push_str(&all_negatives.join(", "));
-        }
+        let prompt = assemble_final_prompt(
+            &parsed.clean_prompt,
+            req.negative_prompt.as_deref(),
+            &parsed.negative_prompts,
+        );
 
         let is_img2img = source_image_b64.is_some();
-        let default_processing = if source_mask_b64.is_some() {
-            "inpainting"
-        } else if is_img2img {
-            "img2img"
-        } else {
-            "txt2img"
-        };
-
-        let mut post_processing_list = Vec::new();
-        let mut seen_post_processing = std::collections::HashSet::new();
-        if req.quality.as_deref() == Some("hd") {
-            for item in ["RealESRGAN_x4plus", "GFPGAN"] {
-                if seen_post_processing.insert(item.to_string()) {
-                    post_processing_list.push(item.to_string());
-                }
-            }
-        }
-        if let Some(req_pp) = &req.post_processing {
-            for pp in req_pp {
-                if seen_post_processing.insert(pp.clone()) {
-                    post_processing_list.push(pp.clone());
-                }
-            }
-        }
-        for pp in parsed.post_processing {
-            if seen_post_processing.insert(pp.clone()) {
-                post_processing_list.push(pp);
-            }
-        }
-        let post_processing = if post_processing_list.is_empty() {
-            None
-        } else {
-            Some(post_processing_list)
-        };
-
-        let workers = if parsed.workers.is_empty() {
-            None
-        } else {
-            Some(parsed.workers)
-        };
+        let post_processing = assemble_post_processing(
+            req.quality.as_deref(),
+            req.post_processing.as_deref(),
+            &parsed.post_processing,
+        );
+        let workers = (!parsed.workers.is_empty()).then_some(parsed.workers);
+        let models = resolve_horde_models(upstream_model_id);
+        let source_processing =
+            resolve_source_processing(is_img2img, source_mask_b64.is_some(), source_processing);
 
         let payload = HordeGenerationPayload {
             prompt,
@@ -540,41 +448,19 @@ impl HordeAdapter {
                     .unwrap_or_else(|| "k_euler_a".to_string()),
                 cfg_scale: parsed.cfg_scale.unwrap_or(6.5),
                 seed: parsed.seed.or(req.seed),
-                denoising_strength: if is_img2img {
-                    Some(denoising_strength.unwrap_or(0.6).clamp(0.0, 1.0))
-                } else {
-                    None
-                },
+                denoising_strength: is_img2img
+                    .then(|| denoising_strength.unwrap_or(0.6).clamp(0.0, 1.0)),
                 karras: true,
                 hires_fix: parsed.hires_fix.unwrap_or(!is_img2img),
                 hires_fix_denoising_strength: parsed.hires_fix_denoising_strength,
                 clip_skip: parsed.clip_skip,
                 control_type: parsed.control_type,
                 post_processing,
-                loras: if parsed.loras.is_empty() {
-                    None
-                } else {
-                    Some(parsed.loras)
-                },
-                tis: if parsed.tis.is_empty() {
-                    None
-                } else {
-                    Some(parsed.tis)
-                },
+                loras: (!parsed.loras.is_empty()).then_some(parsed.loras),
+                tis: (!parsed.tis.is_empty()).then_some(parsed.tis),
                 workers: workers.clone(),
             },
-            models: {
-                let list: Vec<String> = upstream_model_id
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                if list.is_empty() {
-                    vec!["AlbedoBase XL (SDXL)".to_string()]
-                } else {
-                    list
-                }
-            },
+            models,
             nsfw: true,
             censor_nsfw: false,
             r2: true,
@@ -583,11 +469,7 @@ impl HordeAdapter {
             workers,
             source_image: source_image_b64,
             source_mask: source_mask_b64,
-            source_processing: if is_img2img {
-                Some(source_processing.unwrap_or(default_processing).to_string())
-            } else {
-                None
-            },
+            source_processing,
         };
 
         let vec = serde_json::to_vec(&payload)
@@ -633,73 +515,74 @@ impl HordeAdapter {
     pub fn extract_image_from_messages(
         messages: &[openproxy_types::OpenAIMessage],
     ) -> Option<String> {
-        for msg in messages.iter().rev() {
-            if let Some(ref content) = msg.content {
-                match content {
-                    serde_json::Value::Array(parts) => {
-                        for part in parts {
-                            if let Some(img) = extract_image_from_part(part) {
-                                return Some(img);
-                            }
-                        }
-                    }
-                    serde_json::Value::Object(map) => {
-                        if let Some(img) = extract_image_from_json_map(map) {
-                            return Some(img);
-                        }
-                    }
-                    serde_json::Value::String(s)
-                        if s.starts_with("data:image/")
-                            || s.starts_with("http://")
-                            || s.starts_with("https://") =>
-                    {
-                        return Some(clean_image_str(s));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        None
+        messages
+            .iter()
+            .rev()
+            .filter_map(|msg| msg.content.as_ref())
+            .find_map(extract_image_from_content)
     }
+
+fn extract_caption_from_object(obj: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    for key in [
+        "caption",
+        "text",
+        "interrogation",
+        "description",
+        "summary",
+        "result",
+    ] {
+        if let Some(s) = obj.get(key).and_then(|v| v.as_str())
+            && !s.trim().is_empty()
+        {
+            return Some(s.trim().to_string());
+        }
+    }
+    serde_json::to_string(obj).ok()
+}
+
+fn parse_form_result_caption(forms: &[serde_json::Value]) -> Option<String> {
+    for form in forms {
+        let Some(result) = form.get("result") else {
+            continue;
+        };
+        if let Some(s) = result.as_str()
+            && !s.trim().is_empty()
+        {
+            return Some(s.trim().to_string());
+        }
+        if let Some(obj) = result.as_object()
+            && let Some(cap) = Self::extract_caption_from_object(obj)
+        {
+            return Some(cap);
+        }
+    }
+    None
+}
+
+fn parse_generations_caption(gens: &[serde_json::Value]) -> Option<String> {
+    for item in gens {
+        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+            return Some(text.trim().to_string());
+        }
+        if let Some(img) = item.get("img").and_then(|v| v.as_str()) {
+            return Some(img.trim().to_string());
+        }
+    }
+    None
+}
 
     /// Parse caption string from a Horde interrogate status response.
     pub fn parse_interrogate_status_caption(status_json: &serde_json::Value) -> Option<String> {
-        // 1. Check forms array:
-        if let Some(forms) = status_json.get("forms").and_then(|v| v.as_array()) {
-            for form in forms {
-                if let Some(result) = form.get("result") {
-                    if let Some(s) = result.as_str()
-                        && !s.trim().is_empty()
-                    {
-                        return Some(s.trim().to_string());
-                    }
-                    if let Some(obj) = result.as_object() {
-                        for key in [
-                            "caption",
-                            "text",
-                            "interrogation",
-                            "description",
-                            "summary",
-                            "result",
-                        ] {
-                            if let Some(s) = obj.get(key).and_then(|v| v.as_str())
-                                && !s.trim().is_empty()
-                            {
-                                return Some(s.trim().to_string());
-                            }
-                        }
-                        if let Ok(serialized) = serde_json::to_string(obj) {
-                            return Some(serialized);
-                        }
-                    }
-                }
-            }
+        if let Some(forms) = status_json.get("forms").and_then(|v| v.as_array())
+            && let Some(cap) = Self::parse_form_result_caption(forms)
+        {
+            return Some(cap);
         }
 
-        // 2. Check top-level result or caption fields
         if let Some(caption) = status_json.get("caption").and_then(|v| v.as_str()) {
             return Some(caption.trim().to_string());
         }
+
         if let Some(result) = status_json.get("result") {
             if let Some(s) = result.as_str() {
                 return Some(s.trim().to_string());
@@ -708,15 +591,9 @@ impl HordeAdapter {
                 return Some(caption.trim().to_string());
             }
         }
+
         if let Some(gens) = status_json.get("generations").and_then(|v| v.as_array()) {
-            for item in gens {
-                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                    return Some(text.trim().to_string());
-                }
-                if let Some(img) = item.get("img").and_then(|v| v.as_str()) {
-                    return Some(img.trim().to_string());
-                }
-            }
+            return Self::parse_generations_caption(gens);
         }
 
         None
@@ -752,8 +629,8 @@ impl HordeAdapter {
         (is_done, is_faulted)
     }
 
-    /// Execute an asynchronous interrogation on AI Horde and poll until done.
-    pub async fn execute_interrogate(
+    /// Submit an asynchronous interrogation job to AI Horde and return its job ID.
+    pub async fn submit_interrogate_job(
         upstream_client: &Arc<UpstreamClient>,
         base_url: &str,
         api_key: &str,
@@ -763,30 +640,10 @@ impl HordeAdapter {
         let payload = Self::build_interrogate_payload(source_image, &["caption"])?;
         let async_url = format!("{base_url}/interrogate/async");
         let mut post_req = UpstreamRequest::post_json(async_url, payload);
-
-        let key = if api_key.trim().is_empty() {
-            "0000000000"
-        } else {
-            api_key.trim()
-        };
-        if let Ok(val) = http::HeaderValue::from_str(key) {
-            post_req
-                .headers
-                .insert(http::header::HeaderName::from_static("apikey"), val);
-        }
-        if let Ok(val) =
-            http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
-        {
-            post_req
-                .headers
-                .insert(http::header::HeaderName::from_static("client-agent"), val);
-        }
-        if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {key}")) {
-            post_req.headers.insert(http::header::AUTHORIZATION, val);
-        }
+        apply_horde_auth_headers(&mut post_req, api_key, true);
 
         let resp = upstream_client
-            .call(post_req, TimeoutProfile::Chat, cancel_token.clone())
+            .call(post_req, TimeoutProfile::Chat, cancel_token)
             .await
             .map_err(|e| {
                 CoreError::UpstreamConnection(format!("horde interrogate submit error: {e:?}"))
@@ -814,15 +671,65 @@ impl HordeAdapter {
                 "horde interrogate did not return a job ID: {submit_json}"
             )));
         };
-        let job_id = job_id.to_string();
+        Ok(job_id.to_string())
+    }
 
+    async fn poll_interrogate_step(
+        upstream_client: &Arc<UpstreamClient>,
+        status_url: &str,
+        api_key: &str,
+        cancel_token: &CancellationToken,
+    ) -> Option<Result<String>> {
+        let mut req = UpstreamRequest::get(status_url);
+        apply_horde_auth_headers(&mut req, api_key, false);
+
+        let resp = match upstream_client
+            .call(req, TimeoutProfile::Chat, cancel_token.clone())
+            .await
+        {
+            Ok(r) if r.status.as_u16() == 200 => r,
+            Ok(_) => return None,
+            Err(e) => {
+                tracing::warn!("Horde interrogate status polling network error: {e:?}");
+                return None;
+            }
+        };
+
+        let body = resp.collect().await.ok()?;
+        let status_json = serde_json::from_slice::<serde_json::Value>(&body).ok()?;
+        Self::evaluate_interrogate_status(&status_json)
+    }
+
+    fn evaluate_interrogate_status(status_json: &serde_json::Value) -> Option<Result<String>> {
+        let (is_done, is_faulted) = Self::is_interrogate_done(status_json);
+        if is_faulted {
+            return Some(Err(CoreError::UpstreamConnection(
+                "horde interrogation job faulted or worker unavailable".into(),
+            )));
+        }
+        if (is_done || status_json.get("forms").is_some())
+            && let Some(caption) = Self::parse_interrogate_status_caption(status_json)
+        {
+            return Some(Ok(caption));
+        }
+        None
+    }
+
+    /// Poll an asynchronous interrogation job on AI Horde until completion or timeout.
+    pub async fn poll_interrogate_job(
+        upstream_client: &Arc<UpstreamClient>,
+        base_url: &str,
+        api_key: &str,
+        job_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<String> {
         let status_url = format!("{base_url}/interrogate/status/{job_id}");
         let timeout = std::time::Duration::from_secs(120);
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
             if cancel_token.is_cancelled() {
-                cancel_interrogate_job(upstream_client, base_url, &job_id, api_key).await;
+                cancel_interrogate_job(upstream_client, base_url, job_id, api_key).await;
                 return Err(CoreError::Cancelled(
                     openproxy_types::CancelReason::ClientDisconnected,
                 ));
@@ -830,62 +737,47 @@ impl HordeAdapter {
 
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
-            let mut req = UpstreamRequest::get(&status_url);
-            if let Ok(val) = http::HeaderValue::from_str(key) {
-                req.headers
-                    .insert(http::header::HeaderName::from_static("apikey"), val);
-            }
-            if let Ok(val) =
-                http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
+            if let Some(res) =
+                Self::poll_interrogate_step(upstream_client, &status_url, api_key, &cancel_token).await
             {
-                req.headers
-                    .insert(http::header::HeaderName::from_static("client-agent"), val);
-            }
-
-            let resp = match upstream_client
-                .call(req, TimeoutProfile::Chat, cancel_token.clone())
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Horde interrogate status polling network error: {e:?}");
-                    continue;
+                if res.is_err() {
+                    cancel_interrogate_job(upstream_client, base_url, job_id, api_key).await;
                 }
-            };
-
-            if resp.status.as_u16() != 200 {
-                continue;
-            }
-
-            let Ok(body) = resp.collect().await else {
-                continue;
-            };
-
-            let Ok(status_json) = serde_json::from_slice::<serde_json::Value>(&body) else {
-                continue;
-            };
-
-            let (is_done, is_faulted) = Self::is_interrogate_done(&status_json);
-
-            if is_faulted {
-                cancel_interrogate_job(upstream_client, base_url, &job_id, api_key).await;
-                return Err(CoreError::UpstreamConnection(
-                    "horde interrogation job faulted or worker unavailable".into(),
-                ));
-            }
-
-            if (is_done || status_json.get("forms").is_some())
-                && let Some(caption) = Self::parse_interrogate_status_caption(&status_json)
-            {
-                return Ok(caption);
+                return res;
             }
         }
 
-        cancel_interrogate_job(upstream_client, base_url, &job_id, api_key).await;
+        cancel_interrogate_job(upstream_client, base_url, job_id, api_key).await;
         Err(CoreError::UpstreamTimeout {
             phase: "horde_interrogate_poll".into(),
             ms: 120_000,
         })
+    }
+
+    /// Execute an asynchronous interrogation on AI Horde and poll until done.
+    pub async fn execute_interrogate(
+        upstream_client: &Arc<UpstreamClient>,
+        base_url: &str,
+        api_key: &str,
+        source_image: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<String> {
+        let job_id = Self::submit_interrogate_job(
+            upstream_client,
+            base_url,
+            api_key,
+            source_image,
+            cancel_token.clone(),
+        )
+        .await?;
+        Self::poll_interrogate_job(
+            upstream_client,
+            base_url,
+            api_key,
+            &job_id,
+            cancel_token,
+        )
+        .await
     }
 }
 
@@ -917,6 +809,27 @@ pub struct HordeInterrogateFormStatus {
     pub result: Option<serde_json::Value>,
 }
 
+fn apply_horde_auth_headers(req: &mut UpstreamRequest, api_key: &str, include_bearer: bool) {
+    let key = if api_key.trim().is_empty() {
+        "0000000000"
+    } else {
+        api_key.trim()
+    };
+    if let Ok(val) = http::HeaderValue::from_str(key) {
+        req.headers
+            .insert(http::header::HeaderName::from_static("apikey"), val);
+    }
+    if let Ok(val) =
+        http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
+    {
+        req.headers
+            .insert(http::header::HeaderName::from_static("client-agent"), val);
+    }
+    if include_bearer && let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {key}")) {
+        req.headers.insert(http::header::AUTHORIZATION, val);
+    }
+}
+
 async fn cancel_interrogate_job(
     upstream_client: &Arc<UpstreamClient>,
     base_url: &str,
@@ -925,24 +838,23 @@ async fn cancel_interrogate_job(
 ) {
     let cancel_url = format!("{base_url}/interrogate/status/{job_id}");
     let mut del_req = UpstreamRequest::delete(&cancel_url);
-    let key = if api_key.trim().is_empty() {
-        "0000000000"
-    } else {
-        api_key.trim()
-    };
-    if let Ok(val) = http::HeaderValue::from_str(key) {
-        del_req
-            .headers
-            .insert(http::header::HeaderName::from_static("apikey"), val);
-    }
-    if let Ok(val) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
-        del_req
-            .headers
-            .insert(http::header::HeaderName::from_static("client-agent"), val);
-    }
+    apply_horde_auth_headers(&mut del_req, api_key, false);
     let _ = upstream_client
         .call(del_req, TimeoutProfile::Chat, CancellationToken::new())
         .await;
+}
+
+fn is_image_url_or_data(s: &str) -> bool {
+    s.starts_with("data:image/") || s.starts_with("http://") || s.starts_with("https://")
+}
+
+fn extract_image_from_content(content: &serde_json::Value) -> Option<String> {
+    match content {
+        serde_json::Value::Array(parts) => parts.iter().find_map(extract_image_from_part),
+        serde_json::Value::Object(map) => extract_image_from_json_map(map),
+        serde_json::Value::String(s) if is_image_url_or_data(s) => Some(clean_image_str(s)),
+        _ => None,
+    }
 }
 
 fn extract_image_from_part(part: &serde_json::Value) -> Option<String> {
@@ -1028,20 +940,24 @@ pub fn normalize_dimension_64(val: u32) -> u32 {
     rounded.clamp(MIN_HORDE_DIMENSION, MAX_HORDE_DIMENSION)
 }
 
-crate::define_jump_map! {
-    /// O(1) jump-map for aspect ratio to pixel dimensions.
-    pub fn aspect_ratio_to_dimensions(ar: &str) -> (u32, u32) {
-        "16:9" => (1024, 576),
-        "9:16" => (576, 1024),
-        "3:2" => (960, 640),
-        "2:3" => (640, 960),
-        "4:3" => (1024, 768),
-        "3:4" => (768, 1024),
-        "21:9" => (1344, 576),
-        "9:21" => (576, 1344),
-        "1:1" => (1024, 1024),
-        _ => (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
-    }
+const ASPECT_RATIO_DIMENSIONS: &[(&str, (u32, u32))] = &[
+    ("16:9", (1024, 576)),
+    ("9:16", (576, 1024)),
+    ("3:2", (960, 640)),
+    ("2:3", (640, 960)),
+    ("4:3", (1024, 768)),
+    ("3:4", (768, 1024)),
+    ("21:9", (1344, 576)),
+    ("9:21", (576, 1344)),
+    ("1:1", (1024, 1024)),
+];
+
+/// Aspect ratio to pixel dimensions lookup.
+pub fn aspect_ratio_to_dimensions(ar: &str) -> (u32, u32) {
+    ASPECT_RATIO_DIMENSIONS
+        .iter()
+        .find(|(ratio, _)| *ratio == ar)
+        .map_or((DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION), |(_, dim)| *dim)
 }
 
 /// Parse dimensions from size string (e.g. "1024x1024") or aspect ratio (e.g. "16:9"),
@@ -1129,8 +1045,93 @@ fn parse_ti_tag(tag_trimmed: &str) -> Option<HordeTi> {
     Some(HordeTi { name, strength })
 }
 
-/// Extract AI Horde prompt directives (<lora:...>, <ti:...>, --sampler, --steps, etc.) from a prompt.
-pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
+fn assemble_final_prompt(
+    clean_prompt: &str,
+    req_neg: Option<&str>,
+    parsed_negs: &[String],
+) -> String {
+    let mut all_negatives = Vec::new();
+    let mut seen_negatives = HashSet::new();
+    if let Some(neg) = req_neg {
+        let clean_neg = clean_residual_prompt(neg);
+        if !clean_neg.is_empty() {
+            seen_negatives.insert(clean_neg.clone());
+            all_negatives.push(clean_neg);
+        }
+    }
+    for n in parsed_negs {
+        let clean_n = clean_residual_prompt(n);
+        if !clean_n.is_empty() && seen_negatives.insert(clean_n.clone()) {
+            all_negatives.push(clean_n);
+        }
+    }
+
+    let mut prompt = clean_prompt.to_string();
+    if !all_negatives.is_empty() {
+        prompt.push_str(" ### ");
+        prompt.push_str(&all_negatives.join(", "));
+    }
+    prompt
+}
+
+fn assemble_post_processing(
+    quality: Option<&str>,
+    req_pp: Option<&[String]>,
+    parsed_pp: &[String],
+) -> Option<Vec<String>> {
+    let mut post_processing_list = Vec::new();
+    let mut seen_post_processing = HashSet::new();
+    if quality == Some("hd") {
+        for item in ["RealESRGAN_x4plus", "GFPGAN"] {
+            if seen_post_processing.insert(item.to_string()) {
+                post_processing_list.push(item.to_string());
+            }
+        }
+    }
+    if let Some(req_pp) = req_pp {
+        for pp in req_pp {
+            if seen_post_processing.insert(pp.clone()) {
+                post_processing_list.push(pp.clone());
+            }
+        }
+    }
+    for pp in parsed_pp {
+        if seen_post_processing.insert(pp.clone()) {
+            post_processing_list.push(pp.clone());
+        }
+    }
+    (!post_processing_list.is_empty()).then_some(post_processing_list)
+}
+
+fn resolve_horde_models(upstream_model_id: &str) -> Vec<String> {
+    let list: Vec<String> = upstream_model_id
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if list.is_empty() {
+        vec!["AlbedoBase XL (SDXL)".to_string()]
+    } else {
+        list
+    }
+}
+
+fn resolve_source_processing(
+    is_img2img: bool,
+    has_mask: bool,
+    explicit_processing: Option<&str>,
+) -> Option<String> {
+    if is_img2img {
+        let default_proc = if has_mask { "inpainting" } else { "img2img" };
+        Some(explicit_processing.unwrap_or(default_proc).to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_lora_and_ti_tags(
+    raw_prompt: &str,
+) -> (String, Vec<HordeLora>, Vec<HordeTi>) {
     let mut loras = Vec::new();
     let mut tis = Vec::new();
     let mut without_tags = String::with_capacity(raw_prompt.len());
@@ -1161,14 +1162,14 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
     if cursor < raw_prompt.len() {
         without_tags.push_str(&raw_prompt[cursor..]);
     }
+    (without_tags, loras, tis)
+}
 
-    let (pos_part, neg_part) = match without_tags.split_once(" ### ") {
-        Some((p, n)) => (p, Some(n)),
-        None => match without_tags.split_once("###") {
-            Some((p, n)) => (p, Some(n)),
-            None => (without_tags.as_str(), None),
-        },
-    };
+fn split_prompt_negative_suffix(without_tags: &str) -> (&str, Vec<String>) {
+    let (pos_part, neg_part) = without_tags
+        .split_once(" ### ")
+        .or_else(|| without_tags.split_once("###"))
+        .map_or((without_tags, None), |(p, n)| (p, Some(n)));
 
     let mut negative_prompts = Vec::new();
     if let Some(n) = neg_part {
@@ -1177,190 +1178,184 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
             negative_prompts.push(cleaned);
         }
     }
+    (pos_part, negative_prompts)
+}
+
+fn parse_hires_flag(words: &[&str], i: &mut usize) -> bool {
+    *i += 1;
+    if *i < words.len() && !words[*i].starts_with("--") {
+        let val = words[*i];
+        if val.eq_ignore_ascii_case("false") || val == "0" || val.eq_ignore_ascii_case("off") {
+            *i += 1;
+            false
+        } else if val.eq_ignore_ascii_case("true") || val == "1" || val.eq_ignore_ascii_case("on") {
+            *i += 1;
+            true
+        } else {
+            true
+        }
+    } else {
+        true
+    }
+}
+
+fn next_arg<'a>(words: &[&'a str], i: &mut usize) -> Option<&'a str> {
+    *i += 1;
+    if *i < words.len() && !words[*i].starts_with("--") {
+        let arg = words[*i];
+        *i += 1;
+        Some(arg)
+    } else {
+        None
+    }
+}
+
+fn parse_string_flag(words: &[&str], i: &mut usize) -> Option<String> {
+    next_arg(words, i).map(|s| s.trim_matches(|c| c == '"' || c == '\'').to_string())
+}
+
+fn parse_numeric_flag<T: std::str::FromStr>(
+    words: &[&str],
+    i: &mut usize,
+    clamp_fn: impl Fn(T) -> T,
+) -> Option<T> {
+    next_arg(words, i)
+        .and_then(|s| s.parse::<T>().ok())
+        .map(clamp_fn)
+}
+
+fn parse_post_processing_tokens(words: &[&str], i: &mut usize, post_processing: &mut Vec<String>) {
+    if let Some(raw) = parse_string_flag(words, i) {
+        for part in raw.split(',') {
+            let p = part.trim().to_string();
+            if !p.is_empty() && !post_processing.contains(&p) {
+                post_processing.push(p);
+            }
+        }
+    }
+}
+
+fn parse_worker_token(words: &[&str], i: &mut usize, workers: &mut Vec<String>) {
+    if let Some(w) = parse_string_flag(words, i)
+        && !workers.contains(&w)
+    {
+        workers.push(w);
+    }
+}
+
+fn parse_negative_tokens(words: &[&str], i: &mut usize, negative_prompts: &mut Vec<String>) {
+    *i += 1;
+    let mut neg_tokens = Vec::new();
+    while *i < words.len() && !words[*i].starts_with("--") {
+        neg_tokens.push(words[*i]);
+        *i += 1;
+    }
+    if !neg_tokens.is_empty() {
+        let neg_str = neg_tokens.join(" ");
+        let cleaned_neg = clean_residual_prompt(neg_str.trim_matches(|c| c == '"' || c == '\''));
+        if !cleaned_neg.is_empty() {
+            negative_prompts.push(cleaned_neg);
+        }
+    }
+}
+
+fn apply_directive(
+    lower: &str,
+    words: &[&str],
+    i: &mut usize,
+    parsed: &mut ParsedPromptDirectives,
+) -> bool {
+    match lower {
+        "--hires" | "--hires_fix" => {
+            parsed.hires_fix = Some(parse_hires_flag(words, i));
+            true
+        }
+        "--no-hires" | "--no_hires" | "--nohires" => {
+            parsed.hires_fix = Some(false);
+            *i += 1;
+            true
+        }
+        "--allow_slow" => {
+            parsed.slow_workers = Some(true);
+            *i += 1;
+            true
+        }
+        "--any_worker" => {
+            parsed.trusted_workers = Some(false);
+            *i += 1;
+            true
+        }
+        "--sampler" | "--sampler_name" => {
+            parsed.sampler_name = parse_string_flag(words, i);
+            true
+        }
+        "--steps" => {
+            parsed.steps = parse_numeric_flag(words, i, |v: u32| v.clamp(10, 100));
+            true
+        }
+        "--cfg" | "--cfg_scale" => {
+            parsed.cfg_scale = parse_numeric_flag(words, i, |v: f32| v.clamp(1.0, 30.0));
+            true
+        }
+        "--clip_skip" => {
+            parsed.clip_skip = parse_numeric_flag(words, i, |v: u32| v.clamp(1, 12));
+            true
+        }
+        "--hires_denoising" => {
+            parsed.hires_fix_denoising_strength =
+                parse_numeric_flag(words, i, |v: f32| v.clamp(0.0, 1.0));
+            true
+        }
+        "--seed" => {
+            parsed.seed = parse_numeric_flag(words, i, |v: u64| v);
+            true
+        }
+        "--control" | "--control_type" => {
+            parsed.control_type = parse_string_flag(words, i);
+            true
+        }
+        "--post" | "--upscale" | "--post_processing" => {
+            parse_post_processing_tokens(words, i, &mut parsed.post_processing);
+            true
+        }
+        "--worker" => {
+            parse_worker_token(words, i, &mut parsed.workers);
+            true
+        }
+        "--no" | "--neg" | "--negative_prompt" => {
+            parse_negative_tokens(words, i, &mut parsed.negative_prompts);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Extract AI Horde prompt directives (<lora:...>, <ti:...>, --sampler, --steps, etc.) from a prompt.
+pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
+    let (without_tags, loras, tis) = extract_lora_and_ti_tags(raw_prompt);
+    let (pos_part, negative_prompts) = split_prompt_negative_suffix(&without_tags);
 
     let words: Vec<&str> = pos_part.split_whitespace().collect();
     let mut clean_words = Vec::new();
-    let mut sampler_name = None;
-    let mut steps = None;
-    let mut cfg_scale = None;
-    let mut clip_skip = None;
-    let mut hires_fix = None;
-    let mut hires_fix_denoising_strength = None;
-    let mut seed = None;
-    let mut control_type = None;
-    let mut post_processing = Vec::new();
-    let mut slow_workers = None;
-    let mut trusted_workers = None;
-    let mut workers = Vec::new();
+    let mut parsed = ParsedPromptDirectives {
+        negative_prompts,
+        loras,
+        tis,
+        ..Default::default()
+    };
 
     let mut i = 0;
     while i < words.len() {
         let word = words[i];
         let lower = word.to_ascii_lowercase();
-
-        match lower.as_str() {
-            "--hires" | "--hires_fix" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    if words[i].eq_ignore_ascii_case("false")
-                        || words[i] == "0"
-                        || words[i].eq_ignore_ascii_case("off")
-                    {
-                        hires_fix = Some(false);
-                        i += 1;
-                    } else if words[i].eq_ignore_ascii_case("true")
-                        || words[i] == "1"
-                        || words[i].eq_ignore_ascii_case("on")
-                    {
-                        hires_fix = Some(true);
-                        i += 1;
-                    } else {
-                        hires_fix = Some(true);
-                    }
-                } else {
-                    hires_fix = Some(true);
-                }
-            }
-            "--no-hires" | "--no_hires" | "--nohires" => {
-                hires_fix = Some(false);
-                i += 1;
-            }
-            "--allow_slow" => {
-                slow_workers = Some(true);
-                i += 1;
-            }
-            "--any_worker" => {
-                trusted_workers = Some(false);
-                i += 1;
-            }
-            "--sampler" | "--sampler_name" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    sampler_name =
-                        Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
-                    i += 1;
-                }
-            }
-            "--steps" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    if let Ok(val) = words[i].parse::<u32>() {
-                        steps = Some(val.clamp(10, 100));
-                    }
-                    i += 1;
-                }
-            }
-            "--cfg" | "--cfg_scale" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    if let Ok(val) = words[i].parse::<f32>() {
-                        cfg_scale = Some(val.clamp(1.0, 30.0));
-                    }
-                    i += 1;
-                }
-            }
-            "--clip_skip" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    if let Ok(val) = words[i].parse::<u32>() {
-                        clip_skip = Some(val.clamp(1, 12));
-                    }
-                    i += 1;
-                }
-            }
-            "--hires_denoising" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    if let Ok(val) = words[i].parse::<f32>() {
-                        hires_fix_denoising_strength = Some(val.clamp(0.0, 1.0));
-                    }
-                    i += 1;
-                }
-            }
-            "--seed" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    if let Ok(val) = words[i].parse::<u64>() {
-                        seed = Some(val);
-                    }
-                    i += 1;
-                }
-            }
-            "--control" | "--control_type" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    control_type =
-                        Some(words[i].trim_matches(|c| c == '"' || c == '\'').to_string());
-                    i += 1;
-                }
-            }
-            "--post" | "--upscale" | "--post_processing" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    let raw = words[i].trim_matches(|c| c == '"' || c == '\'');
-                    for part in raw.split(',') {
-                        let p = part.trim().to_string();
-                        if !p.is_empty() && !post_processing.contains(&p) {
-                            post_processing.push(p);
-                        }
-                    }
-                    i += 1;
-                }
-            }
-            "--worker" => {
-                i += 1;
-                if i < words.len() && !words[i].starts_with("--") {
-                    let w = words[i].trim_matches(|c| c == '"' || c == '\'').to_string();
-                    if !workers.contains(&w) {
-                        workers.push(w);
-                    }
-                    i += 1;
-                }
-            }
-            "--no" | "--neg" | "--negative_prompt" => {
-                i += 1;
-                let mut neg_tokens = Vec::new();
-                while i < words.len() && !words[i].starts_with("--") {
-                    neg_tokens.push(words[i]);
-                    i += 1;
-                }
-                if !neg_tokens.is_empty() {
-                    let neg_str = neg_tokens.join(" ");
-                    let cleaned_neg =
-                        clean_residual_prompt(neg_str.trim_matches(|c| c == '"' || c == '\''));
-                    if !cleaned_neg.is_empty() {
-                        negative_prompts.push(cleaned_neg);
-                    }
-                }
-            }
-            _ => {
-                clean_words.push(word);
-                i += 1;
-            }
+        if !apply_directive(&lower, &words, &mut i, &mut parsed) {
+            clean_words.push(word);
+            i += 1;
         }
     }
 
-    let raw_clean = clean_words.join(" ");
-    let clean_prompt = clean_residual_prompt(&raw_clean);
-
-    ParsedPromptDirectives {
-        clean_prompt,
-        negative_prompts,
-        loras,
-        tis,
-        sampler_name,
-        steps,
-        cfg_scale,
-        clip_skip,
-        hires_fix,
-        hires_fix_denoising_strength,
-        seed,
-        control_type,
-        post_processing,
-        slow_workers,
-        trusted_workers,
-        workers,
-    }
+    parsed.clean_prompt = clean_residual_prompt(&clean_words.join(" "));
+    parsed
 }
 
 /// Clean up stray punctuation, multiple spaces, and dangling commas left after extracting directives.

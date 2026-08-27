@@ -157,32 +157,35 @@ pub async fn regenerate_api_key(
     })))
 }
 
+fn fetch_api_key_usage(
+    r: &rusqlite::Connection,
+    id: i64,
+) -> Result<serde_json::Value, ApiError> {
+    let key_id = ApiKeyId(id);
+    if core_api_keys::get_by_id(r, key_id)?.is_none() {
+        return Err(ApiError(CoreError::Internal(format!("api_key {id} not found"))));
+    }
+    let head = core_api_keys::usage_summary(r, key_id)?;
+    let detailed = core_usage::summary(
+        r,
+        &UsageFilter {
+            api_key_id: Some(key_id),
+            ..Default::default()
+        },
+    )?;
+    Ok(serde_json::json!({
+        "key": head,
+        "summary": detailed,
+    }))
+}
+
 pub async fn api_key_usage(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Read-only SELECTs (get_by_id, usage_summary, core_usage::summary) —
-    // use the READER.
     let r = s.db_pool().reader();
-
-    // Confirm the key exists first so a 404 surfaces here
-    // (cleaner) instead of an empty summary that could be
-    // confused with "key has no traffic".
-    let _ = core_api_keys::get_by_id(&r, ApiKeyId(id))?
-        .ok_or_else(|| CoreError::Internal(format!("api_key {id} not found")))?;
-
-    let head = core_api_keys::usage_summary(&r, ApiKeyId(id))?;
-    let detailed = core_usage::summary(
-        &r,
-        &UsageFilter {
-            api_key_id: Some(ApiKeyId(id)),
-            ..Default::default()
-        },
-    )?;
-    Ok(Json(serde_json::json!({
-        "key": head,
-        "summary": detailed,
-    })))
+    let usage = fetch_api_key_usage(&r, id)?;
+    Ok(Json(usage))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

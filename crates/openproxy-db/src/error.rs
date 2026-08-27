@@ -18,64 +18,59 @@ pub enum DbErrorKind {
 }
 
 pub fn classify_sqlite_error(err: &rusqlite::Error) -> DbErrorKind {
-    match err {
-        rusqlite::Error::SqliteFailure(ffi_err, msg) => {
-            // Check extended error code first for maximum precision
-            match ffi_err.extended_code {
-                rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
-                | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY => {
-                    return DbErrorKind::UniqueViolation;
-                }
-                rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => {
-                    return DbErrorKind::ForeignKeyViolation;
-                }
-                rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => {
-                    return DbErrorKind::CheckViolation;
-                }
-                rusqlite::ffi::SQLITE_BUSY
-                | rusqlite::ffi::SQLITE_LOCKED
-                | rusqlite::ffi::SQLITE_BUSY_RECOVERY
-                | rusqlite::ffi::SQLITE_BUSY_SNAPSHOT => {
-                    return DbErrorKind::BusyOrLocked;
-                }
-                rusqlite::ffi::SQLITE_CORRUPT
-                | rusqlite::ffi::SQLITE_NOTADB
-                | rusqlite::ffi::SQLITE_CORRUPT_VTAB
-                | rusqlite::ffi::SQLITE_CORRUPT_SEQUENCE
-                | rusqlite::ffi::SQLITE_CORRUPT_INDEX => {
-                    return DbErrorKind::Corrupt;
-                }
-                _ => {}
-            }
+    let rusqlite::Error::SqliteFailure(ffi_err, msg) = err else {
+        return DbErrorKind::Other;
+    };
 
-            // Fallback to primary error code / message
-            match ffi_err.code {
-                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => {
-                    DbErrorKind::BusyOrLocked
-                }
-                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase => {
-                    DbErrorKind::Corrupt
-                }
-                rusqlite::ErrorCode::ConstraintViolation => {
-                    if let Some(m) = msg {
-                        let upper = m.to_ascii_uppercase();
-                        if upper.contains("FOREIGN KEY") {
-                            DbErrorKind::ForeignKeyViolation
-                        } else if upper.contains("UNIQUE") || upper.contains("PRIMARY KEY") {
-                            DbErrorKind::UniqueViolation
-                        } else if upper.contains("CHECK") {
-                            DbErrorKind::CheckViolation
-                        } else {
-                            DbErrorKind::Other
-                        }
-                    } else {
-                        DbErrorKind::Other
-                    }
-                }
-                _ => DbErrorKind::Other,
-            }
+    classify_extended_code(ffi_err.extended_code)
+        .unwrap_or_else(|| classify_primary_code(ffi_err.code, msg.as_deref()))
+}
+
+fn classify_extended_code(code: std::ffi::c_int) -> Option<DbErrorKind> {
+    match code {
+        rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY => {
+            Some(DbErrorKind::UniqueViolation)
+        }
+        rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => Some(DbErrorKind::ForeignKeyViolation),
+        rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => Some(DbErrorKind::CheckViolation),
+        rusqlite::ffi::SQLITE_BUSY
+        | rusqlite::ffi::SQLITE_LOCKED
+        | rusqlite::ffi::SQLITE_BUSY_RECOVERY
+        | rusqlite::ffi::SQLITE_BUSY_SNAPSHOT => Some(DbErrorKind::BusyOrLocked),
+        rusqlite::ffi::SQLITE_CORRUPT
+        | rusqlite::ffi::SQLITE_NOTADB
+        | rusqlite::ffi::SQLITE_CORRUPT_VTAB
+        | rusqlite::ffi::SQLITE_CORRUPT_SEQUENCE
+        | rusqlite::ffi::SQLITE_CORRUPT_INDEX => Some(DbErrorKind::Corrupt),
+        _ => None,
+    }
+}
+
+fn classify_primary_code(code: rusqlite::ErrorCode, msg: Option<&str>) -> DbErrorKind {
+    match code {
+        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => {
+            DbErrorKind::BusyOrLocked
+        }
+        rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase => {
+            DbErrorKind::Corrupt
+        }
+        rusqlite::ErrorCode::ConstraintViolation => {
+            msg.map_or(DbErrorKind::Other, classify_constraint_message)
         }
         _ => DbErrorKind::Other,
+    }
+}
+
+fn classify_constraint_message(msg: &str) -> DbErrorKind {
+    let upper = msg.to_ascii_uppercase();
+    if upper.contains("FOREIGN KEY") {
+        DbErrorKind::ForeignKeyViolation
+    } else if upper.contains("UNIQUE") || upper.contains("PRIMARY KEY") {
+        DbErrorKind::UniqueViolation
+    } else if upper.contains("CHECK") {
+        DbErrorKind::CheckViolation
+    } else {
+        DbErrorKind::Other
     }
 }
 

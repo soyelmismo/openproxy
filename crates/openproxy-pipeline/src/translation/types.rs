@@ -1,4 +1,4 @@
-pub use openproxy_types::{OpenAIChoice, OpenAIResponse, OpenAIUsage};
+pub use openproxy_types::{OpenAIChoice as Choice, OpenAIChoice, OpenAIResponse, OpenAIUsage};
 use serde::{Deserialize, Serialize};
 
 // =====================

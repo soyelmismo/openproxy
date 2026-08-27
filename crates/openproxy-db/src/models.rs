@@ -286,13 +286,7 @@ pub fn update_model_type(conn: &Connection, id: ModelRowId, model_type: &str) ->
     Ok(())
 }
 
-pub fn update_model_details(
-    conn: &Connection,
-    id: ModelRowId,
-    display_name: Option<&str>,
-    model_type: Option<&str>,
-    target_format: Option<TargetFormat>,
-) -> Result<()> {
+fn update_model_display_name(conn: &Connection, id: ModelRowId, display_name: Option<&str>) -> Result<()> {
     if let Some(dn) = display_name {
         conn.execute(
             "UPDATE models SET display_name = ?1 WHERE id = ?2",
@@ -300,6 +294,10 @@ pub fn update_model_details(
         )
         .map_err(crate::error::map_db_error)?;
     }
+    Ok(())
+}
+
+fn update_model_type_opt(conn: &Connection, id: ModelRowId, model_type: Option<&str>) -> Result<()> {
     if let Some(mt) = model_type {
         conn.execute(
             "UPDATE models SET model_type = ?1 WHERE id = ?2",
@@ -307,6 +305,10 @@ pub fn update_model_details(
         )
         .map_err(crate::error::map_db_error)?;
     }
+    Ok(())
+}
+
+fn update_model_target_format(conn: &Connection, id: ModelRowId, target_format: Option<TargetFormat>) -> Result<()> {
     if let Some(tf) = target_format {
         conn.execute(
             "UPDATE models SET target_format = ?1 WHERE id = ?2",
@@ -317,16 +319,26 @@ pub fn update_model_details(
     Ok(())
 }
 
-pub fn apply_auto_activation(
+pub fn update_model_details(
     conn: &Connection,
+    id: ModelRowId,
+    display_name: Option<&str>,
+    model_type: Option<&str>,
+    target_format: Option<TargetFormat>,
+) -> Result<()> {
+    update_model_display_name(conn, id, display_name)?;
+    update_model_type_opt(conn, id, model_type)?;
+    update_model_target_format(conn, id, target_format)
+}
+
+fn query_newly_active_models(
+    tx: &rusqlite::Transaction,
     provider: &ProviderId,
     keyword: Option<&str>,
-) -> Result<u64> {
-    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
-
-    let newly_active: Vec<(String, Option<String>)> = match keyword {
+) -> Result<Vec<(String, Option<String>)>> {
+    match keyword {
         Some(k) => crate::db_query_all!(
-            &tx,
+            tx,
             model_auto_active_select!(
                 "WHERE provider_id = ?1 AND custom = 0 \
                  AND discovered_at >= datetime('now', '-60 seconds') \
@@ -336,9 +348,9 @@ pub fn apply_auto_activation(
             params![provider.as_str(), k],
             |r| crate::map_row_tuple!(r => (0, 1)),
             "query newly active models with keyword"
-        )?,
+        ),
         None => crate::db_query_all!(
-            &tx,
+            tx,
             model_auto_active_select!(
                 "WHERE provider_id = ?1 AND custom = 0 \
                  AND discovered_at >= datetime('now', '-60 seconds') \
@@ -347,10 +359,16 @@ pub fn apply_auto_activation(
             params![provider.as_str()],
             |r| crate::map_row_tuple!(r => (0, 1)),
             "query newly active models"
-        )?,
-    };
+        ),
+    }
+}
 
-    let updated = match keyword {
+fn update_models_active_status(
+    tx: &rusqlite::Transaction,
+    provider: &ProviderId,
+    keyword: Option<&str>,
+) -> Result<usize> {
+    match keyword {
         Some(k) => tx.execute(
             "UPDATE models \
               SET active = CASE WHEN model_id LIKE '%' || ?1 || '%' THEN 1 ELSE 0 END \
@@ -369,8 +387,15 @@ pub fn apply_auto_activation(
     }
     .map_err(map_db_error_ctx(format!(
         "apply_auto_activation for {provider}"
-    )))?;
+    )))
+}
 
+fn notify_auto_activated_models(
+    tx: &rusqlite::Transaction,
+    provider: &ProviderId,
+    keyword: Option<&str>,
+    newly_active: &[(String, Option<String>)],
+) -> Result<()> {
     let notifications_present: bool = tx
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'notifications'",
@@ -379,72 +404,77 @@ pub fn apply_auto_activation(
         )
         .is_ok_and(|n| n != 0);
 
-    if notifications_present && !newly_active.is_empty() {
-        let already_notified: std::collections::HashSet<String> = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT dedup_key FROM notifications \
-                     WHERE kind = 'model_auto_activated' AND provider_id = ?1 AND dedup_key IS NOT NULL",
-                )
-                .map_err(map_db_error)?;
-            let rows = stmt
-                .query_map(params![provider.as_str()], |r| r.get::<_, String>(0))
-                .map_err(map_db_error)?;
-            rows.filter_map(std::result::Result::ok).collect()
-        };
-
-        let to_notify: Vec<_> = newly_active
-            .into_iter()
-            .filter(|(model_id, _)| {
-                let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
-                !already_notified.contains(&dedup)
-            })
-            .collect();
-
-        if !to_notify.is_empty() {
-            let _ = crate::batch::batch_insert(
-                &tx,
-                "INSERT OR IGNORE INTO",
-                "notifications",
-                &["kind", "payload_json", "dedup_key", "provider_id"],
-                &to_notify,
-                None,
-                |(model_id, display_name), query_params| {
-                    let payload = serde_json::json!({
-                        "provider_id": provider.as_str(),
-                        "model_id": model_id,
-                        "display_name": display_name,
-                        "matched_keyword": keyword,
-                    });
-                    let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
-
-                    query_params.push(rusqlite::types::Value::Text(
-                        "model_auto_activated".to_string(),
-                    ));
-                    query_params.push(rusqlite::types::Value::Text(payload.to_string()));
-                    query_params.push(rusqlite::types::Value::Text(dedup));
-                    query_params.push(rusqlite::types::Value::Text(provider.as_str().to_string()));
-                },
-            );
-        }
+    if !notifications_present || newly_active.is_empty() {
+        return Ok(());
     }
 
-    tx.commit().map_err(map_db_error)?;
+    let already_notified: std::collections::HashSet<String> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT dedup_key FROM notifications \
+                 WHERE kind = 'model_auto_activated' AND provider_id = ?1 AND dedup_key IS NOT NULL",
+            )
+            .map_err(map_db_error)?;
+        let rows = stmt
+            .query_map(params![provider.as_str()], |r| r.get::<_, String>(0))
+            .map_err(map_db_error)?;
+        rows.filter_map(std::result::Result::ok).collect()
+    };
 
+    let to_notify: Vec<_> = newly_active
+        .iter()
+        .filter(|(model_id, _)| {
+            let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+            !already_notified.contains(&dedup)
+        })
+        .collect();
+
+    if !to_notify.is_empty() {
+        let _ = crate::batch::batch_insert(
+            tx,
+            "INSERT OR IGNORE INTO",
+            "notifications",
+            &["kind", "payload_json", "dedup_key", "provider_id"],
+            &to_notify,
+            None,
+            |(model_id, display_name), query_params| {
+                let payload = serde_json::json!({
+                    "provider_id": provider.as_str(),
+                    "model_id": model_id,
+                    "display_name": display_name,
+                    "matched_keyword": keyword,
+                });
+                let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+
+                query_params.push(rusqlite::types::Value::Text(
+                    "model_auto_activated".to_string(),
+                ));
+                query_params.push(rusqlite::types::Value::Text(payload.to_string()));
+                query_params.push(rusqlite::types::Value::Text(dedup));
+                query_params.push(rusqlite::types::Value::Text(provider.as_str().to_string()));
+            },
+        );
+    }
+    Ok(())
+}
+
+pub fn apply_auto_activation(
+    conn: &Connection,
+    provider: &ProviderId,
+    keyword: Option<&str>,
+) -> Result<u64> {
+    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+    let newly_active = query_newly_active_models(&tx, provider, keyword)?;
+    let updated = update_models_active_status(&tx, provider, keyword)?;
+    notify_auto_activated_models(&tx, provider, keyword, &newly_active)?;
+    tx.commit().map_err(map_db_error)?;
     Ok(updated as u64)
 }
 
-pub fn upsert_many(
+fn fetch_existing_model_ids(
     conn: &Connection,
     provider: &ProviderId,
-    discovered: &[DiscoveredModel],
-    ttl: Duration,
-) -> Result<UpsertResult> {
-    let ttl_secs = ttl.as_secs() as i64;
-    let mut total = 0usize;
-    let mut new_model_ids: Vec<ModelId> = Vec::new();
-    let mut inserted_model_ids: Vec<&str> = Vec::new();
-
+) -> Result<std::collections::HashSet<String>> {
     let existing_rows: Vec<(String, i64, Option<String>)> = crate::db_query_all!(
         conn,
         model_existing_select!("WHERE provider_id = ?1"),
@@ -453,80 +483,93 @@ pub fn upsert_many(
         "query existing models"
     )?;
 
-    let existing: std::collections::HashSet<&str> =
-        existing_rows.iter().map(|(m, _, _)| m.as_str()).collect();
+    Ok(existing_rows.into_iter().map(|(m, _, _)| m).collect())
+}
 
-    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+fn upsert_discovered_models<'a>(
+    tx: &rusqlite::Transaction,
+    provider: &ProviderId,
+    discovered: &'a [DiscoveredModel],
+    ttl_secs: i64,
+    existing: &std::collections::HashSet<String>,
+    new_model_ids: &mut Vec<ModelId>,
+    inserted_model_ids: &mut Vec<&'a str>,
+) -> Result<usize> {
+    let mut stmt = tx
+        .prepare(
+            "INSERT INTO models (\
+                provider_id, model_id, display_name, target_format, \
+                discovered_at, expires_at, \
+                context_length, max_output_tokens, \
+                input_modalities_json, output_modalities_json, \
+                model_type, family, capabilities_json, model_id_normalized\
+             ) VALUES (\
+                ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
+                ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?, ?\
+             ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+                display_name = excluded.display_name, \
+                target_format = excluded.target_format, \
+                context_length = COALESCE(excluded.context_length, context_length), \
+                max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
+                input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
+                output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
+                model_type = COALESCE(models.model_type, excluded.model_type), \
+                family = COALESCE(excluded.family, family), \
+                capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
+                model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
+        )
+        .map_err(map_db_error)?;
 
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO models (\
-                    provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, \
-                    context_length, max_output_tokens, \
-                    input_modalities_json, output_modalities_json, \
-                    model_type, family, capabilities_json, model_id_normalized\
-                 ) VALUES (\
-                    ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
-                    ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?, ?\
-                 ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-                    display_name = excluded.display_name, \
-                    target_format = excluded.target_format, \
-                    context_length = COALESCE(excluded.context_length, context_length), \
-                    max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
-                    input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
-                    output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                    model_type = COALESCE(models.model_type, excluded.model_type), \
-                    family = COALESCE(excluded.family, family), \
-                    capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
-                    model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
-            )
-            .map_err(map_db_error)?;
+    let mut total = 0;
+    for d in discovered {
+        let caps_json = d
+            .capabilities
+            .as_ref()
+            .and_then(openproxy_types::ModelCapabilities::to_json);
+        let input_mods_json = d
+            .input_modalities
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
+        let output_mods_json = d
+            .output_modalities
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
 
-        for d in discovered {
-            let caps_json = d
-                .capabilities
-                .as_ref()
-                .and_then(openproxy_types::ModelCapabilities::to_json);
-            let input_mods_json = d
-                .input_modalities
-                .as_ref()
-                .and_then(|v| serde_json::to_string(v).ok());
-            let output_mods_json = d
-                .output_modalities
-                .as_ref()
-                .and_then(|v| serde_json::to_string(v).ok());
-
-            let is_new = !existing.contains(d.model_id.as_str());
-            if is_new {
-                new_model_ids.push(d.model_id.clone());
-                inserted_model_ids.push(d.model_id.as_str());
-            }
-
-            let normalized = normalize_model_id(d.model_id.as_str());
-
-            let changed = stmt
-                .execute(params![
-                    provider.as_str(),
-                    d.model_id.as_str(),
-                    d.display_name,
-                    d.target_format.as_str(),
-                    ttl_secs,
-                    d.context_length,
-                    d.max_output_tokens,
-                    input_mods_json,
-                    output_mods_json,
-                    d.model_type,
-                    d.family,
-                    caps_json,
-                    &normalized,
-                ])
-                .map_err(map_db_error)?;
-            total += changed;
+        let is_new = !existing.contains(d.model_id.as_str());
+        if is_new {
+            new_model_ids.push(d.model_id.clone());
+            inserted_model_ids.push(d.model_id.as_str());
         }
-    }
 
+        let normalized = normalize_model_id(d.model_id.as_str());
+
+        let changed = stmt
+            .execute(params![
+                provider.as_str(),
+                d.model_id.as_str(),
+                d.display_name,
+                d.target_format.as_str(),
+                ttl_secs,
+                d.context_length,
+                d.max_output_tokens,
+                input_mods_json,
+                output_mods_json,
+                d.model_type,
+                d.family,
+                caps_json,
+                &normalized,
+            ])
+            .map_err(map_db_error)?;
+        total += changed;
+    }
+    Ok(total)
+}
+
+fn prune_obsolete_models(
+    tx: &rusqlite::Transaction,
+    provider: &ProviderId,
+    discovered: &[DiscoveredModel],
+) -> Result<()> {
     if discovered.is_empty() {
         tx.execute(
             "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
@@ -543,40 +586,77 @@ pub fn upsert_many(
         tx.execute(sql, params![provider.as_str(), discovered_json])
             .map_err(map_db_error)?;
     }
+    Ok(())
+}
 
-    if !inserted_model_ids.is_empty() {
-        let inserted_json =
-            serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
-        let new_rows: Vec<(i64, String)> = crate::db_query_all!(
-            &tx,
-            model_inserted_select!(
-                "WHERE provider_id = ?1 AND model_id IN (SELECT value FROM json_each(?2))"
-            ),
-            params![provider.as_str(), inserted_json],
-            |r| crate::map_row_tuple!(r => (0, 1)),
-            "query inserted models"
-        )?;
+fn reconnect_inserted_combo_targets(
+    tx: &rusqlite::Transaction,
+    provider: &ProviderId,
+    inserted_model_ids: &[&str],
+) -> Result<()> {
+    if inserted_model_ids.is_empty() {
+        return Ok(());
+    }
 
-        let combo_targets_present: bool = tx
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master \
-                 WHERE type = 'table' AND name = 'combo_targets'",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
-            .is_ok_and(|n| n != 0);
+    let inserted_json =
+        serde_json::to_string(inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
+    let new_rows: Vec<(i64, String)> = crate::db_query_all!(
+        tx,
+        model_inserted_select!(
+            "WHERE provider_id = ?1 AND model_id IN (SELECT value FROM json_each(?2))"
+        ),
+        params![provider.as_str(), inserted_json],
+        |r| crate::map_row_tuple!(r => (0, 1)),
+        "query inserted models"
+    )?;
 
-        if combo_targets_present {
-            for (new_id, upstream) in &new_rows {
-                let _ = crate::combos::reconnect_orphan_targets(
-                    &tx,
-                    provider,
-                    upstream,
-                    ModelRowId(*new_id),
-                )?;
-            }
+    let combo_targets_present: bool = tx
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master \
+             WHERE type = 'table' AND name = 'combo_targets'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .is_ok_and(|n| n != 0);
+
+    if combo_targets_present {
+        for (new_id, upstream) in &new_rows {
+            let _ = crate::combos::reconnect_orphan_targets(
+                tx,
+                provider,
+                upstream,
+                ModelRowId(*new_id),
+            )?;
         }
     }
+    Ok(())
+}
+
+pub fn upsert_many(
+    conn: &Connection,
+    provider: &ProviderId,
+    discovered: &[DiscoveredModel],
+    ttl: Duration,
+) -> Result<UpsertResult> {
+    let ttl_secs = ttl.as_secs() as i64;
+    let existing = fetch_existing_model_ids(conn, provider)?;
+    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+
+    let mut new_model_ids: Vec<ModelId> = Vec::new();
+    let mut inserted_model_ids: Vec<&str> = Vec::new();
+
+    let total = upsert_discovered_models(
+        &tx,
+        provider,
+        discovered,
+        ttl_secs,
+        &existing,
+        &mut new_model_ids,
+        &mut inserted_model_ids,
+    )?;
+
+    prune_obsolete_models(&tx, provider, discovered)?;
+    reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids)?;
 
     tx.commit().map_err(map_db_error)?;
 

@@ -36,55 +36,107 @@ impl KiroAdapter {
         }
     }
 
+fn map_kiro_discovered_model(item: &serde_json::Value) -> Option<DiscoveredModel> {
+    let model_id_str = item
+        .get("modelId")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("id").and_then(|v| v.as_str()))?;
+    let display_name_str = item
+        .get("modelName")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("name").and_then(|v| v.as_str()))
+        .unwrap_or(model_id_str);
+
+    let caps = openproxy_types::ModelCapabilities {
+        vision: Some(true),
+        tool_calling: Some(true),
+        reasoning: Some(true),
+        thinking: Some(true),
+        attachment: None,
+        structured_output: None,
+        temperature: None,
+    };
+
+    Some(DiscoveredModel {
+        model_id: ModelId::new(model_id_str),
+        display_name: Some(display_name_str.to_string()),
+        target_format: TargetFormat::Openai,
+        context_length: Some(200_000),
+        max_output_tokens: Some(64_000),
+        input_modalities: None,
+        output_modalities: None,
+        model_type: Some("chat".to_string()),
+        family: None,
+        capabilities: Some(caps),
+    })
+}
+
     fn parse_models_response(json: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         let models_arr = json
             .get("models")
             .and_then(|v| v.as_array())
             .or_else(|| json.get("availableModels").and_then(|v| v.as_array()))?;
 
-        let mut discovered = Vec::new();
-        for item in models_arr {
-            let model_id_str = item
-                .get("modelId")
-                .and_then(|v| v.as_str())
-                .or_else(|| item.get("id").and_then(|v| v.as_str()))?;
-            let display_name_str = item
-                .get("modelName")
-                .and_then(|v| v.as_str())
-                .or_else(|| item.get("name").and_then(|v| v.as_str()))
-                .unwrap_or(model_id_str);
+        let discovered: Vec<DiscoveredModel> =
+            models_arr.iter().filter_map(Self::map_kiro_discovered_model).collect();
 
-            discovered.push(DiscoveredModel {
-                model_id: ModelId::new(model_id_str),
-                display_name: Some(display_name_str.to_string()),
-                target_format: TargetFormat::Openai,
-                context_length: Some(200_000),
-                max_output_tokens: Some(64000),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(openproxy_types::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: Some(true),
-                    thinking: Some(true),
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            });
-        }
-
-        if discovered.is_empty() {
-            None
-        } else {
-            Some(discovered)
-        }
+        (!discovered.is_empty()).then_some(discovered)
     }
 }
 
 crate::adapters::derive_default_from_new!(KiroAdapter);
+
+fn extract_kiro_region(account_label: &str) -> String {
+    if !account_label.is_empty()
+        && let Some(m) = REGION_RE.find(account_label)
+    {
+        m.as_str().to_string()
+    } else {
+        "us-east-1".to_string()
+    }
+}
+
+fn build_kiro_model_endpoints(region: &str) -> Vec<String> {
+    if region == "us-east-1" {
+        vec![
+            "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
+            "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"
+                .to_string(),
+        ]
+    } else {
+        vec![
+            format!("https://q.{region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"),
+            "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
+        ]
+    }
+}
+
+async fn try_fetch_models_from_endpoint(
+    upstream_client: &Arc<UpstreamClient>,
+    api_key: &str,
+    endpoint: &str,
+) -> Option<Vec<DiscoveredModel>> {
+    let mut req = UpstreamRequest::get(endpoint);
+    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let cancel = CancellationToken::new();
+    let resp = upstream_client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .ok()?;
+    if !resp.status.is_success() {
+        return None;
+    }
+    let body_bytes = resp.collect().await.ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).ok()?;
+    KiroAdapter::parse_models_response(&json)
+}
 
 impl ProviderAdapter for KiroAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
@@ -195,44 +247,12 @@ impl ProviderAdapter for KiroAdapter {
             return Ok(vec![]);
         }
 
-        let mut region = "us-east-1".to_string();
-        if !account_label.is_empty()
-            && let Some(m) = REGION_RE.find(account_label)
-        {
-            region = m.as_str().to_string();
-        }
-
-        let endpoints = if region == "us-east-1" {
-            vec![
-                "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
-                "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
-            ]
-        } else {
-            vec![
-                format!("https://q.{region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"),
-                "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"
-                    .to_string(),
-            ]
-        };
+        let region = extract_kiro_region(account_label);
+        let endpoints = build_kiro_model_endpoints(&region);
 
         for endpoint in &endpoints {
-            let mut req = UpstreamRequest::get(endpoint);
-            if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
-            req.headers.insert(
-                http::header::ACCEPT,
-                HeaderValue::from_static("application/json"),
-            );
-
-            let cancel = CancellationToken::new();
-            if let Ok(resp) = upstream_client
-                .call(req, TimeoutProfile::ModelDiscovery, cancel)
-                .await
-                && resp.status.is_success()
-                && let Ok(body_bytes) = resp.collect().await
-                && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                && let Some(models) = Self::parse_models_response(&json)
+            if let Some(models) =
+                try_fetch_models_from_endpoint(upstream_client, api_key, endpoint).await
             {
                 return Ok(models);
             }
@@ -284,6 +304,204 @@ pub fn kiro_runtime_url(region: &str) -> String {
     format!("{host}/generateAssistantResponse")
 }
 
+fn parse_kiro_meta_config(provider_specific: Option<&str>) -> (String, Option<String>) {
+    let mut region = "us-east-1".to_string();
+    let mut profile_arn = None;
+
+    if let Some(json_str) = provider_specific
+        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str)
+    {
+        if let Some(r) = meta.get("region").and_then(|v| v.as_str())
+            && !r.is_empty()
+        {
+            region = r.to_string();
+        }
+        if let Some(arn) = meta
+            .get("profileArn")
+            .or_else(|| meta.get("profile_arn"))
+            .and_then(|v| v.as_str())
+        {
+            profile_arn = Some(arn.to_string());
+        }
+    }
+    (region, profile_arn)
+}
+
+fn extract_profile_arn_from_json(value: &serde_json::Value, region: &str) -> Option<String> {
+    let arr = value.get("profiles")?.as_array()?;
+    let region_pattern = format!(":{region}:");
+    let target = arr
+        .iter()
+        .find(|p| {
+            p.get("arn")
+                .or_else(|| p.get("profileArn"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.contains(&region_pattern))
+        })
+        .or_else(|| arr.first())?;
+
+    target
+        .get("arn")
+        .or_else(|| target.get("profileArn"))
+        .and_then(|v| v.as_str())
+        .map(std::string::ToString::to_string)
+}
+
+async fn discover_kiro_profile_arn(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    base_url: &str,
+    region: &str,
+) -> Option<String> {
+    let url = format!("{base_url}/");
+    let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(r#"{"maxResults":10}"#));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-target"),
+        http::HeaderValue::from_static("AmazonCodeWhispererService.ListAvailableProfiles"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-user-agent"),
+        http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
+    );
+
+    let cancel = CancellationToken::new();
+    let resp = match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
+        Ok(r) if r.status.is_success() => r,
+        Ok(r) => {
+            let status = r.status;
+            let body_str =
+                String::from_utf8_lossy(&r.collect().await.unwrap_or_default()).to_string();
+            tracing::info!(status = %status, body = %body_str, "Kiro profile ARN discovery returned non-success; proceeding without profile ARN");
+            return None;
+        }
+        Err(e) => {
+            tracing::info!(error = %e, "kiro listAvailableProfiles network call failed; proceeding without profile ARN");
+            return None;
+        }
+    };
+
+    let body_bytes = resp.collect().await.ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes).ok()?;
+    extract_profile_arn_from_json(&value, region)
+}
+
+fn empty_kiro_quota() -> openproxy_types::AccountQuota {
+    openproxy_types::AccountQuota {
+        session_used: None,
+        session_limit: None,
+        session_reset_at: None,
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        plan_name: Some("Kiro".to_string()),
+        last_fetched_at: openproxy_types::now_unix_secs_str(),
+        fetch_error: None,
+        model_details: None,
+    }
+}
+
+fn build_kiro_usage_limits_request(
+    base_url: &str,
+    access_token: &str,
+    profile_arn: Option<&str>,
+) -> Option<UpstreamRequest> {
+    let url = format!("{base_url}/");
+    let mut payload = serde_json::json!({
+        "origin": "AI_EDITOR",
+        "resourceType": "AGENTIC_REQUEST"
+    });
+    if let Some(arn) = profile_arn {
+        payload["profileArn"] = serde_json::json!(arn);
+    }
+    let body_bytes = match serde_json::to_vec(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::info!(error = %e, "kiro GetUsageLimits serialize payload failed; returning empty quota");
+            return None;
+        }
+    };
+
+    let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-target"),
+        http::HeaderValue::from_static("AmazonCodeWhispererService.GetUsageLimits"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-user-agent"),
+        http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
+    );
+    Some(req)
+}
+
+async fn fetch_kiro_usage_limits_json(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    base_url: &str,
+    profile_arn: Option<&str>,
+) -> Result<Option<serde_json::Value>> {
+    let Some(req) = build_kiro_usage_limits_request(base_url, access_token, profile_arn) else {
+        return Ok(None);
+    };
+
+    let cancel = CancellationToken::new();
+    let resp = match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::info!(error = %e, "kiro GetUsageLimits network call failed; returning empty quota without error");
+            return Ok(None);
+        }
+    };
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        tracing::info!(status = status, body = %body_str, "Kiro GetUsageLimits returned non-success; returning empty quota");
+        return Ok(None);
+    }
+
+    let resp_bytes = resp
+        .collect()
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("kiro GetUsageLimits read: {e}")))?;
+    let data: serde_json::Value = serde_json::from_slice(&resp_bytes)
+        .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits parse: {e}")))?;
+    Ok(Some(data))
+}
+
+fn extract_agentic_request_limits(data: &serde_json::Value) -> (Option<i64>, Option<i64>) {
+    let Some(arr) = data.get("usageBreakdownList").and_then(|v| v.as_array()) else {
+        return (None, None);
+    };
+
+    for breakdown in arr {
+        let resource_type = breakdown
+            .get("resourceType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if resource_type.eq_ignore_ascii_case("agentic_request") {
+            let current = breakdown
+                .get("currentUsageWithPrecision")
+                .or_else(|| breakdown.get("currentUsage"))
+                .and_then(serde_json::Value::as_f64)
+                .map(|v| v.round() as i64);
+            let limit = breakdown
+                .get("usageLimitWithPrecision")
+                .or_else(|| breakdown.get("usageLimit"))
+                .and_then(serde_json::Value::as_f64)
+                .map(|v| v.round() as i64);
+            return (current, limit);
+        }
+    }
+    (None, None)
+}
+
 impl KiroAdapter {
     async fn fetch_kiro_quota_local(
         &self,
@@ -291,187 +509,28 @@ impl KiroAdapter {
         access_token: &str,
         provider_specific: Option<&str>,
     ) -> Result<openproxy_types::AccountQuota> {
-        let mut region = "us-east-1".to_string();
-        let mut profile_arn = None;
-
-        if let Some(json_str) = provider_specific
-            && let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str)
-        {
-            if let Some(r) = meta.get("region").and_then(|v| v.as_str())
-                && !r.is_empty()
-            {
-                region = r.to_string();
-            }
-            if let Some(arn) = meta.get("profileArn").and_then(|v| v.as_str()) {
-                profile_arn = Some(arn.to_string());
-            } else if let Some(arn) = meta.get("profile_arn").and_then(|v| v.as_str()) {
-                profile_arn = Some(arn.to_string());
-            }
-        }
-
+        let (region, mut profile_arn) = parse_kiro_meta_config(provider_specific);
         let base_url = if region == "us-east-1" || region.is_empty() {
             "https://codewhisperer.us-east-1.amazonaws.com".to_string()
         } else {
             format!("https://q.{region}.amazonaws.com")
         };
 
-        let profile_arn = match profile_arn {
-            Some(arn) => Some(arn),
-            None => {
-                let url = format!("{base_url}/");
-                let mut req =
-                    UpstreamRequest::post_json(&url, bytes::Bytes::from(r#"{"maxResults":10}"#));
-                if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-                    req.headers.insert(http::header::AUTHORIZATION, v);
-                }
-                req.headers.insert(
-                    http::header::HeaderName::from_static("x-amz-target"),
-                    http::HeaderValue::from_static(
-                        "AmazonCodeWhispererService.ListAvailableProfiles",
-                    ),
-                );
-                req.headers.insert(
-                    http::header::HeaderName::from_static("x-amz-user-agent"),
-                    http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
-                );
-
-                let cancel = CancellationToken::new();
-
-                match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
-                    Ok(resp) if resp.status.is_success() => {
-                        if let Ok(body_bytes) = resp.collect().await {
-                            if let Ok(value) =
-                                serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                            {
-                                value
-                                    .get("profiles")
-                                    .and_then(|v| v.as_array())
-                                    .and_then(|arr| {
-                                        arr.iter()
-                                            .find(|p| {
-                                                p.get("arn")
-                                                    .or_else(|| p.get("profileArn"))
-                                                    .and_then(|v| v.as_str())
-                                                    .is_some_and(|s| {
-                                                        s.contains(&format!(":{region}:"))
-                                                    })
-                                            })
-                                            .or_else(|| arr.first())
-                                    })
-                                    .and_then(|p| {
-                                        p.get("arn")
-                                            .or_else(|| p.get("profileArn"))
-                                            .and_then(|v| v.as_str())
-                                    })
-                                    .map(std::string::ToString::to_string)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    Ok(resp) => {
-                        let status_code = resp.status;
-                        let body_str =
-                            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default())
-                                .to_string();
-                        tracing::info!(status = %status_code, body = %body_str, "Kiro profile ARN discovery returned non-success; proceeding without profile ARN");
-                        None
-                    }
-                    Err(e) => {
-                        tracing::info!(error = %e, "kiro listAvailableProfiles network call failed; proceeding without profile ARN");
-                        None
-                    }
-                }
-            }
-        };
-
-        let url = format!("{base_url}/");
-        let mut payload = serde_json::json!({
-            "origin": "AI_EDITOR",
-            "resourceType": "AGENTIC_REQUEST"
-        });
-        if let Some(ref arn) = profile_arn {
-            payload["profileArn"] = serde_json::json!(arn);
-        }
-        let body_bytes = match serde_json::to_vec(&payload) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::info!(error = %e, "kiro GetUsageLimits serialize payload failed; returning empty quota");
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: Some("Kiro".to_string()),
-                    last_fetched_at: openproxy_types::now_unix_secs_str(),
-                    fetch_error: None,
-                    model_details: None,
-                });
-            }
-        };
-
-        let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
-        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-            req.headers.insert(http::header::AUTHORIZATION, v);
-        }
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-amz-target"),
-            http::HeaderValue::from_static("AmazonCodeWhispererService.GetUsageLimits"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-amz-user-agent"),
-            http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
-        );
-
-        let cancel = CancellationToken::new();
-        let resp = match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::info!(error = %e, "kiro GetUsageLimits network call failed; returning empty quota without error");
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: Some("Kiro".to_string()),
-                    last_fetched_at: openproxy_types::now_unix_secs_str(),
-                    fetch_error: None,
-                    model_details: None,
-                });
-            }
-        };
-
-        if !resp.status.is_success() {
-            let status = resp.status.as_u16();
-            let body_str =
-                String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-            tracing::info!(status = status, body = %body_str, "Kiro GetUsageLimits returned non-success (likely restricted quota access); returning empty quota without error");
-            return Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: Some("Kiro".to_string()),
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: None,
-                model_details: None,
-            });
+        if profile_arn.is_none() {
+            profile_arn =
+                discover_kiro_profile_arn(upstream, access_token, &base_url, &region).await;
         }
 
-        let resp_bytes = resp
-            .collect()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("kiro GetUsageLimits read: {e}")))?;
-        let data: serde_json::Value = serde_json::from_slice(&resp_bytes)
-            .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits parse: {e}")))?;
+        let Some(data) = fetch_kiro_usage_limits_json(
+            upstream,
+            access_token,
+            &base_url,
+            profile_arn.as_deref(),
+        )
+        .await?
+        else {
+            return Ok(empty_kiro_quota());
+        };
 
         let reset_at = data
             .get("nextDateReset")
@@ -479,43 +538,7 @@ impl KiroAdapter {
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string);
 
-        let usage_list = data.get("usageBreakdownList").and_then(|v| v.as_array());
-
-        let mut session_used = None;
-        let mut session_limit = None;
-
-        if let Some(arr) = usage_list {
-            for breakdown in arr {
-                let resource_type = breakdown
-                    .get("resourceType")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if resource_type.to_lowercase() == "agentic_request" {
-                    let current = breakdown
-                        .get("currentUsageWithPrecision")
-                        .and_then(serde_json::Value::as_f64)
-                        .or_else(|| {
-                            breakdown
-                                .get("currentUsage")
-                                .and_then(serde_json::Value::as_f64)
-                        })
-                        .map(|v| v.round() as i64);
-                    let limit = breakdown
-                        .get("usageLimitWithPrecision")
-                        .and_then(serde_json::Value::as_f64)
-                        .or_else(|| {
-                            breakdown
-                                .get("usageLimit")
-                                .and_then(serde_json::Value::as_f64)
-                        })
-                        .map(|v| v.round() as i64);
-
-                    session_used = current;
-                    session_limit = limit;
-                    break;
-                }
-            }
-        }
+        let (session_used, session_limit) = extract_agentic_request_limits(&data);
 
         let plan_name = data
             .get("subscriptionInfo")
@@ -616,72 +639,71 @@ pub struct KiroInferenceConfig {
 ///   binary format and is a follow-up)
 pub const KIRO_DEFAULT_MODEL: &str = "kiro-default-model";
 
+fn build_kiro_history_item(pair: &[&openproxy_types::OpenAIMessage]) -> Option<KiroHistoryItem> {
+    let [user, assistant] = pair else {
+        return None;
+    };
+    Some(KiroHistoryItem {
+        user_input_message: KiroUserInputMessage {
+            content: user
+                .content
+                .as_ref()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            model_id: KIRO_DEFAULT_MODEL.to_string(),
+            origin: "AI_EDITOR".to_string(),
+        },
+        assistant_response_message: KiroAssistantResponseMessage {
+            content: assistant
+                .content
+                .as_ref()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        },
+    })
+}
+
+fn build_kiro_inference_config(openai: &OpenAIRequest) -> Option<KiroInferenceConfig> {
+    let has_any = openai.max_tokens.is_some()
+        || openai.temperature.is_some()
+        || openai.top_p.is_some()
+        || openai.stop.is_some();
+    has_any.then(|| KiroInferenceConfig {
+        max_tokens: openai.max_tokens,
+        temperature: openai.temperature,
+        top_p: openai.top_p,
+        stop: openai.stop.clone(),
+    })
+}
+
 fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> KiroRequest {
     let (history_msgs, current_msg) = split_history(openai);
 
     let history: Vec<KiroHistoryItem> = history_msgs
         .chunks(2)
-        .filter_map(|pair| {
-            if let [user, assistant] = pair {
-                Some(KiroHistoryItem {
-                    user_input_message: KiroUserInputMessage {
-                        content: user
-                            .content
-                            .as_ref()
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        model_id: KIRO_DEFAULT_MODEL.to_string(),
-                        origin: "AI_EDITOR".to_string(),
-                    },
-                    assistant_response_message: KiroAssistantResponseMessage {
-                        content: assistant
-                            .content
-                            .as_ref()
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                    },
-                })
-            } else {
-                None
-            }
-        })
+        .filter_map(build_kiro_history_item)
         .collect();
 
-    let inference_config = if openai.max_tokens.is_some()
-        || openai.temperature.is_some()
-        || openai.top_p.is_some()
-        || openai.stop.is_some()
-    {
-        Some(KiroInferenceConfig {
-            max_tokens: openai.max_tokens,
-            temperature: openai.temperature,
-            top_p: openai.top_p,
-            stop: openai.stop.clone(),
-        })
-    } else {
-        None
-    };
+    let inference_config = build_kiro_inference_config(openai);
+
+    let current_content = current_msg
+        .and_then(|m| m.content.as_ref())
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
 
     KiroRequest {
         conversation_state: KiroConversationState {
             current_message: KiroCurrentMessage {
                 user_input_message: KiroUserInputMessage {
-                    content: current_msg
-                        .and_then(|m| m.content.as_ref())
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
+                    content: current_content,
                     model_id: openai.model.clone(),
                     origin: "AI_EDITOR".to_string(),
                 },
             },
-            history: if history.is_empty() {
-                None
-            } else {
-                Some(history)
-            },
+            history: (!history.is_empty()).then_some(history),
             chat_trigger_type: "MANUAL".to_string(),
         },
         profile_arn: profile_arn.map(std::string::ToString::to_string),

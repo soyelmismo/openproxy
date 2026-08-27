@@ -189,57 +189,82 @@ pub async fn refresh_account_quota(
     result
 }
 
+fn find_candidate_account_for_refresh(
+    accounts: &[core_accounts::Account],
+    requested_id: Option<i64>,
+) -> Option<AccountId> {
+    if let Some(aid) = requested_id {
+        return Some(AccountId::new(aid));
+    }
+    accounts
+        .iter()
+        .find(|a| a.health_status == core_accounts::HealthStatus::Healthy)
+        .or_else(|| {
+            accounts
+                .iter()
+                .find(|a| a.health_status == core_accounts::HealthStatus::Degraded)
+        })
+        .map(|a| a.id)
+}
+
 pub(crate) fn resolve_refresh_account(
     s: &AppState,
     provider: &ProviderId,
     q: &ProviderRefreshQuery,
 ) -> Result<(Option<AccountId>, String), ApiError> {
     let w = s.db_pool().writer();
-    let provider_row = match core_providers::get(&w, provider) {
-        Ok(p) => p,
-        Err(e) => return Err(ApiError(e)),
-    };
-    let accounts_list = match core_accounts::list(&w, Some(provider), s.master_key().as_ref()) {
-        Ok(l) => l,
-        Err(e) => return Err(ApiError(e)),
-    };
+    let provider_row = core_providers::get(&w, provider).map_err(ApiError)?;
+    let accounts_list = core_accounts::list(&w, Some(provider), s.master_key().as_ref()).map_err(ApiError)?;
 
-    let is_anonymous = match &provider_row {
-        Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
-        _ if accounts_list.is_empty() => true,
-        _ => false,
-    };
+    let is_auth_none = provider_row
+        .as_ref()
+        .is_some_and(|p| matches!(p.auth_type, core_providers::AuthType::None));
 
-    if is_anonymous {
+    if is_auth_none || accounts_list.is_empty() {
         return Ok((None, String::new()));
     }
 
-    let account_id = match q.account_id {
-        Some(aid) => Some(AccountId::new(aid)),
-        None => accounts_list
-            .iter()
-            .find(|a| a.health_status == core_accounts::HealthStatus::Healthy)
-            .or_else(|| {
-                accounts_list
-                    .iter()
-                    .find(|a| a.health_status == core_accounts::HealthStatus::Degraded)
-            })
-            .map(|a| a.id),
-    };
-
-    if account_id.is_none() {
-        let is_anonymous_fallback = provider_row
-            .as_ref()
-            .is_some_and(|p| matches!(p.auth_type, core_providers::AuthType::None));
-
-        if is_anonymous_fallback || accounts_list.is_empty() {
-            Ok((None, String::new()))
-        } else {
-            Err(ApiError(CoreError::NoHealthyTargets(0)))
-        }
-    } else {
-        Ok((account_id, String::new()))
+    let account_id = find_candidate_account_for_refresh(&accounts_list, q.account_id);
+    match account_id {
+        Some(id) => Ok((Some(id), String::new())),
+        None => Err(ApiError(CoreError::NoHealthyTargets(0))),
     }
+}
+
+fn write_antigravity_token_file(payload_str: &str) -> Result<std::path::PathBuf, CoreError> {
+    let cli_dir = dirs::home_dir()
+        .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
+        .join(".gemini")
+        .join("antigravity-cli");
+
+    std::fs::create_dir_all(&cli_dir).map_err(|e| {
+        CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {e}"))
+    })?;
+
+    let token_file = cli_dir.join("antigravity-oauth-token");
+
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true).create(true).truncate(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_options.mode(0o600);
+    }
+
+    let mut file = open_options.open(&token_file).map_err(|e| {
+        CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e))
+    })?;
+
+    file.write_all(payload_str.as_bytes()).map_err(|e| {
+        CoreError::Validation(format!(
+            "Failed to write to {}: {}",
+            token_file.display(),
+            e
+        ))
+    })?;
+
+    Ok(token_file)
 }
 
 pub async fn apply_account_local_cli(
@@ -274,40 +299,10 @@ pub async fn apply_account_local_cli(
         "auth_method": "consumer"
     });
 
-    // Ensure ~/.gemini/antigravity-cli directory exists
-    let cli_dir = dirs::home_dir()
-        .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
-        .join(".gemini")
-        .join("antigravity-cli");
-
-    std::fs::create_dir_all(&cli_dir).map_err(|e| {
-        CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {e}"))
-    })?;
-
-    let token_file = cli_dir.join("antigravity-oauth-token");
-
-    let mut open_options = std::fs::OpenOptions::new();
-    open_options.write(true).create(true).truncate(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_options.mode(0o600);
-    }
-
-    let mut file = open_options.open(&token_file).map_err(|e| {
-        CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e))
-    })?;
-
     let payload_str = serde_json::to_string(&payload)
         .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
-    file.write_all(payload_str.as_bytes()).map_err(|e| {
-        CoreError::Validation(format!(
-            "Failed to write to {}: {}",
-            token_file.display(),
-            e
-        ))
-    })?;
+
+    let token_file = write_antigravity_token_file(&payload_str)?;
 
     Ok(Json(serde_json::json!({
         "success": true,

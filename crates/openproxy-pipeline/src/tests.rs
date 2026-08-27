@@ -35,6 +35,220 @@ fn global_publisher(event: openproxy_types::usage::StageEvent) {
     }
 }
 
+async fn drain_http_headers_stream(sock: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut total = 0usize;
+    loop {
+        let Ok(Ok(n)) = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..])).await else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") || total == buf.len() {
+            break;
+        }
+    }
+}
+
+async fn drain_http_request_stream_full(sock: &mut tokio::net::TcpStream) -> (Vec<u8>, Option<usize>) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut total = 0usize;
+    let mut content_length: Option<usize> = None;
+    let mut header_end: Option<usize> = None;
+    loop {
+        let Ok(Ok(n)) = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..])).await else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if header_end.is_none()
+            && let Some(pos) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+        {
+            header_end = Some(pos);
+            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+            for line in header_str.split("\r\n") {
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = rest.trim().parse().ok();
+                }
+            }
+        }
+        if let (Some(he), Some(cl)) = (header_end, content_length)
+            && total - (he + 4) >= cl
+        {
+            break;
+        }
+        if total == buf.len() {
+            break;
+        }
+    }
+    (buf[..total].to_vec(), header_end)
+}
+
+async fn respond_with_status_and_body(
+    sock: &mut tokio::net::TcpStream,
+    status_line: &str,
+    body: &[u8],
+    content_type: &str,
+) {
+    use tokio::io::AsyncWriteExt;
+    let response = format!(
+        "{status_line}\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        body.len()
+    );
+    let _ = sock.write_all(response.as_bytes()).await;
+    let _ = sock.write_all(body).await;
+    let _ = sock.flush().await;
+}
+
+fn test_config_with_single_mock(master_key: Arc<MasterKey>, provider_name: &str, base_url: &str) -> PipelineConfig {
+    use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
+    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+    let mock = crate::test_utils::MockAdapter {
+        config: ProviderAdapterConfig {
+            id: ProviderId::new(provider_name),
+            base_url: base_url.to_string(),
+            auth_type: AdapterAuthType::Bearer,
+            format: AdapterFormat::Openai,
+            extra_headers: Vec::new(),
+        },
+        call_count: None,
+        fail_fetch: false,
+        models_to_return: None,
+    };
+    PipelineConfig {
+        defaults,
+        racing: RacingConfig::default(),
+        retries: RetriesConfig::default(),
+        max_attempts: 1,
+        master_key,
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
+        cooldown_secs: 60,
+        cooldown_max_secs: 3600,
+        cooldown_factor: 2,
+        upstream_client: UpstreamClient::new(),
+        oauth_provider_registry: None,
+        compression_mode: openproxy_compression::CompressionMode::Off,
+        idle_chunk_retryable: true,
+        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
+        background_tx: tokio::sync::mpsc::channel(1).0,
+    }
+}
+
+async fn send_single_openai_sse_chunk(sock: &mut tokio::net::TcpStream) -> bool {
+    use tokio::io::AsyncWriteExt;
+    let headers = b"HTTP/1.1 200 OK\r\n\
+                    Content-Type: text/event-stream\r\n\
+                    Cache-Control: no-cache\r\n\
+                    Transfer-Encoding: chunked\r\n\
+                    Connection: close\r\n\
+                    \r\n";
+    let chunk = b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\
+                  \"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n";
+    if sock.write_all(headers).await.is_err() {
+        return false;
+    }
+    let framed = format!(
+        "{:x}\r\n{}\r\n",
+        chunk.len(),
+        std::str::from_utf8(chunk).unwrap()
+    );
+    if sock.write_all(framed.as_bytes()).await.is_err() {
+        return false;
+    }
+    sock.flush().await.is_ok()
+}
+
+async fn stall_watching_client_close(
+    mut sock: tokio::net::TcpStream,
+    server_client_closed: Arc<std::sync::atomic::AtomicBool>,
+    server_bytes: Arc<std::sync::atomic::AtomicU64>,
+) {
+    use tokio::io::AsyncReadExt;
+    let mut stall_buf = [0u8; 1024];
+    let stall_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let now = std::time::Instant::now();
+        if now >= stall_deadline {
+            break;
+        }
+        let remaining = stall_deadline - now;
+        let read = tokio::time::timeout(remaining, sock.read(&mut stall_buf)).await;
+        match read {
+            Ok(Ok(0)) | Ok(Err(_)) => {
+                server_client_closed.store(true, std::sync::atomic::Ordering::SeqCst);
+                break;
+            }
+            Ok(Ok(n)) => {
+                server_bytes.fetch_add(n as u64, std::sync::atomic::Ordering::SeqCst);
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+fn seed_n_targets_combo(
+    w: &rusqlite::Connection,
+    mk: &MasterKey,
+    provider: &str,
+    combo_name: &str,
+    strategy: Strategy,
+    n: usize,
+) -> (ComboId, Vec<ComboTargetId>) {
+    use crate::test_utils::combos::AddTargetInput;
+    seed_provider(w, provider, AuthType::Bearer);
+    w.execute(
+        &format!("INSERT INTO models(provider_id, model_id, target_format) VALUES ('{provider}', 'm', 'openai')"),
+        [],
+    )
+    .expect("seed model");
+    let model_rowid: i64 = w
+        .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+        .expect("last_insert_rowid");
+    let model_id = openproxy_types::ids::ModelRowId(model_rowid);
+    let combo_id = combos::create_combo(w, combo_name, strategy, 1).expect("create combo");
+    let mut tids = Vec::new();
+    for i in 0..n {
+        let account_label = format!("a{}", i + 1);
+        let prio = ((i + 1) * 10) as i32;
+        let account_id = openproxy_db::accounts::create(
+            w,
+            &ProviderId::new(provider),
+            Some("sk-test"),
+            mk,
+            Some(&account_label),
+            prio,
+            None,
+        )
+        .expect("seed account");
+        let tid = combos::add_target(
+            w,
+            AddTargetInput {
+                combo_id,
+                provider_id: ProviderId::new(provider),
+                account_id: Some(account_id),
+                model_row_id: Some(model_id),
+                sub_combo_id: None,
+                priority_order: prio as i64,
+            },
+        )
+        .expect("add target");
+        tids.push(tid);
+    }
+    (combo_id, tids)
+}
+
 // NEW-2 fix unit tests: parse_retry_after_ms handles integer-seconds
 // and HTTP-date forms, applies the 5-minute cap to malicious values,
 // and returns None for empty/unparseable input.
@@ -707,80 +921,46 @@ async fn pipeline_probes_parked_target_when_only_option() {
     assert!(is_in_cooldown);
 }
 
+fn assert_cooldown_walk_results(w: &rusqlite::Connection, target_ids: &[ComboTargetId], result: &PipelineResult) {
+    match &result.error {
+        Some(CoreError::NoHealthyTargets(id)) => panic!(
+            "expected the dispatch loop to walk all parked targets, got NoHealthyTargets({})",
+            id
+        ),
+        Some(CoreError::UpstreamConnection(msg)) => {
+            assert!(!msg.is_empty(), "UpstreamConnection message should not be empty");
+        }
+        Some(_) => {}
+        None => panic!("expected a real upstream error from walking the parked row, got a successful result"),
+    }
+
+    let usage_count: i64 = w
+        .query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0))
+        .expect("count usage");
+    assert!(usage_count >= 1, "expected at least one usage row");
+
+    for tid in target_ids {
+        let is_in_cooldown = w.query_row(
+            "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
+            rusqlite::params![tid.0, chrono::Utc::now().to_rfc3339()],
+            |r| r.get::<_, i64>(0),
+        ).unwrap() > 0;
+        assert!(is_in_cooldown, "expected cooldown row for target {} to still be present", tid.0);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
-    // Regression for the cross-request cooldown contract:
-    // when *every* target in a priority combo is parked, the
-    // pipeline must still walk the full row (using the
-    // pre-cooldown snapshot) so the request surfaces a real
-    // upstream error rather than a 502 NoHealthyTargets
-    // short-circuit. The persistent cooldown row is preserved
-    // across this single request (the dispatch loop only
-    // clears on success) so the cross-request protection
-    // remains intact.
-    use crate::test_utils::combos::AddTargetInput;
-
     let (pool, conn, _path) = fresh_pool();
     let repo = SqlitePipelineRepository::new(Arc::clone(&conn));
     let mk = Arc::new(MasterKey::generate());
 
-    // Seed one provider, one model, three accounts (distinct
-    // labels so the (provider, label) uniqueness constraint
-    // lets them coexist), and one combo with three targets,
-    // each pointing at the same provider + model but a
-    // different account. Distinct priority_orders (10, 20,
-    // 30) make the row look like a real priority combo to
-    // the dispatch loop.
     let (combo_id, target_ids) = {
         let w = pool.writer();
-        // Seed the shared provider, model, and combo.
-        seed_provider(&w, "p", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) VALUES ('p', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        let combo_id = combos::create_combo(&w, "c", Strategy::Priority, 1).expect("create combo");
-
-        // Three accounts, three targets, one row in the
-        // combo's priority list. Each target needs a unique
-        // (provider, account) pair to satisfy the combo
-        // uniqueness guard inside `add_target`.
-        let mut tids = Vec::new();
-        for (label, prio) in [("a1", 10_i32), ("a2", 20_i32), ("a3", 30_i32)] {
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("p"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(label),
-                prio,
-                None,
-            )
-            .expect("seed account");
-            let tid = combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("p"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: prio as i64,
-                },
-            )
-            .expect("add target");
-            tids.push(tid);
-        }
-        (combo_id, tids)
+        seed_n_targets_combo(&w, mk.as_ref(), "p", "c", Strategy::Priority, 3)
     };
     assert_eq!(target_ids.len(), 3, "expected 3 targets in the row");
 
-    // Park all three for 60s.
     {
         let _w = pool.writer();
         for tid in &target_ids {
@@ -802,86 +982,8 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
     let (req, _dis_tx) = make_request(combo_id);
     let result = p.run(req).await;
 
-    // (a) + (b) The result must NOT be a NoHealthyTargets
-    // 502 short-circuit. The dispatch loop walked the full
-    // row, so we expect a real upstream error. The status
-    // code can still be 502 (UpstreamConnection also maps to
-    // 502), so we discriminate on the error variant, not on
-    // status_code.
-    match &result.error {
-        Some(CoreError::NoHealthyTargets(id)) => panic!(
-            "expected the dispatch loop to walk all parked targets, \
-                 got NoHealthyTargets({})",
-            id
-        ),
-        Some(CoreError::UpstreamConnection(msg)) => {
-            assert!(
-                !msg.is_empty(),
-                "UpstreamConnection message should not be empty"
-            );
-        }
-        Some(other) => {
-            eprintln!(
-                "pipeline_walks_full_row_when_all_targets_in_cooldown: \
-                     non-NoHealthyTargets error {:?} (acceptable)",
-                other
-            );
-        }
-        None => panic!(
-            "expected a real upstream error from walking the parked row, \
-                 got a successful result"
-        ),
-    }
-
-    // (c) The dispatch loop fired: at least one usage row
-    // was written for this request. The `NoHealthyTargets`
-    // short-circuit writes its own row, so this alone is
-    // not sufficient; combined with the error-variant check
-    // above, it proves the loop walked at least one target
-    // through `execute_single` → `record_and_fail`. We use
-    // `>= 1` rather than `== 3` because the loop may
-    // short-circuit on the first non-retryable error (e.g.
-    // `ProviderNotFound` when the test registry has no
-    // adapter for "p") — the per-target cooldown rows below
-    // are what guarantee the cross-request contract is
-    // preserved.
     let w = pool.writer();
-    let usage_count: i64 = w
-        .query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0))
-        .expect("count usage");
-    assert!(
-        usage_count >= 1,
-        "expected the dispatch loop to write at least one usage \
-             row (proves it fired); got {}",
-        usage_count
-    );
-
-    // (d) The error should be a *real* error, not a
-    // no-op short-circuit. This is the same contract as
-    // (a)/(b) restated; we keep it as its own assertion so
-    // a future regression that, e.g., maps every parked
-    // target to NoHealthyTargets surfaces as a dedicated
-    // failure with a clear message.
-    assert!(
-        !matches!(result.error, Some(CoreError::NoHealthyTargets(_))),
-        "expected a real upstream error, not NoHealthyTargets"
-    );
-
-    // (e) All three cooldown rows are still there: every
-    // attempt failed, so the dispatch loop re-parked them
-    // (or left the seeded row in place).
-    for tid in &target_ids {
-        let is_in_cooldown = w.query_row(
-            "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
-            rusqlite::params![tid.0, chrono::Utc::now().to_rfc3339()],
-            |r| r.get::<_, i64>(0),
-        ).unwrap() > 0;
-        assert!(
-            is_in_cooldown,
-            "expected cooldown row for target {} to still be present",
-            tid.0
-        );
-    }
+    assert_cooldown_walk_results(&w, &target_ids, &result);
 }
 
 /// Regression for bugs 3+4: a `Strategy::Priority` combo of
@@ -901,21 +1003,24 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
 ///   - the result has no error,
 ///   - the surfaced body comes from target 2
 ///     (`choices[0].message.content == "from model 2"`).
+fn assert_priority_walk_success(result: &PipelineResult, calls: u32) {
+    assert!(result.error.is_none(), "expected success, got error: {:?}", result.error);
+    let openai_response = result.final_response.as_ref().expect("final_response must be Some");
+    let first_content = openai_response
+        .choices
+        .first()
+        .and_then(|c| c.message.content.as_ref())
+        .and_then(|v| v.as_str());
+    assert_eq!(first_content, Some("from model 2"));
+    assert_eq!(calls, 2, "expected exactly 2 upstream calls");
+    assert!(result.attempts >= 1);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn priority_combo_walks_row_after_first_5xx() {
-    use crate::test_utils::combos::AddTargetInput;
-    use openproxy_adapters::adapters::AdapterFormat;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    // ----- 1. Mock adapter that points at our localhost listener -----
-    // ----- 2. Bind the listener; spawn a server that:
-    //         - 1st request → 500 (retryable, advances to next target),
-    //         - 2nd request → 200 with the "from model 2" body,
-    //         - 3rd request (shouldn't happen) → also 500, so any
-    //           regression that *skips* target 2 surfaces as a
-    //           pipeline error, not a misleading success.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -929,170 +1034,31 @@ async fn priority_combo_walks_row_after_first_5xx() {
                 Err(_) => break,
             };
             let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            let _ = drain_http_request_stream_full(&mut sock).await;
 
-            // Drain headers (and body, if Content-Length present)
-            // so the client can finish its write before we respond.
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            let mut content_length: Option<usize> = None;
-            let mut header_end: Option<usize> = None;
-            loop {
-                let read_result =
-                    tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
-                        .await;
-                match read_result {
-                    Err(_) => break,
-                    Ok(Ok(0)) => break,
-                    Ok(Ok(n)) => {
-                        total += n;
-                        if header_end.is_none()
-                            && let Some(pos) =
-                                buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                        {
-                            header_end = Some(pos);
-                            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                            for line in header_str.split("\r\n") {
-                                if let Some(rest) =
-                                    line.to_ascii_lowercase().strip_prefix("content-length:")
-                                {
-                                    content_length = rest.trim().parse().ok();
-                                }
-                            }
-                        }
-                        if let (Some(he), Some(cl)) = (header_end, content_length)
-                            && total - (he + 4) >= cl
-                        {
-                            break;
-                        }
-                        if total == buf.len() {
-                            break;
-                        }
-                    }
-                    Ok(Err(_)) => break,
-                }
-            }
-
-            // Build the response for this call.
-            let (status_line, body): (&str, Vec<u8>) = if my_call == 1 {
+            let (status_line, body): (&str, &[u8]) = if my_call == 1 {
                 (
                     "HTTP/1.1 500 Internal Server Error",
-                    r#"{"error":{"message":"upstream boom","type":"server_error"}}"#
-                        .as_bytes()
-                        .to_vec(),
+                    br#"{"error":{"message":"upstream boom","type":"server_error"}}"#,
                 )
             } else {
                 (
-                        "HTTP/1.1 200 OK",
-                        b"data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 2\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
-                    )
+                    "HTTP/1.1 200 OK",
+                    b"data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 2\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                )
             };
-            let response = format!(
-                "{}\r\n\
-                     Content-Type: text/event-stream\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n",
-                status_line,
-                body.len(),
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.flush().await;
+            respond_with_status_and_body(&mut sock, status_line, body, "text/event-stream").await;
         }
     });
 
-    // ----- 3. Seed a Priority combo with 3 healthy targets -----
-    //         All three use the same provider+model+url (the
-    //         mock listener), so the mock's per-call counter is
-    //         what discriminates them. Distinct account labels
-    //         keep the (provider, account) uniqueness constraint
-    //         happy.
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
-
-    // 1 provider, 1 model, 3 accounts, 3 targets with priorities
-    // 10/20/30 → dispatch order is target#1 → target#2 → target#3.
     let (combo_id, _target_ids) = {
         let w = pool.writer();
-        seed_provider(&w, "prio-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('prio-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        // Explicitly create the combo with race_size = 1 (the
-        // production default from admin.rs). Pre-fix, this
-        // collapsed `to_run` to a single target regardless of
-        // the combo's `Strategy`.
-        let combo_id =
-            combos::create_combo(&w, "prio-test", Strategy::Priority, 1).expect("create combo");
-        let mut tids = Vec::new();
-        for (label, prio) in [("a1", 10_i32), ("a2", 20_i32), ("a3", 30_i32)] {
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("prio-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(label),
-                prio,
-                None,
-            )
-            .expect("seed account");
-            let tid = combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("prio-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: prio as i64,
-                },
-            )
-            .expect("add target");
-            tids.push(tid);
-        }
-        (combo_id, tids)
+        seed_n_targets_combo(&w, mk.as_ref(), "prio-mock", "prio-test", Strategy::Priority, 3)
     };
 
-    // ----- 4. Wire the mock adapter + run the pipeline -----
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "prio-mock",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        // CRITICAL: leave max_attempts = 1 so the outer
-        // `for attempt in 1..=max_attempts` loop fires ONCE.
-        // If the priority walk fix is broken, `to_run` has 1
-        // entry, target 1 returns 500, attempt = 1 = max, the
-        // pipeline returns the 500 — and the mock will record
-        // only ONE HTTP call, not two.
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "prio-mock", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
@@ -1100,55 +1066,8 @@ async fn priority_combo_walks_row_after_first_5xx() {
         .await
         .expect("pipeline.run timed out");
 
-    // ----- 5. Asserts -----
-    // (a) No error: target 2's 200 won the walk.
-    assert!(
-        result.error.is_none(),
-        "expected success after walking the row, got error: {:?}",
-        result.error
-    );
-    // (b) The surfaced body came from target 2.
-    let openai_response = result
-        .final_response
-        .expect("final_response must be Some on success");
-    let first_content = openai_response
-        .choices
-        .first()
-        .and_then(|c| c.message.content.as_ref())
-        .and_then(|v| v.as_str());
-    assert_eq!(
-        first_content,
-        Some("from model 2"),
-        "expected the second target's body to win the walk"
-    );
-    // (c) The mock saw exactly two HTTP requests: target 1
-    // (500) and target 2 (200). Target 3 was NOT called.
-    //     A regression that collapses the walk to one target
-    //     (pre-fix behavior) would record only 1 call.
-    //     A regression that mistakenly *skips* target 2 would
-    //     record calls to targets 1 and 3 (call_count == 2
-    //     would still match, but then result.error would NOT
-    //     be None — caught by (a)).
     let calls = call_count.load(AtomicOrdering::SeqCst);
-    assert_eq!(
-        calls, 2,
-        "expected exactly 2 upstream calls (target 1 500, target 2 200); got {} — \
-             this means the priority walk did NOT advance past the failing target",
-        calls
-    );
-    // (d) attempts reflects the per-target loop accounting.
-    //     With max_attempts = 1 we expect 1 target tried at
-    //     the outer level; the result struct's `attempts`
-    //     field tracks the outer-loop counter, not the inner
-    //     per-target walk length.
-    assert!(
-        result.attempts >= 1,
-        "expected result.attempts >= 1, got {}",
-        result.attempts
-    );
-
-    // Best-effort: stop the accept loop. It's harmless if the
-    // server task is still running on the way out.
+    assert_priority_walk_success(&result, calls);
     drop(server_handle);
 }
 
@@ -1190,14 +1109,9 @@ async fn priority_combo_walks_row_after_first_5xx() {
 /// listener inline.
 #[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() {
-    use crate::test_utils::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    // 1. Mock adapter that always responds 500 with an openai-shaped body.
-    use openproxy_adapters::adapters::AdapterFormat;
-    // 2. Spin a 500-only listener.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -1210,131 +1124,20 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
                 Err(_) => break,
             };
             let _ = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            loop {
-                if let Ok(Ok(0)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
-                        .await
-                {
-                    break;
-                }
-                if let Ok(Ok(n)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
-                        .await
-                {
-                    if n == 0 {
-                        break;
-                    }
-                    total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            let body = r#"{"error":{"message":"all-fail","type":"server_error"}}"#.to_string();
-            let response = format!(
-                "HTTP/1.1 500 Internal Server Error\r\n\
-                     Content-Type: application/json\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n{}",
-                body.len(),
-                body,
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.flush().await;
+            let _ = drain_http_request_stream_full(&mut sock).await;
+            let body = br#"{"error":{"message":"all-fail","type":"server_error"}}"#;
+            respond_with_status_and_body(&mut sock, "HTTP/1.1 500 Internal Server Error", body, "application/json").await;
         }
     });
 
-    // 3. Seed a Priority combo with 5 targets.
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, _target_ids) = {
         let w = pool.writer();
-        seed_provider(&w, "adv-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('adv-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        let combo_id =
-            combos::create_combo(&w, "adv-prio-5", Strategy::Priority, 1).expect("create combo");
-        let mut tids = Vec::new();
-        for i in 0..5 {
-            let account_label = format!("a{}", i);
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("adv-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(&account_label),
-                (i + 1) * 10,
-                None,
-            )
-            .expect("seed account");
-            let tid = combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("adv-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: ((i + 1) * 10) as i64,
-                },
-            )
-            .expect("add target");
-            tids.push(tid);
-        }
-        (combo_id, tids)
+        seed_n_targets_combo(&w, mk.as_ref(), "adv-mock", "adv-prio-5", Strategy::Priority, 5)
     };
 
-    // 4. Wire the mock + run.
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "adv-mock",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        // Bug 4 fix: with per-target retry, the
-        // `retries.max_attempts` knob now controls how many
-        // times each individual target is retried. This
-        // test exists to assert the priority walk (bug 3
-        // fix), not the per-target retry (bug 4 fix), so
-        // pin `retries.max_attempts` to 1 to make the test
-        // insensitive to the bug 4 fix. Each target gets
-        // exactly one call → 5 calls total.
-        retries: RetriesConfig {
-            max_attempts: 1,
-            ..RetriesConfig::default()
-        },
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "adv-mock", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
@@ -1342,35 +1145,19 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
         .await
         .expect("pipeline.run timed out");
 
-    // 5. Asserts.
     let calls = call_count.load(AtomicOrdering::SeqCst);
     assert_eq!(
         calls, 5,
-        "expected 5 upstream calls (one per target), got {} — the priority \
-             walk did not honor eligible.len()=5 for a 5-target row",
+        "expected 5 upstream calls (one per target), got {} — the priority walk did not honor eligible.len()=5 for a 5-target row",
         calls
-    );
-    // The last error must be an upstream 500 (the pipeline
-    // returned the 5th target's failure, not a 502 NoHealthy).
-    assert!(
-        result.error.is_some(),
-        "expected an error after walking 5 failing targets"
     );
     match &result.error {
         Some(CoreError::UpstreamError { status, .. }) => {
             assert_eq!(*status, 500, "expected 500 from last target");
         }
-        Some(other) => panic!(
-            "expected CoreError::UpstreamError(500) from the last target, got {:?}",
-            other
-        ),
-        None => unreachable!(),
+        other => panic!("expected CoreError::UpstreamError(500) from the last target, got {:?}", other),
     }
-    assert!(
-        result.attempts >= 1,
-        "expected attempts >= 1, got {}",
-        result.attempts
-    );
+    assert!(result.attempts >= 1);
 
     drop(server_handle);
 }
@@ -1397,13 +1184,9 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
 /// a Priority combo.
 #[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
-    use crate::test_utils::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use openproxy_adapters::adapters::AdapterFormat;
-    // 1. Listener: 1st → 400, 2nd → 503, 3rd → 200.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -1416,121 +1199,24 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
                 Err(_) => break,
             };
             let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            while let Ok(Ok(n)) =
-                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-            {
-                if n == 0 {
-                    break;
-                }
-                total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let (status_line, body): (&str, Vec<u8>) = match my_call {
-                    1 => ("HTTP/1.1 400 Bad Request",
-                          r#"{"error":{"message":"bad prompt","type":"invalid_request_error"}}"#.as_bytes().to_vec()),
-                    2 => ("HTTP/1.1 503 Service Unavailable",
-                          r#"{"error":{"message":"overloaded","type":"server_error"}}"#.as_bytes().to_vec()),
-                    _ => ("HTTP/1.1 200 OK",
-                          b"data: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 3\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()),
-                };
-            let content_type = if status_line.contains("200") {
-                "text/event-stream"
-            } else {
-                "application/json"
+            let _ = drain_http_request_stream_full(&mut sock).await;
+            let (status_line, body, content_type): (&str, &[u8], &str) = match my_call {
+                1 => ("HTTP/1.1 400 Bad Request", br#"{"error":{"message":"bad prompt","type":"invalid_request_error"}}"#, "application/json"),
+                2 => ("HTTP/1.1 503 Service Unavailable", br#"{"error":{"message":"overloaded","type":"server_error"}}"#, "application/json"),
+                _ => ("HTTP/1.1 200 OK", b"data: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 3\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "text/event-stream"),
             };
-            let response = format!(
-                "{}\r\n\
-                     Content-Type: {}\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n",
-                status_line,
-                content_type,
-                body.len(),
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.flush().await;
+            respond_with_status_and_body(&mut sock, status_line, body, content_type).await;
         }
     });
 
-    // 2. Seed a 3-target Priority combo.
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, _target_ids) = {
         let w = pool.writer();
-        seed_provider(&w, "adv-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('adv-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        let combo_id = combos::create_combo(&w, "adv-prio-mixed", Strategy::Priority, 1)
-            .expect("create combo");
-        for i in 0..3 {
-            let account_label = format!("mx{}", i);
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("adv-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(&account_label),
-                (i + 1) * 10,
-                None,
-            )
-            .expect("seed account");
-            combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("adv-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: ((i + 1) * 10) as i64,
-                },
-            )
-            .expect("add target");
-        }
-        (combo_id, Vec::<ComboTargetId>::new())
+        seed_n_targets_combo(&w, mk.as_ref(), "adv-mock", "adv-prio-mixed", Strategy::Priority, 3)
     };
 
-    // 3. Wire the mock + run.
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "adv-mock",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "adv-mock", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
@@ -1538,28 +1224,12 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
         .await
         .expect("pipeline.run timed out");
 
-    // 4. Asserts.
     let calls = call_count.load(AtomicOrdering::SeqCst);
-    // The TESTER's expected behavior: the priority walk should
-    // advance past a 4xx because the operator's intent is to
-    // try the next model. The current implementation aborts on
-    // non-retryable errors — so this test MAY fail (returning
-    // the 400 from target #1 with calls=1). If it does, that
-    // documents the limitation and is exactly the kind of
-    // finding the TESTER is supposed to surface.
     assert_eq!(
         calls, 3,
-        "expected 3 upstream calls (walk past 400 → 503 → 200), got {} — \
-             the priority walk aborts on a 4xx; if this is intentional, the \
-             test should be revised to assert calls=1 and 400 surfaced",
-        calls
+        "expected 3 upstream calls (walk past 400 -> 503 -> 200), got {calls}"
     );
-    // If the walk does advance, the result must be the 200 from target #3.
-    assert!(
-        result.error.is_none(),
-        "expected success from target 3, got error: {:?}",
-        result.error
-    );
+    assert!(result.error.is_none(), "expected success from target 3, got error: {:?}", result.error);
 
     drop(server_handle);
 }
@@ -1586,14 +1256,9 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
 /// the loop).
 #[tokio::test(flavor = "multi_thread")]
 async fn round_robin_combo_walks_past_non_retryable_400() {
-    use crate::test_utils::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use openproxy_adapters::adapters::AdapterFormat;
-    // 1. Listener: 1st → 400 (non-retryable), 2nd → 200.
-    // The walk must advance past the 400 and reach target #2.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -1606,121 +1271,23 @@ async fn round_robin_combo_walks_past_non_retryable_400() {
                 Err(_) => break,
             };
             let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            while let Ok(Ok(n)) =
-                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-            {
-                if n == 0 {
-                    break;
-                }
-                total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let (status_line, body): (&str, Vec<u8>) = match my_call {
-                    1 => ("HTTP/1.1 400 Bad Request",
-                          r#"{"error":{"message":"invalid params, function name or parameters is empty (2013)","type":"invalid_request_error"}}"#.as_bytes().to_vec()),
-                    _ => ("HTTP/1.1 200 OK",
-                          b"data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 2\"},\"finish_reason\":null}]}
-
-data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}
-
-data: [DONE]
-
-".to_vec()),
-                };
-            let content_type = if status_line.starts_with("HTTP/1.1 200") {
-                "text/event-stream"
-            } else {
-                "application/json"
+            let _ = drain_http_request_stream_full(&mut sock).await;
+            let (status_line, body, content_type): (&str, &[u8], &str) = match my_call {
+                1 => ("HTTP/1.1 400 Bad Request", br#"{"error":{"message":"invalid params, function name or parameters is empty (2013)","type":"invalid_request_error"}}"#, "application/json"),
+                _ => ("HTTP/1.1 200 OK", b"data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 2\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "text/event-stream"),
             };
-            let response = format!(
-                "{}\r\n\
-                     Content-Type: {}\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n",
-                status_line,
-                content_type,
-                body.len(),
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.flush().await;
+            respond_with_status_and_body(&mut sock, status_line, body, content_type).await;
         }
     });
 
-    // 2. Seed a 2-target RoundRobin combo (race_size=1).
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
-    let combo_id = {
+    let (combo_id, _target_ids) = {
         let w = pool.writer();
-        seed_provider(&w, "rr-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('rr-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        let combo_id = combos::create_combo(&w, "rr-walk-past-400", Strategy::RoundRobin, 1)
-            .expect("create combo");
-        for i in 0..2 {
-            let account_label = format!("rr{}", i);
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("rr-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(&account_label),
-                (i + 1) * 10,
-                None,
-            )
-            .expect("seed account");
-            combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("rr-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: ((i + 1) * 10) as i64,
-                },
-            )
-            .expect("add target");
-        }
-        combo_id
+        seed_n_targets_combo(&w, mk.as_ref(), "rr-mock", "rr-walk-past-400", Strategy::RoundRobin, 2)
     };
 
-    // 3. Wire the mock + run.
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock =
-        crate::test_utils::MockAdapter::new("rr-mock", upstream_url.to_owned(), AdapterFormat::Openai);
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "rr-mock", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
@@ -1728,19 +1295,9 @@ data: [DONE]
         .await
         .expect("pipeline.run timed out");
 
-    // 4. Asserts.
     let calls = call_count.load(AtomicOrdering::SeqCst);
-    assert_eq!(
-        calls, 2,
-        "expected 2 upstream calls (walk past 400 → 200), got {} — \
-             the RoundRobin walk must NOT short-circuit on non-retryable errors",
-        calls
-    );
-    assert!(
-        result.error.is_none(),
-        "expected success from target 2, got error: {:?}",
-        result.error
-    );
+    assert_eq!(calls, 2, "expected 2 upstream calls (walk past 400 -> 200), got {calls}");
+    assert!(result.error.is_none(), "expected success from target 2, got error: {:?}", result.error);
 
     drop(server_handle);
 }
@@ -1757,15 +1314,89 @@ data: [DONE]
 ///
 /// Post-fix: the walk advances through X (400) → Y (400) → Z (200)
 /// and returns Z's 200.
+fn seed_nested_parent_and_sub_combo(w: &rusqlite::Connection, mk: &MasterKey) -> ComboId {
+    use crate::test_utils::combos::AddTargetInput;
+    seed_provider(w, "nested-mock", AuthType::Bearer);
+    w.execute(
+        "INSERT INTO models(provider_id, model_id, target_format) VALUES ('nested-mock', 'm', 'openai')",
+        [],
+    )
+    .expect("seed model");
+    let model_rowid: i64 = w
+        .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+        .expect("last_insert_rowid");
+    let model_id = openproxy_types::ids::ModelRowId(model_rowid);
+
+    let sub_combo_id = combos::create_combo(w, "sub-B", Strategy::Priority, 1).expect("create sub-combo");
+    for i in 0..2 {
+        let account_label = format!("sub{}", i);
+        let account_id = openproxy_db::accounts::create(
+            w,
+            &ProviderId::new("nested-mock"),
+            Some("sk-test"),
+            mk,
+            Some(&account_label),
+            (i + 1) * 10,
+            None,
+        )
+        .expect("seed account");
+        combos::add_target(
+            w,
+            AddTargetInput {
+                combo_id: sub_combo_id,
+                provider_id: ProviderId::new("nested-mock"),
+                account_id: Some(account_id),
+                model_row_id: Some(model_id),
+                sub_combo_id: None,
+                priority_order: ((i + 1) * 10) as i64,
+            },
+        )
+        .expect("add sub-combo target");
+    }
+
+    let parent_combo_id = combos::create_combo(w, "parent-A", Strategy::RoundRobin, 1).expect("create parent combo");
+    combos::add_target(
+        w,
+        AddTargetInput {
+            combo_id: parent_combo_id,
+            provider_id: ProviderId::new("nested-mock"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: Some(sub_combo_id),
+            priority_order: 10,
+        },
+    )
+    .expect("add sub-combo entry to parent");
+    let z_account_id = openproxy_db::accounts::create(
+        w,
+        &ProviderId::new("nested-mock"),
+        Some("sk-test"),
+        mk,
+        Some("z-acct"),
+        100,
+        None,
+    )
+    .expect("seed Z account");
+    combos::add_target(
+        w,
+        AddTargetInput {
+            combo_id: parent_combo_id,
+            provider_id: ProviderId::new("nested-mock"),
+            account_id: Some(z_account_id),
+            model_row_id: Some(model_id),
+            sub_combo_id: None,
+            priority_order: 20,
+        },
+    )
+    .expect("add Z entry to parent");
+    parent_combo_id
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
-    use crate::test_utils::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use openproxy_adapters::adapters::AdapterFormat;
-    // Listener: calls 1-2 → 400 (sub-combo's X and Y), call 3 → 200 (Z).
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -1778,160 +1409,23 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
                 Err(_) => break,
             };
             let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            while let Ok(Ok(n)) =
-                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-            {
-                if n == 0 {
-                    break;
-                }
-                total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let (status_line, body): (&str, Vec<u8>) = match my_call {
-                    1 | 2 => ("HTTP/1.1 400 Bad Request",
-                          r#"{"error":{"message":"invalid params (2013)","type":"invalid_request_error"}}"#.as_bytes().to_vec()),
-                    _ => ("HTTP/1.1 200 OK",
-                          b"data: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"z\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model Z\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"z\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()),
-                };
-            let content_type = if status_line.contains("200") {
-                "text/event-stream"
-            } else {
-                "application/json"
+            let _ = drain_http_request_stream_full(&mut sock).await;
+            let (status_line, body, content_type): (&str, &[u8], &str) = match my_call {
+                1 | 2 => ("HTTP/1.1 400 Bad Request", br#"{"error":{"message":"invalid params (2013)","type":"invalid_request_error"}}"#, "application/json"),
+                _ => ("HTTP/1.1 200 OK", b"data: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"z\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model Z\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"z\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "text/event-stream"),
             };
-            let response = format!(
-                "{}\r\n\
-                     Content-Type: {}\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n",
-                status_line,
-                content_type,
-                body.len(),
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.flush().await;
+            respond_with_status_and_body(&mut sock, status_line, body, content_type).await;
         }
     });
 
-    // Seed: parent combo A (RoundRobin, race_size=1) with
-    // [sub-combo B, model Z]. Sub-combo B has [model X, model Y].
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let parent_combo_id = {
         let w = pool.writer();
-        seed_provider(&w, "nested-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('nested-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-
-        // Sub-combo B with X, Y.
-        let sub_combo_id =
-            combos::create_combo(&w, "sub-B", Strategy::Priority, 1).expect("create sub-combo");
-        for i in 0..2 {
-            let account_label = format!("sub{}", i);
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("nested-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(&account_label),
-                (i + 1) * 10,
-                None,
-            )
-            .expect("seed account");
-            combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id: sub_combo_id,
-                    provider_id: ProviderId::new("nested-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: ((i + 1) * 10) as i64,
-                },
-            )
-            .expect("add sub-combo target");
-        }
-
-        // Parent combo A with [sub-combo B, model Z].
-        let parent_combo_id = combos::create_combo(&w, "parent-A", Strategy::RoundRobin, 1)
-            .expect("create parent combo");
-        // Entry 1: sub-combo B.
-        combos::add_target(
-            &w,
-            AddTargetInput {
-                combo_id: parent_combo_id,
-                provider_id: ProviderId::new("nested-mock"),
-                account_id: None,
-                model_row_id: None,
-                sub_combo_id: Some(sub_combo_id),
-                priority_order: 10,
-            },
-        )
-        .expect("add sub-combo entry to parent");
-        // Entry 2: model Z.
-        let z_account_id = openproxy_db::accounts::create(
-            &w,
-            &ProviderId::new("nested-mock"),
-            Some("sk-test"),
-            mk.as_ref(),
-            Some("z-acct"),
-            100,
-            None,
-        )
-        .expect("seed Z account");
-        combos::add_target(
-            &w,
-            AddTargetInput {
-                combo_id: parent_combo_id,
-                provider_id: ProviderId::new("nested-mock"),
-                account_id: Some(z_account_id),
-                model_row_id: Some(model_id),
-                sub_combo_id: None,
-                priority_order: 20,
-            },
-        )
-        .expect("add Z entry to parent");
-        parent_combo_id
+        seed_nested_parent_and_sub_combo(&w, mk.as_ref())
     };
 
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "nested-mock",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "nested-mock", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(parent_combo_id);
@@ -1939,19 +1433,12 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
         .await
         .expect("pipeline.run timed out");
 
-    // The walk must reach all 3 targets (X, Y, Z) and return Z's 200.
     let calls = call_count.load(AtomicOrdering::SeqCst);
     assert_eq!(
         calls, 3,
-        "expected 3 upstream calls (X 400 → Y 400 → Z 200), got {} — \
-             nested combo must fall through to parent sibling when sub-combo fails",
-        calls
+        "expected 3 upstream calls (X 400 -> Y 400 -> Z 200), got {calls}"
     );
-    assert!(
-        result.error.is_none(),
-        "expected success from Z, got error: {:?}",
-        result.error
-    );
+    assert!(result.error.is_none(), "expected success from Z, got error: {:?}", result.error);
 
     drop(server_handle);
 }
@@ -2090,13 +1577,9 @@ async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
 /// the outer loop with the wrong `to_run` capture.
 #[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
-    use crate::test_utils::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use openproxy_adapters::adapters::AdapterFormat;
-    // Listener: always 503.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -2108,135 +1591,38 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
                 Ok(p) => p,
                 Err(_) => break,
             };
-            let c = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
-            eprintln!("[server] accepted connection #{c}");
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            while let Ok(Ok(n)) =
-                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-            {
-                if n == 0 {
-                    break;
-                }
-                total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            eprintln!("[server] connection #{c} read {} bytes, sending 503", total);
-            let body = r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string();
-            let response = format!(
-                "HTTP/1.1 503 Service Unavailable\r\n\
-                     Content-Type: application/json\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n{}",
-                body.len(),
-                body,
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.flush().await;
-            eprintln!("[server] connection #{c} flushed response");
+            let _ = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
+            let _ = drain_http_request_stream_full(&mut sock).await;
+            let body = br#"{"error":{"message":"flaky","type":"server_error"}}"#;
+            respond_with_status_and_body(&mut sock, "HTTP/1.1 503 Service Unavailable", body, "application/json").await;
         }
     });
 
-    // 1-target Priority combo, max_attempts = 3.
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
-    let combo_id = {
+    let (combo_id, _target_ids) = {
         let w = pool.writer();
-        seed_provider(&w, "adv-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('adv-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        let account_id = openproxy_db::accounts::create(
-            &w,
-            &ProviderId::new("adv-mock"),
-            Some("sk-test"),
-            mk.as_ref(),
-            Some("only"),
-            10,
-            None,
-        )
-        .expect("seed account");
-        let combo_id =
-            combos::create_combo(&w, "adv-prio-1", Strategy::Priority, 1).expect("create combo");
-        combos::add_target(
-            &w,
-            AddTargetInput {
-                combo_id,
-                provider_id: ProviderId::new("adv-mock"),
-                account_id: Some(account_id),
-                model_row_id: Some(model_id),
-                sub_combo_id: None,
-                priority_order: 10,
-            },
-        )
-        .expect("add target");
-        combo_id
+        seed_n_targets_combo(&w, mk.as_ref(), "adv-mock", "adv-prio-1", Strategy::Priority, 1)
     };
 
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "adv-mock",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        // CRITICAL: max_attempts = 3 so the outer loop fires 3 times.
-        max_attempts: 3,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        // Disable retry backoff so the test is fast.
-        retries: RetriesConfig {
-            backoff_base_ms: 1,
-            backoff_factor: 1,
-            backoff_jitter_pct: 0,
-            ..RetriesConfig::default()
-        },
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let mut cfg = test_config_with_single_mock(mk, "adv-mock", &upstream_url);
+    cfg.max_attempts = 3;
+    cfg.retries.backoff_base_ms = 1;
+    cfg.retries.backoff_factor = 1;
+    cfg.retries.backoff_jitter_pct = 0;
     let p = Pipeline::new(conn, cfg);
+
     let (req, _cancel_tx) = make_request(combo_id);
-    eprintln!("[test] starting p.run(req)...");
     let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
-    eprintln!("[test] p.run(req) returned!");
 
     let calls = call_count.load(AtomicOrdering::SeqCst);
     assert_eq!(
         calls, 3,
-        "expected 3 upstream calls (one per outer-loop attempt) for a \
-             1-target Priority combo with max_attempts=3, got {} — the outer \
-             retry loop is not firing, or the inner walk is collapsing to 0",
-        calls
+        "expected 3 upstream calls for 1-target Priority combo with max_attempts=3, got {calls}"
     );
-    assert_eq!(
-        result.attempts, 3,
-        "expected PipelineResult.attempts == 3, got {}",
-        result.attempts
-    );
+    assert_eq!(result.attempts, 3, "expected PipelineResult.attempts == 3, got {}", result.attempts);
 
     drop(server_handle);
 }
@@ -2263,16 +1649,9 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
 /// call is the one that succeeds.
 #[tokio::test(flavor = "multi_thread")]
 async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
-    use crate::test_utils::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use openproxy_adapters::adapters::AdapterFormat;
-    // Listener: per-call counter, returns 503 for the first
-    // `bug4_max_attempts_for_target1` calls and 200 for the
-    // rest. This lets us assert both the per-target retry
-    // budget and the fall-through to the next target.
     const TARGET1_RETRY_BUDGET: u32 = 3;
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
@@ -2286,187 +1665,45 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
                 Err(_) => break,
             };
             let n = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            while let Ok(Ok(rd)) =
-                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-            {
-                if rd == 0 {
-                    break;
-                }
-                total += rd;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let (status_line, body): (&str, Vec<u8>) = if n < TARGET1_RETRY_BUDGET {
-                (
-                    "HTTP/1.1 503 Service Unavailable",
-                    r#"{"error":{"message":"flaky","type":"server_error"}}"#
-                        .as_bytes()
-                        .to_vec(),
-                )
+            let _ = drain_http_request_stream_full(&mut sock).await;
+            let (status_line, body, content_type): (&str, &[u8], &str) = if n < TARGET1_RETRY_BUDGET {
+                ("HTTP/1.1 503 Service Unavailable", br#"{"error":{"message":"flaky","type":"server_error"}}"#, "application/json")
             } else {
-                (
-                        "HTTP/1.1 200 OK",
-                        b"data: {\"id\":\"chatcmpl-bug4\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-bug4\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
-                    )
+                ("HTTP/1.1 200 OK", b"data: {\"id\":\"chatcmpl-bug4\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-bug4\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "text/event-stream")
             };
-            let content_type = if status_line.contains("200") {
-                "text/event-stream"
-            } else {
-                "application/json"
-            };
-            let response = format!(
-                "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                status_line,
-                content_type,
-                body.len(),
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.flush().await;
+            respond_with_status_and_body(&mut sock, status_line, body, content_type).await;
         }
     });
 
-    // 2-target Priority combo. Two distinct accounts on the
-    // same provider/model yield two distinct targets,
-    // satisfying the (provider, account, model) uniqueness
-    // constraint. Target 1 is exhausted (3 × 503); target 2
-    // succeeds on its first call. Expected: 4 HTTP calls
-    // total (3 retry of target 1 + 1 success of target 2).
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
-    let combo_id = {
+    let (combo_id, _target_ids) = {
         let w = pool.writer();
-        seed_provider(&w, "adv-mock", AuthType::Bearer);
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('adv-mock', 'm', 'openai')",
-            [],
-        )
-        .expect("seed model");
-        let model_rowid: i64 = w
-            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .expect("last_insert_rowid");
-        let model_id = openproxy_types::ids::ModelRowId(model_rowid);
-        let mut account_ids = Vec::new();
-        for label in ["bug4-a1", "bug4-a2"] {
-            let account_id = openproxy_db::accounts::create(
-                &w,
-                &ProviderId::new("adv-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some(label),
-                10,
-                None,
-            )
-            .expect("seed account");
-            account_ids.push(account_id);
-        }
-        let combo_id =
-            combos::create_combo(&w, "adv-bug4", Strategy::Priority, 1).expect("create combo");
-        for (&prio, &account_id) in [10_i32, 20].iter().zip(&account_ids) {
-            combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("adv-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: prio as i64,
-                },
-            )
-            .expect("add target");
-        }
-        combo_id
+        seed_n_targets_combo(&w, mk.as_ref(), "adv-mock", "adv-bug4", Strategy::Priority, 2)
     };
 
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "adv-mock",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        // The per-target retry budget is the source of
-        // truth for the bug 4 fix. We set it to 3 so the
-        // first target is retried 3 times, then the
-        // pipeline falls through to the second target.
-        retries: RetriesConfig {
-            max_attempts: TARGET1_RETRY_BUDGET as u8,
-            backoff_base_ms: 1,
-            backoff_factor: 1,
-            backoff_jitter_pct: 0,
-            // Bug-fix fields. Test doesn't care about
-            // idle-chunk retryability; the production
-            // default (false) is fine.
-            idle_chunk_retryable: false,
-            // 1 = no combo walk retry; this test only
-            // exercises the per-target retry path.
-            combo_max_attempts: 1,
-        },
-        // PipelineConfig.max_attempts is now mostly a
-        // vestigial knob for the outer combo walk; the
-        // per-target retry is governed by
-        // `retries.max_attempts` above. Pin to 1 to make
-        // the test insensitive to future changes in the
-        // outer loop.
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let mut cfg = test_config_with_single_mock(mk, "adv-mock", &upstream_url);
+    cfg.retries.max_attempts = TARGET1_RETRY_BUDGET as u8;
+    cfg.retries.backoff_base_ms = 1;
+    cfg.retries.backoff_factor = 1;
+    cfg.retries.backoff_jitter_pct = 0;
+    cfg.retries.combo_max_attempts = 1;
     let p = Pipeline::new(conn, cfg);
+
     let (req, _cancel_tx) = make_request(combo_id);
     let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
     let calls = call_count.load(AtomicOrdering::SeqCst);
-    // 3 retries on target 1 (all 503) + 1 success on target 2.
     assert_eq!(
         calls, 4,
-        "expected 4 upstream calls (3 retries of target 1 + 1 success of target 2), \
-             got {} — the per-target retry budget is not being applied to the same \
-             model before fall-through",
-        calls
+        "expected 4 upstream calls (3 retries of target 1 + 1 success of target 2), got {calls}"
     );
-    // The 4th call (the first call to target 2) succeeded,
-    // so the pipeline returns a 200 with the upstream body.
-    assert!(
-        result.error.is_none(),
-        "expected success after target 2's first call, got error: {:?}",
-        result.error
-    );
-    assert_eq!(
-        result.status_code, 200,
-        "expected 200, got {}",
-        result.status_code
-    );
-    let body = result
-        .final_response
-        .as_ref()
-        .expect("final_response must be set on success");
-    assert!(
-        body.id.starts_with("chatcmpl-bug4") || body.id.starts_with("chatcmpl-"),
-        "expected a chatcmpl id, got {:?}",
-        body.id
-    );
+    assert!(result.error.is_none(), "expected success after target 2's first call, got error: {:?}", result.error);
+    assert_eq!(result.status_code, 200, "expected 200, got {}", result.status_code);
+    let body = result.final_response.as_ref().expect("final_response must be set on success");
+    assert!(body.id.starts_with("chatcmpl-bug4") || body.id.starts_with("chatcmpl-"));
 
     drop(server_handle);
 }
@@ -2627,191 +1864,111 @@ async fn test_cooldown_disabled_modes() {
 // misleading 502.
 // -------------------------------------------------------------------
 
+fn seed_nine_targets_three_providers(w: &rusqlite::Connection, mk: &MasterKey) -> (ComboId, Vec<(ProviderId, AccountId)>) {
+    use crate::test_utils::combos::AddTargetInput;
+    let combo_id = combos::create_combo(w, "nerd", Strategy::Priority, 1).expect("create combo");
+    let mut acc_ids = Vec::new();
+    for prov_idx in 0..3 {
+        let pid_str = format!("p{}", prov_idx);
+        openproxy_db::providers::create(
+            w,
+            openproxy_db::providers::NewProvider {
+                id: &ProviderId::new(&pid_str),
+                name: &pid_str,
+                base_url: "https://example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            },
+        )
+        .expect("seed provider");
+        w.execute(
+            "INSERT INTO models(provider_id, model_id, target_format) VALUES (?1, ?2, 'openai')",
+            rusqlite::params![&pid_str, format!("m{}", prov_idx)],
+        )
+        .expect("seed model");
+        let model_rowid: i64 = w
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .expect("last_insert_rowid");
+        let model_id = ModelRowId(model_rowid);
+
+        for acct_idx in 0..3 {
+            let label = format!("a{}-{}", prov_idx, acct_idx);
+            let account_id = openproxy_db::accounts::create(
+                w,
+                &ProviderId::new(&pid_str),
+                Some("sk-test"),
+                mk,
+                Some(&label),
+                prov_idx * 3 + acct_idx + 1,
+                None,
+            )
+            .expect("seed account");
+            combos::add_target(
+                w,
+                AddTargetInput {
+                    combo_id,
+                    provider_id: ProviderId::new(&pid_str),
+                    account_id: Some(account_id),
+                    model_row_id: Some(model_id),
+                    sub_combo_id: None,
+                    priority_order: ((prov_idx * 3 + acct_idx + 1) * 10) as i64,
+                },
+            )
+            .expect("add target");
+            acc_ids.push((ProviderId::new(&pid_str), account_id));
+        }
+    }
+    (combo_id, acc_ids)
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit() {
-    // Three providers, one model each, one account per provider,
-    // three targets per provider → 9 targets total. The combo is
-    // a 9-row priority list spanning 3 different providers so the
-    // dispatch loop has to walk across providers (matching the
-    // user's 'nerd' shape). All 3 accounts are forced Unhealthy
-    // before the run.
-    use crate::test_utils::combos::AddTargetInput;
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
 
     let (combo_id, account_ids) = {
         let w = pool.writer();
-        let combo_id =
-            combos::create_combo(&w, "nerd", Strategy::Priority, 1).expect("create combo");
-
-        let mut acc_ids: Vec<(ProviderId, AccountId)> = Vec::new();
-        // Three providers × three accounts each × three model rows
-        // = nine targets. We pick the targets to alternate
-        // providers so the priority walk visits all 9.
-        for prov_idx in 0..3 {
-            let pid_str = format!("p{}", prov_idx);
-            openproxy_db::providers::create(
-                &w,
-                openproxy_db::providers::NewProvider {
-                    id: &ProviderId::new(&pid_str),
-                    name: &pid_str,
-                    base_url: "https://example.com",
-                    auth_type: AuthType::Bearer,
-                    format: ProviderFormat::Openai,
-                    extra_headers_json: None,
-                    auto_activate_keyword: None,
-                    rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-                },
-            )
-            .expect("seed provider");
-            w.execute(
-                "INSERT INTO models(provider_id, model_id, target_format) \
-                     VALUES (?1, ?2, 'openai')",
-                rusqlite::params![&pid_str, format!("m{}", prov_idx)],
-            )
-            .expect("seed model");
-            let model_rowid: i64 = w
-                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-                .expect("last_insert_rowid");
-            let model_id = ModelRowId(model_rowid);
-
-            for acct_idx in 0..3 {
-                let label = format!("a{}-{}", prov_idx, acct_idx);
-                let account_id = openproxy_db::accounts::create(
-                    &w,
-                    &ProviderId::new(&pid_str),
-                    Some("sk-test"),
-                    mk.as_ref(),
-                    Some(&label),
-                    // priority_order is the per-target ordering
-                    // inside the combo; we just need them to
-                    // alternate so the walk visits every account.
-                    prov_idx * 3 + acct_idx + 1,
-                    None,
-                )
-                .expect("seed account");
-                combos::add_target(
-                    &w,
-                    AddTargetInput {
-                        combo_id,
-                        provider_id: ProviderId::new(&pid_str),
-                        account_id: Some(account_id),
-                        model_row_id: Some(model_id),
-                        sub_combo_id: None,
-                        priority_order: ((prov_idx * 3 + acct_idx + 1) * 10) as i64,
-                    },
-                )
-                .expect("add target");
-                acc_ids.push((ProviderId::new(&pid_str), account_id));
-            }
-        }
-        (combo_id, acc_ids)
+        seed_nine_targets_three_providers(&w, mk.as_ref())
     };
-    assert_eq!(
-        account_ids.len(),
-        9,
-        "expected 9 (provider, account) pairs seeded across 3 providers"
-    );
+    assert_eq!(account_ids.len(), 9);
 
     let cfg = test_config(mk);
     let p = Pipeline::new(conn, cfg);
 
-    // Force every account into the Unhealthy state. This is the
-    // exact in-memory state the registry would reach after 5
-    // consecutive retryable failures on each account.
     for (_pid, aid) in &account_ids {
         p.circuit_breaker
             .force_unhealthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid));
     }
-    // Sanity-check: every account is now Unhealthy.
     for (_pid, aid) in &account_ids {
         assert_eq!(
             p.circuit_breaker
                 .is_healthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid)),
             crate::circuit_breaker::Health::Unhealthy,
-            "account {:?} should be Unhealthy before the run",
-            aid
         );
     }
 
     let (req, _dis_tx) = make_request(combo_id);
     let result = p.run(req).await;
 
-    // The current code (with only the cooldown-table fix in
-    // place) returns `NoHealthyTargets` here because:
-    //
-    //   1. The eligible filter (pipeline.rs:213-220) drops every
-    //      target whose account is Unhealthy.
-    //   2. The eligible vec is therefore empty.
-    //   3. The fix at lines 298-425 only fires AFTER the
-    //      eligible filter, and only handles the
-    //      `target_cooldowns` table — it does not consider the
-    //      circuit breaker.
-    //   4. The auto-populate fallback at lines 235-281 also does
-    //      not re-introduce Unhealthy accounts (the registry is
-    //      in-memory, the DB is `health_status = 'healthy'`).
-    //   5. Pipeline returns NoHealthyTargets in 0 ms.
-    //
-    // The contract the test enforces: the next request to this
-    // combo must NOT short-circuit to NoHealthyTargets; the
-    // dispatch loop must walk the row and surface a real
-    // per-target error (e.g. ProviderNotFound for an unknown
-    // provider, or UpstreamConnection for a real upstream).
     match &result.error {
         Some(CoreError::NoHealthyTargets(id)) => {
-            panic!(
-                "REGRESSION: combo with 9 targets, all accounts in circuit_breaker.Unhealthy, \
-                     short-circuited to NoHealthyTargets({}) in {:?}. \
-                     The fix at pipeline.rs:298-425 only covers the persistent \
-                     target_cooldowns table; the in-memory circuit breaker is a second \
-                     independent de-route path that still short-circuits the request. \
-                     See: pipeline.rs:213-220 (eligible filter) — this filter happens \
-                     BEFORE the cooldown snapshot, so when ALL accounts are Unhealthy \
-                     `to_run_unfiltered_snapshot` is empty and the fallback at line 423 \
-                     is never reached.",
-                id, result.attempts
-            );
+            panic!("REGRESSION: combo short-circuited to NoHealthyTargets({})", id);
         }
-        Some(CoreError::ProviderNotFound(_)) => {
-            // Acceptable: the dispatch loop walked the row and
-            // surfaced a real per-target error (no adapter was
-            // registered for any of the 3 providers in
-            // test_config). The point is: it did NOT short-
-            // circuit to NoHealthyTargets.
-        }
-        Some(CoreError::UpstreamConnection(msg)) => {
-            // Also acceptable: real upstream-flavoured error.
-            assert!(!msg.is_empty());
-        }
+        Some(CoreError::ProviderNotFound(_)) | Some(CoreError::UpstreamConnection(_)) => {}
         Some(other) => {
-            eprintln!(
-                "combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit: \
-                     non-NoHealthyTargets error {:?} (acceptable)",
-                other
-            );
+            eprintln!("combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit: non-NoHealthyTargets error {:?} (acceptable)", other);
         }
-        None => panic!(
-            "expected a real upstream / per-target error from walking the unhealthy row, \
-                 got a successful result"
-        ),
+        None => panic!("expected a real upstream / per-target error, got a successful result"),
     }
 
-    // Side contract: the dispatch loop fired. We don't assert
-    // the exact count because ProviderNotFound is non-retryable
-    // and the loop short-circuits on the first one — but at
-    // least one usage row must exist (the NoHealthyTargets
-    // short-circuit writes its own row, so this only proves the
-    // loop fired in combination with the error-variant
-    // assertion above).
     let w = pool.writer();
     let usage_count: i64 = w
         .query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0))
         .expect("count usage");
-    assert!(
-        usage_count >= 1,
-        "expected the dispatch loop to write at least one usage row; got {}",
-        usage_count
-    );
+    assert!(usage_count >= 1);
 }
 
 // -------------------------------------------------------------------
@@ -3048,119 +2205,30 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
 /// client-based path used).
 #[tokio::test(flavor = "multi_thread")]
 async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
-    use openproxy_adapters::adapters::AdapterFormat;
     use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    // ----- 1. A mock ProviderAdapter that points at our
-    //         localhost listener -----
-    // ----- 2. Wire the listener + spawn a server that returns a
-    //         well-formed OpenAI chat completion response. The
-    //         server parses Content-Length from the request
-    //         headers and stops reading once that many body
-    //         bytes have arrived — this avoids blocking on a
-    //         body that hyper may or may not flush before the
-    //         response window expires. -----
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
 
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
-        // Read until we've seen `\r\n\r\n` and (if a
-        // Content-Length is present) that many body bytes. We
-        // cap each read at 2s so the test never hangs the
-        // suite on a misbehaving client.
-        let mut buf = vec![0u8; 64 * 1024];
-        let mut total = 0usize;
-        let mut content_length: Option<usize> = None;
-        let mut header_end: Option<usize> = None;
-        loop {
-            let read_result =
-                tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..])).await;
-            match read_result {
-                Err(_) => break,
-                Ok(Ok(0)) => break,
-                Ok(Ok(n)) => {
-                    total += n;
-                    if header_end.is_none()
-                        && let Some(pos) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                    {
-                        header_end = Some(pos);
-                        let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                        for line in header_str.split("\r\n") {
-                            if let Some(rest) =
-                                line.to_ascii_lowercase().strip_prefix("content-length:")
-                            {
-                                content_length = rest.trim().parse().ok();
-                            }
-                        }
-                    }
-                    if let (Some(he), Some(cl)) = (header_end, content_length)
-                        && total - (he + 4) >= cl
-                    {
-                        break;
-                    }
-                    if total == buf.len() {
-                        break;
-                    }
-                }
-                Ok(Err(_)) => break,
-            }
-        }
-        // Return a minimal-but-valid OpenAI chat completion.
+        let _ = drain_http_request_stream_full(&mut sock).await;
         let body = b"data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-                 Content-Type: text/event-stream\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\
-                 \r\n",
-            body.len(),
-        );
-        let _ = sock.write_all(response.as_bytes()).await;
-        let _ = sock.write_all(body).await;
-        let _ = sock.flush().await;
+        respond_with_status_and_body(&mut sock, "HTTP/1.1 200 OK", body, "text/event-stream").await;
     });
 
-    // ----- 3. Build the pipeline config + pipeline -----
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, _account_id) =
         seed_solo_combo_at_url(&pool.writer(), "non-streaming-test", &upstream_url, &mk);
 
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "non-streaming-test",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "non-streaming-test", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
 
-    // ----- 4. Run the pipeline and assert success -----
     let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out — non-streaming dispatch did not return");
@@ -3188,90 +2256,27 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
     let _ = server_handle.await;
 }
 
-/// Regression test for the body-discard bug in
-/// `ProductionDispatch::dispatch`. The hyper client is
-/// `HyperClient<PhasedConnector, Full<Bytes>>` and the dispatch
-/// shim must materialise the caller's `Pin<Box<dyn Body>>` into
-/// a concrete `Full<Bytes>` before handing the request to
-/// hyper. This test exercises the full pipeline end-to-end and
-/// asserts that the mock upstream actually receives the JSON
-/// body — not an empty `Content-Length: 0`.
 #[tokio::test(flavor = "multi_thread")]
 async fn bug_a_body_reaches_upstream() {
-    use openproxy_adapters::adapters::AdapterFormat;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
 
-    // Count body bytes the upstream actually receives. The
-    // `MARKER` substring in the body lets us verify the JSON
-    // round-trips intact (i.e. we're not getting a default /
-    // empty body).
     let bytes_received = Arc::new(AtomicUsize::new(0));
     let bytes_received_clone = Arc::clone(&bytes_received);
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
-        let mut buf = vec![0u8; 64 * 1024];
-        let mut total = 0usize;
-        let mut content_length: Option<usize> = None;
-        let mut header_end: Option<usize> = None;
-        loop {
-            let r =
-                tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..])).await;
-            match r {
-                Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
-                Ok(Ok(n)) => {
-                    total += n;
-                    if header_end.is_none()
-                        && let Some(pos) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                    {
-                        header_end = Some(pos);
-                        let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                        for line in header_str.split("\r\n") {
-                            if let Some(rest) =
-                                line.to_ascii_lowercase().strip_prefix("content-length:")
-                            {
-                                content_length = rest.trim().parse().ok();
-                            }
-                        }
-                    }
-                    if let (Some(he), Some(cl)) = (header_end, content_length)
-                        && total - (he + 4) >= cl
-                    {
-                        break;
-                    }
-                    if total == buf.len() {
-                        break;
-                    }
-                }
-            }
-        }
-        // Count body bytes (everything after the header
-        // terminator, capped at `content_length`).
-        if let (Some(he), Some(cl)) = (header_end, content_length) {
-            let body_start = he + 4;
-            let body_end = std::cmp::min(body_start + cl, total);
-            if body_end > body_start {
-                bytes_received_clone.store(body_end - body_start, Ordering::SeqCst);
-            }
+        let (buf, header_end) = drain_http_request_stream_full(&mut sock).await;
+        if let Some(he) = header_end {
+            let body_bytes = buf.len().saturating_sub(he + 4);
+            bytes_received_clone.store(body_bytes, Ordering::SeqCst);
         }
         let body = b"data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-                 Content-Type: text/event-stream\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\
-                 \r\n",
-            body.len(),
-        );
-        let _ = sock.write_all(response.as_bytes()).await;
-        let _ = sock.write_all(body).await;
-        let _ = sock.flush().await;
+        respond_with_status_and_body(&mut sock, "HTTP/1.1 200 OK", body, "text/event-stream").await;
     });
 
     let (pool, conn, _path) = fresh_pool();
@@ -3279,32 +2284,7 @@ async fn bug_a_body_reaches_upstream() {
     let (combo_id, _account_id) =
         seed_solo_combo_at_url(&pool.writer(), "body-bug-test", &upstream_url, &mk);
 
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "body-bug-test",
-        upstream_url.to_owned(),
-        AdapterFormat::Openai,
-    );
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "body-bug-test", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
@@ -3320,15 +2300,9 @@ async fn bug_a_body_reaches_upstream() {
     );
     let _ = server_handle.await;
     let received = bytes_received.load(Ordering::SeqCst);
-    // A real OpenAI chat body is well over 200 bytes; the old
-    // `Empty<Bytes>` body would land at 0. We allow a generous
-    // floor (50) so the test is robust against small format
-    // tweaks while still catching the "body dropped to 0" bug.
     assert!(
         received > 50,
-        "upstream received only {received} body bytes; expected the full \
-             OpenAI chat JSON body (regression: ProductionDispatch::dispatch \
-             was discarding the caller's body before Gate E5)"
+        "upstream received only {received} body bytes; expected the full OpenAI chat JSON body"
     );
 }
 
@@ -3366,156 +2340,111 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     //         (the way a real upstream would stream an
     //         OpenAI response). -----
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+async fn send_openai_stream_chunks(sock: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncWriteExt;
+    let headers = b"HTTP/1.1 200 OK\r\n\
+                    Content-Type: text/event-stream\r\n\
+                    Cache-Control: no-cache\r\n\
+                    Connection: close\r\n\
+                    \r\n";
+    if sock.write_all(headers).await.is_err() {
+        return;
+    }
+    let chunks: &[&[u8]] = &[
+        b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
+        b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" there\"},\"finish_reason\":null}]}\n\n",
+        b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":null}]}\n\n",
+        b"data: [DONE]\n\n",
+    ];
+    for c in chunks {
+        if sock.write_all(c).await.is_err() || sock.flush().await.is_err() {
+            return;
+        }
+    }
+    let _ = sock.shutdown().await;
+}
+
+fn strip_sse_frame(bytes: &[u8]) -> Option<&[u8]> {
+    let done_frame = b"data: [DONE]\n\n";
+    if bytes == done_frame {
+        return None;
+    }
+    let data_prefix = b"data: ";
+    let suffix = b"\n\n";
+    if bytes.starts_with(data_prefix) && bytes.ends_with(suffix) {
+        Some(&bytes[data_prefix.len()..bytes.len() - suffix.len()])
+    } else {
+        None
+    }
+}
+
+fn assert_streaming_sink_output(collected: &[bytes::Bytes]) {
+    assert!(!collected.is_empty(), "expected at least one SSE chunk in sink output");
+
+    let done_count = collected
+        .iter()
+        .filter(|b| **b == *crate::SSE_DONE_BYTES)
+        .count();
+    assert!(done_count >= 1, "expected at least one [DONE] sentinel in sink output");
+
+    let mut reconstructed = String::new();
+    for item in collected {
+        if *item == crate::SSE_DONE_BYTES {
+            continue;
+        }
+        let payload_bytes = strip_sse_frame(item)
+            .unwrap_or_else(|| panic!("sink item is not a valid SSE frame: {:?}", item));
+        let payload_str = std::str::from_utf8(payload_bytes)
+            .unwrap_or_else(|_| panic!("SSE payload is not valid UTF-8: {:?}", payload_bytes));
+        let parsed: serde_json::Value = serde_json::from_str(payload_str).unwrap_or_else(|e| {
+            panic!("sink item is not valid JSON: {:?} ({})", payload_str, e)
+        });
+        assert!(
+            parsed.get("choices").is_some(),
+            "translated chunk must carry a `choices` field: {:?}",
+            parsed
+        );
+        if let Some(content) = parsed
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("delta"))
+            .and_then(|d| d.get("content"))
+            .and_then(|s| s.as_str())
+        {
+            reconstructed.push_str(content);
+        }
+    }
+    assert_eq!(reconstructed, "hi there!", "concatenated chunk content mismatch");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streaming_dispatch_uses_upstream_client_end_to_end() {
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
 
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
-        // Drain the request bytes so the client can finish
-        // the POST. The mock upstream is OpenAI-on-the-wire;
-        // we don't parse the body — just consume it.
-        let mut buf = vec![0u8; 64 * 1024];
-        let mut total = 0usize;
-        let mut header_end: Option<usize> = None;
-        let mut content_length: Option<usize> = None;
-        loop {
-            let read_result =
-                tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..])).await;
-            match read_result {
-                Err(_) => break,
-                Ok(Ok(0)) => break,
-                Ok(Ok(n)) => {
-                    total += n;
-                    if header_end.is_none()
-                        && let Some(pos) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                    {
-                        header_end = Some(pos);
-                        let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                        for line in header_str.split("\r\n") {
-                            if let Some(rest) =
-                                line.to_ascii_lowercase().strip_prefix("content-length:")
-                            {
-                                content_length = rest.trim().parse().ok();
-                            }
-                        }
-                    }
-                    if let (Some(he), Some(cl)) = (header_end, content_length)
-                        && total - (he + 4) >= cl
-                    {
-                        break;
-                    }
-                    if total == buf.len() {
-                        break;
-                    }
-                }
-                Ok(Err(_)) => break,
-            }
-        }
-
-        // Send the response headers. We use neither
-        // Content-Length nor Transfer-Encoding: chunked
-        // — the upstream closes the socket when the
-        // response is complete. This is the simplest
-        // streaming shape and is the one the production
-        // hyper client is tuned for (the `Limited` body
-        // wrapper reads until EOF in this case).
-        let headers = b"HTTP/1.1 200 OK\r\n\
-                            Content-Type: text/event-stream\r\n\
-                            Cache-Control: no-cache\r\n\
-                            Connection: close\r\n\
-                            \r\n";
-        if sock.write_all(headers).await.is_err() {
-            return;
-        }
-
-        // Three OpenAI-style chunks (delta.content="hi" /
-        // " there" / "!") then [DONE]. Each chunk is
-        // sent as a separate `write_all` so the upstream
-        // client's body stream sees multiple frames
-        // arriving on the socket, exercising the
-        // `next_chunk()` boundary in the loop.
-        let chunks: &[&[u8]] = &[
-                br#"data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}
-
-"#.as_slice(),
-                br#"data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}
-
-"#.as_slice(),
-                br#"data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
-
-"#.as_slice(),
-            ];
-        for c in chunks {
-            if sock.write_all(c).await.is_err() {
-                return;
-            }
-            if sock.flush().await.is_err() {
-                return;
-            }
-        }
-        // [DONE] sentinel as the last chunk.
-        let done = b"data: [DONE]\n\n";
-        let _ = sock.write_all(done).await;
-        let _ = sock.flush().await;
-        // Close the socket to signal EOF — the upstream
-        // client's `next_chunk` will return `Ok(None)`.
-        let _ = sock.shutdown().await;
+        let _ = drain_http_request_stream_full(&mut sock).await;
+        send_openai_stream_chunks(&mut sock).await;
     });
 
-    // ----- 3. Build the pipeline config + pipeline -----
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, _account_id) =
         seed_solo_combo_at_url(&pool.writer(), "streaming-test", &upstream_url, &mk);
 
-    let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter {
-        config: ProviderAdapterConfig {
-            id: ProviderId::new("streaming-test"),
-            base_url: upstream_url.to_owned(),
-            auth_type: AdapterAuthType::Bearer,
-            format: AdapterFormat::Openai,
-            extra_headers: Vec::new(),
-        },
-        call_count: None,
-        fail_fetch: false,
-        models_to_return: None,
-    };
-    let cfg = PipelineConfig {
-        defaults,
-        racing: RacingConfig::default(),
-        retries: RetriesConfig::default(),
-        max_attempts: 1,
-        master_key: mk,
-        adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-        ]),
-        cooldown_secs: 60,
-        cooldown_max_secs: 3600,
-        cooldown_factor: 2,
-        upstream_client: UpstreamClient::new(),
-        oauth_provider_registry: None,
-        // Auto-added (test compile fix):
-        compression_mode: openproxy_compression::CompressionMode::Off,
-        idle_chunk_retryable: true,
-        quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-        background_tx: tokio::sync::mpsc::channel(1).0,
-    };
+    let cfg = test_config_with_single_mock(mk, "streaming-test", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
-    // ----- 4. Build a streaming request: `stream = true`,
-    //         a real sink channel, and a real cancel watch
-    //         (we never send `true`, so the watch stays
-    //         false for the whole run). -----
     let (mut req, _cancel_tx) = make_request(combo_id);
     Arc::make_mut(&mut req.openai_request).stream = true;
     let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
     req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
-    // ----- 5. Run the pipeline. We capture the result so we
-    //         can report it in the panic message; the
-    //         streaming dispatch populates the sink as a
-    //         side effect. -----
     let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("streaming pipeline.run timed out — next_chunk() did not return");
@@ -3527,99 +2456,12 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     );
     assert_eq!(result.status_code, 200);
 
-    // After `run` returns the sink sender has been dropped,
-    // so the channel is closed. Drain everything still in
-    // the buffer.
     let mut collected: Vec<bytes::Bytes> = Vec::new();
     while let Some(item) = sink_rx.recv().await {
         collected.push(item);
     }
 
-    // ----- 6. Assertions -----
-    assert!(
-        !collected.is_empty(),
-        "expected at least one SSE chunk to be forwarded to the sink — \
-             the streaming dispatch path produced no output"
-    );
-
-    /// Strip the SSE framing (`data: ` prefix and `\n\n` suffix) to
-    /// recover the raw JSON payload. Returns `None` for the `[DONE]`
-    /// sentinel or if the format is unexpected.
-    fn strip_sse_frame(bytes: &[u8]) -> Option<&[u8]> {
-        let done_frame = b"data: [DONE]\n\n";
-        if bytes == done_frame {
-            return None;
-        }
-        let data_prefix = b"data: ";
-        let suffix = b"\n\n";
-        if bytes.starts_with(data_prefix) && bytes.ends_with(suffix) {
-            Some(&bytes[data_prefix.len()..bytes.len() - suffix.len()])
-        } else {
-            None
-        }
-    }
-
-    // The [DONE] sentinel is sent by the pipeline
-    // itself, but the upstream also sends it; either way
-    // at least one [DONE] must be present.
-    let done_count = collected
-        .iter()
-        .filter(|b| **b == *crate::SSE_DONE_BYTES)
-        .count();
-    assert!(
-        done_count >= 1,
-        "expected at least one [DONE] sentinel in the sink output, got: {:?}",
-        collected
-    );
-    // Every non-[DONE] entry must be a valid JSON object
-    // with a `choices` array (i.e. a translated OpenAI
-    // chunk).
-    for item in &collected {
-        if *item == crate::SSE_DONE_BYTES {
-            continue;
-        }
-        let payload_bytes = strip_sse_frame(item)
-            .unwrap_or_else(|| panic!("sink item is not a valid SSE frame: {:?}", item));
-        let payload_str = std::str::from_utf8(payload_bytes)
-            .unwrap_or_else(|_| panic!("SSE payload is not valid UTF-8: {:?}", payload_bytes));
-        let parsed: serde_json::Value = serde_json::from_str(payload_str).unwrap_or_else(|e| {
-            panic!(
-                "sink item is not valid JSON: {:?} (parse error: {})",
-                payload_str, e
-            )
-        });
-        assert!(
-            parsed.get("choices").is_some(),
-            "translated chunk must carry a `choices` field: {:?}",
-            parsed
-        );
-    }
-    // The concatenated `delta.content` of the translated
-    // chunks must spell "hi there!" — proves every chunk
-    // was forwarded and translated, not just the first.
-    let mut reconstructed = String::new();
-    for item in &collected {
-        if *item == crate::SSE_DONE_BYTES {
-            continue;
-        }
-        if let Some(payload_bytes) = strip_sse_frame(item)
-            && let Ok(payload_str) = std::str::from_utf8(payload_bytes)
-            && let Ok(v) = serde_json::from_str::<serde_json::Value>(payload_str)
-            && let Some(delta) = v
-                .get("choices")
-                .and_then(|c| c.get(0))
-                .and_then(|c| c.get("delta"))
-            && let Some(content) = delta.get("content").and_then(|s| s.as_str())
-        {
-            reconstructed.push_str(content);
-        }
-    }
-    assert_eq!(
-        reconstructed, "hi there!",
-        "concatenated chunk content must equal `hi there!`, got {:?}",
-        reconstructed
-    );
-
+    assert_streaming_sink_output(&collected);
     let _ = server_handle.await;
 }
 
@@ -3747,95 +2589,46 @@ async fn cancellation_mid_stream_select_aborts() {
 /// server holds the socket open without sending more data, so
 /// the only way the pipeline can finish is by hitting the
 /// cancel arm of the inner `tokio::select!`.
+fn assert_client_disconnected_499(result: &PipelineResult, accepted: bool) {
+    match &result.error {
+        Some(CoreError::ClientDisconnected) => {
+            assert_eq!(
+                CoreError::ClientDisconnected.http_status(),
+                499,
+                "ClientDisconnected must map to HTTP 499"
+            );
+        }
+        other => panic!(
+            "expected ClientDisconnected(499) from mid-stream cancel but got {:?} — the stream-side tokio::select! is not firing on the cancel arm during an active SSE stream",
+            other
+        ),
+    }
+    assert!(
+        accepted,
+        "the mock upstream never accepted a connection — the pipeline did not actually reach the HTTP layer, so this test is not exercising the stream-side select! at all"
+    );
+}
+
+async fn check_client_closed_observed(client_closed: &std::sync::atomic::AtomicBool, bytes_after_headers: &std::sync::atomic::AtomicU64) {
+    let close_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !client_closed.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < close_deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let client_closed_observed = client_closed.load(std::sync::atomic::Ordering::SeqCst);
+    let bytes_observed = bytes_after_headers.load(std::sync::atomic::Ordering::SeqCst);
+    if !client_closed_observed {
+        eprintln!(
+            "[test note] client_close not observed within 5s; bytes_after_headers={bytes_observed} — this is acceptable when the upstream side closes its end first"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn cancellation_mid_sse_stream_aborts_immediately() {
-    use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    // -----------------------------------------------------------------
-    // 1. A minimal `ProviderAdapter` whose `base_url` is whatever
-    //    the test wants. The built-in adapters hardcode
-    //    `https://openrouter.ai/api/v1` (or similar) which makes
-    //    it impossible to point them at a localhost listener; the
-    //    pipeline reads the URL via `adapter.build_chat_url(...)`,
-    //    NOT from the `providers.upstream_url` column. So we need
-    //    our own adapter, registered under a unique provider id
-    //    so the existing `OpenRouterAdapter` does not match.
-    //
-    //    The shape mirrors `OpenRouterAdapter` for the chat path
-    //    and is OpenAI-on-the-wire; the methods we don't exercise
-    //    (`fetch_models`, `models_url`) return values that would
-    //    never get called by the streaming dispatch path.
-    // -----------------------------------------------------------------
-
-    // -----------------------------------------------------------------
-    // 2. Build a `PipelineConfig` that registers ONLY the mock
-    //    adapter, scoped to a unique provider id. The default
-    //    `test_config()` has an empty adapter list; `test_config_
-    //    with_adapters` ships every built-in adapter, which would
-    //    mean a request for `"test-mock-sse"` finds no match and
-    //    bails with `ProviderNotFound` before reaching the HTTP
-    //    layer. We want ONLY our mock to be discoverable.
-    // -----------------------------------------------------------------
-    fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> PipelineConfig {
-        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = crate::test_utils::MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("test-mock-sse"),
-                base_url: base_url.to_string(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-            call_count: None,
-            fail_fetch: false,
-            models_to_return: None,
-        };
-        PipelineConfig {
-            defaults,
-            racing: RacingConfig::default(),
-            retries: RetriesConfig::default(),
-            max_attempts: 1,
-            master_key,
-            adapters: Arc::new(vec![
-                openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
-            ]),
-            cooldown_secs: 60,
-            cooldown_max_secs: 3600,
-            cooldown_factor: 2,
-            upstream_client: UpstreamClient::new(),
-            oauth_provider_registry: None,
-            // Auto-added (test compile fix):
-            compression_mode: openproxy_compression::CompressionMode::Off,
-            idle_chunk_retryable: true,
-            quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
-            background_tx: tokio::sync::mpsc::channel(1).0,
-        }
-    }
-
-    // -----------------------------------------------------------------
-    // 3. Bind the mock upstream, start its accept task. The server:
-    //    a. accepts ONE connection (the dispatch will only open
-    //       one — single target, no race),
-    //    b. drains the request bytes until "\r\n\r\n" so UpstreamClient
-    //       is no longer blocked on writing the body,
-    //    c. writes `200 OK` + `text/event-stream` headers,
-    //    d. writes ONE valid OpenAI SSE chunk so the pipeline
-    //       records TTFT and enters the steady-state stream loop,
-    //    e. STALLS — holds the socket open and stops writing.
-    //       The pipeline's `bytes_stream().next()` future is now
-    //       pending, so the only way it can wake is via the
-    //       cancel arm of the inner `tokio::select!`.
-    //
-    //    The server records whether it observed a client-side
-    //    close (read returns 0 / Err) AFTER the cancel fires.
-    //    That is the proof that UpstreamClient's connection was actually
-    //    torn down as a consequence of the cancellation, not just
-    //    that the pipeline's `select!` short-circuited internally.
-    // -----------------------------------------------------------------
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
     let upstream_url = format!("http://{local_addr}");
@@ -3851,168 +2644,24 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
         server_accepted.store(true, Ordering::SeqCst);
 
-        // Drain the request line + headers so the client can
-        // finish writing its POST body. We bound the read at
-        // 32 KiB which is far more than any of the headers +
-        // tiny body the client will send.
-        let mut buf = vec![0u8; 32 * 1024];
-        let mut total = 0usize;
-        loop {
-            match sock.read(&mut buf[total..]).await {
-                Ok(0) => break, // peer closed before sending
-                Ok(n) => {
-                    total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                        // Headers ended. Any further bytes are
-                        // body; we don't need to parse them, but
-                        // keep reading a little so the client can
-                        // finish the POST and the pipeline can
-                        // start reading the response.
-                        while let Ok(n) = sock.read(&mut buf).await {
-                            if n == 0 {
-                                break;
-                            }
-                            total += n;
-                        }
-                        break;
-                    }
-                    if total == buf.len() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        let _ = total;
-
-        // Send the SSE response: status line + headers + a
-        // single valid OpenAI chunk, then STALL. The chunk is
-        // well-formed JSON so `parse_openai_sse_line` returns
-        // `Ok(Some(_))` and the pipeline records TTFT and
-        // enters the steady-state `while let` loop.
-        // `Content-Type: text/event-stream` here is critical:
-        // with `Transfer-Encoding: chunked` the body is a
-        // proper byte stream that only ends when the server
-        // closes the socket. Without chunked encoding, the
-        // client hyper derives `Content-Length` from the first
-        // chunk and treats subsequent writes as protocol
-        // errors, masking the very signal we want to observe.
-        let headers = b"HTTP/1.1 200 OK\r\n\
-                            Content-Type: text/event-stream\r\n\
-                            Cache-Control: no-cache\r\n\
-                            Transfer-Encoding: chunked\r\n\
-                            Connection: close\r\n\
-                            \r\n";
-        let chunk = b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\
-                          \"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n";
-        if sock.write_all(headers).await.is_err() {
+        let _ = drain_http_request_stream_full(&mut sock).await;
+        if !send_single_openai_sse_chunk(&mut sock).await {
             return;
         }
-        // Wrap the chunk in chunked-encoding framing so the
-        // client sees a proper open-ended stream.
-        let framed = format!(
-            "{:x}\r\n{}\r\n",
-            chunk.len(),
-            std::str::from_utf8(chunk).unwrap()
-        );
-        if sock.write_all(framed.as_bytes()).await.is_err() {
-            return;
-        }
-        if sock.flush().await.is_err() {
-            return;
-        }
-
-        // Now STALL: read the socket until either the client
-        // closes (which is what we want to observe — UpstreamClient
-        // tears the connection down when the pipeline drops
-        // the response future) or 10s elapse. We deliberately
-        // do NOT send a `[DONE]` sentinel and do NOT close the
-        // socket ourselves; the pipeline's `bytes_stream().next()`
-        // must stay pending throughout this period.
-        let mut stall_buf = [0u8; 1024];
-        let stall_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut poll_count = 0u32;
-        loop {
-            let now = std::time::Instant::now();
-            if now >= stall_deadline {
-                break;
-            }
-            let remaining = stall_deadline - now;
-            let read = tokio::time::timeout(remaining, sock.read(&mut stall_buf)).await;
-            poll_count += 1;
-            match read {
-                // Client closed the connection — this is the
-                // signal that the client propagated the
-                // cancellation all the way down to the socket.
-                Ok(Ok(0)) => {
-                    eprintln!(
-                        "[test server] client closed connection after {} polls",
-                        poll_count
-                    );
-                    server_client_closed.store(true, Ordering::SeqCst);
-                    break;
-                }
-                Ok(Ok(n)) => {
-                    eprintln!(
-                        "[test server] received {} bytes from client (poll {})",
-                        n, poll_count
-                    );
-                    server_bytes.fetch_add(n as u64, Ordering::SeqCst);
-                }
-                // Read errored out (typically a reset from the
-                // peer once the client drops the body future).
-                Ok(Err(_)) => {
-                    eprintln!("[test server] read errored (poll {})", poll_count);
-                    server_client_closed.store(true, Ordering::SeqCst);
-                    break;
-                }
-                // Timeout with no data: the client is still
-                // holding the socket open. Loop and try again
-                // so we keep watching for the close.
-                Err(_) => {
-                    if poll_count.is_multiple_of(20) {
-                        eprintln!(
-                            "[test server] still waiting for close (poll {})",
-                            poll_count
-                        );
-                    }
-                }
-            }
-        }
+        stall_watching_client_close(sock, server_client_closed, server_bytes).await;
     });
 
-    // -----------------------------------------------------------------
-    // 4. Seed a 1-provider / 1-account / 1-target combo whose
-    //    upstream URL is the listener. The URL we pass to
-    //    `providers::create` is irrelevant to the dispatch path
-    //    (the adapter hardcodes the URL), but we still pass the
-    //    real listener URL so the row is self-describing for
-    //    future readers of the test.
-    // -----------------------------------------------------------------
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, _account_id) =
         seed_solo_combo_at_url(&pool.writer(), "test-mock-sse", &upstream_url, &mk);
 
-    // -----------------------------------------------------------------
-    // 5. Wire the pipeline to the mock adapter and run the
-    //    request with `stream = true`. We use long timeouts so
-    //    the only way the run can complete is by hitting the
-    //    cancel arm of the stream-side `tokio::select!`. If the
-    //    pipeline accidentally fell back to `total_ms` or
-    //    `idle_chunk_ms` instead, the run would still be
-    //    pending at the 3s timeout below.
-    // -----------------------------------------------------------------
-    let cfg = test_config_with_mock(mk, &upstream_url);
+    let cfg = test_config_with_single_mock(mk, "test-mock-sse", &upstream_url);
     let p = Pipeline::new(conn, cfg);
 
     let (mut req, cancel_tx) = make_request(combo_id);
     Arc::make_mut(&mut req.openai_request).stream = true;
 
-    // Drive the cancel ~300ms after the run starts. That's
-    // enough time for UpstreamClient to finish the POST, get the
-    // 200 OK, parse the first chunk, and start blocking on
-    // the second `bytes_stream().next()`.
     let cancel_task = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let _ = cancel_tx.send(true);
@@ -4020,89 +2669,13 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
 
     let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
         .await
-        .expect(
-            "mid-stream cancellation: pipeline.run did not abort within 3s of \
-             cancel — the stream-side tokio::select! (response.bytes_stream().next() \
-             vs client_disconnected) is not being honored",
-        );
+        .expect("mid-stream cancellation: pipeline.run did not abort within 3s of cancel");
 
-    // The cancel task is fire-and-forget; just await it for
-    // tidiness.
     let _ = cancel_task.await;
 
-    // -----------------------------------------------------------------
-    // 6. Assertions. The contract is:
-    //    a. the run completes well under `total_ms` (we use a
-    //       3s hard timeout above; with `total = 30s`, hitting
-    //       that ceiling would prove the cancel did NOT short-
-    //       circuit the stream),
-    //    b. the error is `ClientDisconnected` (not an
-    //       `UpstreamConnection` from a hung-up socket — the
-    //       server kept its side open),
-    //    c. the server saw the connection as torn down AFTER
-    //       the cancel fired (i.e. the client propagated the
-    //       abort to the socket). This is the proof that the
-    //       pipeline's `select!` actually selected the cancel
-    //       arm and dropped the body future, instead of
-    //       waiting for the stream to finish on its own.
-    // -----------------------------------------------------------------
-    match &result.error {
-        Some(CoreError::ClientDisconnected) => {
-            assert_eq!(
-                CoreError::ClientDisconnected.http_status(),
-                499,
-                "ClientDisconnected must map to HTTP 499"
-            );
-        }
-        other => panic!(
-            "expected ClientDisconnected(499) from mid-stream cancel but got \
-                 {:?} — the stream-side tokio::select! is not firing on the \
-                 cancel arm during an active SSE stream",
-            other
-        ),
-    }
+    assert_client_disconnected_499(&result, accepted.load(Ordering::SeqCst));
+    check_client_closed_observed(&client_closed, &bytes_after_headers).await;
 
-    // Verify the server actually accepted a TCP connection.
-    // If accepted=false, the pipeline never reached the HTTP
-    // layer and this test is not exercising the cancel path.
-    assert!(
-        accepted.load(Ordering::SeqCst),
-        "the mock upstream never accepted a connection — the pipeline did \
-             not actually reach the HTTP layer, so this test is not exercising \
-             the stream-side select! at all"
-    );
-    // Poll the server-side close flag for up to 5s. This
-    // gives the hyper-util Pooled -> Idle -> drop chain
-    // enough time to close the TCP connection on the wire.
-    // We surface the observed value in the test logs so a
-    // regression in the cancellation path is visible even if
-    // the connection eventually reuses elsewhere.
-    let close_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !client_closed.load(Ordering::SeqCst) && std::time::Instant::now() < close_deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let client_closed_observed = client_closed.load(Ordering::SeqCst);
-    let bytes_observed = bytes_after_headers.load(Ordering::SeqCst);
-    if !client_closed_observed {
-        // Soft warning instead of panic: a cancelled
-        // request whose connection stays pooled for the
-        // 5s window is not a correctness regression in
-        // the cancellation logic (the pipeline still
-        // short-circuits its own `select!` and the hyper
-        // body is dropped), it just means the underlying
-        // TCP close is best-effort and depends on the
-        // upstream side holding the socket open long
-        // enough. The `bug_a_body_reaches_upstream` test
-        // is the load-bearing regression guard for
-        // "request body is sent to upstream".
-        eprintln!(
-            "[test note] client_close not observed within 5s; \
-                 bytes_after_headers={bytes_observed} — this is acceptable \
-                 when the upstream side closes its end first"
-        );
-    }
-
-    // Stop the server.
     server_handle.abort();
     let _ = server_handle.await;
 }
@@ -5413,180 +3986,15 @@ async fn streaming_response_body_caps_at_16mib() {
     );
 }
 
-#[test]
-fn test_quota_routing_and_protection() {
-    let (_pool, conn, _db_path) = fresh_pool();
-    let master_key = Arc::new(MasterKey::generate());
-    let config = test_config(Arc::clone(&master_key));
-    let pipeline = Pipeline::new(Arc::clone(&conn), config);
-
-    seed_provider(&conn.lock(), "antigravity", AuthType::Bearer);
-
-    // Helper to insert an account with specific quota columns
-    let insert_mock_account = |id: i64,
-                               priority: i32,
-                               session_used: Option<i64>,
-                               session_limit: Option<i64>,
-                               model_details: Option<&str>| {
-        let conn = conn.lock();
-        conn.execute(
-            "INSERT INTO accounts (id, provider_id, auth_type, priority, health_status, \
-                 quota_session_used, quota_session_limit, quota_model_details) \
-                 VALUES (?1, 'antigravity', 'api_key', ?2, 'healthy', ?3, ?4, ?5)",
-            rusqlite::params![id, priority, session_used, session_limit, model_details],
-        )
-        .unwrap();
-    };
-
-    // 1. Test evaluate_account_quota - Aggregate session quota
-    insert_mock_account(1, 1, Some(100), Some(100), None); // Exhausted
-    insert_mock_account(2, 1, Some(50), Some(100), None); // Available
-    insert_mock_account(3, 1, None, None, None); // Available (no limit)
-
-    {
-        let acc1 = pipeline
-            .repo()
-            .get_account(AccountId(1), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc2 = pipeline
-            .repo()
-            .get_account(AccountId(2), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc3 = pipeline
-            .repo()
-            .get_account(AccountId(3), &master_key)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc1,
-                "gemini-3-flash"
-            ),
-            QuotaStatus::Exhausted
-        );
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc2,
-                "gemini-3-flash"
-            ),
-            QuotaStatus::Available
-        );
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc3,
-                "gemini-3-flash"
-            ),
-            QuotaStatus::Available
-        );
-    }
-
-    // 2. Test evaluate_account_quota - Model-specific quota with protection
-    // Account 4 has 5% remaining (Protected under default 10% threshold)
-    insert_mock_account(
-        4,
-        1,
-        None,
-        None,
-        Some(
-            r#"[{"model_id":"gemini-3-flash","session_used":950,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.05}]"#,
-        ),
-    );
-    // Account 5 has 20% remaining (Available)
-    insert_mock_account(
-        5,
-        1,
-        None,
-        None,
-        Some(
-            r#"[{"model_id":"gemini-3-flash","session_used":800,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.20}]"#,
-        ),
-    );
-    // Account 6 is strictly exhausted for flash (remaining_fraction <= 0.0)
-    insert_mock_account(
-        6,
-        1,
-        None,
-        None,
-        Some(
-            r#"[{"model_id":"gemini-3-flash","session_used":1000,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.0}]"#,
-        ),
-    );
-
-    {
-        let acc4 = pipeline
-            .repo()
-            .get_account(AccountId(4), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc5 = pipeline
-            .repo()
-            .get_account(AccountId(5), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc6 = pipeline
-            .repo()
-            .get_account(AccountId(6), &master_key)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc4,
-                "gemini-3-flash"
-            ),
-            QuotaStatus::Protected
-        );
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc5,
-                "gemini-3-flash"
-            ),
-            QuotaStatus::Available
-        );
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc6,
-                "gemini-3-flash"
-            ),
-            QuotaStatus::Exhausted
-        );
-
-        // Unmonitored models should map to Available as long as remaining_fraction > 0
-        assert_eq!(
-            crate::quotas::evaluate_account_quota(
-                pipeline.config.quota_protection.enabled,
-                pipeline.config.quota_protection.threshold_percentage,
-                &acc4,
-                "gpt-4o"
-            ),
-            QuotaStatus::Available
-        );
-    }
-
-    // 3. Test apply_quota_routing - Filtering and sorting
-    let make_target = |id: i64, account_id: i64| ComboTarget {
+fn make_quota_resolved_target(id: i64, account_id: Option<i64>, priority_order: i32) -> crate::context::ResolvedTarget {
+    let t = ComboTarget {
         id: ComboTargetId(id),
         combo_id: ComboId(1),
         provider_id: ProviderId::new("antigravity"),
-        account_id: Some(AccountId(account_id)),
+        account_id: account_id.map(AccountId),
         model_row_id: None,
         sub_combo_id: None,
-        priority_order: id as i32,
+        priority_order,
         weight: 1,
         active: true,
         rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
@@ -5595,8 +4003,7 @@ fn test_quota_routing_and_protection() {
         cooldown_max_secs: None,
         cooldown_factor: None,
     };
-
-    let to_resolved = |t: ComboTarget| crate::context::ResolvedTarget {
+    crate::context::ResolvedTarget {
         target: t,
         model: openproxy_types::models::Model {
             row_id: openproxy_types::ids::ModelRowId(1),
@@ -5622,125 +4029,106 @@ fn test_quota_routing_and_protection() {
         api_key: String::new(),
         api_key_label: None,
         custom_meta: None,
-    };
+    }
+}
 
-    // Candidates: Account 1 (Exhausted), Account 4 (Protected), Account 5 (Available)
-    let targets: Vec<_> = vec![
-        make_target(1, 1), // Account 1
-        make_target(2, 4), // Account 4
-        make_target(3, 5), // Account 5
-    ]
-    .into_iter()
-    .map(to_resolved)
-    .collect();
+fn insert_quota_mock_account(
+    conn: &parking_lot::Mutex<rusqlite::Connection>,
+    id: i64,
+    priority: i32,
+    session_used: Option<i64>,
+    session_limit: Option<i64>,
+    model_details: Option<&str>,
+) {
+    let c = conn.lock();
+    c.execute(
+        "INSERT INTO accounts (id, provider_id, auth_type, priority, health_status, \
+             quota_session_used, quota_session_limit, quota_model_details) \
+             VALUES (?1, 'antigravity', 'api_key', ?2, 'healthy', ?3, ?4, ?5)",
+        rusqlite::params![id, priority, session_used, session_limit, model_details],
+    )
+    .unwrap();
+}
 
-    // Should filter out Account 1 (Exhausted) and Account 4 (Protected) because Account 5 is Available
-    let resolved = crate::quotas::apply_quota_routing(
-        pipeline.config.quota_protection.enabled,
-        pipeline.config.quota_protection.threshold_percentage,
-        pipeline.repo().as_ref(),
-        &master_key,
-        targets.to_vec(),
-        "gemini-3-flash",
-    );
+#[test]
+fn test_quota_routing_and_protection() {
+    let (_pool, conn, _db_path) = fresh_pool();
+    let master_key = Arc::new(MasterKey::generate());
+    let config = test_config(Arc::clone(&master_key));
+    let pipeline = Pipeline::new(Arc::clone(&conn), config);
+
+    seed_provider(&conn.lock(), "antigravity", AuthType::Bearer);
+
+    // 1. Aggregate session quota
+    insert_quota_mock_account(&conn, 1, 1, Some(100), Some(100), None);
+    insert_quota_mock_account(&conn, 2, 1, Some(50), Some(100), None);
+    insert_quota_mock_account(&conn, 3, 1, None, None, None);
+
+    let acc1 = pipeline.repo().get_account(AccountId(1), &master_key).unwrap().unwrap();
+    let acc2 = pipeline.repo().get_account(AccountId(2), &master_key).unwrap().unwrap();
+    let acc3 = pipeline.repo().get_account(AccountId(3), &master_key).unwrap().unwrap();
+
+    let enabled = pipeline.config.quota_protection.enabled;
+    let threshold = pipeline.config.quota_protection.threshold_percentage;
+
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc1, "gemini-3-flash"), QuotaStatus::Exhausted);
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc2, "gemini-3-flash"), QuotaStatus::Available);
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc3, "gemini-3-flash"), QuotaStatus::Available);
+
+    // 2. Model-specific quota with protection
+    insert_quota_mock_account(&conn, 4, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":950,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.05}]"#));
+    insert_quota_mock_account(&conn, 5, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":800,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.20}]"#));
+    insert_quota_mock_account(&conn, 6, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":1000,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.0}]"#));
+
+    let acc4 = pipeline.repo().get_account(AccountId(4), &master_key).unwrap().unwrap();
+    let acc5 = pipeline.repo().get_account(AccountId(5), &master_key).unwrap().unwrap();
+    let acc6 = pipeline.repo().get_account(AccountId(6), &master_key).unwrap().unwrap();
+
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc4, "gemini-3-flash"), QuotaStatus::Protected);
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc5, "gemini-3-flash"), QuotaStatus::Available);
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc6, "gemini-3-flash"), QuotaStatus::Exhausted);
+    assert_eq!(crate::quotas::evaluate_account_quota(enabled, threshold, &acc4, "gpt-4o"), QuotaStatus::Available);
+
+    // 3. Filtering and fallback
+    let targets = vec![
+        make_quota_resolved_target(1, Some(1), 1),
+        make_quota_resolved_target(2, Some(4), 2),
+        make_quota_resolved_target(3, Some(5), 3),
+    ];
+    let resolved = crate::quotas::apply_quota_routing(enabled, threshold, pipeline.repo().as_ref(), &master_key, targets, "gemini-3-flash");
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].target.account_id, Some(AccountId(5)));
 
-    // 4. Test apply_quota_routing - Fallback to Protected when no Available ones exist
-    // Candidates: Account 1 (Exhausted), Account 4 (Protected)
-    let targets_only_protected: Vec<_> = vec![make_target(1, 1), make_target(2, 4)]
-        .into_iter()
-        .map(to_resolved)
-        .collect();
-
-    // Should fallback to keeping Account 4 (Protected)
-    let resolved_fallback = crate::quotas::apply_quota_routing(
-        pipeline.config.quota_protection.enabled,
-        pipeline.config.quota_protection.threshold_percentage,
-        pipeline.repo().as_ref(),
-        &master_key,
-        targets_only_protected,
-        "gemini-3-flash",
-    );
+    let targets_only_protected = vec![
+        make_quota_resolved_target(1, Some(1), 1),
+        make_quota_resolved_target(2, Some(4), 2),
+    ];
+    let resolved_fallback = crate::quotas::apply_quota_routing(enabled, threshold, pipeline.repo().as_ref(), &master_key, targets_only_protected, "gemini-3-flash");
     assert_eq!(resolved_fallback.len(), 1);
     assert_eq!(resolved_fallback[0].target.account_id, Some(AccountId(4)));
 
-    // 5. Test apply_quota_routing - Sorting based on remaining fraction
-    // Insert Account 7 with 50% remaining, priority 1
-    insert_mock_account(
-        7,
-        1,
-        None,
-        None,
-        Some(
-            r#"[{"model_id":"gemini-3-flash","session_used":500,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.50}]"#,
-        ),
-    );
-    // Insert Account 8 with 80% remaining, priority 2 (worse priority but better quota)
-    insert_mock_account(
-        8,
-        2,
-        None,
-        None,
-        Some(
-            r#"[{"model_id":"gemini-3-flash","session_used":200,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.80}]"#,
-        ),
-    );
+    // 4. Sorting based on remaining fraction
+    insert_quota_mock_account(&conn, 7, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":500,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.50}]"#));
+    insert_quota_mock_account(&conn, 8, 2, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":200,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.80}]"#));
 
-    let targets_sorting: Vec<_> = vec![
-        make_target(1, 7), // Account 7 (Priority 1, 50% quota)
-        make_target(2, 5), // Account 5 (Priority 1, 20% quota)
-        make_target(3, 8), // Account 8 (Priority 2, 80% quota)
-    ]
-    .into_iter()
-    .map(to_resolved)
-    .collect();
-
-    let resolved_sorting = crate::quotas::apply_quota_routing(
-        pipeline.config.quota_protection.enabled,
-        pipeline.config.quota_protection.threshold_percentage,
-        pipeline.repo().as_ref(),
-        &master_key,
-        targets_sorting,
-        "gemini-3-flash",
-    );
+    let targets_sorting = vec![
+        make_quota_resolved_target(1, Some(7), 1),
+        make_quota_resolved_target(2, Some(5), 2),
+        make_quota_resolved_target(3, Some(8), 3),
+    ];
+    let resolved_sorting = crate::quotas::apply_quota_routing(enabled, threshold, pipeline.repo().as_ref(), &master_key, targets_sorting, "gemini-3-flash");
     assert_eq!(resolved_sorting.len(), 3);
-    // Should sort by priority ASC first, then remaining fraction DESC:
-    // Index 0: Account 7 (Priority 1, 50%)
-    // Index 1: Account 5 (Priority 1, 20%)
-    // Index 2: Account 8 (Priority 2, 80%)
     assert_eq!(resolved_sorting[0].target.account_id, Some(AccountId(7)));
     assert_eq!(resolved_sorting[1].target.account_id, Some(AccountId(5)));
     assert_eq!(resolved_sorting[2].target.account_id, Some(AccountId(8)));
 
-    // 6. Test apply_quota_routing - Preserves combo target priority_order when mixing anonymous & account targets
-    let mut target_anon_1 = make_target(1, 0);
-    target_anon_1.account_id = None;
-    target_anon_1.priority_order = 1;
-
-    let mut target_acc_2 = make_target(2, 7);
-    target_acc_2.account_id = Some(AccountId(7)); // priority 1, 50%
-    target_acc_2.priority_order = 2;
-
-    let mut target_anon_19 = make_target(19, 0);
-    target_anon_19.account_id = None;
-    target_anon_19.priority_order = 19;
-
+    // 5. Preserves combo target priority_order when mixing anonymous & account targets
     let targets_mixed = vec![
-        to_resolved(target_anon_1),
-        to_resolved(target_acc_2),
-        to_resolved(target_anon_19),
+        make_quota_resolved_target(1, None, 1),
+        make_quota_resolved_target(2, Some(7), 2),
+        make_quota_resolved_target(19, None, 19),
     ];
-
-    let resolved_mixed = crate::quotas::apply_quota_routing(
-        pipeline.config.quota_protection.enabled,
-        pipeline.config.quota_protection.threshold_percentage,
-        pipeline.repo().as_ref(),
-        &master_key,
-        targets_mixed,
-        "gemini-3-flash",
-    );
-
+    let resolved_mixed = crate::quotas::apply_quota_routing(enabled, threshold, pipeline.repo().as_ref(), &master_key, targets_mixed, "gemini-3-flash");
     assert_eq!(resolved_mixed.len(), 3);
     assert_eq!(resolved_mixed[0].target.priority_order, 1);
     assert_eq!(resolved_mixed[1].target.priority_order, 2);

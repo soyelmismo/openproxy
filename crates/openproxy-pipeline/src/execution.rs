@@ -8,6 +8,60 @@ use openproxy_types::ids::ComboId;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+fn flatten_sub_combos(
+    repo: &dyn crate::repository::PipelineRepository,
+    root_combo_id: ComboId,
+    targets: Vec<ComboTarget>,
+) -> Result<Vec<ComboTarget>> {
+    let mut out = Vec::with_capacity(targets.len());
+    let mut visited: Vec<ComboId> = vec![root_combo_id];
+    for t in targets {
+        if let Some(sub_id) = t.sub_combo_id {
+            let sub_flat = repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
+            out.extend(sub_flat);
+        } else {
+            out.push(t);
+        }
+    }
+    repo.expand_account_rotation(out)
+}
+
+struct TargetIdCollections {
+    model_row_ids: Vec<openproxy_types::ids::ModelRowId>,
+    account_ids: Vec<openproxy_types::ids::AccountId>,
+    provider_ids_no_account: Vec<openproxy_types::ids::ProviderId>,
+}
+
+fn collect_and_dedup_target_ids(eligible: &[ComboTarget]) -> TargetIdCollections {
+    let mut model_row_ids = Vec::new();
+    let mut account_ids = Vec::new();
+    let mut provider_ids_no_account = Vec::new();
+
+    for t in eligible {
+        if let Some(m) = t.model_row_id {
+            model_row_ids.push(m);
+        }
+        if let Some(a) = t.account_id {
+            account_ids.push(a);
+        } else {
+            provider_ids_no_account.push(t.provider_id.clone());
+        }
+    }
+
+    model_row_ids.sort_unstable_by_key(|id| id.0);
+    model_row_ids.dedup_by_key(|id| id.0);
+    account_ids.sort_unstable_by_key(|id| id.0);
+    account_ids.dedup_by_key(|id| id.0);
+    provider_ids_no_account.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    provider_ids_no_account.dedup_by(|a, b| a.0 == b.0);
+
+    TargetIdCollections {
+        model_row_ids,
+        account_ids,
+        provider_ids_no_account,
+    }
+}
+
 impl Pipeline {
     /// Drive one chat-completion request to completion.
     pub async fn run(&self, req: PipelineRequest) -> PipelineResult {
@@ -47,48 +101,38 @@ impl Pipeline {
         let root_combo_id = *root_combo_id;
         let repo = self.repo();
         tokio::task::spawn_blocking(move || {
-            let mut out = Vec::with_capacity(targets.len());
-            let mut visited: Vec<ComboId> = vec![root_combo_id];
-            for t in targets {
-                if let Some(sub_id) = t.sub_combo_id {
-                    let sub_flat = repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
-                    out.extend(sub_flat);
-                } else {
-                    out.push(t);
-                }
-            }
-            let expanded = repo.expand_account_rotation(out)?;
-            Ok(expanded)
+            flatten_sub_combos(repo.as_ref(), root_combo_id, targets)
         })
         .await
         .map_err(|e| CoreError::Internal(e.to_string()))?
     }
+}
 
+fn do_auto_populate(repo: &dyn crate::repository::PipelineRepository, combo_id: openproxy_types::ids::ComboId, combo_name: &str) -> Result<usize> {
+    if !repo.list_targets(combo_id)?.is_empty() {
+        return Ok(0);
+    }
+
+    let added = repo.auto_populate_empty_combo(combo_id)?;
+    if added > 0 {
+        tracing::info!(
+            combo_id = combo_id.0,
+            combo_name = %combo_name,
+            added_targets = added,
+            "auto-populated empty combo with healthy provider's active models"
+        );
+    }
+    Ok(added)
+}
+
+impl Pipeline {
     pub(crate) async fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
         let repo = self.repo();
         let combo_id = combo.id;
         let combo_name = combo.name.clone();
-        tokio::task::spawn_blocking(move || {
-            {
-                if !repo.list_targets(combo_id)?.is_empty() {
-                    return Ok(0);
-                }
-            }
-
-            let added = { repo.auto_populate_empty_combo(combo_id)? };
-
-            if added > 0 {
-                tracing::info!(
-                    combo_id = combo_id.0,
-                    combo_name = %combo_name,
-                    added_targets = added,
-                    "auto-populated empty combo with healthy provider's active models"
-                );
-            }
-            Ok(added)
-        })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))?
+        tokio::task::spawn_blocking(move || do_auto_populate(repo.as_ref(), combo_id, &combo_name))
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?
     }
 
     pub async fn resolve_combo_targets_full(
@@ -99,27 +143,11 @@ impl Pipeline {
             return Vec::new();
         }
 
-        let mut model_row_ids = Vec::new();
-        let mut account_ids = Vec::new();
-        let mut provider_ids_no_account = Vec::new();
-
-        for t in &eligible {
-            if let Some(m) = t.model_row_id {
-                model_row_ids.push(m);
-            }
-            if let Some(a) = t.account_id {
-                account_ids.push(a);
-            } else {
-                provider_ids_no_account.push(t.provider_id.clone());
-            }
-        }
-
-        model_row_ids.sort_unstable_by_key(|id| id.0);
-        model_row_ids.dedup_by_key(|id| id.0);
-        account_ids.sort_unstable_by_key(|id| id.0);
-        account_ids.dedup_by_key(|id| id.0);
-        provider_ids_no_account.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        provider_ids_no_account.dedup_by(|a, b| a.0 == b.0);
+        let TargetIdCollections {
+            model_row_ids,
+            account_ids,
+            provider_ids_no_account,
+        } = collect_and_dedup_target_ids(&eligible);
 
         let repo = self.repo();
         let master_key = Arc::clone(&self.config.master_key);
@@ -241,7 +269,35 @@ impl Pipeline {
         .await
         .map_err(|e| CoreError::Internal(e.to_string()))?
     }
+}
 
+fn resolve_targets_blocking(
+    repo: &dyn crate::repository::PipelineRepository,
+    combo: &Combo,
+    overrides: Option<Vec<ComboTarget>>,
+    rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+    selection_registry: &Arc<openproxy_types::SelectionRegistry>,
+) -> Result<Vec<ComboTarget>> {
+    if let Some(overrides) = overrides {
+        let balanced = crate::load_balancing::execute_load_balancing(
+            overrides,
+            combo,
+            rr_counters,
+            selection_registry,
+        );
+        return repo.expand_account_rotation(balanced);
+    }
+
+    let _ = repo.list_targets(combo.id)?;
+    let ordered = repo.resolve_target_order_with_mode(
+        combo,
+        rr_counters,
+        selection_registry,
+    )?;
+    repo.expand_account_rotation(ordered)
+}
+
+impl Pipeline {
     pub(crate) async fn resolve_targets(
         &self,
         combo: &Combo,
@@ -253,23 +309,13 @@ impl Pipeline {
         let rr_counters = Arc::clone(&self.rr_counters);
         let selection_registry = Arc::clone(&self.selection_registry);
         tokio::task::spawn_blocking(move || {
-            if let Some(overrides) = overrides {
-                let balanced = crate::load_balancing::execute_load_balancing(
-                    overrides,
-                    &combo_clone,
-                    &rr_counters,
-                    &selection_registry,
-                );
-                return repo.expand_account_rotation(balanced);
-            }
-
-            let _ = repo.list_targets(combo_clone.id)?;
-            let ordered = repo.resolve_target_order_with_mode(
+            resolve_targets_blocking(
+                repo.as_ref(),
                 &combo_clone,
+                overrides,
                 &rr_counters,
                 &selection_registry,
-            )?;
-            repo.expand_account_rotation(ordered)
+            )
         })
         .await
         .map_err(|e| CoreError::Internal(e.to_string()))?

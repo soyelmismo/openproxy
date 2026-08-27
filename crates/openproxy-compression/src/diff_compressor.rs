@@ -132,27 +132,26 @@ pub fn compress_diff_string(text: &str) -> Option<(String, &'static str)> {
 /// strictly smaller than the original).
 fn compress_diff_content(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
-    if lines.len() < MIN_DIFF_LINES {
-        return None;
-    }
-    if !is_git_diff(&lines) {
+    if lines.len() < MIN_DIFF_LINES || !is_git_diff(&lines) {
         return None;
     }
     let files = parse_diff(&lines);
     if files.is_empty() {
         return None;
     }
-    let original_lines = lines.len();
     let compressed_body = compress_files(&files);
     if compressed_body.is_empty() {
         return None;
     }
-    let output = format!("[#diff_compressed: was {original_lines} lines]\n{compressed_body}");
-    // Never produce a larger message.
-    if output.len() >= text.len() {
-        return None;
+    let output = format!(
+        "[#diff_compressed: was {} lines]\n{compressed_body}",
+        lines.len()
+    );
+    if output.len() < text.len() {
+        Some(output)
+    } else {
+        None
     }
-    Some(output)
 }
 
 /// Detect git diff format: first 10 lines contain `diff --git` OR a
@@ -162,6 +161,54 @@ fn is_git_diff(lines: &[&str]) -> bool {
         .iter()
         .take(10)
         .any(|l| l.starts_with("diff --git ") || HUNK_HEADER_RE.is_match(l))
+}
+
+fn handle_diff_git_header(
+    line: &str,
+    current_hunk: &mut Option<Hunk>,
+    current_file: &mut Option<DiffFile>,
+    files: &mut Vec<DiffFile>,
+) {
+    attach_hunk(current_hunk, current_file);
+    if let Some(f) = current_file.take() {
+        files.push(f);
+    }
+    *current_file = Some(DiffFile {
+        header: line.to_string(),
+        metadata: Vec::new(),
+        hunks: Vec::new(),
+    });
+}
+
+fn handle_hunk_header(
+    line: &str,
+    current_hunk: &mut Option<Hunk>,
+    current_file: &mut Option<DiffFile>,
+) {
+    attach_hunk(current_hunk, current_file);
+    if current_file.is_none() {
+        *current_file = Some(DiffFile {
+            header: String::new(),
+            metadata: Vec::new(),
+            hunks: Vec::new(),
+        });
+    }
+    *current_hunk = Some(Hunk {
+        header: line.to_string(),
+        lines: Vec::new(),
+    });
+}
+
+fn handle_diff_body_line(
+    line: &str,
+    current_hunk: &mut Option<Hunk>,
+    current_file: &mut Option<DiffFile>,
+) {
+    if let Some(h) = current_hunk.as_mut() {
+        h.lines.push(classify_diff_line(line));
+    } else if let Some(f) = current_file.as_mut() {
+        f.metadata.push(line.to_string());
+    }
 }
 
 /// Parse a git diff into a list of files.
@@ -177,43 +224,12 @@ fn parse_diff(lines: &[&str]) -> Vec<DiffFile> {
 
     for line in lines {
         if line.starts_with("diff --git ") {
-            // Finalize current hunk and file.
-            attach_hunk(&mut current_hunk, &mut current_file);
-            if let Some(f) = current_file.take() {
-                files.push(f);
-            }
-            current_file = Some(DiffFile {
-                header: line.to_string(),
-                metadata: Vec::new(),
-                hunks: Vec::new(),
-            });
-            continue;
+            handle_diff_git_header(line, &mut current_hunk, &mut current_file, &mut files);
+        } else if HUNK_HEADER_LENIENT_RE.is_match(line) {
+            handle_hunk_header(line, &mut current_hunk, &mut current_file);
+        } else {
+            handle_diff_body_line(line, &mut current_hunk, &mut current_file);
         }
-
-        if HUNK_HEADER_LENIENT_RE.is_match(line) {
-            // Finalize current hunk.
-            attach_hunk(&mut current_hunk, &mut current_file);
-            // Synthetic file for diff fragments without `diff --git`.
-            if current_file.is_none() {
-                current_file = Some(DiffFile {
-                    header: String::new(),
-                    metadata: Vec::new(),
-                    hunks: Vec::new(),
-                });
-            }
-            current_hunk = Some(Hunk {
-                header: line.to_string(),
-                lines: Vec::new(),
-            });
-            continue;
-        }
-
-        if let Some(h) = current_hunk.as_mut() {
-            h.lines.push(classify_diff_line(line));
-        } else if let Some(f) = current_file.as_mut() {
-            f.metadata.push(line.to_string());
-        }
-        // Orphan lines (before any `diff --git` or `@@`) are dropped.
     }
 
     // Finalize trailing hunk and file.
@@ -246,36 +262,43 @@ fn classify_diff_line(line: &str) -> DiffLine {
     }
 }
 
+fn render_file_hunks(hunks: &[Hunk], out: &mut String) {
+    let (kept_hunks, truncated_hunks) = cap_hunks(hunks);
+    for hunk in kept_hunks {
+        let reduced = reduce_context(&hunk.lines);
+        if reduced.is_empty() {
+            continue;
+        }
+        out.push_str(&hunk.header);
+        out.push('\n');
+        for line in reduced {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    if truncated_hunks > 0 {
+        let _ = writeln!(out, "[#diff: {truncated_hunks} more hunks in this file]");
+    }
+}
+
+fn render_diff_file(file: &DiffFile, out: &mut String) {
+    if !file.header.is_empty() {
+        out.push_str(&file.header);
+        out.push('\n');
+    }
+    for m in &file.metadata {
+        out.push_str(m);
+        out.push('\n');
+    }
+    render_file_hunks(&file.hunks, out);
+}
+
 /// Compress a parsed diff back into a string.
 fn compress_files(files: &[DiffFile]) -> String {
     let (kept_files, truncated_files) = cap_files(files);
     let mut out = String::new();
     for file in kept_files {
-        if !file.header.is_empty() {
-            out.push_str(&file.header);
-            out.push('\n');
-        }
-        for m in &file.metadata {
-            out.push_str(m);
-            out.push('\n');
-        }
-        let (kept_hunks, truncated_hunks) = cap_hunks(&file.hunks);
-        for hunk in kept_hunks {
-            let reduced = reduce_context(&hunk.lines);
-            if reduced.is_empty() {
-                // Hunk had no keepable lines — skip its header too.
-                continue;
-            }
-            out.push_str(&hunk.header);
-            out.push('\n');
-            for line in reduced {
-                out.push_str(&line);
-                out.push('\n');
-            }
-        }
-        if truncated_hunks > 0 {
-            let _ = writeln!(out, "[#diff: {truncated_hunks} more hunks in this file]");
-        }
+        render_diff_file(file, &mut out);
     }
     if truncated_files > 0 {
         let _ = writeln!(out, "[#diff: truncated {truncated_files} more files]");
@@ -293,33 +316,72 @@ fn cap_files(files: &[DiffFile]) -> (Vec<&DiffFile>, usize) {
     (kept, truncated)
 }
 
-/// Cap hunks at MAX_HUNKS_PER_FILE. Prefer hunks with additions/deletions;
-/// fill remaining slots with no-change hunks. Preserves original order.
-fn cap_hunks(hunks: &[Hunk]) -> (Vec<&Hunk>, usize) {
-    if hunks.len() <= MAX_HUNKS_PER_FILE {
-        return (hunks.iter().collect(), 0);
-    }
+fn collect_hunk_indices(hunks: &[Hunk]) -> Vec<usize> {
     let has_changes: Vec<bool> = hunks.iter().map(Hunk::has_changes).collect();
     let mut kept_indices: Vec<usize> = Vec::new();
-    // First pass: hunks with changes.
     for (i, &has) in has_changes.iter().enumerate() {
         if has && kept_indices.len() < MAX_HUNKS_PER_FILE {
             kept_indices.push(i);
         }
     }
-    // Second pass: fill with no-change hunks.
     for (i, &has) in has_changes.iter().enumerate() {
         if !has && kept_indices.len() < MAX_HUNKS_PER_FILE {
             kept_indices.push(i);
         }
     }
     kept_indices.sort_unstable();
+    kept_indices
+}
+
+/// Cap hunks at MAX_HUNKS_PER_FILE. Prefer hunks with additions/deletions;
+/// fill remaining slots with no-change hunks. Preserves original order.
+fn cap_hunks(hunks: &[Hunk]) -> (Vec<&Hunk>, usize) {
+    if hunks.len() <= MAX_HUNKS_PER_FILE {
+        return (hunks.iter().collect(), 0);
+    }
+    let kept_indices = collect_hunk_indices(hunks);
     let truncated = hunks.len() - kept_indices.len();
     let kept: Vec<&Hunk> = kept_indices
         .into_iter()
         .filter_map(|i| hunks.get(i))
         .collect();
     (kept, truncated)
+}
+
+/// Mark contiguous change block (non-context lines) as kept.
+fn mark_change_block(lines: &[DiffLine], keep: &mut [bool], mut i: usize) -> usize {
+    while i < lines.len() && !lines[i].is_context() {
+        keep[i] = true;
+        i += 1;
+    }
+    i
+}
+
+/// Mark up to MAX_CONTEXT_LINES context lines immediately before block_start.
+fn mark_context_before(lines: &[DiffLine], keep: &mut [bool], mut j: usize) {
+    let mut count = 0;
+    while j > 0 && count < MAX_CONTEXT_LINES {
+        j -= 1;
+        if !lines[j].is_context() {
+            break;
+        }
+        keep[j] = true;
+        count += 1;
+    }
+}
+
+/// Mark up to MAX_CONTEXT_LINES context lines immediately after a change block.
+fn mark_context_after(lines: &[DiffLine], keep: &mut [bool], mut i: usize) -> usize {
+    let mut count = 0;
+    while i < lines.len() && count < MAX_CONTEXT_LINES {
+        if !lines[i].is_context() {
+            break;
+        }
+        keep[i] = true;
+        count += 1;
+        i += 1;
+    }
+    i
 }
 
 /// Reduce context lines: keep only MAX_CONTEXT_LINES context lines
@@ -331,58 +393,28 @@ fn cap_hunks(hunks: &[Hunk]) -> (Vec<&Hunk>, usize) {
 /// (Addition / Deletion / Other). Context lines more than MAX_CONTEXT_LINES
 /// away from every change block are dropped.
 fn reduce_context(lines: &[DiffLine]) -> Vec<String> {
-    let n = lines.len();
-    if n == 0 {
+    if lines.is_empty() {
         return Vec::new();
     }
-    let mut keep = vec![false; n];
+    let mut keep = vec![false; lines.len()];
     let mut i = 0;
-    while i < n {
+    while i < lines.len() {
         if lines[i].is_context() {
             i += 1;
             continue;
         }
-        // Start of a change block (non-context line).
         let block_start = i;
-        while i < n && !lines[i].is_context() {
-            keep[i] = true;
-            i += 1;
-        }
-        // `i` is now just past the end of the change block.
-        // Keep up to MAX_CONTEXT_LINES context lines immediately before block_start.
-        let mut count = 0;
-        let mut j = block_start;
-        while j > 0 && count < MAX_CONTEXT_LINES {
-            j -= 1;
-            if lines[j].is_context() {
-                keep[j] = true;
-                count += 1;
-            } else {
-                // Hit a non-context line (previous change block) — stop.
-                break;
-            }
-        }
-        // Keep up to MAX_CONTEXT_LINES context lines immediately after the block.
-        let mut count = 0;
-        while i < n && count < MAX_CONTEXT_LINES {
-            if lines[i].is_context() {
-                keep[i] = true;
-                count += 1;
-                i += 1;
-            } else {
-                // Next change block starts here — let the outer loop handle it.
-                break;
-            }
-        }
+        i = mark_change_block(lines, &mut keep, i);
+        mark_context_before(lines, &mut keep, block_start);
+        i = mark_context_after(lines, &mut keep, i);
     }
 
-    let mut out = Vec::new();
-    for (line, &should_keep) in lines.iter().zip(&keep) {
-        if should_keep {
-            out.push(line.as_str().to_string());
-        }
-    }
-    out
+    lines
+        .iter()
+        .zip(&keep)
+        .filter(|&(_, &should_keep)| should_keep)
+        .map(|(line, _)| line.as_str().to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -545,6 +577,19 @@ mod tests {
         );
     }
 
+    fn build_test_hunk_lines(header: &str, prefix: &str, tag: &str) -> Vec<String> {
+        let mut lines = vec![header.to_string()];
+        for i in 0..5u32 {
+            lines.push(format!(" {prefix}_before_{i}"));
+        }
+        lines.push(format!("-del{tag}"));
+        lines.push(format!("+add{tag}"));
+        for i in 0..5u32 {
+            lines.push(format!(" {prefix}_after_{i}"));
+        }
+        lines
+    }
+
     #[test]
     fn test_compress_diff_preserves_additions_deletions() {
         let mut lines: Vec<String> = vec![
@@ -552,25 +597,9 @@ mod tests {
             "index abc..def 100644".to_string(),
             "--- a/foo.rs".to_string(),
             "+++ b/foo.rs".to_string(),
-            "@@ -1,12 +1,12 @@".to_string(),
         ];
-        for i in 0..5u32 {
-            lines.push(format!(" ctx_before_{i}"));
-        }
-        lines.push("-del1".to_string());
-        lines.push("+add1".to_string());
-        for i in 0..5u32 {
-            lines.push(format!(" ctx_after_{i}"));
-        }
-        lines.push("@@ -20,12 +20,12 @@".to_string());
-        for i in 0..5u32 {
-            lines.push(format!(" ctx2_before_{i}"));
-        }
-        lines.push("-del2".to_string());
-        lines.push("+add2".to_string());
-        for i in 0..5u32 {
-            lines.push(format!(" ctx2_after_{i}"));
-        }
+        lines.extend(build_test_hunk_lines("@@ -1,12 +1,12 @@", "ctx", "1"));
+        lines.extend(build_test_hunk_lines("@@ -20,12 +20,12 @@", "ctx2", "2"));
         let content = lines.join("\n");
         // 4 metadata + (1 header + 12 body) * 2 = 4 + 26 = 30 lines.
         assert_eq!(lines.len(), 30);

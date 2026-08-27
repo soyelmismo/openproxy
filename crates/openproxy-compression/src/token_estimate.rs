@@ -132,6 +132,14 @@ pub fn message_content_to_text(msg: &OpenAIMessage) -> String {
     text
 }
 
+fn flush_whitespace_run(ws_run: usize) -> usize {
+    if ws_run > 4 {
+        ws_run / 10
+    } else {
+        ws_run
+    }
+}
+
 /// Char-based heuristic fallback (~4 chars/token for Latin, ~2 for CJK).
 /// Only used if the BPE encoder fails to initialize.
 fn estimate_tokens_heuristic(text: &str) -> u32 {
@@ -147,13 +155,7 @@ fn estimate_tokens_heuristic(text: &str) -> u32 {
         if ch.is_whitespace() {
             ws_run += 1;
         } else {
-            if ws_run > 4 {
-                // Long whitespace run: ~1 token per 10 ws chars
-                other_count += ws_run / 10;
-            } else if ws_run > 0 {
-                // Short whitespace run: fold into other
-                other_count += ws_run;
-            }
+            other_count += flush_whitespace_run(ws_run);
             ws_run = 0;
 
             if is_cjk(ch) {
@@ -163,12 +165,7 @@ fn estimate_tokens_heuristic(text: &str) -> u32 {
             }
         }
     }
-    // Handle trailing whitespace run
-    if ws_run > 4 {
-        other_count += ws_run / 10;
-    } else if ws_run > 0 {
-        other_count += ws_run;
-    }
+    other_count += flush_whitespace_run(ws_run);
 
     // CJK: ~2 chars/token; Latin/other: ~4 chars/token
     let cjk_tokens = cjk_count.div_ceil(2); // ceiling div

@@ -64,6 +64,78 @@ impl AntigravityAdapter {
         }
     }
 
+fn extract_antigravity_model_capabilities(
+    model_data: &serde_json::Value,
+) -> openproxy_types::ModelCapabilities {
+    let supports_thinking = model_data
+        .get("supportsThinking")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let supports_images = model_data
+        .get("supportsImages")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let tool_formatter_type = model_data
+        .get("toolFormatterType")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let supports_cumulative_context = model_data
+        .get("supportsCumulativeContext")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    openproxy_types::ModelCapabilities {
+        vision: Some(supports_images),
+        tool_calling: Some(tool_formatter_type || supports_cumulative_context),
+        reasoning: Some(supports_thinking),
+        thinking: Some(supports_thinking),
+        attachment: Some(supports_images),
+        structured_output: None,
+        temperature: None,
+    }
+}
+
+fn map_antigravity_discovered_model(
+    model_id: &str,
+    model_data: &serde_json::Value,
+) -> DiscoveredModel {
+    let display_name = model_data
+        .get("displayName")
+        .and_then(|d| d.as_str())
+        .map(std::string::ToString::to_string);
+
+    let context_length = model_data
+        .get("maxTokens")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            model_data
+                .get("contextLength")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .map(|v| v as i64);
+
+    let max_output_tokens = model_data
+        .get("maxOutputTokens")
+        .and_then(serde_json::Value::as_u64)
+        .map(|v| v as i64)
+        .or(Some(8192));
+
+    let capabilities = Self::extract_antigravity_model_capabilities(model_data);
+
+    DiscoveredModel {
+        model_id: ModelId::new(model_id),
+        display_name,
+        target_format: TargetFormat::Gemini,
+        context_length,
+        max_output_tokens,
+        input_modalities: None,
+        output_modalities: None,
+        model_type: Some("chat".to_string()),
+        family: None,
+        capabilities: Some(capabilities),
+    }
+}
+
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     fn parse_models_response(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         tracing::info!(
@@ -71,81 +143,12 @@ impl AntigravityAdapter {
             serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string())
         );
         let models_obj = body.get("models")?.as_object()?;
+        let models: Vec<DiscoveredModel> = models_obj
+            .iter()
+            .map(|(k, v)| Self::map_antigravity_discovered_model(k, v))
+            .collect();
 
-        let mut models = Vec::new();
-        for (model_id, model_data) in models_obj {
-            let display_name = model_data
-                .get("displayName")
-                .and_then(|d| d.as_str())
-                .map(std::string::ToString::to_string);
-
-            // Read maxTokens as context_length (fallback to contextLength)
-            let context_length = model_data
-                .get("maxTokens")
-                .and_then(serde_json::Value::as_u64)
-                .or_else(|| {
-                    model_data
-                        .get("contextLength")
-                        .and_then(serde_json::Value::as_u64)
-                })
-                .map(|v| v as i64);
-
-            // Read maxOutputTokens as max_output_tokens
-            let max_output_tokens = model_data
-                .get("maxOutputTokens")
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as i64)
-                .or(Some(8192));
-
-            let target_format = TargetFormat::Gemini;
-
-            // Infer capabilities from upstream fields
-            let supports_thinking = model_data
-                .get("supportsThinking")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let supports_images = model_data
-                .get("supportsImages")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let tool_formatter_type = model_data
-                .get("toolFormatterType")
-                .and_then(|v| v.as_str())
-                .is_some();
-            let supports_cumulative_context = model_data
-                .get("supportsCumulativeContext")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-
-            let capabilities = openproxy_types::ModelCapabilities {
-                vision: Some(supports_images),
-                tool_calling: Some(tool_formatter_type || supports_cumulative_context),
-                reasoning: Some(supports_thinking),
-                thinking: Some(supports_thinking),
-                attachment: Some(supports_images),
-                structured_output: None,
-                temperature: None,
-            };
-
-            models.push(DiscoveredModel {
-                model_id: ModelId::new(model_id),
-                display_name,
-                target_format,
-                context_length,
-                max_output_tokens,
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(capabilities),
-            });
-        }
-
-        if models.is_empty() {
-            None
-        } else {
-            Some(models)
-        }
+        (!models.is_empty()).then_some(models)
     }
 }
 
@@ -289,25 +292,9 @@ impl ProviderAdapter for AntigravityAdapter {
             "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         ];
 
-        for endpoint in &endpoints {
-            let mut req = UpstreamRequest::post_json(*endpoint, Bytes::from_static(b"{}"));
-            if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
-            req.headers.insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            AntigravitySpoofer::new().apply_to_request(&mut req);
-
-            let cancel = CancellationToken::new();
-            if let Ok(resp) = upstream_client
-                .call(req, TimeoutProfile::ModelDiscovery, cancel)
-                .await
-                && resp.status.is_success()
-                && let Ok(body_bytes) = resp.collect().await
-                && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                && let Some(models) = Self::parse_models_response(&json)
+        for endpoint in endpoints {
+            if let Some(models) =
+                fetch_antigravity_models_from_endpoint(upstream_client, api_key, endpoint).await
             {
                 return Ok(models);
             }
@@ -348,9 +335,181 @@ impl ProviderAdapter for AntigravityAdapter {
     }
 }
 
+async fn fetch_antigravity_models_from_endpoint(
+    upstream_client: &Arc<UpstreamClient>,
+    api_key: &str,
+    endpoint: &str,
+) -> Option<Vec<DiscoveredModel>> {
+    let mut req = UpstreamRequest::post_json(endpoint, Bytes::from_static(b"{}"));
+    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    AntigravitySpoofer::new().apply_to_request(&mut req);
+
+    let cancel = CancellationToken::new();
+    let resp = upstream_client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .ok()?;
+    if !resp.status.is_success() {
+        return None;
+    }
+    let body_bytes = resp.collect().await.ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).ok()?;
+    AntigravityAdapter::parse_models_response(&json)
+}
+
 static PLAN_CACHE: std::sync::LazyLock<
     parking_lot::Mutex<std::collections::HashMap<String, String>>,
 > = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+
+fn merge_summary_into_models_quota(
+    models_quota: &mut openproxy_types::AccountQuota,
+    summary_quota: &openproxy_types::AccountQuota,
+) {
+    if summary_quota.weekly_used.is_some() {
+        models_quota.weekly_used = summary_quota.weekly_used;
+        models_quota.weekly_limit = summary_quota.weekly_limit;
+        models_quota
+            .weekly_reset_at
+            .clone_from(&summary_quota.weekly_reset_at);
+    }
+    if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
+        models_quota.session_used = summary_quota.session_used;
+        models_quota.session_limit = summary_quota.session_limit;
+        models_quota
+            .session_reset_at
+            .clone_from(&summary_quota.session_reset_at);
+    }
+}
+
+fn resolve_final_plan_name(
+    models_plan: Option<String>,
+    summary_res: &Result<openproxy_types::AccountQuota>,
+    plan_result: Option<String>,
+) -> Option<String> {
+    if let Some(plan) = plan_result {
+        return Some(plan);
+    }
+    if models_plan.is_some() && models_plan.as_deref() != Some("Antigravity") {
+        return models_plan;
+    }
+    if let Ok(summary_quota) = summary_res
+        && let Some(summary_plan) = &summary_quota.plan_name
+        && summary_plan != "Antigravity"
+    {
+        return Some(summary_plan.clone());
+    }
+    Some("Free".to_string())
+}
+
+async fn try_fetch_models_quota_endpoint(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    endpoint: &str,
+) -> Option<openproxy_types::AccountQuota> {
+    let mut req = UpstreamRequest::post_json(endpoint, bytes::Bytes::from_static(b"{}"));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+    let cancel = CancellationToken::new();
+    let resp = upstream.call(req, TimeoutProfile::Quota, cancel).await.ok()?;
+    if !resp.status.is_success() {
+        return None;
+    }
+    let body = resp.collect().await.ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    parse_antigravity_models_response(&json).ok()
+}
+
+fn extract_tier_from_load_code_assist(json: &serde_json::Value) -> Option<&str> {
+    let paid = json
+        .pointer("/paidTier/name")
+        .or_else(|| json.pointer("/paidTier/id"))
+        .and_then(|v| v.as_str());
+    if paid.is_some() {
+        return paid;
+    }
+    let is_ineligible = json
+        .pointer("/ineligibleTiers")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty());
+
+    if !is_ineligible {
+        return json
+            .pointer("/currentTier/name")
+            .or_else(|| json.pointer("/currentTier/id"))
+            .and_then(|v| v.as_str());
+    }
+
+    let allowed = json.pointer("/allowedTiers")?.as_array()?;
+    for t in allowed {
+        if t.get("isDefault")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            return t.get("name").or_else(|| t.get("id")).and_then(|v| v.as_str());
+        }
+    }
+    None
+}
+
+const PLAN_KEYWORDS: &[(&[&str], &str)] = &[
+    (&["ULTRA"], "Ultra"),
+    (&["PRO", "PREMIUM", "GOOGLE_ONE", "ONE_AI", "GOOGLE ONE"], "Pro"),
+    (&["ENTERPRISE"], "Enterprise"),
+    (&["BUSINESS", "STANDARD"], "Business"),
+    (&["PLUS"], "Plus"),
+    (&["LITE", "LIGHT"], "Lite"),
+    (&["FREE", "INDIVIDUAL", "LEGACY"], "Free"),
+];
+
+fn classify_antigravity_plan_name(t: &str) -> String {
+    let upper = t.to_uppercase();
+    for (keywords, plan) in PLAN_KEYWORDS {
+        if keywords.iter().any(|k| upper.contains(k)) {
+            return (*plan).to_string();
+        }
+    }
+    t.to_string()
+}
+
+async fn try_fetch_code_assist_plan(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    endpoint: &str,
+) -> Option<String> {
+    let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
+    let mut req = UpstreamRequest::post_json(endpoint, payload);
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+    let cancel = CancellationToken::new();
+    let resp = upstream.call(req, TimeoutProfile::Quota, cancel).await.ok()?;
+    if !resp.status.is_success() {
+        return None;
+    }
+    let body = resp.collect().await.ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    let tier = extract_tier_from_load_code_assist(&json)?;
+    Some(classify_antigravity_plan_name(tier))
+}
 
 impl AntigravityAdapter {
     async fn fetch_antigravity_quota_local(
@@ -366,96 +525,27 @@ impl AntigravityAdapter {
 
         match (models_result, summary_result) {
             (Ok(mut models_quota), summary_res) => {
-                if let Ok(ref summary_quota) = summary_res {
-                    if summary_quota.weekly_used.is_some() {
-                        models_quota.weekly_used = summary_quota.weekly_used;
-                        models_quota.weekly_limit = summary_quota.weekly_limit;
-                        models_quota
-                            .weekly_reset_at
-                            .clone_from(&summary_quota.weekly_reset_at);
-                    }
-                    if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
-                        models_quota.session_used = summary_quota.session_used;
-                        models_quota.session_limit = summary_quota.session_limit;
-                        models_quota
-                            .session_reset_at
-                            .clone_from(&summary_quota.session_reset_at);
-                    }
+                if let Ok(summary_quota) = &summary_res {
+                    merge_summary_into_models_quota(&mut models_quota, summary_quota);
                 }
-
-                if let Some(plan) = plan_result {
-                    models_quota.plan_name = Some(plan);
-                } else if models_quota.plan_name.is_none()
-                    || models_quota.plan_name.as_deref() == Some("Antigravity")
-                {
-                    if let Ok(ref summary_quota) = summary_res {
-                        if let Some(summary_plan) = &summary_quota.plan_name
-                            && summary_plan != "Antigravity"
-                        {
-                            models_quota.plan_name = Some(summary_plan.clone());
-                        } else {
-                            models_quota.plan_name = Some("Free".to_string());
-                        }
-                    } else {
-                        models_quota.plan_name = Some("Free".to_string());
-                    }
-                }
-
+                models_quota.plan_name = resolve_final_plan_name(
+                    models_quota.plan_name,
+                    &summary_res,
+                    plan_result,
+                );
                 Ok(models_quota)
             }
             (Err(_models_err), Ok(mut summary_quota)) => {
-                if let Some(plan) = plan_result {
-                    summary_quota.plan_name = Some(plan);
-                } else if summary_quota.plan_name.is_none()
-                    || summary_quota.plan_name.as_deref() == Some("Antigravity")
-                {
-                    summary_quota.plan_name = Some("Free".to_string());
-                }
+                let current_plan = summary_quota.plan_name.clone();
+                summary_quota.plan_name = resolve_final_plan_name(
+                    current_plan,
+                    &Ok(summary_quota.clone()),
+                    plan_result,
+                );
                 Ok(summary_quota)
             }
             (Err(models_err), Err(_)) => Err(models_err),
         }
-    }
-
-    async fn fetch_antigravity_models_quota_local(
-        &self,
-        upstream: &Arc<UpstreamClient>,
-        access_token: &str,
-    ) -> Result<openproxy_types::AccountQuota> {
-        let endpoints = [
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-        ];
-
-        for endpoint in &endpoints {
-            let mut req = UpstreamRequest::post_json(*endpoint, bytes::Bytes::from_static(b"{}"));
-            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
-            req.headers.insert(
-                http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
-            crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-            let cancel = CancellationToken::new();
-            let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
-
-            if let Ok(resp) = response
-                && resp.status.is_success()
-            {
-                let Ok(body) = resp.collect().await else {
-                    continue;
-                };
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-                    return parse_antigravity_models_response(&json);
-                }
-            }
-        }
-
-        Err(CoreError::UpstreamConnection(
-            "all fetchAvailableModels endpoints failed".into(),
-        ))
     }
 
     async fn fetch_antigravity_user_quota_local(
@@ -490,14 +580,14 @@ impl AntigravityAdapter {
                     ));
                 }
                 Err(e) => {
-                    last_err = Some(e.to_core_error("retrieveUserQuotaSummary"));
+                    last_err = Some(CoreError::UpstreamConnection(e.to_string()));
                     continue;
                 }
             };
 
             if !response.status.is_success() {
                 last_err = Some(CoreError::UpstreamConnection(format!(
-                    "retrieveUserQuotaSummary: status {}",
+                    "{url}: status {}",
                     response.status.as_u16()
                 )));
                 continue;
@@ -506,7 +596,7 @@ impl AntigravityAdapter {
             let body = match response.collect().await {
                 Ok(b) => b,
                 Err(e) => {
-                    last_err = Some(e.to_core_error("retrieveUserQuotaSummary body"));
+                    last_err = Some(CoreError::UpstreamConnection(e.to_string()));
                     continue;
                 }
             };
@@ -514,19 +604,45 @@ impl AntigravityAdapter {
             let json: serde_json::Value = match serde_json::from_slice(&body) {
                 Ok(j) => j,
                 Err(e) => {
-                    last_err = Some(CoreError::Parse(format!(
-                        "retrieveUserQuotaSummary parse: {e}"
-                    )));
+                    last_err = Some(CoreError::Parse(e.to_string()));
                     continue;
                 }
             };
 
-            return parse_antigravity_user_quota_summary(&json);
+            match parse_antigravity_user_quota_summary(&json) {
+                Ok(q) => return Ok(q),
+                Err(e) => {
+                    last_err = Some(e);
+                }
+            }
         }
 
         Err(last_err.unwrap_or_else(|| {
-            CoreError::UpstreamConnection("retrieveUserQuotaSummary: all endpoints failed".into())
+            CoreError::UpstreamConnection("all retrieveUserQuotaSummary endpoints failed".into())
         }))
+    }
+
+    async fn fetch_antigravity_models_quota_local(
+        &self,
+        upstream: &Arc<UpstreamClient>,
+        access_token: &str,
+    ) -> Result<openproxy_types::AccountQuota> {
+        let endpoints = [
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        ];
+
+        for endpoint in endpoints {
+            if let Some(quota) =
+                try_fetch_models_quota_endpoint(upstream, access_token, endpoint).await
+            {
+                return Ok(quota);
+            }
+        }
+
+        Err(CoreError::UpstreamConnection(
+            "all fetchAvailableModels endpoints failed".into(),
+        ))
     }
 
     async fn fetch_antigravity_subscription_plan_local(
@@ -543,97 +659,14 @@ impl AntigravityAdapter {
             "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
         ];
 
-        let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
-
-        for endpoint in &endpoints {
-            let mut req = UpstreamRequest::post_json(*endpoint, payload.clone());
-            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
-            req.headers.insert(
-                http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
-            crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-            let cancel = CancellationToken::new();
-            let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
-
-            if let Ok(resp) = response
-                && resp.status.is_success()
+        for endpoint in endpoints {
+            if let Some(plan_name) =
+                try_fetch_code_assist_plan(upstream, access_token, endpoint).await
             {
-                let Ok(body) = resp.collect().await else {
-                    continue;
-                };
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-                    let paid_name = json.pointer("/paidTier/name").and_then(|v| v.as_str());
-                    let paid_id = json.pointer("/paidTier/id").and_then(|v| v.as_str());
-
-                    let mut tier = paid_name.or(paid_id);
-
-                    if tier.is_none() {
-                        let is_ineligible = json
-                            .pointer("/ineligibleTiers")
-                            .and_then(|v| v.as_array())
-                            .is_some_and(|a| !a.is_empty());
-
-                        if !is_ineligible {
-                            let current_name =
-                                json.pointer("/currentTier/name").and_then(|v| v.as_str());
-                            let current_id =
-                                json.pointer("/currentTier/id").and_then(|v| v.as_str());
-                            tier = current_name.or(current_id);
-                        } else if let Some(allowed) =
-                            json.pointer("/allowedTiers").and_then(|v| v.as_array())
-                        {
-                            for t in allowed {
-                                if t.get("isDefault")
-                                    .and_then(serde_json::Value::as_bool)
-                                    .unwrap_or(false)
-                                {
-                                    let name = t.get("name").and_then(|v| v.as_str());
-                                    let id = t.get("id").and_then(|v| v.as_str());
-                                    tier = name.or(id);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if let Some(t) = tier {
-                        let upper = t.to_uppercase();
-                        let plan_name = if upper.contains("ULTRA") {
-                            "Ultra".to_string()
-                        } else if upper.contains("PRO")
-                            || upper.contains("PREMIUM")
-                            || upper.contains("GOOGLE_ONE")
-                            || upper.contains("ONE_AI")
-                            || upper.contains("GOOGLE ONE")
-                        {
-                            "Pro".to_string()
-                        } else if upper.contains("ENTERPRISE") {
-                            "Enterprise".to_string()
-                        } else if upper.contains("BUSINESS") || upper.contains("STANDARD") {
-                            "Business".to_string()
-                        } else if upper.contains("PLUS") {
-                            "Plus".to_string()
-                        } else if upper.contains("LITE") || upper.contains("LIGHT") {
-                            "Lite".to_string()
-                        } else if upper.contains("FREE")
-                            || upper.contains("INDIVIDUAL")
-                            || upper.contains("LEGACY")
-                        {
-                            "Free".to_string()
-                        } else {
-                            t.to_string()
-                        };
-
-                        PLAN_CACHE
-                            .lock()
-                            .insert(access_token.to_string(), plan_name.clone());
-                        return Some(plan_name);
-                    }
-                }
+                PLAN_CACHE
+                    .lock()
+                    .insert(access_token.to_string(), plan_name.clone());
+                return Some(plan_name);
             }
         }
 
@@ -641,66 +674,60 @@ impl AntigravityAdapter {
     }
 }
 
+fn parse_model_quota_detail(
+    model_id: &str,
+    model_data: &serde_json::Value,
+) -> Option<openproxy_types::ModelQuotaDetail> {
+    const NORMALIZED_BASE: i64 = 1000;
+    let quota_info = model_data.get("quotaInfo")?;
+    let reset_time = quota_info
+        .get("resetTime")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+
+    let remaining_fraction = quota_info
+        .get("remainingFraction")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
+
+    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
+    let used = if is_unlimited {
+        0
+    } else {
+        NORMALIZED_BASE.saturating_sub(remaining)
+    };
+
+    Some(openproxy_types::ModelQuotaDetail {
+        model_id: model_id.to_string(),
+        session_used: used,
+        session_limit: NORMALIZED_BASE,
+        session_reset_at: reset_time,
+        remaining_fraction,
+    })
+}
+
 fn parse_antigravity_models_response(
     body: &serde_json::Value,
 ) -> Result<openproxy_types::AccountQuota> {
-    const NORMALIZED_BASE: i64 = 1000;
-
     let models = body
         .get("models")
         .and_then(|m| m.as_object())
         .ok_or_else(|| CoreError::Internal("missing 'models' in response".into()))?;
 
-    let mut details: Vec<openproxy_types::ModelQuotaDetail> = Vec::new();
-    let mut worst_remaining = f64::MAX;
-    let mut worst_model_id = String::new();
-
-    for (model_id, model_data) in models {
-        let Some(quota_info) = model_data.get("quotaInfo") else {
-            continue;
-        };
-        let reset_time = quota_info
-            .get("resetTime")
-            .and_then(|r| r.as_str())
-            .map(String::from);
-
-        let remaining_fraction = quota_info
-            .get("remainingFraction")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
-
-        let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-        let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-        let used = if is_unlimited {
-            0
-        } else {
-            NORMALIZED_BASE.saturating_sub(remaining)
-        };
-
-        details.push(openproxy_types::ModelQuotaDetail {
-            model_id: model_id.clone(),
-            session_used: used,
-            session_limit: NORMALIZED_BASE,
-            session_reset_at: reset_time,
-            remaining_fraction,
-        });
-
-        if remaining_fraction < worst_remaining {
-            worst_remaining = remaining_fraction;
-            worst_model_id.clone_from(model_id);
-        }
-    }
-
-    if details.is_empty() {
-        return Err(CoreError::Internal(
-            "no quota info found in response".into(),
-        ));
-    }
+    let details: Vec<openproxy_types::ModelQuotaDetail> = models
+        .iter()
+        .filter_map(|(k, v)| parse_model_quota_detail(k, v))
+        .collect();
 
     let worst = details
         .iter()
-        .find(|d| d.model_id == worst_model_id)
-        .ok_or_else(|| CoreError::Internal("worst quota detail not found".into()))?;
+        .min_by(|a, b| {
+            a.remaining_fraction
+                .partial_cmp(&b.remaining_fraction)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .ok_or_else(|| CoreError::Internal("no quota info found in response".into()))?;
 
     Ok(openproxy_types::AccountQuota {
         plan_name: Some("Antigravity".to_string()),
@@ -716,6 +743,64 @@ fn parse_antigravity_models_response(
     })
 }
 
+struct AntigravityQuotaBucket {
+    plan_name: Option<String>,
+    is_weekly: bool,
+    used: i64,
+    reset_at: Option<String>,
+}
+
+fn parse_quota_bucket(
+    group_plan: Option<&str>,
+    bucket: &serde_json::Value,
+) -> AntigravityQuotaBucket {
+    const NORMALIZED_BASE: i64 = 1000;
+    let reset_time = bucket
+        .get("resetTime")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
+
+    let remaining_fraction = bucket
+        .get("remainingFraction")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
+
+    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
+    let used = if is_unlimited {
+        0
+    } else {
+        NORMALIZED_BASE.saturating_sub(remaining)
+    };
+
+    let is_weekly =
+        window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
+
+    AntigravityQuotaBucket {
+        plan_name: group_plan.map(std::string::ToString::to_string),
+        is_weekly,
+        used,
+        reset_at: reset_time,
+    }
+}
+
+fn extract_quota_buckets(
+    groups: &[serde_json::Value],
+) -> impl Iterator<Item = AntigravityQuotaBucket> + '_ {
+    groups.iter().flat_map(|group| {
+        let group_plan = group.get("displayName").and_then(|n| n.as_str());
+        let buckets = group
+            .get("buckets")
+            .and_then(|b| b.as_array())
+            .map_or(&[][..], |v| v.as_slice());
+
+        buckets
+            .iter()
+            .map(move |bucket| parse_quota_bucket(group_plan, bucket))
+    })
+}
+
 fn parse_antigravity_user_quota_summary(
     body: &serde_json::Value,
 ) -> Result<openproxy_types::AccountQuota> {
@@ -728,58 +813,27 @@ fn parse_antigravity_user_quota_summary(
             CoreError::Internal("missing 'groups' in retrieveUserQuotaSummary".into())
         })?;
 
-    let mut weekly_used: Option<i64> = None;
-    let mut weekly_limit: Option<i64> = None;
-    let mut weekly_reset_at: Option<String> = None;
-    let mut session_used: Option<i64> = None;
-    let mut session_limit: Option<i64> = None;
-    let mut session_reset_at: Option<String> = None;
-    let mut plan_name: Option<String> = None;
+    let mut weekly_used = None;
+    let mut weekly_limit = None;
+    let mut weekly_reset_at = None;
+    let mut session_used = None;
+    let mut session_limit = None;
+    let mut session_reset_at = None;
+    let mut plan_name = None;
 
-    for group in groups {
-        let group_plan = group.get("displayName").and_then(|n| n.as_str());
-
-        let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) else {
-            continue;
-        };
-
-        for bucket in buckets {
-            let reset_time = bucket
-                .get("resetTime")
-                .and_then(|r| r.as_str())
-                .map(String::from);
-            let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
-
-            let remaining_fraction = bucket
-                .get("remainingFraction")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
-
-            let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-            let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-            let used = if is_unlimited {
-                0
-            } else {
-                NORMALIZED_BASE.saturating_sub(remaining)
-            };
-
-            let is_weekly =
-                window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
-            if is_weekly && weekly_used.is_none() {
-                weekly_used = Some(used);
+    for bucket in extract_quota_buckets(groups) {
+        if bucket.is_weekly {
+            if weekly_used.is_none() {
+                weekly_used = Some(bucket.used);
                 weekly_limit = Some(NORMALIZED_BASE);
-                weekly_reset_at = reset_time;
-                if plan_name.is_none() {
-                    plan_name = group_plan.map(std::string::ToString::to_string);
-                }
-            } else if !is_weekly && session_used.is_none() {
-                session_used = Some(used);
-                session_limit = Some(NORMALIZED_BASE);
-                session_reset_at = reset_time;
-                if plan_name.is_none() {
-                    plan_name = group_plan.map(std::string::ToString::to_string);
-                }
+                weekly_reset_at = bucket.reset_at;
+                plan_name = plan_name.or(bucket.plan_name);
             }
+        } else if session_used.is_none() {
+            session_used = Some(bucket.used);
+            session_limit = Some(NORMALIZED_BASE);
+            session_reset_at = bucket.reset_at;
+            plan_name = plan_name.or(bucket.plan_name);
         }
     }
 
@@ -1021,6 +1075,24 @@ pub async fn onboard_user(
     Ok(project_id)
 }
 
+fn patch_part_thought_signature(part: &mut serde_json::Value) {
+    let has_fc = part.get("functionCall").is_some() || part.get("function_call").is_some();
+    if has_fc
+        && part.get("thoughtSignature").is_none()
+        && part.get("thought_signature").is_none()
+        && let Some(obj) = part.as_object_mut()
+    {
+        obj.insert(
+            "thoughtSignature".to_string(),
+            serde_json::json!("skip_thought_signature_validator"),
+        );
+        obj.insert(
+            "thought_signature".to_string(),
+            serde_json::json!("skip_thought_signature_validator"),
+        );
+    }
+}
+
 fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &str) {
     let model_lc = model.to_lowercase();
     let is_flash_or_agent = (model_lc.contains("gemini") && model_lc.contains("flash"))
@@ -1033,22 +1105,7 @@ fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &
         for msg in arr {
             if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
                 for part in parts {
-                    let has_fc =
-                        part.get("functionCall").is_some() || part.get("function_call").is_some();
-                    if has_fc
-                        && part.get("thoughtSignature").is_none()
-                        && part.get("thought_signature").is_none()
-                        && let Some(obj) = part.as_object_mut()
-                    {
-                        obj.insert(
-                            "thoughtSignature".to_string(),
-                            serde_json::json!("skip_thought_signature_validator"),
-                        );
-                        obj.insert(
-                            "thought_signature".to_string(),
-                            serde_json::json!("skip_thought_signature_validator"),
-                        );
-                    }
+                    patch_part_thought_signature(part);
                 }
             }
         }

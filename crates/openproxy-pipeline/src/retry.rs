@@ -42,7 +42,17 @@ impl RetryPolicy {
         let total = (base as i64).saturating_add(jitter).max(0) as u64;
         Some(Duration::from_millis(total))
     }
+}
 
+fn is_timeout_retryable(phase: &str, idle_chunk_retryable: bool) -> bool {
+    if phase == "idle_chunk" {
+        idle_chunk_retryable
+    } else {
+        true
+    }
+}
+
+impl RetryPolicy {
     /// True if the error is retryable per spec §5.4.
     pub fn is_retryable(
         err: &openproxy_types::error::CoreError,
@@ -52,27 +62,12 @@ impl RetryPolicy {
             Cancelled, RaceLost, RateLimited, UpstreamConnection, UpstreamError, UpstreamTimeout,
         };
         match err {
-            UpstreamTimeout { phase, .. } => match phase.as_str() {
-                // idle_chunk is the ONLY switchable exception. It
-                // fires mid-stream and retrying would corrupt the
-                // output, so it's gated by `idle_chunk_retryable`.
-                "idle_chunk" => idle_chunk_retryable,
-                // ALL other timeout phases (dns, dial, tls, write,
-                // headers, body, total) are retryable.
-                _ => true,
-            },
-            UpstreamConnection(_) => {
-                let msg = err.to_string();
-                !msg.starts_with("client disconnected")
-            }
+            UpstreamTimeout { phase, .. } => is_timeout_retryable(phase, idle_chunk_retryable),
+            UpstreamConnection(_) => !err.to_string().starts_with("client disconnected"),
             RateLimited {
                 is_proxy_rotated, ..
             } => *is_proxy_rotated,
-            UpstreamError { status, .. } => {
-                // 429 is not retryable locally unless the proxy rotates (which is handled by RateLimited).
-                // If it slips through as UpstreamError, we don't want to retry the same target.
-                *status != 429
-            }
+            UpstreamError { status, .. } => *status != 429,
             Cancelled(_) | RaceLost => false,
             _ => true,
         }

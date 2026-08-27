@@ -36,45 +36,69 @@ impl FxAdapter {
 
 crate::adapters::derive_default_from_new!(FxAdapter);
 
+fn convert_function_tool(func: &Value) -> Option<Value> {
+    let name = func.get("name")?.as_str()?;
+    let description = func.get("description").and_then(|d| d.as_str());
+    let input_schema = func
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
+    let mut obj = serde_json::json!({
+        "type": "function",
+        "name": name,
+        "inputSchema": input_schema,
+    });
+    if let Some(desc) = description {
+        obj["description"] = Value::String(desc.to_string());
+    }
+    Some(obj)
+}
+
+fn convert_generic_tool(t: &Value) -> Option<Value> {
+    if t.get("name").is_some() && t.get("inputSchema").is_some() {
+        return Some(t.clone());
+    }
+    if t.get("name").and_then(|n| n.as_str()).is_some() {
+        let mut obj = t.clone();
+        if obj.get("inputSchema").is_none() {
+            obj["inputSchema"] = serde_json::json!({"type": "object", "properties": {}});
+        }
+        if obj.get("type").is_none() {
+            obj["type"] = Value::String("function".to_string());
+        }
+        return Some(obj);
+    }
+    None
+}
+
+fn convert_single_tool(t: &Value) -> Option<Value> {
+    if let Some(func) = t.get("function") {
+        convert_function_tool(func)
+    } else {
+        convert_generic_tool(t)
+    }
+}
+
 fn convert_tools(req_tools: Option<&[Value]>) -> Vec<Value> {
     let Some(tools) = req_tools else {
         return Vec::new();
     };
-    tools
-        .iter()
-        .filter_map(|t| {
-            if let Some(func) = t.get("function") {
-                let name = func.get("name")?.as_str()?;
-                let description = func.get("description").and_then(|d| d.as_str());
-                let input_schema = func
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-                let mut obj = serde_json::json!({
-                    "type": "function",
-                    "name": name,
-                    "inputSchema": input_schema,
-                });
-                if let Some(desc) = description {
-                    obj["description"] = Value::String(desc.to_string());
-                }
-                Some(obj)
-            } else if t.get("name").is_some() && t.get("inputSchema").is_some() {
-                Some(t.clone())
-            } else if let Some(_name) = t.get("name").and_then(|n| n.as_str()) {
-                let mut obj = t.clone();
-                if obj.get("inputSchema").is_none() {
-                    obj["inputSchema"] = serde_json::json!({"type": "object", "properties": {}});
-                }
-                if obj.get("type").is_none() {
-                    obj["type"] = Value::String("function".to_string());
-                }
-                Some(obj)
-            } else {
-                None
-            }
+    tools.iter().filter_map(convert_single_tool).collect()
+}
+
+fn parse_obj_tool_choice(obj: &serde_json::Map<String, Value>) -> Value {
+    if let Some(func) = obj
+        .get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+    {
+        serde_json::json!({
+            "type": "tool",
+            "toolName": func
         })
-        .collect()
+    } else {
+        serde_json::json!({"type": "auto"})
+    }
 }
 
 fn convert_tool_choice(choice: Option<&Value>) -> Value {
@@ -84,96 +108,91 @@ fn convert_tool_choice(choice: Option<&Value>) -> Value {
             "required" => serde_json::json!({"type": "required"}),
             _ => serde_json::json!({"type": "auto"}),
         },
-        Some(Value::Object(obj)) => {
-            if let Some(func) = obj
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-            {
-                serde_json::json!({
-                    "type": "tool",
-                    "toolName": func
-                })
-            } else {
-                serde_json::json!({"type": "auto"})
-            }
-        }
+        Some(Value::Object(obj)) => parse_obj_tool_choice(obj),
         _ => serde_json::json!({"type": "auto"}),
     }
 }
 
-fn convert_messages(messages: &[OpenAIMessage]) -> Vec<Value> {
-    messages
-        .iter()
-        .map(|m| {
-            let text = openproxy_types::message::extract_content_text(&m.content);
-            match m.role.as_str() {
-                "system" => serde_json::json!({
-                    "role": "system",
-                    "content": text,
-                }),
-                "assistant" => {
-                    let mut parts: Vec<Value> = Vec::new();
-                    if !text.is_empty() {
-                        parts.push(serde_json::json!({
-                            "type": "text",
-                            "text": text,
-                        }));
-                    }
-                    if let Some(tool_calls) = &m.tool_calls {
-                        for tc in tool_calls {
-                            let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            let name = tc
-                                .get("function")
-                                .and_then(|f| f.get("name"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            let raw_args = tc.get("function").and_then(|f| f.get("arguments"));
-                            let input_val = match raw_args {
-                                Some(Value::String(s)) => serde_json::from_str(s)
-                                    .unwrap_or_else(|_| Value::String(s.clone())),
-                                Some(other) => other.clone(),
-                                None => serde_json::json!({}),
-                            };
-                            parts.push(serde_json::json!({
-                                "type": "tool-call",
-                                "toolCallId": id,
-                                "toolName": name,
-                                "input": input_val,
-                            }));
-                        }
-                    }
-                    serde_json::json!({
-                        "role": "assistant",
-                        "content": parts,
-                    })
-                }
-                "tool" => {
-                    let tool_call_id = m.tool_call_id.as_deref().unwrap_or("");
-                    let tool_name = m.name.as_deref().unwrap_or("unknown");
-                    serde_json::json!({
-                        "role": "tool",
-                        "content": [{
-                            "type": "tool-result",
-                            "toolCallId": tool_call_id,
-                            "toolName": tool_name,
-                            "output": {
-                                "type": "text",
-                                "value": text,
-                            }
-                        }]
-                    })
-                }
-                role => serde_json::json!({
-                    "role": role,
-                    "content": [{
-                        "type": "text",
-                        "text": text,
-                    }],
-                }),
+fn convert_assistant_tool_call(tc: &Value) -> Value {
+    let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let name = tc
+        .get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let raw_args = tc.get("function").and_then(|f| f.get("arguments"));
+    let input_val = match raw_args {
+        Some(Value::String(s)) => {
+            serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone()))
+        }
+        Some(other) => other.clone(),
+        None => serde_json::json!({}),
+    };
+    serde_json::json!({
+        "type": "tool-call",
+        "toolCallId": id,
+        "toolName": name,
+        "input": input_val,
+    })
+}
+
+fn convert_assistant_message(text: &str, tool_calls: Option<&Vec<Value>>) -> Value {
+    let mut parts: Vec<Value> = Vec::new();
+    if !text.is_empty() {
+        parts.push(serde_json::json!({
+            "type": "text",
+            "text": text,
+        }));
+    }
+    if let Some(calls) = tool_calls {
+        for tc in calls {
+            parts.push(convert_assistant_tool_call(tc));
+        }
+    }
+    serde_json::json!({
+        "role": "assistant",
+        "content": parts,
+    })
+}
+
+fn convert_tool_message(m: &OpenAIMessage, text: &str) -> Value {
+    let tool_call_id = m.tool_call_id.as_deref().unwrap_or("");
+    let tool_name = m.name.as_deref().unwrap_or("unknown");
+    serde_json::json!({
+        "role": "tool",
+        "content": [{
+            "type": "tool-result",
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "output": {
+                "type": "text",
+                "value": text,
             }
-        })
-        .collect()
+        }]
+    })
+}
+
+fn convert_single_message(m: &OpenAIMessage) -> Value {
+    let text = openproxy_types::message::extract_content_text(&m.content);
+    match m.role.as_str() {
+        "system" => serde_json::json!({
+            "role": "system",
+            "content": text,
+        }),
+        "assistant" => convert_assistant_message(&text, m.tool_calls.as_ref()),
+        "tool" => convert_tool_message(m, &text),
+        role => serde_json::json!({
+            "role": role,
+            "content": [{
+                "type": "text",
+                "text": text,
+            }],
+        }),
+    }
+}
+
+fn convert_messages(messages: &[OpenAIMessage]) -> Vec<Value> {
+    messages.iter().map(convert_single_message).collect()
 }
 
 impl ProviderAdapter for FxAdapter {

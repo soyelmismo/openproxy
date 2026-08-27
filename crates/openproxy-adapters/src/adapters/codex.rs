@@ -63,6 +63,37 @@ impl CodexAdapter {
         }
     }
 
+fn build_hardcoded_codex_model(
+    (id, name, ctx, _max_ctx, vision): (&str, &str, i64, i64, bool),
+) -> DiscoveredModel {
+    let input_modalities = if vision {
+        Some(vec!["text".to_string(), "image".to_string()])
+    } else {
+        Some(vec!["text".to_string()])
+    };
+    let caps = openproxy_types::ModelCapabilities {
+        vision: Some(vision),
+        tool_calling: Some(true),
+        reasoning: Some(true),
+        thinking: Some(true),
+        attachment: None,
+        structured_output: None,
+        temperature: None,
+    };
+    DiscoveredModel {
+        model_id: ModelId::new(id),
+        display_name: Some(name.to_string()),
+        target_format: TargetFormat::Responses,
+        context_length: Some(ctx),
+        max_output_tokens: Some(32_768),
+        input_modalities,
+        output_modalities: Some(vec!["text".to_string()]),
+        model_type: Some("chat".to_string()),
+        family: Some("gpt".to_string()),
+        capabilities: Some(caps),
+    }
+}
+
     fn hardcoded_models() -> Vec<DiscoveredModel> {
         // Models from codex-rs/models-manager/models.json (official Codex bundled catalog)
         // Updated from https://github.com/openai/codex
@@ -77,30 +108,7 @@ impl CodexAdapter {
             // codex-auto-review is internal (visibility: hide), excluded from user-facing list
         ]
         .into_iter()
-        .map(|(id, name, ctx, _max_ctx, vision)| DiscoveredModel {
-            model_id: ModelId::new(id),
-            display_name: Some(name.to_string()),
-            target_format: TargetFormat::Responses,
-            context_length: Some(ctx),
-            max_output_tokens: Some(32_768),
-            input_modalities: if vision {
-                Some(vec!["text".to_string(), "image".to_string()])
-            } else {
-                Some(vec!["text".to_string()])
-            },
-            output_modalities: Some(vec!["text".to_string()]),
-            model_type: Some("chat".to_string()),
-            family: Some("gpt".to_string()),
-            capabilities: Some(openproxy_types::ModelCapabilities {
-                vision: Some(vision),
-                tool_calling: Some(true),
-                reasoning: Some(true),
-                thinking: Some(true),
-                attachment: None,
-                structured_output: None,
-                temperature: None,
-            }),
-        })
+        .map(Self::build_hardcoded_codex_model)
         .collect()
     }
 }
@@ -194,44 +202,7 @@ impl CodexAdapter {
         access_token: &str,
         workspace_id: Option<&str>,
     ) -> Result<openproxy_types::AccountQuota> {
-        let url = "https://chatgpt.com/backend-api/wham/usage";
-        let mut req = UpstreamRequest::get(url);
-        req.headers.insert(
-            http::header::AUTHORIZATION,
-            http::HeaderValue::from_str(&format!("Bearer {access_token}"))
-                .unwrap_or_else(|_| http::HeaderValue::from_static("")),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("origin"),
-            http::HeaderValue::from_static("https://chatgpt.com"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("originator"),
-            http::HeaderValue::from_static("codex_cli_rs"),
-        );
-        if let Ok(v) = http::HeaderValue::from_str(codex_client_version_str()) {
-            req.headers
-                .insert(http::HeaderName::from_static("version"), v);
-        }
-        if let Ok(v) = http::HeaderValue::from_str(codex_user_agent_str()) {
-            req.headers.insert(http::header::USER_AGENT, v);
-        }
-        let workspace_header = workspace_id.and_then(codex_workspace_header);
-        if let Some(ws) = workspace_header.as_deref()
-            && let Ok(val) = http::HeaderValue::from_str(ws)
-        {
-            req.headers
-                .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
-        }
-
+        let req = build_codex_quota_request(access_token, workspace_id);
         let cancel = CancellationToken::new();
         let response = upstream
             .call(req, TimeoutProfile::Chat, cancel)
@@ -245,22 +216,7 @@ impl CodexAdapter {
                 .chars()
                 .take(200)
                 .collect::<String>();
-            return Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some(if snippet.is_empty() {
-                    format!("Codex quota check failed: HTTP {status}")
-                } else {
-                    format!("Codex quota check failed: HTTP {status}: {snippet}")
-                }),
-                model_details: None,
-            });
+            return Ok(build_codex_error_quota(status, &snippet));
         }
 
         let body = response
@@ -270,6 +226,67 @@ impl CodexAdapter {
         let json: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|e| CoreError::Parse(format!("codex quota parse: {e}")))?;
         parse_codex_usage_quota(&json)
+    }
+}
+
+fn build_codex_quota_request(access_token: &str, workspace_id: Option<&str>) -> UpstreamRequest {
+    let url = "https://chatgpt.com/backend-api/wham/usage";
+    let mut req = UpstreamRequest::get(url);
+    req.headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+            .unwrap_or_else(|_| http::HeaderValue::from_static("")),
+    );
+    req.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("origin"),
+        http::HeaderValue::from_static("https://chatgpt.com"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("originator"),
+        http::HeaderValue::from_static("codex_cli_rs"),
+    );
+    if let Ok(v) = http::HeaderValue::from_str(codex_client_version_str()) {
+        req.headers
+            .insert(http::HeaderName::from_static("version"), v);
+    }
+    if let Ok(v) = http::HeaderValue::from_str(codex_user_agent_str()) {
+        req.headers.insert(http::header::USER_AGENT, v);
+    }
+    let workspace_header = workspace_id.and_then(codex_workspace_header);
+    if let Some(ws) = workspace_header.as_deref()
+        && let Ok(val) = http::HeaderValue::from_str(ws)
+    {
+        req.headers
+            .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
+    }
+    req
+}
+
+fn build_codex_error_quota(status: u16, snippet: &str) -> openproxy_types::AccountQuota {
+    let fetch_error = if snippet.is_empty() {
+        format!("Codex quota check failed: HTTP {status}")
+    } else {
+        format!("Codex quota check failed: HTTP {status}: {snippet}")
+    };
+    openproxy_types::AccountQuota {
+        session_used: None,
+        session_limit: None,
+        session_reset_at: None,
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        plan_name: None,
+        last_fetched_at: openproxy_types::now_unix_secs_str(),
+        fetch_error: Some(fetch_error),
+        model_details: None,
     }
 }
 

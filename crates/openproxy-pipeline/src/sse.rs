@@ -416,6 +416,52 @@ fn map_gemini_finish_reason(reason: &str) -> String {
 /// `serde_json::Value` to avoid allocating the full JSON AST per chunk.
 /// serde skips unknown fields without allocating them, which reduces
 /// per-chunk CPU on the Gemini path significantly.
+fn extract_gemini_candidates(probe: &GeminiSseProbe) -> &[GeminiCandidateProbe] {
+    if !probe.candidates.is_empty() {
+        &probe.candidates
+    } else if let Some(inner) = &probe.response {
+        &inner.candidates
+    } else {
+        &probe.candidates
+    }
+}
+
+fn extract_gemini_usage_metadata(probe: &GeminiSseProbe) -> Option<&GeminiUsageProbe> {
+    probe.usage_metadata.as_ref().or_else(|| {
+        probe.response.as_ref().and_then(|r| r.usage_metadata.as_ref())
+    })
+}
+
+fn extract_gemini_content_and_reasoning(candidates: &[GeminiCandidateProbe]) -> (String, Option<String>) {
+    let mut content_parts = String::new();
+    let mut reasoning_parts = String::new();
+    if let Some(candidate) = candidates.first()
+        && let Some(content) = &candidate.content
+    {
+        for part in &content.parts {
+            if let Some(t) = part.text.as_deref() {
+                if part.thought.unwrap_or(false) {
+                    reasoning_parts.push_str(t);
+                } else {
+                    content_parts.push_str(t);
+                }
+            }
+        }
+    }
+    let dr = (!reasoning_parts.is_empty()).then_some(reasoning_parts);
+    (content_parts, dr)
+}
+
+fn extract_gemini_usage(usage_metadata: Option<&GeminiUsageProbe>) -> Option<OpenAIUsage> {
+    let u = usage_metadata?;
+    Some(OpenAIUsage {
+        prompt_tokens: u.prompt_tokens?.try_into().unwrap_or(u32::MAX),
+        completion_tokens: u.completion_tokens?.try_into().unwrap_or(u32::MAX),
+        total_tokens: u.total_tokens?.try_into().unwrap_or(u32::MAX),
+        prompt_tokens_details: None,
+    })
+}
+
 pub fn parse_gemini_sse_line(
     line: &str,
     chunk_id: &str,
@@ -428,116 +474,41 @@ pub fn parse_gemini_sse_line(
     if payload == "[DONE]" {
         return Ok(Some(UpstreamSseChunk::done()));
     }
-    // Fast targeted parse: only extracts candidates[].content.parts[].text
-    // (+ thought flag), candidates[].finishReason, and usageMetadata.
-    // Skips unknown fields (role, index, safetyRatings, citations, etc.)
-    // without allocating them.
+
     let probe: GeminiSseProbe = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("gemini sse json: {e}")))?;
 
-    // Handle Antigravity nested response structure
-    let candidates = if !probe.candidates.is_empty() {
-        &probe.candidates
-    } else if let Some(inner) = &probe.response {
-        &inner.candidates
-    } else {
-        &probe.candidates
-    };
+    let candidates = extract_gemini_candidates(&probe);
+    let usage_metadata = extract_gemini_usage_metadata(&probe);
+    let (text, delta_reasoning) = extract_gemini_content_and_reasoning(candidates);
 
-    let usage_metadata = if probe.usage_metadata.is_some() {
-        &probe.usage_metadata
-    } else if let Some(inner) = &probe.response {
-        &inner.usage_metadata
-    } else {
-        &None
-    };
-
-    // Extract text from candidates[0].content.parts[].
-    //
-    // Each part may have a `thought: true` flag indicating it's a
-    // reasoning fragment (Gemini 2.0/2.5 thinking models). We split
-    // the parts into two accumulators so the accumulator downstream
-    // (sse_accumulator.rs::ResponseAccumulator) can build separate
-    // `content` and `reasoning` fields for the persisted JSON.
-    //
-    // A single part can carry BOTH `text` and `thought: true` — that
-    // is the thinking-then-answering interleaved case. We route the
-    // text based on the `thought` flag, never on the field ordering.
-    let (text, delta_reasoning) = {
-        let mut content_parts = String::new();
-        let mut reasoning_parts = String::new();
-        if let Some(candidate) = candidates.first()
-            && let Some(content) = &candidate.content
-        {
-            for part in &content.parts {
-                if let Some(t) = part.text.as_deref() {
-                    let is_thought = part.thought.unwrap_or(false);
-                    if is_thought {
-                        reasoning_parts.push_str(t);
-                    } else {
-                        content_parts.push_str(t);
-                    }
-                }
-            }
-        }
-        let dr = if reasoning_parts.is_empty() {
-            None
-        } else {
-            Some(reasoning_parts)
-        };
-        // The wire payload's `delta.content` carries ONLY the
-        // non-thought text (OpenAI streaming convention:
-        // reasoning goes in a separate field). The pipeline's
-        // `append_openai_raw` -> `finish()` flow extracts
-        // `delta.content` from each stored payload to rebuild the
-        // persisted message's `content` field, so this MUST NOT
-        // include thought text or thought text would leak into
-        // the user's `content`. The thought text is routed to
-        // `delta_reasoning` (which the pipeline separately feeds
-        // to `append_reasoning`).
-        (content_parts, dr)
-    };
-
-    // Extract finish_reason
     let finish_reason = candidates
         .first()
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
 
-    // Build OpenAI chunk
-    let choice = if let Some(ref reason) = finish_reason {
-        serde_json::json!({
-            "index": 0,
-            "delta": if text.is_empty() { serde_json::json!({}) } else { serde_json::json!({"content": text}) },
-            "finish_reason": reason,
-        })
+    let delta = if text.is_empty() {
+        serde_json::json!({})
     } else {
-        serde_json::json!({
-            "index": 0,
-            "delta": if text.is_empty() { serde_json::json!({}) } else { serde_json::json!({"content": text}) },
-            "finish_reason": serde_json::Value::Null,
-        })
+        serde_json::json!({"content": text})
     };
+    let finish_val = finish_reason
+        .as_ref()
+        .map_or(serde_json::Value::Null, |r| serde_json::json!(r));
 
     let chunk = serde_json::json!({
         "id": chunk_id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model,
-        "choices": [choice],
+        "choices": [{
+            "index": 0,
+            "delta": delta,
+            "finish_reason": finish_val,
+        }],
     });
 
-    // Extract usage if present (final chunk). Uses `?` semantics to
-    // match the original behavior: if any token count is missing or
-    // the wrong type, the whole usage is `None`.
-    let usage = usage_metadata.as_ref().and_then(|u| {
-        Some(OpenAIUsage {
-            prompt_tokens: u.prompt_tokens?.try_into().unwrap_or(u32::MAX),
-            completion_tokens: u.completion_tokens?.try_into().unwrap_or(u32::MAX),
-            total_tokens: u.total_tokens?.try_into().unwrap_or(u32::MAX),
-            prompt_tokens_details: None,
-        })
-    });
+    let usage = extract_gemini_usage(usage_metadata);
 
     Ok(Some(UpstreamSseChunk {
         raw_payload: None,
@@ -604,6 +575,164 @@ pub fn parse_anthropic_sse_stream_line(
 /// an OpenAI-compatible SSE chunk string.
 ///
 /// The payload format is "event_type\njson_data".
+fn build_anthropic_message_start_chunk(
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> UpstreamSseChunk {
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"role": "assistant", "content": ""},
+            "finish_reason": null
+        }]
+    });
+    UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: Vec::new(),
+        has_content: false,
+    }
+}
+
+fn translate_anthropic_content_delta(
+    data: &Value,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Option<UpstreamSseChunk> {
+    let delta_type = data
+        .get("delta")
+        .and_then(|d| d.get("type"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("text_delta");
+
+    if delta_type == "thinking_delta" {
+        let thinking = data
+            .get("delta")
+            .and_then(|d| d.get("thinking"))
+            .and_then(|t| t.as_str())
+            .filter(|s| !s.is_empty())?;
+
+        let chunk = serde_json::json!({
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"content": ""},
+                "finish_reason": null
+            }]
+        });
+        return Some(UpstreamSseChunk {
+            raw_payload: None,
+            payload: chunk,
+            done: false,
+            usage: None,
+            stop_reason: None,
+            delta_reasoning: Some(thinking.to_string()),
+            delta_tool_calls: Vec::new(),
+            has_content: true,
+        });
+    }
+
+    let text = data
+        .get("delta")
+        .and_then(|d| d.get("text"))
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())?;
+
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": text},
+            "finish_reason": null
+        }]
+    });
+    Some(UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: Vec::new(),
+        has_content: true,
+    })
+}
+
+fn translate_anthropic_message_delta(
+    data: &Value,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> UpstreamSseChunk {
+    let stop_reason = data
+        .get("delta")
+        .and_then(|d| d.get("stop_reason"))
+        .and_then(|r| r.as_str());
+
+    let finish_reason = match stop_reason {
+        Some("end_turn" | "stop_sequence") => Some("stop".to_string()),
+        Some("max_tokens") => Some("length".to_string()),
+        _ => None,
+    };
+
+    let usage = data.get("usage").map(|u| {
+        crate::translation::OpenAIUsage {
+            prompt_tokens: u
+                .get("input_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .try_into()
+                .unwrap_or(u32::MAX),
+            completion_tokens: u
+                .get("output_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .try_into()
+                .unwrap_or(u32::MAX),
+            total_tokens: 0,
+            prompt_tokens_details: None,
+        }
+    });
+
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": finish_reason
+        }]
+    });
+    UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: true,
+        usage,
+        stop_reason: stop_reason.map(std::string::ToString::to_string),
+        delta_reasoning: None,
+        delta_tool_calls: Vec::new(),
+        has_content: false,
+    }
+}
+
 pub fn translate_anthropic_sse_payload(
     payload: &str,
     chunk_id: &str,
@@ -614,8 +743,7 @@ pub fn translate_anthropic_sse_payload(
         return Ok(None);
     };
 
-    // Skip ping events
-    if event_type == "ping" {
+    if event_type == "ping" || event_type == "message_stop" {
         return Ok(None);
     }
 
@@ -623,187 +751,10 @@ pub fn translate_anthropic_sse_payload(
         .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
 
     match event_type {
-        "message_start" => {
-            // Return role-only chunk
-            let chunk = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": ""},
-                    "finish_reason": null
-                }]
-            });
-            Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: chunk,
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: None,
-                delta_tool_calls: Vec::new(),
-                // message_start is a metadata-only event: it announces
-                // the assistant role but carries no generated tokens.
-                // Must NOT reset the idle_chunk timer — the model
-                // hasn't started producing content yet.
-                has_content: false,
-            }))
-        }
-        "content_block_delta" => {
-            // Determine the delta subtype. Anthropic distinguishes
-            //   - text_delta        (regular text)
-            //   - thinking_delta    (extended thinking / Claude reasoning)
-            //   - input_json_delta  (tool_use argument fragments;
-            //                       handled by `translate_anthropic_sse_event`
-            //                       and the H5 accumulator, NOT here)
-            // Missing `type` defaults to text_delta (legacy clients).
-            let delta_type = data
-                .get("delta")
-                .and_then(|d| d.get("type"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("text_delta");
-
-            if delta_type == "thinking_delta" {
-                // Anthropic extended thinking. Extract `delta.thinking`
-                // and surface it as `delta_reasoning` on the chunk so
-                // the downstream accumulator (sse_accumulator.rs) can
-                // build the persisted `reasoning` field.
-                let thinking = data
-                    .get("delta")
-                    .and_then(|d| d.get("thinking"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
-                if thinking.is_empty() {
-                    return Ok(None);
-                }
-                let chunk = serde_json::json!({
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": ""},
-                        "finish_reason": null
-                    }]
-                });
-                return Ok(Some(UpstreamSseChunk {
-                    raw_payload: None,
-                    payload: chunk,
-                    done: false,
-                    usage: None,
-                    stop_reason: None,
-                    delta_reasoning: Some(thinking.to_string()),
-                    delta_tool_calls: Vec::new(),
-                    has_content: true,
-                }));
-            }
-
-            // text_delta (or unknown subtype — fall back to text
-            // extraction to preserve existing behavior for any
-            // future subtype we don't recognize).
-            let text = data
-                .get("delta")
-                .and_then(|d| d.get("text"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
-
-            if text.is_empty() {
-                return Ok(None);
-            }
-
-            let chunk = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": text},
-                    "finish_reason": null
-                }]
-            });
-            Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: chunk,
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: None,
-                delta_tool_calls: Vec::new(),
-                has_content: true,
-            }))
-        }
-        "message_delta" => {
-            // Extract finish reason and usage
-            let stop_reason = data
-                .get("delta")
-                .and_then(|d| d.get("stop_reason"))
-                .and_then(|r| r.as_str());
-
-            let finish_reason = match stop_reason {
-                Some("end_turn" | "stop_sequence") => Some("stop".to_string()),
-                Some("max_tokens") => Some("length".to_string()),
-                _ => None,
-            };
-
-            let usage = data.get("usage").map(|u| {
-                crate::translation::OpenAIUsage {
-                    prompt_tokens: u
-                        .get("input_tokens")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0)
-                        .try_into()
-                        .unwrap_or(u32::MAX),
-                    completion_tokens: u
-                        .get("output_tokens")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0)
-                        .try_into()
-                        .unwrap_or(u32::MAX),
-                    total_tokens: 0, // Will be computed
-                    prompt_tokens_details: None,
-                }
-            });
-
-            let chunk = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": finish_reason
-                }]
-            });
-            Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: chunk,
-                done: true,
-                usage,
-                stop_reason: stop_reason.map(std::string::ToString::to_string),
-                delta_reasoning: None,
-                delta_tool_calls: Vec::new(),
-                // message_delta carries only stop_reason + usage —
-                // no generated tokens. Must NOT reset the idle_chunk
-                // timer.
-                has_content: false,
-            }))
-        }
-        "message_stop" => {
-            // H4 fix: `message_delta` already emitted the
-            // `done: true` chunk (line 307). `message_stop` is just
-            // Anthropic's closing handshake and would otherwise
-            // produce a SECOND `done: true` chunk downstream — and
-            // combined with the post-loop `[DONE]` at pipeline.rs
-            // :2431 the client would see three end-of-stream
-            // signals. Swallow it.
-            Ok(None)
-        }
-        _ => Ok(None), // content_block_start, content_block_stop, etc.
+        "message_start" => Ok(Some(build_anthropic_message_start_chunk(chunk_id, created, model))),
+        "content_block_delta" => Ok(translate_anthropic_content_delta(&data, chunk_id, created, model)),
+        "message_delta" => Ok(Some(translate_anthropic_message_delta(&data, chunk_id, created, model))),
+        _ => Ok(None),
     }
 }
 
@@ -866,6 +817,231 @@ struct AnthropicContentBlockProbe {
     name: Option<String>,
 }
 
+fn handle_anthropic_input_json_delta(
+    delta: &AnthropicDeltaProbe,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    acc: &mut AnthropicToolUseAccumulator,
+) -> UpstreamSseChunk {
+    // Capture the running length BEFORE appending so
+    // the downstream accumulator (sse_accumulator.rs)
+    // can append only the NEW fragment, not the
+    // whole running total (which would double-encode
+    // the arguments JSON across the wire chunks).
+    let prev_len = acc.arguments.len();
+    if let Some(partial) = delta.partial_json.as_deref() {
+        // Bound check: prevent unbounded argument accumulation
+        if prev_len + partial.len() <= MAX_TOOL_ARGUMENTS_BYTES {
+            acc.arguments.push_str(partial);
+        }
+    }
+    let new_fragment = &acc.arguments[prev_len..];
+    // Emit a chunk that carries ONLY the newly-appended
+    // fragment in `arguments`. The OpenAI streaming
+    // tool_calls spec requires each chunk to carry a
+    // FRAGMENT of the arguments JSON; the client
+    // concatenates fragments by `index`.
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [{
+                    "index": acc.index,
+                    "function": {
+                        "arguments": new_fragment
+                    }
+                }]
+            },
+            "finish_reason": null
+        }]
+    });
+    // Mirror ONLY the new fragment in
+    // `delta_tool_calls` so the pipeline's accumulator
+    // appends it once to its in-flight tool_call's arguments.
+    let tool_call_obj = serde_json::json!({
+        "index": acc.index,
+        "function": {
+            "arguments": new_fragment,
+        }
+    });
+    UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: vec![tool_call_obj],
+        has_content: true,
+    }
+}
+
+fn handle_anthropic_thinking_delta(
+    delta: &AnthropicDeltaProbe,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Option<UpstreamSseChunk> {
+    let thinking = delta.thinking.as_deref().unwrap_or("");
+    if thinking.is_empty() {
+        return None;
+    }
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": ""},
+            "finish_reason": null
+        }]
+    });
+    Some(UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: Some(thinking.to_string()),
+        delta_tool_calls: Vec::new(),
+        has_content: true,
+    })
+}
+
+fn handle_anthropic_text_delta(
+    delta: &AnthropicDeltaProbe,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Option<UpstreamSseChunk> {
+    let text = delta.text.as_deref().unwrap_or("");
+    if text.is_empty() {
+        return None;
+    }
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": text},
+            "finish_reason": null
+        }]
+    });
+    Some(UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: Vec::new(),
+        has_content: true,
+    })
+}
+
+fn translate_anthropic_content_block_delta(
+    data_json: &str,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    tool_use_acc: &mut Option<AnthropicToolUseAccumulator>,
+) -> Result<Option<UpstreamSseChunk>> {
+    let probe: AnthropicContentBlockDeltaProbe = serde_json::from_str(data_json)
+        .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
+    let delta = probe.delta.unwrap_or_default();
+    let delta_type = delta.delta_type.as_deref().unwrap_or("");
+
+    let chunk = match delta_type {
+        "input_json_delta" => tool_use_acc
+            .as_mut()
+            .map(|acc| handle_anthropic_input_json_delta(&delta, chunk_id, created, model, acc)),
+        "thinking_delta" => handle_anthropic_thinking_delta(&delta, chunk_id, created, model),
+        _ => handle_anthropic_text_delta(&delta, chunk_id, created, model),
+    };
+
+    Ok(chunk)
+}
+
+fn translate_anthropic_content_block_start(
+    data_json: &str,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    tool_use_acc: &mut Option<AnthropicToolUseAccumulator>,
+    tool_call_index_counter: &mut u32,
+) -> Result<Option<UpstreamSseChunk>> {
+    let probe: AnthropicContentBlockStartProbe = serde_json::from_str(data_json)
+        .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
+    let block = probe.content_block.unwrap_or_default();
+    let block_type = block.block_type.as_deref().unwrap_or("");
+
+    if block_type != "tool_use" {
+        return Ok(None);
+    }
+
+    let id = block.id.unwrap_or_default();
+    let name = block.name.unwrap_or_default();
+    let index = *tool_call_index_counter;
+    *tool_call_index_counter += 1;
+
+    *tool_use_acc = Some(AnthropicToolUseAccumulator::new_with_bounds(
+        index,
+        id.clone(),
+        name.clone(),
+    )?);
+
+    let chunk = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [{
+                    "index": index,
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": ""
+                    }
+                }]
+            },
+            "finish_reason": null
+        }]
+    });
+
+    let tool_call_obj = serde_json::json!({
+        "index": index,
+        "id": id,
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": ""
+        }
+    });
+
+    Ok(Some(UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: vec![tool_call_obj],
+        has_content: false,
+    }))
+}
+
 pub fn translate_anthropic_sse_event(
     payload: &str,
     chunk_id: &str,
@@ -878,278 +1054,32 @@ pub fn translate_anthropic_sse_event(
         return Ok(None);
     };
 
-    // Skip ping events.
-    if event_type == "ping" {
-        return Ok(None);
-    }
-
-    // Fast path for content_block_delta: use a targeted probe that
-    // only extracts delta.{type,text,thinking,partial_json}, avoiding
-    // the full Value AST allocation on the streaming hot path.
-    if event_type == "content_block_delta" {
-        let probe: AnthropicContentBlockDeltaProbe = serde_json::from_str(data_json)
-            .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
-        let delta = probe.delta.unwrap_or_default();
-        let delta_type = delta.delta_type.as_deref().unwrap_or("");
-
-        if delta_type == "input_json_delta" {
-            // We need an open accumulator to receive deltas. If
-            // somehow we don't (malformed stream), drop the
-            // fragment rather than emit a chunk with a phantom
-            // tool call.
-            if let Some(acc) = tool_use_acc.as_mut() {
-                // Capture the running length BEFORE appending so
-                // the downstream accumulator (sse_accumulator.rs)
-                // can append only the NEW fragment, not the
-                // whole running total (which would double-encode
-                // the arguments JSON across the wire chunks).
-                let prev_len = acc.arguments.len();
-                if let Some(partial) = delta.partial_json.as_deref() {
-                    // Bound check: prevent unbounded argument accumulation
-                    if prev_len + partial.len() > MAX_TOOL_ARGUMENTS_BYTES {
-                        // Drop the fragment, don't accumulate
-                    } else {
-                        acc.arguments.push_str(partial);
-                    }
-                }
-                let new_fragment = &acc.arguments[prev_len..];
-                // Emit a chunk that carries ONLY the newly-appended
-                // fragment in `arguments`. The OpenAI streaming
-                // tool_calls spec requires each chunk to carry a
-                // FRAGMENT of the arguments JSON; the client
-                // concatenates fragments by `index`. Sending the
-                // running total here would cause the client to
-                // concatenate f1 + (f1+f2) + (f1+f2+f3) + ...,
-                // duplicating early fragments N times — which is
-                // exactly the "tool call arguments duplicated"
-                // bug the user reported.
-                let chunk = serde_json::json!({
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "tool_calls": [{
-                                "index": acc.index,
-                                "function": {
-                                    "arguments": new_fragment
-                                }
-                            }]
-                        },
-                        "finish_reason": null
-                    }]
-                });
-                // Mirror ONLY the new fragment in
-                // `delta_tool_calls` so the pipeline's accumulator
-                // (`update_anthropic_tool_use(Delta { partial_json })`)
-                // appends it once to its in-flight tool_call's
-                // arguments — otherwise the running total gets
-                // concatenated with itself across chunks and the
-                // persisted arguments string is the running total
-                // repeated per fragment (broken JSON).
-                let tool_call_obj = serde_json::json!({
-                    "index": acc.index,
-                    "function": {
-                        "arguments": new_fragment,
-                    }
-                });
-                return Ok(Some(UpstreamSseChunk {
-                    raw_payload: None,
-                    payload: chunk,
-                    done: false,
-                    usage: None,
-                    stop_reason: None,
-                    delta_reasoning: None,
-                    delta_tool_calls: vec![tool_call_obj],
-                    has_content: true,
-                }));
-            }
-            // No accumulator open — drop the fragment.
-            return Ok(None);
+    match event_type {
+        "ping" => Ok(None),
+        "content_block_delta" => translate_anthropic_content_block_delta(
+            data_json,
+            chunk_id,
+            created,
+            model,
+            tool_use_acc,
+        ),
+        "content_block_start" => translate_anthropic_content_block_start(
+            data_json,
+            chunk_id,
+            created,
+            model,
+            tool_use_acc,
+            tool_call_index_counter,
+        ),
+        "content_block_stop" => {
+            *tool_use_acc = None;
+            Ok(None)
         }
-        if delta_type == "thinking_delta" {
-            // Anthropic extended thinking. Extract `delta.thinking`
-            // and surface it as `delta_reasoning` on the chunk so
-            // the downstream accumulator (sse_accumulator.rs) can
-            // persist it as `choices[0].message.reasoning_content`.
-            // Mirrors the structure of the stateless
-            // `translate_anthropic_sse_payload` thinking_delta
-            // branch (sse.rs:412-444).
-            let thinking = delta.thinking.as_deref().unwrap_or("");
-            if thinking.is_empty() {
-                return Ok(None);
-            }
-            let chunk = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": ""},
-                    "finish_reason": null
-                }]
-            });
-            return Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: chunk,
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: Some(thinking.to_string()),
-                delta_tool_calls: Vec::new(),
-                has_content: true,
-            }));
+        _ => {
+            let rebuilt = format!("{event_type}\n{data_json}");
+            translate_anthropic_sse_payload(&rebuilt, chunk_id, created, model)
         }
-        // text_delta (or unknown subtype — fall back to text
-        // extraction to preserve existing behavior for any
-        // future subtype we don't recognize).
-        let text = delta.text.as_deref().unwrap_or("");
-        if text.is_empty() {
-            return Ok(None);
-        }
-        let chunk = serde_json::json!({
-            "id": chunk_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"content": text},
-                "finish_reason": null
-            }]
-        });
-        return Ok(Some(UpstreamSseChunk {
-            raw_payload: None,
-            payload: chunk,
-            done: false,
-            usage: None,
-            stop_reason: None,
-            delta_reasoning: None,
-            delta_tool_calls: Vec::new(),
-            has_content: true,
-        }));
     }
-
-    // Fast path for content_block_start: use a targeted probe for the
-    // tool_use dispatch. Only allocates the `type`/`id`/`name` strings
-    // — serde skips the rest of the AST.
-    if event_type == "content_block_start" {
-        let probe: AnthropicContentBlockStartProbe = serde_json::from_str(data_json)
-            .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
-        let block_type = probe
-            .content_block
-            .as_ref()
-            .and_then(|b| b.block_type.as_deref())
-            .unwrap_or("");
-        if block_type == "tool_use" {
-            let id = probe
-                .content_block
-                .as_ref()
-                .and_then(|b| b.id.as_deref())
-                .unwrap_or("")
-                .to_string();
-            let name = probe
-                .content_block
-                .as_ref()
-                .and_then(|b| b.name.as_deref())
-                .unwrap_or("")
-                .to_string();
-            // Allocate a new tool_call index for this turn.
-            let index = *tool_call_index_counter;
-            *tool_call_index_counter += 1;
-            *tool_use_acc = Some(AnthropicToolUseAccumulator::new_with_bounds(
-                index,
-                id.clone(),
-                name.clone(),
-            )?);
-            // Emit the initial OpenAI-style tool_call chunk with
-            // id+type+name and empty arguments (the standard
-            // OpenAI streaming-tools shape). `finish_reason` stays
-            // null because more chunks for this same choice index
-            // are coming.
-            let chunk = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {
-                        "tool_calls": [{
-                            "index": index,
-                            "id": id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": ""
-                            }
-                        }]
-                    },
-                    "finish_reason": null
-                }]
-            });
-            // Mirror the wire-level tool_call record into
-            // `delta_tool_calls` so the downstream accumulator
-            // (sse_accumulator.rs) can build its tool_calls
-            // list without re-parsing the wire payload.
-            let tool_call_obj = serde_json::json!({
-                "index": index,
-                "id": id,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": ""
-                }
-            });
-            return Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: chunk,
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: None,
-                delta_tool_calls: vec![tool_call_obj],
-                // content_block_start (tool_use) is a metadata-only
-                // event: it announces the tool call id+name with EMPTY
-                // arguments. The actual argument tokens come later in
-                // content_block_delta (input_json_delta) events. Must
-                // NOT reset the idle_chunk timer here — the model
-                // hasn't produced any argument tokens yet. This was
-                // the root cause of the user-visible bug where
-                // MiniMax-M3 tool calls failed with "idle_chunk after
-                // 10000ms" even though ttft_ms was Some(0): the
-                // content_block_start event arrived at ~0ms, the
-                // pipeline called note_content_chunk(), the chunk-gap
-                // timer started, and 10s later the timer fired while
-                // the model was still generating the first argument
-                // fragment.
-                has_content: false,
-            }));
-        }
-        // Non-tool_use content_block_start (e.g. text block) —
-        // fall through to Ok(None); the content_block_delta arm
-        // handles the actual emission.
-        return Ok(None);
-    }
-
-    if event_type == "content_block_stop" {
-        // Close out the accumulator. We don't emit a chunk here;
-        // the next `message_delta` or `message_stop` will carry
-        // finish_reason and any final usage. The client can
-        // detect the tool_call is complete by index reuse.
-        *tool_use_acc = None;
-        return Ok(None);
-    }
-
-    // For all other events (message_start, message_delta, message_stop,
-    // and unknown future events), defer to the stateless translator so
-    // they keep their existing behavior. These events are O(1) per
-    // response (not per chunk), so the Value-based parse is acceptable.
-    let rebuilt = format!("{event_type}\n{data_json}");
-    translate_anthropic_sse_payload(&rebuilt, chunk_id, created, model)
 }
 
 // =====================================================================
@@ -2405,39 +2335,14 @@ pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
     &bytes[pos..]
 }
 
+fn check_finish_reason_non_null(payload: &str) -> bool {
+    payload
+        .find("\"finish_reason")
+        .is_some_and(|idx| !payload[idx + 14..].starts_with("\":null"))
+}
+
 pub fn sse_payload_needs_parse(payload: &str) -> bool {
-    let bytes = payload.as_bytes();
-    let mut has_usage = false;
-    let mut has_finish_reason = false;
-    let mut has_finish_reason_null = false;
-
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'"' {
-            if !has_usage && i + 9 <= bytes.len() && &bytes[i..i + 9] == b"\"usage\":{" {
-                has_usage = true;
-            }
-            if !has_finish_reason
-                && i + 14 <= bytes.len()
-                && &bytes[i..i + 14] == b"\"finish_reason"
-            {
-                has_finish_reason = true;
-                if i + 20 <= bytes.len() && &bytes[i + 14..i + 20] == b"\":null" {
-                    has_finish_reason_null = true;
-                }
-            }
-            if has_usage || (has_finish_reason && !has_finish_reason_null) {
-                return true;
-            }
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-        }
-        i += 1;
-    }
-
-    has_usage || (has_finish_reason && !has_finish_reason_null)
+    payload.contains("\"usage\":{") || check_finish_reason_non_null(payload)
 }
 
 #[derive(Default, Debug)]

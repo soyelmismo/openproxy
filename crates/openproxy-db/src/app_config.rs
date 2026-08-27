@@ -27,34 +27,36 @@ pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = openproxy_types::IDLE_CHUNK_RETRY
 pub const PROXY_TEST_URL_KEY: &str = "proxy_test_url";
 pub const PROXY_TEST_URL_DEFAULT: &str = "https://cloudflare.com/cdn-cgi/trace";
 
+use rusqlite::OptionalExtension;
+
+fn parse_config_json<T: serde::de::DeserializeOwned>(raw: &str, key: &str) -> Option<T> {
+    match serde_json::from_str::<T>(raw) {
+        Ok(cfg) => Some(cfg),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                key = key,
+                "app_config row exists but JSON is corrupt; ignoring and falling back to default"
+            );
+            None
+        }
+    }
+}
+
 fn load_config_val<T: serde::de::DeserializeOwned>(
     conn: &Connection,
     key: &str,
 ) -> Result<Option<T>> {
-    let mut stmt = conn
-        .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(params![key])
-        .map_err(crate::error::map_db_error)?;
-    match rows.next() {
-        Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-            match serde_json::from_str::<T>(&raw) {
-                Ok(cfg) => Ok(Some(cfg)),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        key = key,
-                        "app_config row exists but JSON is corrupt; ignoring and falling back to default"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx("iterate load_config_val")(e)),
-    }
+    let raw_opt: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_config WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(crate::error::map_db_error_ctx("query load_config_val"))?;
+
+    Ok(raw_opt.and_then(|raw| parse_config_json(&raw, key)))
 }
 
 fn save_config_val<T: serde::Serialize>(
@@ -139,20 +141,19 @@ app_config_kv! {
 }
 
 pub fn load_proxy_test_url(conn: &Connection) -> Result<String> {
-    let mut stmt = conn
-        .prepare("SELECT value FROM app_config WHERE key = ?1")
+    let raw_opt: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_config WHERE key = ?1",
+            params![PROXY_TEST_URL_KEY],
+            |row| row.get(0),
+        )
+        .optional()
         .map_err(crate::error::map_db_error)?;
-    let mut rows = stmt
-        .query(params![PROXY_TEST_URL_KEY])
-        .map_err(crate::error::map_db_error)?;
-    if let Ok(Some(row)) = rows.next() {
-        let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
-        if let Ok(s) = serde_json::from_str::<String>(&raw) {
-            return Ok(s);
-        }
-        return Ok(raw);
+
+    match raw_opt {
+        Some(raw) => Ok(serde_json::from_str::<String>(&raw).unwrap_or(raw)),
+        None => Ok(PROXY_TEST_URL_DEFAULT.to_string()),
     }
-    Ok(PROXY_TEST_URL_DEFAULT.to_string())
 }
 
 pub fn save_proxy_test_url(conn: &Connection, url: &str) -> Result<()> {

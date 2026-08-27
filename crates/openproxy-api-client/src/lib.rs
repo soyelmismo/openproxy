@@ -771,11 +771,7 @@ mod tests {
         assert_eq!(res[0].provider_id.as_str(), "p1");
     }
 
-    #[test]
-    fn test_core_error_from_code() {
-        use openproxy_types::CancelReason;
-
-        // String error mappings
+    fn check_string_errors() {
         assert!(matches!(
             CoreError::from_code_and_message("auth", "unauthorized"),
             Some(CoreError::Auth(msg)) if msg == "unauthorized"
@@ -812,8 +808,9 @@ mod tests {
             CoreError::from_code_and_message("internal", "panic"),
             Some(CoreError::Internal(msg)) if msg == "panic"
         ));
+    }
 
-        // ID error mappings
+    fn check_id_errors() {
         assert!(matches!(
             CoreError::from_code_and_message("account_not_found", "42"),
             Some(CoreError::AccountNotFound(42))
@@ -829,8 +826,11 @@ mod tests {
             Some(CoreError::NoHealthyTargets(5))
         ));
         assert!(CoreError::from_code_and_message("no_healthy_targets", "nan").is_none());
+    }
 
-        // Custom mappings
+    fn check_custom_errors() {
+        use openproxy_types::CancelReason;
+
         assert!(matches!(
             CoreError::from_code_and_message("model_not_found", "gpt-4"),
             Some(CoreError::ModelNotFound { model, .. }) if model == "gpt-4"
@@ -855,8 +855,13 @@ mod tests {
             CoreError::from_code_and_message("race_lost", "lost"),
             Some(CoreError::RaceLost)
         ));
-
-        // Unknown code
         assert!(CoreError::from_code_and_message("unrecognized_code", "some error").is_none());
+    }
+
+    #[test]
+    fn test_core_error_from_code() {
+        check_string_errors();
+        check_id_errors();
+        check_custom_errors();
     }
 }

@@ -55,24 +55,26 @@ fn map_proxy_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProxyRow> {
     crate::map_row_tuple!(row => (0, 1, 2, 3, 4, 5))
 }
 
-/// Retrieve or assign an alive proxy for a provider or account.
-pub fn get_or_assign_provider_proxy(
+fn check_proxy_enabled(
     conn: &Connection,
     provider_id: &ProviderId,
-    account_id: Option<&AccountId>,
-) -> Result<Option<String>> {
-    use crate::cooldowns::is_provider_proxy_in_cooldown;
-
+) -> Result<Option<openproxy_types::Provider>> {
     let Some(provider) = crate::providers::get(conn, provider_id)? else {
         return Ok(None);
     };
-
     if !provider.use_proxies {
         return Ok(None);
     }
+    Ok(Some(provider))
+}
 
-    let is_per_account = provider.proxy_rotation_mode == "account";
-    let current_proxy_id: Option<String> = if is_per_account {
+fn resolve_current_proxy_id(
+    conn: &Connection,
+    provider: &openproxy_types::Provider,
+    account_id: Option<&AccountId>,
+    is_per_account: bool,
+) -> Result<Option<String>> {
+    if is_per_account {
         if let Some(acc_id) = account_id {
             conn.query_row(
                 "SELECT current_proxy_id FROM accounts WHERE id = ?1",
@@ -86,55 +88,105 @@ pub fn get_or_assign_provider_proxy(
             None
         }
     } else {
-        provider.current_proxy_id
-    };
+        provider.current_proxy_id.clone()
+    }
+    .pipe(Ok)
+}
 
-    if let Some(ref proxy_id) = current_proxy_id
-        && !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), proxy_id)
+// Extension helper trait to pipe values into Ok
+trait PipeExt: Sized {
+    fn pipe<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(Self) -> R,
     {
-        let exists_and_alive = conn
-            .query_row(
-                alive_proxy_select!("WHERE id = ?1 AND status = 'alive'"),
-                params![proxy_id],
-                |row| {
-                    crate::map_row_tuple!(row => (
-                        (0, String),
-                        (1, i64),
-                        (2, String),
-                        (3, Option<String>),
-                        (4, Option<String>),
-                    ))
-                },
-            )
-            .optional()
-            .map_err(crate::error::map_db_error)?;
+        f(self)
+    }
+}
+impl<T> PipeExt for T {}
 
-        if let Some((host, port, proto, username, password)) = exists_and_alive {
-            return Ok(Some(format_proxy_url(
-                &proto,
-                &host,
-                port,
-                username.as_deref(),
-                password.as_deref(),
-            )));
-        }
+fn fetch_alive_proxy_url(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    proxy_id: &str,
+) -> Result<Option<String>> {
+    use crate::cooldowns::is_provider_proxy_in_cooldown;
+
+    if is_provider_proxy_in_cooldown(conn, provider_id.as_str(), proxy_id) {
+        return Ok(None);
     }
 
-    let mut in_use_by_others = std::collections::HashSet::new();
-    if is_per_account {
-        let mut stmt = conn
-            .prepare("SELECT current_proxy_id FROM accounts WHERE provider_id = ?1 AND current_proxy_id IS NOT NULL AND id != ?2")
-            .map_err(crate::error::map_db_error)?;
-        let rows = stmt
-            .query_map(
-                params![provider_id.as_str(), account_id.map_or(0, |id| id.0)],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(crate::error::map_db_error)?;
-        for r in rows.flatten() {
-            in_use_by_others.insert(r);
-        }
+    let exists_and_alive = conn
+        .query_row(
+            alive_proxy_select!("WHERE id = ?1 AND status = 'alive'"),
+            params![proxy_id],
+            |row| {
+                crate::map_row_tuple!(row => (
+                    (0, String),
+                    (1, i64),
+                    (2, String),
+                    (3, Option<String>),
+                    (4, Option<String>),
+                ))
+            },
+        )
+        .optional()
+        .map_err(crate::error::map_db_error)?;
+
+    Ok(exists_and_alive.map(|(host, port, proto, username, password)| {
+        format_proxy_url(
+            &proto,
+            &host,
+            port,
+            username.as_deref(),
+            password.as_deref(),
+        )
+    }))
+}
+
+fn check_current_proxy(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    provider: &openproxy_types::Provider,
+    account_id: Option<&AccountId>,
+    is_per_account: bool,
+) -> Result<Option<String>> {
+    let current_proxy_id = resolve_current_proxy_id(conn, provider, account_id, is_per_account)?;
+    if let Some(proxy_id) = current_proxy_id {
+        fetch_alive_proxy_url(conn, provider_id, &proxy_id)
+    } else {
+        Ok(None)
     }
+}
+
+fn fetch_accounts_in_use_proxies(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    account_id: Option<&AccountId>,
+) -> Result<std::collections::HashSet<String>> {
+    let mut stmt = conn
+        .prepare("SELECT current_proxy_id FROM accounts WHERE provider_id = ?1 AND current_proxy_id IS NOT NULL AND id != ?2")
+        .map_err(crate::error::map_db_error)?;
+    let rows = stmt
+        .query_map(
+            params![provider_id.as_str(), account_id.map_or(0, |id| id.0)],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(crate::error::map_db_error)?;
+    let mut set = std::collections::HashSet::new();
+    for r in rows.flatten() {
+        set.insert(r);
+    }
+    Ok(set)
+}
+
+type ProxyTuple = (String, String, i64, String, Option<String>, Option<String>);
+
+fn select_available_proxy(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    in_use_by_others: &std::collections::HashSet<String>,
+) -> Result<Option<ProxyTuple>> {
+    use crate::cooldowns::is_provider_proxy_in_cooldown;
 
     let mut stmt = conn
         .prepare(free_proxy_select!(
@@ -146,42 +198,84 @@ pub fn get_or_assign_provider_proxy(
         .query_map([], map_proxy_row)
         .map_err(crate::error::map_db_error)?;
 
-    let mut selected_proxy = None;
-
     for item in candidate_rows.flatten() {
         if !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0)
             && !in_use_by_others.contains(&item.0)
         {
-            selected_proxy = Some(item);
-            break;
+            return Ok(Some(item));
         }
     }
+    Ok(None)
+}
 
-    if let Some((new_id, host, port, proto, username, password)) = selected_proxy {
-        if is_per_account {
-            if let Some(acc_id) = account_id {
-                conn.execute(
-                    "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
-                    params![new_id, acc_id.0],
-                )
-                .map_err(crate::error::map_db_error)?;
-            }
-        } else {
-            crate::providers::update_current_proxy(conn, provider_id, Some(&new_id))?;
+fn save_assigned_proxy(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    account_id: Option<&AccountId>,
+    is_per_account: bool,
+    new_id: &str,
+) -> Result<()> {
+    if is_per_account {
+        if let Some(acc_id) = account_id {
+            conn.execute(
+                "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
+                params![new_id, acc_id.0],
+            )
+            .map_err(crate::error::map_db_error)?;
         }
+    } else {
+        crate::providers::update_current_proxy(conn, provider_id, Some(new_id))?;
+    }
+    Ok(())
+}
 
-        return Ok(Some(format_proxy_url(
-            &proto,
-            &host,
-            port,
-            username.as_deref(),
-            password.as_deref(),
+fn assign_new_proxy(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    account_id: Option<&AccountId>,
+    is_per_account: bool,
+) -> Result<Option<String>> {
+    let in_use = if is_per_account {
+        fetch_accounts_in_use_proxies(conn, provider_id, account_id)?
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let Some((new_id, host, port, proto, username, password)) =
+        select_available_proxy(conn, provider_id, &in_use)?
+    else {
+        return Err(openproxy_types::error::CoreError::Validation(format!(
+            "use_proxies is enabled for provider '{provider_id}', but no alive proxies are available in pool"
         )));
+    };
+
+    save_assigned_proxy(conn, provider_id, account_id, is_per_account, &new_id)?;
+
+    Ok(Some(format_proxy_url(
+        &proto,
+        &host,
+        port,
+        username.as_deref(),
+        password.as_deref(),
+    )))
+}
+
+/// Retrieve or assign an alive proxy for a provider or account.
+pub fn get_or_assign_provider_proxy(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    account_id: Option<&AccountId>,
+) -> Result<Option<String>> {
+    let Some(provider) = check_proxy_enabled(conn, provider_id)? else {
+        return Ok(None);
+    };
+
+    let is_per_account = provider.proxy_rotation_mode == "account";
+    if let Some(url) = check_current_proxy(conn, provider_id, &provider, account_id, is_per_account)? {
+        return Ok(Some(url));
     }
 
-    Err(openproxy_types::error::CoreError::Validation(format!(
-        "use_proxies is enabled for provider '{provider_id}', but no alive proxies are available in pool"
-    )))
+    assign_new_proxy(conn, provider_id, account_id, is_per_account)
 }
 
 /// Retrieve up to `limit` alive candidate proxies not in cooldown for provider.
@@ -202,30 +296,15 @@ pub fn get_candidate_proxies_for_provider(
         .query_map([], map_proxy_row)
         .map_err(crate::error::map_db_error)?;
 
-    let mut candidates = Vec::with_capacity(limit);
-    for item in rows.flatten() {
-        if !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0) {
-            let proxy_id = item.0;
-            let host = item.1;
-            let port = item.2;
-            let proto = item.3;
-            let username = item.4;
-            let password = item.5;
-
-            let url = format_proxy_url(
-                &proto,
-                &host,
-                port,
-                username.as_deref(),
-                password.as_deref(),
-            );
-
-            candidates.push((proxy_id, url));
-            if candidates.len() >= limit {
-                break;
-            }
-        }
-    }
+    let candidates = rows
+        .flatten()
+        .filter(|item| !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0))
+        .take(limit)
+        .map(|item| {
+            let url = format_proxy_url(&item.3, &item.1, item.2, item.4.as_deref(), item.5.as_deref());
+            (item.0, url)
+        })
+        .collect();
 
     Ok(candidates)
 }
@@ -243,12 +322,7 @@ pub fn get_proxy_status_by_url(conn: &Connection, url: &str) -> Option<String> {
     .ok()
 }
 
-/// Reorder proxy source priorities in batch.
-pub fn reorder_proxy_sources(conn: &Connection, ids: &[String]) -> Result<()> {
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(crate::error::map_db_error)?;
-
+fn apply_source_priorities(tx: &rusqlite::Transaction, ids: &[String]) -> Result<()> {
     let mut stmt = tx
         .prepare_cached("UPDATE proxy_sources SET priority = ?1 WHERE id = ?2")
         .map_err(crate::error::map_db_error)?;
@@ -259,7 +333,16 @@ pub fn reorder_proxy_sources(conn: &Connection, ids: &[String]) -> Result<()> {
         stmt.execute(params![p, id])
             .map_err(crate::error::map_db_error)?;
     }
-    drop(stmt);
+    Ok(())
+}
+
+/// Reorder proxy source priorities in batch.
+pub fn reorder_proxy_sources(conn: &Connection, ids: &[String]) -> Result<()> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(crate::error::map_db_error)?;
+
+    apply_source_priorities(&tx, ids)?;
     tx.commit().map_err(crate::error::map_db_error)?;
 
     Ok(())
@@ -295,41 +378,37 @@ mod tests {
         );
     }
 
+    fn insert_test_source(conn: &Connection, id: &str, name: &str, url: &str) -> Result<()> {
+        conn.execute(
+            "INSERT INTO proxy_sources (id, name, url, priority) VALUES (?1, ?2, ?3, 0)",
+            params![id, name, url],
+        )
+        .map_err(crate::error::map_db_error)?;
+        Ok(())
+    }
+
+    fn get_source_priority(conn: &Connection, id: &str) -> Result<i32> {
+        conn.query_row(
+            "SELECT priority FROM proxy_sources WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(crate::error::map_db_error)
+    }
+
     #[test]
     fn test_reorder_proxy_sources() -> Result<()> {
         let mut conn = Connection::open_in_memory().map_err(crate::error::map_db_error)?;
         crate::migrations::run(&mut conn).map_err(crate::error::map_db_error)?;
 
-        conn.execute(
-            "INSERT INTO proxy_sources (id, name, url, priority) VALUES ('src1', 'Source 1', 'http://a.com', 0)",
-            [],
-        ).map_err(crate::error::map_db_error)?;
-
-        conn.execute(
-            "INSERT INTO proxy_sources (id, name, url, priority) VALUES ('src2', 'Source 2', 'http://b.com', 0)",
-            [],
-        ).map_err(crate::error::map_db_error)?;
+        insert_test_source(&conn, "src1", "Source 1", "http://a.com")?;
+        insert_test_source(&conn, "src2", "Source 2", "http://b.com")?;
 
         let ids = vec!["src1".to_string(), "src2".to_string()];
         reorder_proxy_sources(&conn, &ids)?;
 
-        let p1: i32 = conn
-            .query_row(
-                "SELECT priority FROM proxy_sources WHERE id = 'src1'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(crate::error::map_db_error)?;
-        let p2: i32 = conn
-            .query_row(
-                "SELECT priority FROM proxy_sources WHERE id = 'src2'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(crate::error::map_db_error)?;
-
-        assert_eq!(p1, 20);
-        assert_eq!(p2, 10);
+        assert_eq!(get_source_priority(&conn, "src1")?, 20);
+        assert_eq!(get_source_priority(&conn, "src2")?, 10);
 
         Ok(())
     }

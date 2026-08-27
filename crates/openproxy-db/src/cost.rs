@@ -20,6 +20,20 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64
     (cost, tps)
 }
 
+fn truncate_sanitized(sanitized: &str, max_len: usize) -> String {
+    if sanitized.len() <= max_len {
+        return sanitized.to_string();
+    }
+    let mut idx = max_len;
+    while idx > 0 && !sanitized.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    let mut s = String::with_capacity(idx + 14);
+    s.push_str(&sanitized[..idx]);
+    s.push_str("...[truncated]");
+    s
+}
+
 pub fn redact_error_msg(raw: &str) -> (String, String) {
     static RE_SK: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
@@ -33,42 +47,28 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
     let sanitized = RE_XAPIKEY.replace_all(&sanitized, "x-api-key: [REDACTED]");
     let sanitized = RE_BEARER.replace_all(&sanitized, "Authorization: Bearer [REDACTED]");
 
-    let result = if sanitized.len() > 2048 {
-        let mut idx = 2048;
-        while idx > 0 && !sanitized.is_char_boundary(idx) {
-            idx -= 1;
-        }
-        let mut s = String::with_capacity(idx + 14);
-        s.push_str(&sanitized[..idx]);
-        s.push_str("...[truncated]");
-        s
-    } else {
-        sanitized.into_owned()
-    };
-
+    let result = truncate_sanitized(&sanitized, 2048);
     (result.clone(), result)
 }
 
-pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {
-    let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
-    if price.is_none()
-        && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
-    {
-        tracing::warn!(
-            provider_id = %input.provider_id,
-            upstream_model_id = %input.upstream_model_id,
-            "no pricing data found; recording cost_usd = NULL (run models.dev sync or set pricing manually)"
-        );
-    }
-    let (cost_usd, tps) = compute(price, input);
-    let (error_msg_for_db, error_msg_redacted_for_db) = match &input.error_msg {
+fn prepare_usage_error_msg(error_msg: Option<&String>) -> (Option<String>, Option<String>) {
+    match error_msg {
         Some(msg) => {
             let (sanitized, redacted) = redact_error_msg(msg);
             (Some(sanitized), Some(redacted))
         }
         None => (None, None),
-    };
+    }
+}
 
+fn insert_usage_record(
+    conn: &Connection,
+    input: &UsageInput,
+    cost_usd: Option<f64>,
+    tps: Option<f64>,
+    error_msg_for_db: Option<&str>,
+    error_msg_redacted_for_db: Option<&str>,
+) -> openproxy_types::Result<i64> {
     let request_id = input.request_id.to_string();
 
     conn.execute(
@@ -147,11 +147,35 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     )
     .map_err(crate::error::map_db_error)?;
 
-    let rowid = conn.last_insert_rowid();
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {
+    let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
+    if price.is_none()
+        && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
+    {
+        tracing::warn!(
+            provider_id = %input.provider_id,
+            upstream_model_id = %input.upstream_model_id,
+            "no pricing data found; recording cost_usd = NULL (run models.dev sync or set pricing manually)"
+        );
+    }
+    let (cost_usd, tps) = compute(price, input);
+    let (error_msg_for_db, error_msg_redacted_for_db) = prepare_usage_error_msg(input.error_msg.as_ref());
+
+    let rowid = insert_usage_record(
+        conn,
+        input,
+        cost_usd,
+        tps,
+        error_msg_for_db.as_deref(),
+        error_msg_redacted_for_db.as_deref(),
+    )?;
 
     let row = RecentUsageRow {
         id: UsageId(rowid),
-        request_id,
+        request_id: input.request_id.to_string(),
         trace_id: input.trace_id.clone(),
         provider_id: input.provider_id.clone(),
         upstream_model_id: input.upstream_model_id.clone(),
@@ -190,6 +214,35 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     Ok(UsageId(rowid))
 }
 
+fn update_backfill_price(
+    conn: &Connection,
+    provider_id: &str,
+    upstream_model_id: &str,
+    price: Option<pricing::Price>,
+) -> openproxy_types::Result<usize> {
+    match price {
+        Some(p) => conn
+            .execute(
+                "UPDATE usage \
+                 SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
+                                (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
+                 WHERE provider_id = ?3 AND upstream_model_id = ?4 \
+                   AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                params![p.input_per_1m, p.output_per_1m, provider_id, upstream_model_id],
+            )
+            .map_err(crate::error::map_db_error),
+        None => conn
+            .execute(
+                "UPDATE usage \
+                 SET cost_usd = NULL \
+                 WHERE provider_id = ?1 AND upstream_model_id = ?2 \
+                   AND prompt_tokens > 0 AND cost_usd = 0.0",
+                params![provider_id, upstream_model_id],
+            )
+            .map_err(crate::error::map_db_error),
+    }
+}
+
 pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usize> {
     let mut stmt = conn
         .prepare(
@@ -208,33 +261,7 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
     let mut total_updated = 0;
     for (provider_id, upstream_model_id) in pairs {
         let price = pricing::lookup_with_db(conn, &provider_id, &upstream_model_id);
-        match price {
-            Some(p) => {
-                let count = conn
-                    .execute(
-                        "UPDATE usage \
-                         SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
-                                        (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
-                         WHERE provider_id = ?3 AND upstream_model_id = ?4 \
-                           AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
-                        params![p.input_per_1m, p.output_per_1m, provider_id, upstream_model_id],
-                    )
-                    .map_err(crate::error::map_db_error)?;
-                total_updated += count;
-            }
-            None => {
-                let count = conn
-                    .execute(
-                        "UPDATE usage \
-                         SET cost_usd = NULL \
-                         WHERE provider_id = ?1 AND upstream_model_id = ?2 \
-                           AND prompt_tokens > 0 AND cost_usd = 0.0",
-                        params![provider_id, upstream_model_id],
-                    )
-                    .map_err(crate::error::map_db_error)?;
-                total_updated += count;
-            }
-        }
+        total_updated += update_backfill_price(conn, &provider_id, &upstream_model_id, price)?;
     }
     Ok(total_updated)
 }

@@ -39,6 +39,22 @@ pub fn candidate_normalized_forms(model: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+fn strip_all_dynamic_suffixes(s: &str) -> &str {
+    let mut cur = s;
+    let strippers: [fn(&str) -> Option<&str>; 4] = [
+        strip_date_suffix,
+        strip_compact_yyyymmdd,
+        strip_4digit_suffix,
+        strip_version_suffix,
+    ];
+    for stripper in strippers {
+        if let Some(stripped) = stripper(cur) {
+            cur = stripped;
+        }
+    }
+    cur
+}
+
 pub fn normalize_model_id(id: &str) -> String {
     let mut s: &str = id.rsplit_once('/').map_or(id, |(_, rest)| rest);
     for suffix in MODEL_SUFFIXES {
@@ -50,21 +66,8 @@ pub fn normalize_model_id(id: &str) -> String {
     } else {
         std::borrow::Cow::Borrowed(s)
     };
-    let mut cur = replaced.as_ref();
 
-    if let Some(stripped) = strip_date_suffix(cur) {
-        cur = stripped;
-    }
-    if let Some(stripped) = strip_compact_yyyymmdd(cur) {
-        cur = stripped;
-    }
-    if let Some(stripped) = strip_4digit_suffix(cur) {
-        cur = stripped;
-    }
-    if let Some(stripped) = strip_version_suffix(cur) {
-        cur = stripped;
-    }
-
+    let cur = strip_all_dynamic_suffixes(replaced.as_ref());
     normalize_family(cur).into_owned()
 }
 
@@ -86,16 +89,23 @@ where
     }
 }
 
+fn is_dash_date_suffix(suffix: &str) -> bool {
+    let bytes = suffix.as_bytes();
+    if bytes.len() != 11 {
+        return false;
+    }
+    bytes[0] == b'-'
+        && bytes[5] == b'-'
+        && bytes[8] == b'-'
+        && bytes[1..5]
+            .iter()
+            .chain(&bytes[6..8])
+            .chain(&bytes[9..11])
+            .all(u8::is_ascii_digit)
+}
+
 fn strip_date_suffix(s: &str) -> Option<&str> {
-    strip_fixed_suffix(s, 11, |suffix| {
-        let bytes = suffix.as_bytes();
-        bytes[0] == b'-'
-            && bytes[1..5].iter().all(u8::is_ascii_digit)
-            && bytes[5] == b'-'
-            && bytes[6..8].iter().all(u8::is_ascii_digit)
-            && bytes[8] == b'-'
-            && bytes[9..11].iter().all(u8::is_ascii_digit)
-    })
+    strip_fixed_suffix(s, 11, is_dash_date_suffix)
 }
 
 fn strip_4digit_suffix(s: &str) -> Option<&str> {

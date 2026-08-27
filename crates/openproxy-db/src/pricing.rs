@@ -112,7 +112,7 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     None
 }
 
-pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
+fn lookup_db_variants(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
     if let Some(p) = lookup_exact_in_db(conn, provider, model) {
         return Some(p);
     }
@@ -122,13 +122,12 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
         }
     }
     let with_free = format!("{model}-free");
-    if let Some(p) = lookup_exact_in_db(conn, provider, &with_free) {
-        return Some(p);
-    }
     let with_colon = format!("{model}:free");
-    if let Some(p) = lookup_exact_in_db(conn, provider, &with_colon) {
-        return Some(p);
-    }
+    lookup_exact_in_db(conn, provider, &with_free)
+        .or_else(|| lookup_exact_in_db(conn, provider, &with_colon))
+}
+
+fn lookup_db_normalized_variants(conn: &Connection, model: &str) -> Option<Price> {
     let normalized = normalize_model_id(model);
     if let Some(p) = lookup_by_normalized(conn, &normalized) {
         return Some(p);
@@ -139,6 +138,10 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
             return Some(p);
         }
     }
+    None
+}
+
+fn lookup_static_variants(provider: &str, model: &str) -> Option<Price> {
     if let Some(p) = lookup(provider, model) {
         return Some(p);
     }
@@ -148,6 +151,12 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
         }
     }
     None
+}
+
+pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
+    lookup_db_variants(conn, provider, model)
+        .or_else(|| lookup_db_normalized_variants(conn, model))
+        .or_else(|| lookup_static_variants(provider, model))
 }
 
 crate::def_table_select!(

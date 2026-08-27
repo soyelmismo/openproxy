@@ -118,29 +118,16 @@ pub trait ProviderAdapter: Send + Sync {
     /// - `Responses` -> `base_url + "/responses"`
     /// - `Mixed` -> depends on `target_format` (same per-branch rules as above)
     fn build_chat_url(&self, target_format: TargetFormat, model: &ModelId) -> String {
-        match self.format() {
-            AdapterFormat::Openai => format!("{}/chat/completions", self.config().base_url),
-            AdapterFormat::Anthropic => format!("{}/messages", self.config().base_url),
-            AdapterFormat::Gemini => {
-                format!(
-                    "{}/models/{}:streamGenerateContent?alt=sse",
-                    self.config().base_url,
-                    model.as_str()
-                )
-            }
-            AdapterFormat::Responses => format!("{}/responses", self.config().base_url),
-            AdapterFormat::Atomesus => format!("{}/chat/atomesus", self.config().base_url),
-            AdapterFormat::Fx => self.config().base_url.clone(),
-            AdapterFormat::Mixed => match target_format {
-                TargetFormat::Openai | TargetFormat::Gemini => {
-                    format!("{}/chat/completions", self.config().base_url)
-                }
-                TargetFormat::Anthropic => format!("{}/messages", self.config().base_url),
-                TargetFormat::Responses => format!("{}/responses", self.config().base_url),
-                TargetFormat::Atomesus => format!("{}/chat/atomesus", self.config().base_url),
-                TargetFormat::Fx => self.config().base_url.clone(),
-            },
+        let base_url = &self.config().base_url;
+        if self.format() == AdapterFormat::Gemini {
+            return format!(
+                "{base_url}/models/{}:streamGenerateContent?alt=sse",
+                model.as_str()
+            );
         }
+        let eff_format = resolve_target_format(self.format(), target_format);
+        target_format_path(eff_format)
+            .map_or_else(|| base_url.clone(), |path| format!("{base_url}{path}"))
     }
 
     /// Build the chat URL with account-level context (label).
@@ -930,6 +917,70 @@ pub use vercel_gateway::VercelGatewayAdapter;
 /// The caller is responsible for mapping
 /// [`crate::upstream::UpstreamError`] into the provider-specific
 /// [`CoreError`] (most call sites return `CoreError::UpstreamConnection`
+fn resolve_target_format(format: AdapterFormat, fallback: TargetFormat) -> TargetFormat {
+    match format {
+        AdapterFormat::Mixed => fallback,
+        AdapterFormat::Openai => TargetFormat::Openai,
+        AdapterFormat::Anthropic => TargetFormat::Anthropic,
+        AdapterFormat::Responses => TargetFormat::Responses,
+        AdapterFormat::Atomesus => TargetFormat::Atomesus,
+        AdapterFormat::Fx => TargetFormat::Fx,
+        AdapterFormat::Gemini => TargetFormat::Gemini,
+    }
+}
+
+fn target_format_path(target_format: TargetFormat) -> Option<&'static str> {
+    match target_format {
+        TargetFormat::Openai | TargetFormat::Gemini => Some("/chat/completions"),
+        TargetFormat::Anthropic => Some("/messages"),
+        TargetFormat::Responses => Some("/responses"),
+        TargetFormat::Atomesus => Some("/chat/atomesus"),
+        TargetFormat::Fx => None,
+    }
+}
+
+fn insert_upstream_headers(
+    req: &mut UpstreamRequest,
+    headers: &[(&str, &str)],
+) -> std::result::Result<(), String> {
+    for &(k, v) in headers {
+        let Ok(hv) = HeaderValue::from_str(v) else {
+            continue;
+        };
+        let name = match header_name(k) {
+            Some(n) => n,
+            None => http::header::HeaderName::from_bytes(k.as_bytes())
+                .map_err(|e| format!("invalid header name '{k}': {e}"))?,
+        };
+        req.headers.insert(name, hv);
+    }
+    Ok(())
+}
+
+async fn handle_upstream_error_response(
+    url: &str,
+    response: crate::upstream::UpstreamResponse,
+) -> String {
+    let status = response.status.as_u16();
+    let body = response
+        .collect()
+        .await
+        .map_err(|e| format!("{url}: failed to read error body: {e}"));
+    match body {
+        Ok(b) => format!("{url}: status {status}: {}", String::from_utf8_lossy(&b)),
+        Err(e) => e,
+    }
+}
+
+/// Fetch raw bytes from an upstream URL via the shared `UpstreamClient`.
+///
+/// Handles timeout profile selection (`ModelDiscovery`), error body
+/// collection, and status code verification. Returns the raw payload
+/// as [`bytes::Bytes`].
+///
+/// The caller is responsible for mapping
+/// [`crate::upstream::UpstreamError`] into the provider-specific
+/// [`CoreError`] (most call sites return `CoreError::UpstreamConnection`
 /// on transport failure and `CoreError::Parse` on JSON failure).
 pub async fn upstream_get_bytes(
     upstream_client: &Arc<UpstreamClient>,
@@ -937,22 +988,8 @@ pub async fn upstream_get_bytes(
     headers: &[(&str, &str)],
 ) -> std::result::Result<bytes::Bytes, String> {
     let mut req = UpstreamRequest::get(url);
-    for (k, v) in headers {
-        if let Ok(hv) = HeaderValue::from_str(v) {
-            // Map common header names to typed `http::header` constants
-            // so case-insensitive matching works; fall back to a raw
-            // insertion when the name is non-standard.
-            if let Some(name) = header_name(k) {
-                req.headers.insert(name, hv);
-            } else {
-                req.headers.insert(
-                    http::header::HeaderName::from_bytes(k.as_bytes())
-                        .map_err(|e| format!("invalid header name '{k}': {e}"))?,
-                    hv,
-                );
-            }
-        }
-    }
+    insert_upstream_headers(&mut req, headers)?;
+
     let cancel = CancellationToken::new();
     let response = upstream_client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
@@ -960,17 +997,7 @@ pub async fn upstream_get_bytes(
         .map_err(|e| format!("{url}: {e}"))?;
 
     if !response.status.is_success() {
-        let status = response.status.as_u16();
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| format!("{url}: failed to read error body: {e}"))?;
-        return Err(format!(
-            "{}: status {}: {}",
-            url,
-            status,
-            String::from_utf8_lossy(&body)
-        ));
+        return Err(handle_upstream_error_response(url, response).await);
     }
 
     response.collect().await.map_err(|e| format!("{url}: {e}"))
@@ -985,6 +1012,16 @@ pub(crate) async fn upstream_get_json(
     serde_json::from_slice(&bytes).map_err(|e| format!("{url}: parse: {e}"))
 }
 
+fn header_name_custom(name: &str) -> Option<http::header::HeaderName> {
+    if name.eq_ignore_ascii_case("x-api-key") {
+        Some(http::HeaderName::from_static("x-api-key"))
+    } else if name.eq_ignore_ascii_case("x-goog-api-key") {
+        Some(http::HeaderName::from_static("x-goog-api-key"))
+    } else {
+        None
+    }
+}
+
 /// Map a header name to its typed `http::header::HeaderName` constant
 /// when one exists; return `None` for non-standard names. This keeps
 /// the common cases (`Authorization`, `Content-Type`, `User-Agent`)
@@ -992,17 +1029,14 @@ pub(crate) async fn upstream_get_json(
 /// for every call.
 pub(crate) fn header_name(name: &str) -> Option<http::header::HeaderName> {
     use http::header;
-    match name.len() {
-        9 if name.eq_ignore_ascii_case("x-api-key") => {
-            Some(http::HeaderName::from_static("x-api-key"))
-        }
-        10 if name.eq_ignore_ascii_case("user-agent") => Some(header::USER_AGENT),
-        12 if name.eq_ignore_ascii_case("content-type") => Some(header::CONTENT_TYPE),
-        13 if name.eq_ignore_ascii_case("authorization") => Some(header::AUTHORIZATION),
-        14 if name.eq_ignore_ascii_case("x-goog-api-key") => {
-            Some(http::HeaderName::from_static("x-goog-api-key"))
-        }
-        _ => None,
+    if name.eq_ignore_ascii_case("authorization") {
+        Some(header::AUTHORIZATION)
+    } else if name.eq_ignore_ascii_case("content-type") {
+        Some(header::CONTENT_TYPE)
+    } else if name.eq_ignore_ascii_case("user-agent") {
+        Some(header::USER_AGENT)
+    } else {
+        header_name_custom(name)
     }
 }
 

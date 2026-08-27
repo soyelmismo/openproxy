@@ -121,6 +121,83 @@ pub async fn dispatch_audio_request(
         .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
 }
 
+async fn dispatch_single_transcribe(
+    db_pool: &DbPool,
+    upstream_client: &Arc<UpstreamClient>,
+    circuit_breaker: &CircuitBreakerRegistry,
+    master_key: &MasterKey,
+    adapter: ProviderAdapterEnum,
+    target: &crate::unary::AudioTarget,
+    parsed_body: &ParsedAudioBody,
+) -> Result<AudioTranscriptionResponse> {
+    let upstream_url = adapter.build_transcription_url();
+    let api_key = resolve_api_key(db_pool, master_key, target.account_id, &target.provider)?;
+    let body_clone = parsed_body.clone();
+
+    let response = dispatch_audio_request(
+        upstream_client,
+        adapter,
+        &upstream_url,
+        &api_key,
+        &target.upstream_model,
+        body_clone,
+    )
+    .await
+    .map_err(|e| {
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        tracing::warn!(
+            "Audio target failed (connection error): provider={}, error={:?}",
+            target.provider,
+            e
+        );
+        e
+    })?;
+
+    let status_code = response.status;
+    let content_type = response
+        .headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+
+    let body_bytes = response.collect().await.map_err(|e| {
+        let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        tracing::warn!(
+            "Audio target body read failed: provider={}, error={:?}",
+            target.provider,
+            err
+        );
+        err
+    })?;
+
+    let code_u16 = status_code.as_u16();
+    if code_u16 >= 400 {
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        let err_text = String::from_utf8_lossy(&body_bytes);
+        tracing::warn!(
+            "Audio target returned error status: provider={}, model={}, status={}, body={}",
+            target.provider,
+            target.upstream_model,
+            status_code,
+            err_text
+        );
+        return Err(map_upstream_status_error(
+            code_u16,
+            target.provider.as_str(),
+            &target.upstream_model,
+            &err_text,
+        ));
+    }
+
+    Ok(AudioTranscriptionResponse {
+        status_code: code_u16,
+        content_type,
+        body_bytes,
+    })
+}
+
 pub async fn execute_transcribe(
     db_pool: &DbPool,
     adapters: &[ProviderAdapterEnum],
@@ -161,114 +238,47 @@ pub async fn execute_transcribe(
             )));
             continue;
         };
-        let upstream_url = adapter.build_transcription_url();
 
-        let api_key =
-            match resolve_api_key(db_pool, master_key, target.account_id, &target.provider) {
-                Ok(k) => k,
-                Err(e) => {
-                    last_error = Some(e);
-                    continue;
-                }
-            };
-
-        let body_clone = parsed_body.clone();
-
-        let response = match dispatch_audio_request(
+        match dispatch_single_transcribe(
+            db_pool,
             upstream_client,
-            ProviderAdapterEnum::clone(&adapter),
-            &upstream_url,
-            &api_key,
-            &target.upstream_model,
-            body_clone,
+            circuit_breaker,
+            master_key,
+            adapter,
+            &target,
+            &parsed_body,
         )
         .await
         {
-            Ok(r) => r,
-            Err(e) => {
-                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-                tracing::warn!(
-                    "Audio target failed (connection error): provider={}, error={:?}",
-                    target.provider,
-                    e
+            Ok(resp) => {
+                let total_ms = started.elapsed().as_millis() as u64;
+                record_unary_usage(
+                    db_pool,
+                    &UnaryUsageArgs {
+                        request_id: RequestId::new(),
+                        api_key_id,
+                        provider_id: &target.provider,
+                        account_id: target.account_id,
+                        combo_id: target.combo_id,
+                        combo_target_id: target.combo_target_id,
+                        model_row_id: target.model_row_id,
+                        upstream_model_id: &target.upstream_model,
+                        prompt_tokens: None,
+                        completion_tokens: None,
+                        status_code: resp.status_code,
+                        error_msg: None,
+                        total_ms,
+                        endpoint_kind: openproxy_types::EndpointKind::Audio,
+                    },
                 );
+
+                tracing::info!("Audio request succeeded after {} attempts", attempt);
+                return Ok(resp);
+            }
+            Err(e) => {
                 last_error = Some(e);
-                continue;
             }
-        };
-
-        let status_code = response.status;
-        let content_type = response
-            .headers
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("application/json")
-            .to_string();
-
-        let body_bytes = match response.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-                tracing::warn!(
-                    "Audio target body read failed: provider={}, error={:?}",
-                    target.provider,
-                    err
-                );
-                last_error = Some(err);
-                continue;
-            }
-        };
-
-        let code_u16 = status_code.as_u16();
-        if code_u16 >= 400 {
-            crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-            let err_text = String::from_utf8_lossy(&body_bytes);
-            tracing::warn!(
-                "Audio target returned error status: provider={}, model={}, status={}, body={}",
-                target.provider,
-                target.upstream_model,
-                status_code,
-                err_text
-            );
-            let err = map_upstream_status_error(
-                code_u16,
-                target.provider.as_str(),
-                &target.upstream_model,
-                &err_text,
-            );
-            last_error = Some(err);
-            continue;
         }
-
-        // Success! Record usage and return.
-        let total_ms = started.elapsed().as_millis() as u64;
-        record_unary_usage(
-            db_pool,
-            &UnaryUsageArgs {
-                request_id: RequestId::new(),
-                api_key_id,
-                provider_id: &target.provider,
-                account_id: target.account_id,
-                combo_id: target.combo_id,
-                combo_target_id: target.combo_target_id,
-                model_row_id: target.model_row_id,
-                upstream_model_id: &target.upstream_model,
-                prompt_tokens: None,
-                completion_tokens: None,
-                status_code: status_code.as_u16(),
-                error_msg: None,
-                total_ms,
-                endpoint_kind: openproxy_types::EndpointKind::Audio,
-            },
-        );
-
-        tracing::info!("Audio request succeeded after {} attempts", attempt);
-        return Ok(AudioTranscriptionResponse {
-            status_code: status_code.as_u16(),
-            content_type,
-            body_bytes,
-        });
     }
 
     Err(last_error.unwrap_or_else(|| CoreError::Internal("No valid targets found".into())))

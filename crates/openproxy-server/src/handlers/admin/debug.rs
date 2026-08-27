@@ -30,21 +30,10 @@ pub fn router() -> axum::Router<AppState> {
         .route("/recover", axum::routing::post(debug_recover))
 }
 
-pub async fn debug_logs(
-    State(_s): State<AppState>,
-    Query(q): Query<DebugLogsQuery>,
-) -> Result<Json<DebugLogsResponse>, ApiError> {
-    let since = q.since.unwrap_or(0);
-    let limit = q.limit.unwrap_or(100).min(1000) as usize;
-
-    // Snapshot from the ring buffer.
-    let mut entries = if since > 0 {
-        crate::debug_log::snapshot_since(since)
-    } else {
-        crate::debug_log::snapshot()
-    };
-
-    // Apply filters.
+fn filter_debug_logs(
+    entries: &mut Vec<crate::debug_log::DebugLogEntry>,
+    q: &DebugLogsQuery,
+) {
     if let Some(rid) = &q.request_id {
         entries.retain(|e| e.request_id.as_deref() == Some(rid.as_str()));
     }
@@ -58,10 +47,24 @@ pub async fn debug_logs(
             .collect();
         entries.retain(|e| wanted.contains(&e.level.to_ascii_uppercase()));
     }
+}
+
+pub async fn debug_logs(
+    State(_s): State<AppState>,
+    Query(q): Query<DebugLogsQuery>,
+) -> Result<Json<DebugLogsResponse>, ApiError> {
+    let since = q.since.unwrap_or(0);
+    let limit = q.limit.unwrap_or(100).min(1000) as usize;
+
+    let mut entries = if since > 0 {
+        crate::debug_log::snapshot_since(since)
+    } else {
+        crate::debug_log::snapshot()
+    };
+
+    filter_debug_logs(&mut entries, &q);
 
     let total_in_buffer = entries.len();
-    // Truncate to `limit` (keep the most recent — the buffer is
-    // oldest-first, so truncate from the front).
     if entries.len() > limit {
         let drop = entries.len() - limit;
         entries.drain(0..drop);
@@ -83,23 +86,99 @@ pub async fn debug_logs_clear(
     Ok(Json(serde_json::json!({ "cleared": true })))
 }
 
+fn run_unhealthy_vacuum(
+    s: &AppState,
+    w: &openproxy_db::conn::WriterGuard<'_>,
+    integrity: &str,
+) -> Result<serde_json::Value, ApiError> {
+    match openproxy_db::maintenance::incremental_vacuum(w, 1000) {
+        Ok(()) => {
+            tracing::info!("VACUUM: incremental_vacuum succeeded despite integrity issues");
+            s.record_vacuum_result("partial (integrity issues — incremental only)");
+            Ok(serde_json::json!({
+                "vacuumed": true,
+                "partial": true,
+                "integrity_check": integrity,
+                "message": "Incremental VACUUM completed, but the database has integrity issues. \
+                            For a full repair, stop the server and run: \
+                            sqlite3 data.db '.recover' > recovered.sql && \
+                            mv data.db data.db.bak && \
+                            sqlite3 data.db < recovered.sql"
+            }))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "VACUUM: incremental_vacuum also failed");
+            s.record_vacuum_result(&format!("failed: {e}"));
+            Err(ApiError(CoreError::Database {
+                message: format!(
+                    "VACUUM failed: {e}. The database has integrity issues: {integrity}. \
+                     To repair: stop the server and run \
+                     'sqlite3 data.db \".recover\" > recovered.sql && \
+                     mv data.db data.db.bak && \
+                     sqlite3 data.db < recovered.sql'"
+                ),
+                source: Some(std::sync::Arc::new(e)),
+            }))
+        }
+    }
+}
+
+fn run_healthy_vacuum(
+    s: &AppState,
+    w: &openproxy_db::conn::WriterGuard<'_>,
+) -> Result<serde_json::Value, ApiError> {
+    if let Err(e) = openproxy_db::maintenance::vacuum(w) {
+        tracing::warn!(error = %e, "VACUUM step 3: full VACUUM failed, trying incremental");
+        return fallback_incremental_vacuum(s, w);
+    }
+
+    tracing::info!("VACUUM step 3: full VACUUM completed");
+    s.record_vacuum_result("ok");
+    Ok(serde_json::json!({
+        "vacuumed": true,
+        "integrity_check": "ok",
+        "message": "VACUUM completed. Free pages have been reclaimed. \
+                    DB connections reopened to refresh page cache."
+    }))
+}
+
+fn fallback_incremental_vacuum(
+    s: &AppState,
+    w: &openproxy_db::conn::WriterGuard<'_>,
+) -> Result<serde_json::Value, ApiError> {
+    match openproxy_db::maintenance::incremental_vacuum(w, 1000) {
+        Ok(()) => {
+            tracing::info!("VACUUM: incremental fallback succeeded");
+            s.record_vacuum_result("partial (full VACUUM failed, incremental fallback)");
+            Ok(serde_json::json!({
+                "vacuumed": true,
+                "partial": true,
+                "message": "Full VACUUM failed but incremental reclaim succeeded. \
+                            DB connections have been reopened. \
+                            The database is usable — try a full VACUUM again later \
+                            or restart the server for a clean state."
+            }))
+        }
+        Err(e2) => {
+            tracing::warn!(error = %e2, "VACUUM: both full and incremental failed");
+            s.record_vacuum_result(&format!("failed: {e2}"));
+            Err(ApiError(CoreError::Database {
+                message: format!(
+                    "VACUUM failed: {e2}. The disk may be full or the DB file \
+                     may be locked by another process. Free disk space and retry, \
+                     or restart the server."
+                ),
+                source: Some(std::sync::Arc::new(e2)),
+            }))
+        }
+    }
+}
+
 pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     s.set_vacuum_in_progress(true);
-    let res: Result<Json<serde_json::Value>, ApiError> = async {
-
-        // Step 0: Reopen both connections BEFORE attempting VACUUM.
-        // The long-lived writer + reader connections hold stale page
-        // caches that reference pages from the pre-repair DB file.
-        // After an offline DB repair (sqlite3 .recover), the file on
-        // disk is completely different but the in-process connections
-        // still see the old file. Reopening gives us fresh connections
-        // that see the current state of the DB file.
+    let res: Result<Json<serde_json::Value>, ApiError> = (|| -> Result<Json<serde_json::Value>, ApiError> {
         tracing::info!("VACUUM step 0: reopening DB connections to clear stale page cache");
-        if let Err(e) = s.db_pool().reopen() {
-            tracing::warn!(error = %e, "VACUUM step 0: reopen failed (continuing with existing connection)");
-        }
-        // Drop the old writer guard — reopen() took its own locks
-        // internally. Now acquire a fresh writer for the VACUUM.
+        let _ = s.db_pool().reopen();
 
         let w = s
             .db_pool()
@@ -110,114 +189,73 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::
                 ))
             })?;
 
-        // Step 1: Checkpoint the WAL.
         let _ = openproxy_db::maintenance::checkpoint_wal(&w);
-        tracing::info!("VACUUM step 1: WAL checkpoint done");
-
-        // Step 2: Integrity check.
         let integrity = openproxy_db::maintenance::integrity_check(&w);
         tracing::info!("VACUUM step 2: integrity_check = {}", integrity);
 
-        if integrity != "ok" {
-            let inc_result = openproxy_db::maintenance::incremental_vacuum(&w, 1000);
-            match inc_result {
-                Ok(()) => {
-                    tracing::info!("VACUUM: incremental_vacuum succeeded despite integrity issues");
-                    // Reopen connections so subsequent queries see the
-                    // compacted DB.
-                    drop(w);
-                    let _ = s.db_pool().reopen();
-                    s.record_vacuum_result("partial (integrity issues — incremental only)");
-                    return Ok(Json(serde_json::json!({
-                        "vacuumed": true,
-                        "partial": true,
-                        "integrity_check": integrity,
-                        "message": "Incremental VACUUM completed, but the database has integrity issues. \
-                                    For a full repair, stop the server and run: \
-                                    sqlite3 data.db '.recover' > recovered.sql && \
-                                    mv data.db data.db.bak && \
-                                    sqlite3 data.db < recovered.sql"
-                    })));
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "VACUUM: incremental_vacuum also failed");
-                    s.record_vacuum_result(&format!("failed: {e}"));
-                    return Err(ApiError(CoreError::Database {
-                        message: format!(
-                            "VACUUM failed: {e}. The database has integrity issues: {integrity}. \
-                             To repair: stop the server and run \
-                             'sqlite3 data.db \".recover\" > recovered.sql && \
-                             mv data.db data.db.bak && \
-                             sqlite3 data.db < recovered.sql'"
-                        ),
-                        source: Some(std::sync::Arc::new(e)),
-                    }));
-                }
-            }
-        }
+        let json_val = if integrity != "ok" {
+            let res = run_unhealthy_vacuum(&s, &w, &integrity)?;
+            drop(w);
+            let _ = s.db_pool().reopen();
+            res
+        } else {
+            let res = run_healthy_vacuum(&s, &w)?;
+            drop(w);
+            let _ = s.db_pool().reopen();
+            res
+        };
 
-        // Step 3: DB is healthy — run full VACUUM.
-        let vacuum_res = openproxy_db::maintenance::vacuum(&w);
+        Ok(Json(json_val))
+    })();
 
-        match vacuum_res {
-            Ok(()) => {
-                tracing::info!("VACUUM step 3: full VACUUM completed");
-                // Reopen connections so subsequent queries see the
-                // compacted DB (VACUUM rebuilds the file; the old
-                // connection's page cache is stale).
-                drop(w);
-                let _ = s.db_pool().reopen();
-                s.record_vacuum_result("ok");
-                Ok(Json(serde_json::json!({
-                    "vacuumed": true,
-                    "integrity_check": "ok",
-                    "message": "VACUUM completed. Free pages have been reclaimed. \
-                                DB connections reopened to refresh page cache."
-                })))
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "VACUUM step 3: full VACUUM failed, trying incremental");
-                match openproxy_db::maintenance::incremental_vacuum(&w, 1000) {
-                    Ok(()) => {
-                        tracing::info!("VACUUM: incremental fallback succeeded");
-                        drop(w);
-                        let _ = s.db_pool().reopen();
-                        s.record_vacuum_result("partial (full VACUUM failed, incremental fallback)");
-                        Ok(Json(serde_json::json!({
-                            "vacuumed": true,
-                            "partial": true,
-                            "message": "Full VACUUM failed but incremental reclaim succeeded. \
-                                        DB connections have been reopened. \
-                                        The database is usable — try a full VACUUM again later \
-                                        or restart the server for a clean state."
-                        })))
-                    }
-                    Err(e2) => {
-                        tracing::warn!(error = %e2, "VACUUM: both full and incremental failed");
-                        s.record_vacuum_result(&format!("failed: {e2}"));
-                        Err(ApiError(CoreError::Database {
-                            message: format!(
-                                "VACUUM failed: {e2}. The disk may be full or the DB file \
-                                 may be locked by another process. Free disk space and retry, \
-                                 or restart the server."
-                            ),
-                            source: Some(std::sync::Arc::new(e2)),
-                        }))
-                    }
-                }
-            }
-        }
-
-    }.await;
     s.set_vacuum_in_progress(false);
     res
 }
 
+fn collect_table_recovery_stats(
+    w: &openproxy_db::conn::WriterGuard<'_>,
+    tables: &[String],
+) -> (Vec<serde_json::Value>, u64) {
+    let mut table_stats = Vec::new();
+    let mut total_rows_recovered = 0;
+
+    for table in tables {
+        match openproxy_db::maintenance::DbTable::parse(table)
+            .map(|t| openproxy_db::maintenance::count_table_rows(w, t))
+        {
+            Some(Ok(count)) => {
+                total_rows_recovered += count as u64;
+                table_stats.push(serde_json::json!({
+                    "table": table,
+                    "rows": count,
+                    "status": "ok"
+                }));
+            }
+            Some(Err(e)) => {
+                tracing::warn!(table = %table, error = %e, "DB repair: table is unreadable");
+                table_stats.push(serde_json::json!({
+                    "table": table,
+                    "rows": 0,
+                    "status": "corrupt",
+                    "error": openproxy_core::cost::redact_error_msg(&e.to_string()).0
+                }));
+            }
+            None => {
+                tracing::warn!(table = %table, "DB repair: table is unknown or unmodeled");
+                table_stats.push(serde_json::json!({
+                    "table": table,
+                    "rows": 0,
+                    "status": "unknown"
+                }));
+            }
+        }
+    }
+    (table_stats, total_rows_recovered)
+}
+
 pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     s.set_vacuum_in_progress(true);
-    let res: Result<Json<serde_json::Value>, ApiError> = async {
-        // We need exclusive access to the DB for the entire repair.
-        // Take the writer lock and hold it.
+    let res: Result<Json<serde_json::Value>, ApiError> = (|| -> Result<Json<serde_json::Value>, ApiError> {
         let w = s
             .db_pool()
             .try_writer_for(std::time::Duration::from_mins(1))
@@ -227,31 +265,8 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                 ))
             })?;
 
-        // Step 1: Get the DB path so we can work with the file directly.
         let db_path = s.db_pool().path().to_path_buf();
-
-        // Step 2: Use SQLite's built-in recovery via `.dump` SQL.
-        // We can't run `.recover` (it's a sqlite3 CLI command, not SQL),
-        // but we can achieve the same effect by:
-        //   a) Dumping all tables to a SQL script in memory
-        //   b) Closing the current connection
-        //   c) Renaming the old DB
-        //   d) Creating a fresh DB and replaying the script
-        //
-        // However, we can't close the connection while holding the
-        // MutexGuard. Instead, we'll use a different approach:
-        // run `PRAGMA integrity_check` to see what's wrong, then
-        // attempt to rebuild each table individually.
-
         let integrity = openproxy_db::maintenance::integrity_check(&w);
-
-        tracing::info!(
-            integrity = %integrity,
-            db_path = %db_path.display(),
-            "DB repair: starting recovery"
-        );
-
-        // List all tables so we can rebuild them.
         let table_names = openproxy_db::maintenance::list_user_tables(&w).map_err(|e| {
             ApiError(CoreError::Database {
                 message: format!("repair: list tables: {e}"),
@@ -259,60 +274,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
             })
         })?;
 
-        tracing::info!(
-            tables = ?table_names,
-            "DB repair: found {} tables to rebuild",
-            table_names.len()
-        );
-
-        // For each table, try to read all rows and count them.
-        // This tells us which tables are readable (not corrupt).
-        let mut table_stats: Vec<serde_json::Value> = Vec::new();
-        let mut total_rows_recovered: u64 = 0;
-        for table in &table_names {
-            let count_result = openproxy_db::maintenance::DbTable::parse(table)
-                .map(|t| openproxy_db::maintenance::count_table_rows(&w, t));
-            match count_result {
-                Some(Ok(count)) => {
-                    total_rows_recovered += count as u64;
-                    table_stats.push(serde_json::json!({
-                        "table": table,
-                        "rows": count,
-                        "status": "ok"
-                    }));
-                }
-                Some(Err(e)) => {
-                    tracing::warn!(
-                        table = %table,
-                        error = %e,
-                        "DB repair: table is unreadable"
-                    );
-                    table_stats.push(serde_json::json!({
-                        "table": table,
-                        "rows": 0,
-                        "status": "corrupt",
-                        "error": openproxy_core::cost::redact_error_msg(&e.to_string()).0
-                    }));
-                }
-                None => {
-                    tracing::warn!(
-                        table = %table,
-                        "DB repair: table is unknown or unmodeled"
-                    );
-                    table_stats.push(serde_json::json!({
-                        "table": table,
-                        "rows": 0,
-                        "status": "unknown"
-                    }));
-                }
-            }
-        }
-
-        // The actual repair (rebuild the DB file) can't be done
-        // from within the process — we'd need to close all
-        // connections, rename the file, and create a new one.
-        // That requires a server restart. So we return the
-        // diagnostic info + instructions.
+        let (table_stats, total_rows_recovered) = collect_table_recovery_stats(&w, &table_names);
         s.record_vacuum_result(&format!(
             "recovery diagnostic ({total_rows_recovered} rows readable)"
         ));
@@ -327,8 +289,6 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
             })));
         }
 
-        // DB is corrupt. We can't auto-repair from within the process,
-        // but we CAN give the operator the exact commands to run.
         Ok(Json(serde_json::json!({
             "recovered": false,
             "needs_manual_repair": true,
@@ -351,8 +311,8 @@ pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json:
                 db_path.display()
             )
         })))
-    }
-    .await;
+    })();
+
     s.set_vacuum_in_progress(false);
     res
 }

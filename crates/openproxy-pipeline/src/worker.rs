@@ -51,6 +51,73 @@ pub fn spawn_worker(
     });
 }
 
+struct CooldownParams {
+    target_id: ComboTargetId,
+    combo_id: ComboId,
+    error_msg: Option<String>,
+    is_upstream_health_issue: bool,
+    cooldown_mode: CooldownMode,
+    cooldown_base_secs: u64,
+    cooldown_max_secs: u64,
+    cooldown_factor: u32,
+}
+
+fn update_cooldown(
+    repo: &dyn crate::repository::PipelineRepository,
+    params: CooldownParams,
+) {
+    if params.combo_id.0 == -1 {
+        return;
+    }
+
+    match params.error_msg {
+        None => {
+            if let Err(e) = repo.clear_cooldown(params.target_id) {
+                tracing::warn!("cooldown::clear failed in background: {}", e);
+            }
+        }
+        Some(reason) if params.is_upstream_health_issue => {
+            if params.cooldown_mode != CooldownMode::None
+                && params.cooldown_base_secs > 0
+                && let Err(e) = repo.record_cooldown(
+                    params.target_id,
+                    &reason,
+                    params.cooldown_mode,
+                    params.cooldown_base_secs,
+                    params.cooldown_max_secs,
+                    params.cooldown_factor,
+                )
+            {
+                tracing::warn!("cooldown::record failed in background: {}", e);
+            }
+        }
+        Some(_) => {}
+    }
+}
+
+fn handle_record_attempt(
+    conn_clone: &Arc<parking_lot::Mutex<Connection>>,
+    repo: &dyn crate::repository::PipelineRepository,
+    selection_registry: &SelectionRegistry,
+    usage_input: Box<UsageInput>,
+    params: CooldownParams,
+) {
+    {
+        let lock = conn_clone.lock();
+        if let Err(e) = openproxy_db::cost::record(&lock, &usage_input) {
+            tracing::warn!("failed to record usage in background: {}", e);
+        }
+    }
+
+    if params.error_msg.is_none() {
+        selection_registry.record_success(params.target_id);
+    } else {
+        selection_registry.record_failure(params.target_id);
+    }
+
+    update_cooldown(repo, params);
+}
+
 pub fn process_job(
     conn_clone: &Arc<parking_lot::Mutex<Connection>>,
     repo: &dyn crate::repository::PipelineRepository,
@@ -68,58 +135,22 @@ pub fn process_job(
             cooldown_base_secs,
             cooldown_max_secs,
             cooldown_factor,
-        } => {
-            let lock = conn_clone.lock();
-
-            // 1. Record usage
-            if let Err(e) = openproxy_db::cost::record(&lock, &usage_input) {
-                tracing::warn!("failed to record usage in background: {}", e);
-            }
-            drop(lock);
-
-            // 2. Update selection registry
-            if error_msg.is_none() {
-                selection_registry.record_success(target_id);
-            } else {
-                selection_registry.record_failure(target_id);
-            }
-
-            let cooldown_op = match error_msg {
-                None => Some("clear"),
-                Some(_) if is_upstream_health_issue => Some("record"),
-                Some(_) => None,
-            };
-
-            if let Some(op) = cooldown_op
-                && combo_id.0 != -1
-            {
-                match op {
-                    "clear" => {
-                        if let Err(e) = repo.clear_cooldown(target_id) {
-                            tracing::warn!("cooldown::clear failed in background: {}", e);
-                        }
-                    }
-                    "record"
-                        if cooldown_mode != openproxy_types::config::CooldownMode::None
-                            && cooldown_base_secs > 0 =>
-                    {
-                        let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
-                        if let Err(e) = repo.record_cooldown(
-                            target_id,
-                            &reason,
-                            cooldown_mode,
-                            cooldown_base_secs,
-                            cooldown_max_secs,
-                            cooldown_factor,
-                        ) {
-                            tracing::warn!("cooldown::record failed in background: {}", e);
-                        }
-                    }
-                    "record" => {}
-                    _ => {}
-                }
-            }
-        }
+        } => handle_record_attempt(
+            conn_clone,
+            repo,
+            selection_registry,
+            usage_input,
+            CooldownParams {
+                target_id,
+                combo_id,
+                error_msg,
+                is_upstream_health_issue,
+                cooldown_mode,
+                cooldown_base_secs,
+                cooldown_max_secs,
+                cooldown_factor,
+            },
+        ),
         BackgroundJob::MarkClientResponse {
             request_id,
             attempt,

@@ -37,6 +37,32 @@ pub fn now_unix_secs_str() -> String {
         .map_or(0, |d| d.as_secs());
     secs.to_string()
 }
+fn parse_duration_unit(unit: u8, val: f64) -> f64 {
+    match unit {
+        b'h' => val * 3600.0,
+        b'm' => val * 60.0,
+        b's' => val,
+        _ => 0.0,
+    }
+}
+
+fn parse_compound_duration(s: &str) -> Option<u64> {
+    let mut total_secs = 0.0;
+    let mut num_range: Option<(usize, usize)> = None;
+    for (i, b) in s.bytes().enumerate() {
+        if b.is_ascii_digit() || b == b'.' {
+            num_range = Some((num_range.map_or(i, |(start, _)| start), i + 1));
+        } else if matches!(b, b'h' | b'm' | b's')
+            && let Some((start, end)) = num_range.take()
+        {
+            let val = s[start..end].parse::<f64>().unwrap_or(0.0);
+            total_secs += parse_duration_unit(b, val);
+        }
+    }
+    let total = total_secs.ceil() as u64;
+    if total > 0 { Some(total) } else { None }
+}
+
 pub fn parse_reset_time(s: &str) -> Option<u64> {
     let s = s.trim();
     if let Ok(secs) = s.parse::<u64>() {
@@ -45,28 +71,7 @@ pub fn parse_reset_time(s: &str) -> Option<u64> {
     if let Ok(secs_f) = s.parse::<f64>() {
         return Some(secs_f.ceil() as u64);
     }
-    let mut total_secs = 0.0;
-    let mut num_range: Option<(usize, usize)> = None;
-    for (i, b) in s.bytes().enumerate() {
-        if b.is_ascii_digit() || b == b'.' {
-            match num_range {
-                Some((start, _)) => num_range = Some((start, i + 1)),
-                None => num_range = Some((i, i + 1)),
-            }
-        } else if matches!(b, b'h' | b'm' | b's')
-            && let Some((start, end)) = num_range.take()
-        {
-            let val = s[start..end].parse::<f64>().unwrap_or(0.0);
-            match b {
-                b'h' => total_secs += val * 3600.0,
-                b'm' => total_secs += val * 60.0,
-                b's' => total_secs += val,
-                _ => {}
-            }
-        }
-    }
-    let total = total_secs.ceil() as u64;
-    if total > 0 { Some(total) } else { None }
+    parse_compound_duration(s)
 }
 
 #[cfg(test)]

@@ -553,6 +553,15 @@ pub struct CreateComboInput {
     pub selection_window_secs: Option<u64>,
 }
 
+impl CreateComboInput {
+    fn has_cooldown_settings(&self) -> bool {
+        self.cooldown_mode.is_some()
+            || self.cooldown_base_secs.is_some()
+            || self.cooldown_max_secs.is_some()
+            || self.cooldown_factor.is_some()
+    }
+}
+
 /// Add a target to a combo. The wire shape is the historical one for
 /// flat (model) targets, plus a new `sub_combo_id` field for combo-in-
 /// combo targets. Exactly one of `model_row_id` / `sub_combo_id` must
@@ -574,16 +583,33 @@ pub struct AddTargetInput {
     pub priority_order: i32,
 }
 
-/// Create a new combo. `race_size` defaults to `1`; `strategy` is parsed
-/// from the wire string (e.g. `"priority"`, `"round_robin"`).
-///
-/// Newly-created combos are auto-populated with one target per active model
-/// of the first provider that has a healthy account and at least one
-/// active model. This is the "operator wants to test NOW" path: a combo
-/// should never be born empty when the DB has routable targets. If no
-/// candidate provider exists the combo is still created — it just stays
-/// empty and the pipeline's `auto_populate` fallback will try again on
-/// the next chat request.
+fn apply_combo_overrides(
+    conn: &Connection,
+    combo_id: ComboId,
+    input: &CreateComboInput,
+) -> Result<()> {
+    if input.priority_mode.is_some() {
+        combos::update_priority_mode(conn, combo_id, input.priority_mode.as_deref())?;
+    }
+    if input.has_cooldown_settings() {
+        combos::update_cooldown_settings(
+            conn,
+            combo_id,
+            input.cooldown_mode.as_deref(),
+            input.cooldown_base_secs,
+            input.cooldown_max_secs,
+            input.cooldown_factor,
+        )?;
+    }
+    if input.lkgp_exploration_rate.is_some() {
+        combos::update_lkgp_settings(conn, combo_id, input.lkgp_exploration_rate)?;
+    }
+    if input.selection_window_secs.is_some() {
+        combos::update_selection_window(conn, combo_id, input.selection_window_secs)?;
+    }
+    Ok(())
+}
+
 pub fn create_combo(conn: &Connection, input: &CreateComboInput) -> Result<ComboId> {
     let strategy =
         openproxy_types::combos::Strategy::parse(&input.strategy).map_err(CoreError::Validation)?;
@@ -603,35 +629,7 @@ pub fn create_combo(conn: &Connection, input: &CreateComboInput) -> Result<Combo
     // the combo created (with `auto_populate` already run) and
     // surfaces the error to the caller — the operator can fix the
     // bad input and re-POST, or PATCH the combo after the fact.
-    //
-    // We call the helpers unconditionally: a `None` field clears
-    // the column back to `NULL` (the legacy default), which is the
-    // right thing for a fresh create where the operator omitted the
-    // field. The helpers are also no-ops on a missing combo id
-    // (which can't happen here — we just inserted it).
-    if input.priority_mode.is_some() {
-        combos::update_priority_mode(conn, combo_id, input.priority_mode.as_deref())?;
-    }
-    if input.cooldown_mode.is_some()
-        || input.cooldown_base_secs.is_some()
-        || input.cooldown_max_secs.is_some()
-        || input.cooldown_factor.is_some()
-    {
-        combos::update_cooldown_settings(
-            conn,
-            combo_id,
-            input.cooldown_mode.as_deref(),
-            input.cooldown_base_secs,
-            input.cooldown_max_secs,
-            input.cooldown_factor,
-        )?;
-    }
-    if input.lkgp_exploration_rate.is_some() {
-        combos::update_lkgp_settings(conn, combo_id, input.lkgp_exploration_rate)?;
-    }
-    if input.selection_window_secs.is_some() {
-        combos::update_selection_window(conn, combo_id, input.selection_window_secs)?;
-    }
+    apply_combo_overrides(conn, combo_id, input)?;
     Ok(combo_id)
 }
 

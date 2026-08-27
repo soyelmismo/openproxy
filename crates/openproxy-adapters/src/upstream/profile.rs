@@ -69,51 +69,61 @@ pub enum TimeoutProfile {
 }
 
 impl TimeoutProfile {
-    /// Resolve to a fully-expanded `ResolvedTimeouts`.
-    pub fn resolve(&self) -> ResolvedTimeouts {
+    const CHAT: ResolvedTimeouts = ResolvedTimeouts {
+        headers_ms: 20_000,
+        body_chunk_ms: 90_000,
+        ..ResolvedTimeouts::SYSTEM_DEFAULTS
+    };
+
+    const QUOTA: ResolvedTimeouts = ResolvedTimeouts {
+        dns_ms: 3_000,
+        dial_ms: 3_000,
+        tls_ms: 3_000,
+        write_ms: 5_000,
+        headers_ms: 8_000,
+        body_chunk_ms: 8_000,
+        total_ms: 15_000,
+    };
+
+    const OAUTH: ResolvedTimeouts = ResolvedTimeouts {
+        dns_ms: 2_000,
+        dial_ms: 2_000,
+        tls_ms: 2_000,
+        write_ms: 3_000,
+        headers_ms: 5_000,
+        body_chunk_ms: 1_000,
+        total_ms: 10_000,
+    };
+
+    const MODEL_DISCOVERY: ResolvedTimeouts = ResolvedTimeouts {
+        headers_ms: 30_000,
+        body_chunk_ms: 60_000,
+        total_ms: 120_000,
+        ..ResolvedTimeouts::SYSTEM_DEFAULTS
+    };
+
+    const IMAGE_GENERATION: ResolvedTimeouts = ResolvedTimeouts {
+        headers_ms: 30_000,
+        body_chunk_ms: 300_000,
+        total_ms: 600_000,
+        ..ResolvedTimeouts::SYSTEM_DEFAULTS
+    };
+
+    const fn builtin_timeouts(&self) -> ResolvedTimeouts {
         match self {
-            // Chat: tighten headers (TTFT) to 20s, body chunk gap to 90s.
-            // Everything else inherits the system defaults.
-            TimeoutProfile::Chat => ResolvedTimeouts {
-                headers_ms: 20_000,
-                body_chunk_ms: 90_000,
-                ..ResolvedTimeouts::SYSTEM_DEFAULTS
-            },
-            // Quota refresh: aggressive everywhere, no streaming.
-            TimeoutProfile::Quota => ResolvedTimeouts {
-                dns_ms: 3_000,
-                dial_ms: 3_000,
-                tls_ms: 3_000,
-                write_ms: 5_000,
-                headers_ms: 8_000,
-                body_chunk_ms: 8_000, // body is small; no gap expected
-                total_ms: 15_000,
-            },
-            // OAuth: very fast, no body.
-            TimeoutProfile::OAuth => ResolvedTimeouts {
-                dns_ms: 2_000,
-                dial_ms: 2_000,
-                tls_ms: 2_000,
-                write_ms: 3_000,
-                headers_ms: 5_000,
-                body_chunk_ms: 1_000, // body is tiny; 1s is plenty
-                total_ms: 10_000,
-            },
-            // Model discovery: long body, but headers still tight.
-            TimeoutProfile::ModelDiscovery => ResolvedTimeouts {
-                headers_ms: 30_000,
-                body_chunk_ms: 60_000,
-                total_ms: 120_000,
-                ..ResolvedTimeouts::SYSTEM_DEFAULTS
-            },
-            // Image generation: very long.
-            TimeoutProfile::ImageGeneration => ResolvedTimeouts {
-                headers_ms: 30_000,
-                body_chunk_ms: 300_000,
-                total_ms: 600_000,
-                ..ResolvedTimeouts::SYSTEM_DEFAULTS
-            },
+            TimeoutProfile::Chat => Self::CHAT,
+            TimeoutProfile::Quota => Self::QUOTA,
+            TimeoutProfile::OAuth => Self::OAUTH,
+            TimeoutProfile::ModelDiscovery => Self::MODEL_DISCOVERY,
+            _ => Self::IMAGE_GENERATION,
+        }
+    }
+
+    /// Resolve to a fully-expanded `ResolvedTimeouts`.
+    pub const fn resolve(&self) -> ResolvedTimeouts {
+        match self {
             TimeoutProfile::Custom(t) => *t,
+            _ => self.builtin_timeouts(),
         }
     }
 }

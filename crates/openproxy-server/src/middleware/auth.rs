@@ -1,5 +1,5 @@
 use crate::{error::ApiError, state::AppState};
-use axum::{extract::State, http::HeaderMap};
+use axum::{extract::State, http::HeaderMap, response::IntoResponse};
 use openproxy_core::api_keys as core_api_keys;
 use openproxy_types::{CoreError, ids::ApiKeyId};
 use std::sync::Arc;
@@ -40,10 +40,9 @@ impl ValidatedApiToken {
     }
 
     pub fn is_model_allowed(&self, model: &str, provider_id: Option<&str>) -> bool {
-        let (prov_from_model, bare_model) = match model.split_once('/') {
-            Some((p, rest)) => (Some(p), rest),
-            None => (None, model),
-        };
+        let (prov_from_model, bare_model) = model
+            .split_once('/')
+            .map_or((None, model), |(p, rest)| (Some(p), rest));
 
         let full_id = provider_id.and_then(|p| {
             if model.starts_with(&format!("{p}/")) {
@@ -53,56 +52,25 @@ impl ValidatedApiToken {
             }
         });
 
-        let matches_spec = |spec: &str, candidate: &str| -> bool {
-            if spec == "*" || spec == candidate {
-                return true;
-            }
-            if let Some(prefix) = spec.strip_suffix('*')
-                && candidate.starts_with(prefix)
-            {
-                return true;
-            }
-            if let Some(suffix) = spec.strip_prefix('*')
-                && candidate.ends_with(suffix)
-            {
-                return true;
-            }
-            false
-        };
-
-        let check_match = |pattern: &str| -> bool {
-            matches_spec(pattern, model)
-                || matches_spec(pattern, bare_model)
-                || full_id.as_deref().is_some_and(|f| matches_spec(pattern, f))
-        };
-
-        // 1. Allowlist check
         if let Some(allowed) = &self.allowed_models
             && !allowed.is_empty()
+            && !allowed
+                .iter()
+                .any(|m| matches_any_model_pattern(m, model, bare_model, full_id.as_deref()))
         {
-            let matches_allowed = allowed.iter().any(|m| check_match(m));
-            if !matches_allowed {
-                return false;
-            }
+            return false;
         }
 
-        // 2. Blacklisted providers check
-        if let Some(blacklisted_provs) = &self.blacklisted_providers {
-            if let Some(p) = provider_id
-                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
-            {
-                return false;
-            }
-            if let Some(p) = prov_from_model
-                && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
-            {
-                return false;
-            }
+        if let Some(blacklisted_provs) = &self.blacklisted_providers
+            && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
+        {
+            return false;
         }
 
-        // 3. Blacklisted models check
         if let Some(blacklisted) = &self.blacklisted_models
-            && blacklisted.iter().any(|b| check_match(b))
+            && blacklisted
+                .iter()
+                .any(|b| matches_any_model_pattern(b, model, bare_model, full_id.as_deref()))
         {
             return false;
         }
@@ -111,27 +79,54 @@ impl ValidatedApiToken {
     }
 }
 
-/// Resolve the caller from the `Authorization` header.
-///
-/// Behaviour matrix:
-///
-/// | Header state                          | Result    |
-/// | ------------------------------------- | --------- |
-/// | absent, no active keys configured     | `Ok(None)` — anonymous OK (local-dev). |
-/// | absent, ≥1 active key configured      | 401 `missing api key`. |
-/// | `Authorization: <other-scheme> ...`   | treated as missing → falls into the two rows above. |
-/// | `Authorization: Bearer *** | look up by SHA-256, enforce active+unexpired+scope+allowlist+blacklist. |
-/// | `Bearer <key>` not in the table        | 401 `invalid api key`. |
-/// | key is revoked / inactive              | 401 `api key revoked or inactive`. |
-/// | key has expired                       | 401 `api key expired`. |
-/// | key lacks the `chat` scope            | 403 `api key lacks 'chat' scope`. |
-/// | key's model allowlist excludes request | 403 `model '...' not allowed for this key`. |
-/// | key's blacklist excludes request      | 403 `model '...' is blacklisted for this key`. |
-pub(crate) fn authenticate(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let Some(token) = headers
+fn pattern_matches(spec: &str, candidate: &str) -> bool {
+    if spec == "*" || spec == candidate {
+        return true;
+    }
+    if let Some(prefix) = spec.strip_suffix('*')
+        && candidate.starts_with(prefix)
+    {
+        return true;
+    }
+    if let Some(suffix) = spec.strip_prefix('*')
+        && candidate.ends_with(suffix)
+    {
+        return true;
+    }
+    false
+}
+
+fn matches_any_model_pattern(
+    pattern: &str,
+    model: &str,
+    bare_model: &str,
+    full_id: Option<&str>,
+) -> bool {
+    pattern_matches(pattern, model)
+        || pattern_matches(pattern, bare_model)
+        || full_id.is_some_and(|f| pattern_matches(pattern, f))
+}
+
+fn is_provider_blacklisted(
+    blacklisted_provs: &[String],
+    provider_id: Option<&str>,
+    prov_from_model: Option<&str>,
+) -> bool {
+    if let Some(p) = provider_id
+        && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
+    {
+        return true;
+    }
+    if let Some(p) = prov_from_model
+        && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
+    {
+        return true;
+    }
+    false
+}
+
+fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
@@ -142,42 +137,29 @@ pub(crate) fn authenticate(
                 .and_then(|v| v.to_str().ok())
                 .map(str::trim)
         })
-    else {
-        // MEDIUM fix (audit finding #5): the previous behaviour
-        // silently admitted anonymous traffic, so an open proxy
-        // on the public internet would forward any client's
-        // prompts to paid upstreams — the operator would foot
-        // the bill with no visibility or per-key rate limits.
-        //
-        // Backward-compat path: if NO active API keys are
-        // configured, this is a fresh install (local-dev /
-        // docker / first run) and anonymous traffic is fine.
-        // As soon as the operator creates the first key, the
-        // chat endpoint requires that key. The transition is
-        // automatic — no config knob needed.
-        //
-        // `count_active` is a SELECT COUNT(*) — use the READER so
-        // the anonymous-fallback check doesn't serialize through
-        // the writer mutex (see `db::conn::DbPool::reader`).
-        let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-        if active == 0 && state.config().server.allow_anonymous {
-            tracing::debug!(
-                target: "openproxy::auth",
-                "anonymous request admitted (no active api keys configured)"
-            );
-            return Ok(None);
-        }
-        return Err(ApiError(CoreError::Auth("missing api key".into())));
-    };
-    if token.is_empty() {
-        // Same gate: a bare `Authorization: Bearer ` (empty
-        // token) is treated as "no header".
-        let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-        if active == 0 && state.config().server.allow_anonymous {
-            return Ok(None);
-        }
-        return Err(ApiError(CoreError::Auth("missing api key".into())));
+        .filter(|t| !t.is_empty())
+}
+
+fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken>, ApiError> {
+    let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
+    if active == 0 && state.config().server.allow_anonymous {
+        tracing::debug!(
+            target: "openproxy::auth",
+            "anonymous request admitted (no active api keys configured)"
+        );
+        return Ok(None);
     }
+    Err(ApiError(CoreError::Auth("missing api key".into())))
+}
+
+/// Resolve the caller from the `Authorization` header.
+pub(crate) fn authenticate(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<ValidatedApiToken>, ApiError> {
+    let Some(token) = extract_bearer_or_api_key_token(headers) else {
+        return check_anonymous_fallback(state);
+    };
 
     let key = verify_key_credentials(state, token, "chat")?;
 
@@ -190,27 +172,10 @@ pub(crate) fn authenticate(
     }))
 }
 
-/// Validate an API key credential against active keys, verifying:
-/// 1. Hash matching
-/// 2. Active status
-/// 3. Expiration date
-/// 4. Required scope presence
-///
-/// If valid, touches `last_used_at` asynchronously on a blocking thread
-/// and returns the [`openproxy_core::api_keys::ApiKey`].
-pub(crate) fn verify_key_credentials(
-    state: &AppState,
-    token: &str,
+fn validate_key_record(
+    key: &core_api_keys::ApiKey,
     required_scope: &str,
-) -> Result<core_api_keys::ApiKey, ApiError> {
-    let key_hash = core_api_keys::hash_key(token);
-    // Auth is a SELECT by hash — use the READER so requests don't
-    // serialize through the writer mutex.
-    let r = state.db_pool().reader();
-    let key = core_api_keys::get_by_hash(&r, &key_hash)
-        .map_err(ApiError)?
-        .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
-
+) -> Result<(), ApiError> {
     if !key.is_active {
         return Err(ApiError(CoreError::Auth(
             "api key revoked or inactive".into(),
@@ -229,11 +194,23 @@ pub(crate) fn verify_key_credentials(
             "api key lacks required scope".into(),
         )));
     }
+    Ok(())
+}
 
-    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
-    // The hot path no longer blocks on acquiring the writer mutex.
-    // `touch_last_used` already throttles itself to 5-minute writes
-    // (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`).
+/// Validate an API key credential against active keys
+pub(crate) fn verify_key_credentials(
+    state: &AppState,
+    token: &str,
+    required_scope: &str,
+) -> Result<core_api_keys::ApiKey, ApiError> {
+    let key_hash = core_api_keys::hash_key(token);
+    let r = state.db_pool().reader();
+    let key = core_api_keys::get_by_hash(&r, &key_hash)
+        .map_err(ApiError)?
+        .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
+
+    validate_key_record(&key, required_scope)?;
+
     let pool = Arc::clone(state.db_pool());
     let key_id = key.id;
     tokio::task::spawn_blocking(move || {
@@ -244,10 +221,28 @@ pub(crate) fn verify_key_credentials(
     Ok(key)
 }
 
+fn verify_combo_authorization(
+    state: &AppState,
+    auth: Option<&ValidatedApiToken>,
+    model_name: &str,
+) -> Result<(), ApiError> {
+    let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
+        openproxy_core::routing::resolve(&state.db_pool().reader(), model_name)
+    else {
+        return Ok(());
+    };
+
+    if let Some(auth) = auth
+        && !auth.is_combo_allowed(combo_id.0)
+    {
+        return Err(ApiError(CoreError::Auth(
+            "combo not allowed for this key".into(),
+        )));
+    }
+    Ok(())
+}
+
 /// Authenticate the request against active API keys and verify model/combo authorization.
-///
-/// Returns `Ok(Some(key_id))` if authenticated with a key, `Ok(None)` if anonymous
-/// access is permitted (0 active keys configured), or an [`ApiError`] on failure.
 pub(crate) fn authenticate_and_authorize_model(
     state: &AppState,
     headers: &HeaderMap,
@@ -263,133 +258,100 @@ pub(crate) fn authenticate_and_authorize_model(
         ))));
     }
 
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
-
-    if let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
-        openproxy_core::routing::resolve(&state.db_pool().reader(), model_name)
-        && let Some(auth) = &auth_result
-        && !auth.is_combo_allowed(combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
-    }
-
-    Ok(api_key_id)
+    verify_combo_authorization(state, auth_result.as_ref(), model_name)?;
+    Ok(auth_result.as_ref().map(|r| r.key_id))
 }
 
-/// `POST /v1/chat/completions`.
-///
-/// The full body is parsed as an `OpenAIRequest`; on parse failure we
-/// return 400 with the standard error envelope. On success we hand
-/// the request to the pipeline, which returns a [`PipelineResult`]
-/// we translate into a `(status, body)` response.
-///
-/// The `CancelWatch` extension is injected by the
-/// [`crate::disconnect::client_disconnect_middleware`]; it carries a
-/// `watch::Receiver<bool>` that flips to `true` the moment the client
-/// closes the TCP connection (request-body read error OR
-/// response-body write error). We thread it into the pipeline as
-/// `PipelineRequest::client_disconnected` so the dispatch loop, the
-/// `UpstreamClient::call()` `tokio::select!`, and the SSE `stream.next()`
-/// `tokio::select!` all observe the real cancel — no time-based
-/// watchdog needed.
-/// `POST /v1/chat/completions`.
-///
-/// The handler creates its own fresh cancel watch (NOT from the
-/// middleware — see router.rs for why the middleware was removed).
-/// The fresh watch is driven only by the watchdog timer (total_ms).
-pub async fn auth_middleware(
-    State(state): State<AppState>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Result<axum::response::Response, crate::error::ApiError> {
-    let (mut parts, body) = req.into_parts();
+const MAX_TOOL_CALLS: usize = 64;
+const MAX_ID_LEN: usize = 128;
 
-    let auth_result = authenticate(&state, &parts.headers)?;
+fn sanitize_tool_calls(messages: &mut Vec<openproxy_types::OpenAIMessage>) {
+    *messages = retain_valid_tool_messages(std::mem::take(messages));
+    prune_unfulfilled_tool_calls(messages);
+}
 
-    // Enforce 32 MiB limit directly, matching DefaultBodyLimit
-    let bytes = match axum::body::to_bytes(body, 32 * 1024 * 1024).await {
-        Ok(b) => b,
-        Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("length limit exceeded") {
-                return Ok(axum::response::IntoResponse::into_response(
-                    axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                ));
-            }
-            return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
-                err_str,
-            )));
-        }
-    };
-
-    let mut parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?;
-
-    // Sanitize orphaned tool calls and tool messages to avoid upstream 400 Bad Request errors.
-    // DeepSeek and other strict OpenAI-compatible providers require that every
-    // tool_call in an assistant message is followed by a matching tool response.
-    const MAX_TOOL_CALLS: usize = 64;
-    const MAX_ID_LEN: usize = 128;
-
-    let mut valid_messages = Vec::with_capacity(parsed.messages.len());
+fn retain_valid_tool_messages(
+    messages: Vec<openproxy_types::OpenAIMessage>,
+) -> Vec<openproxy_types::OpenAIMessage> {
+    let mut valid_messages = Vec::with_capacity(messages.len());
     let mut last_assistant_tool_calls: Vec<String> = Vec::new();
 
-    for mut msg in std::mem::take(&mut parsed.messages) {
-        if msg.role == "assistant" {
-            last_assistant_tool_calls.clear();
-            if let Some(calls) = &mut msg.tool_calls {
-                calls.truncate(MAX_TOOL_CALLS);
-                for call in calls.iter() {
-                    if let Some(id) = call.get("id").and_then(|v| v.as_str())
-                        && id.len() <= MAX_ID_LEN
-                    {
-                        last_assistant_tool_calls.push(id.to_string());
-                    }
-                }
-            }
-            valid_messages.push(msg);
-        } else if msg.role == "tool" {
-            if let Some(id) = msg.tool_call_id.as_deref()
-                && id.len() <= MAX_ID_LEN
-                && let Some(pos) = last_assistant_tool_calls.iter().position(|c| c == id)
-            {
-                last_assistant_tool_calls.remove(pos);
+    for mut msg in messages {
+        match msg.role.as_str() {
+            "assistant" => {
+                last_assistant_tool_calls = extract_assistant_tool_call_ids(&mut msg);
                 valid_messages.push(msg);
             }
-        } else {
-            last_assistant_tool_calls.clear();
-            valid_messages.push(msg);
+            "tool" => {
+                if let Some(pos) = find_matching_tool_call(&msg, &last_assistant_tool_calls) {
+                    last_assistant_tool_calls.remove(pos);
+                    valid_messages.push(msg);
+                }
+            }
+            _ => {
+                last_assistant_tool_calls.clear();
+                valid_messages.push(msg);
+            }
         }
     }
-    parsed.messages = valid_messages;
+    valid_messages
+}
 
-    let mut remainder = parsed.messages.as_mut_slice();
+fn extract_assistant_tool_call_ids(msg: &mut openproxy_types::OpenAIMessage) -> Vec<String> {
+    let Some(calls) = &mut msg.tool_calls else {
+        return Vec::new();
+    };
+    calls.truncate(MAX_TOOL_CALLS);
+    calls
+        .iter()
+        .filter_map(|call| call.get("id").and_then(|v| v.as_str()))
+        .filter(|id| id.len() <= MAX_ID_LEN)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn find_matching_tool_call(
+    msg: &openproxy_types::OpenAIMessage,
+    last_assistant_tool_calls: &[String],
+) -> Option<usize> {
+    let id = msg.tool_call_id.as_deref()?;
+    if id.len() > MAX_ID_LEN {
+        return None;
+    }
+    last_assistant_tool_calls.iter().position(|c| c == id)
+}
+
+fn prune_unfulfilled_tool_calls(messages: &mut [openproxy_types::OpenAIMessage]) {
+    let mut remainder = messages;
     while let Some((msg, tail)) = remainder.split_first_mut() {
         remainder = tail;
         if msg.role == "assistant"
             && let Some(calls) = &mut msg.tool_calls
         {
-            calls.retain(|call| {
-                let call_id = call.get("id").and_then(|v| v.as_str());
-                call_id.is_some_and(|id| {
-                    id.len() <= MAX_ID_LEN
-                        && remainder
-                            .iter()
-                            .take_while(|m| m.role == "tool")
-                            .take(MAX_TOOL_CALLS)
-                            .any(|m| m.tool_call_id.as_deref() == Some(id))
-                })
-            });
+            calls.retain(|call| is_tool_call_fulfilled(call, remainder));
             if calls.is_empty() {
                 msg.tool_calls = None;
             }
         }
     }
+}
 
-    // DeepSeek thinking mode requires `reasoning_content` to be passed back in assistant messages.
-    // If a client strips it, we inject an empty string to prevent 400 errors.
+fn is_tool_call_fulfilled(
+    call: &serde_json::Value,
+    following_messages: &[openproxy_types::OpenAIMessage],
+) -> bool {
+    let Some(id) = call.get("id").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    id.len() <= MAX_ID_LEN
+        && following_messages
+            .iter()
+            .take_while(|m| m.role == "tool")
+            .take(MAX_TOOL_CALLS)
+            .any(|m| m.tool_call_id.as_deref() == Some(id))
+}
+
+fn inject_deepseek_reasoning_if_needed(parsed: &mut openproxy_types::OpenAIRequest) {
     if parsed.model.to_lowercase().contains("deepseek") {
         for msg in &mut parsed.messages {
             if msg.role == "assistant" && !msg.extra.contains_key("reasoning_content") {
@@ -400,13 +362,51 @@ pub async fn auth_middleware(
             }
         }
     }
+}
+
+async fn read_request_body_capped(
+    body: axum::body::Body,
+    limit: usize,
+) -> Result<bytes::Bytes, axum::response::Response> {
+    match axum::body::to_bytes(body, limit).await {
+        Ok(b) => Ok(b),
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("length limit exceeded") {
+                Err(axum::response::IntoResponse::into_response(
+                    axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                ))
+            } else {
+                Err(ApiError(openproxy_types::CoreError::Parse(err_str)).into_response())
+            }
+        }
+    }
+}
+
+pub async fn auth_middleware(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, crate::error::ApiError> {
+    let (mut parts, body) = req.into_parts();
+    let auth_result = authenticate(&state, &parts.headers)?;
+
+    let bytes = match read_request_body_capped(body, 32 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(resp) => return Ok(resp),
+    };
+
+    let mut parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?;
+
+    sanitize_tool_calls(&mut parsed.messages);
+    inject_deepseek_reasoning_if_needed(&mut parsed);
 
     if parsed.model.is_empty() && parts.uri.path().starts_with("/v1/images") {
         parsed.model = "dall-e-2".to_string();
     }
 
     let requested_model = &parsed.model;
-
     if let Some(token) = &auth_result
         && !token.is_model_allowed(requested_model, None)
     {

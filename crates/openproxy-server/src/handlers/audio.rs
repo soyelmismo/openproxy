@@ -39,61 +39,82 @@ pub async fn transcribe(
     ))
 }
 
-async fn parse_multipart_body(mut multipart: Multipart) -> Result<ParsedAudioBody, ApiError> {
-    let mut model_name = String::new();
-    let mut file_bytes: Option<bytes::Bytes> = None;
-    let mut file_name = String::from("audio");
-    let mut file_content_type = String::from("application/octet-stream");
-    let mut form_fields: Vec<(String, String)> = Vec::new();
+struct AudioMultipartAccumulator {
+    model_name: String,
+    file_bytes: Option<bytes::Bytes>,
+    file_name: String,
+    file_content_type: String,
+    form_fields: Vec<(String, String)>,
+}
 
+impl AudioMultipartAccumulator {
+    fn new() -> Self {
+        Self {
+            model_name: String::new(),
+            file_bytes: None,
+            file_name: String::from("audio"),
+            file_content_type: String::from("application/octet-stream"),
+            form_fields: Vec::new(),
+        }
+    }
+
+    async fn process_field(&mut self, field: axum::extract::multipart::Field<'_>) {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "model" => {
+                self.model_name = field.text().await.unwrap_or_default();
+            }
+            "file" => {
+                self.file_name = field.file_name().unwrap_or("audio").to_string();
+                self.file_content_type = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                self.file_bytes = Some(field.bytes().await.unwrap_or_default());
+            }
+            _ => {
+                let value = field.text().await.unwrap_or_default();
+                self.form_fields.push((name, value));
+            }
+        }
+    }
+
+    fn finish(self) -> Result<ParsedAudioBody, ApiError> {
+        let file_bytes = self.file_bytes.ok_or_else(|| {
+            ApiError(CoreError::Validation(
+                "missing 'file' part in multipart body".into(),
+            ))
+        })?;
+        if file_bytes.is_empty() {
+            return Err(ApiError(CoreError::Validation(
+                "empty 'file' part in multipart body".into(),
+            )));
+        }
+        if self.model_name.is_empty() {
+            return Err(ApiError(CoreError::Validation(
+                "missing 'model' field in multipart body".into(),
+            )));
+        }
+        Ok(ParsedAudioBody {
+            model_name: self.model_name,
+            file_bytes,
+            file_name: self.file_name,
+            file_content_type: self.file_content_type,
+            form_fields: self.form_fields,
+        })
+    }
+}
+
+async fn parse_multipart_body(mut multipart: Multipart) -> Result<ParsedAudioBody, ApiError> {
+    let mut acc = AudioMultipartAccumulator::new();
     while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| ApiError(CoreError::Validation(format!("multipart parse: {e}"))))?
     {
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "model" => {
-                model_name = field.text().await.unwrap_or_default();
-            }
-            "file" => {
-                file_name = field.file_name().unwrap_or("audio").to_string();
-                file_content_type = field
-                    .content_type()
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                file_bytes = Some(field.bytes().await.unwrap_or_default());
-            }
-            _ => {
-                let value = field.text().await.unwrap_or_default();
-                form_fields.push((name, value));
-            }
-        }
+        acc.process_field(field).await;
     }
-
-    let file_bytes = file_bytes.ok_or_else(|| {
-        ApiError(CoreError::Validation(
-            "missing 'file' part in multipart body".into(),
-        ))
-    })?;
-    if file_bytes.is_empty() {
-        return Err(ApiError(CoreError::Validation(
-            "empty 'file' part in multipart body".into(),
-        )));
-    }
-    if model_name.is_empty() {
-        return Err(ApiError(CoreError::Validation(
-            "missing 'model' field in multipart body".into(),
-        )));
-    }
-
-    Ok(ParsedAudioBody {
-        model_name,
-        file_bytes,
-        file_name,
-        file_content_type,
-        form_fields,
-    })
+    acc.finish()
 }
 
 fn build_audio_response(status_code: u16, content_type: &str, body: bytes::Bytes) -> Response {

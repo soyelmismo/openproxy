@@ -68,6 +68,76 @@ pub async fn dispatch_embedding_request(
         .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
 }
 
+async fn dispatch_single_embedding(
+    db_pool: &DbPool,
+    upstream_client: &Arc<UpstreamClient>,
+    circuit_breaker: &CircuitBreakerRegistry,
+    master_key: &MasterKey,
+    adapter: &ProviderAdapterEnum,
+    target: &UnaryTarget,
+    req: &EmbeddingRequest,
+) -> Result<(EmbeddingResponse, u16)> {
+    let upstream_url = adapter.build_embeddings_url();
+    let api_key = resolve_api_key(db_pool, master_key, target.account_id, &target.provider)?;
+
+    let response = dispatch_embedding_request(
+        upstream_client,
+        adapter,
+        &upstream_url,
+        &api_key,
+        &target.upstream_model,
+        req,
+    )
+    .await
+    .map_err(|e| {
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        tracing::warn!(
+            "Embedding target failed (connection error): provider={}, error={:?}",
+            target.provider,
+            e
+        );
+        e
+    })?;
+
+    let status_code = response.status.as_u16();
+    let body_bytes = response.collect().await.map_err(|e| {
+        let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        tracing::warn!(
+            "Embedding target body read failed: provider={}, error={:?}",
+            target.provider,
+            err
+        );
+        err
+    })?;
+
+    if status_code >= 400 {
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        let err_text = String::from_utf8_lossy(&body_bytes);
+        tracing::warn!(
+            "Embedding target returned error status: provider={}, status={}, body={}",
+            target.provider,
+            status_code,
+            err_text
+        );
+        return Err(map_upstream_status_error(
+            status_code,
+            target.provider.as_str(),
+            &target.upstream_model,
+            &err_text,
+        ));
+    }
+
+    let parsed_response: EmbeddingResponse = serde_json::from_slice(&body_bytes)
+        .map_err(|e| CoreError::Parse(format!("failed to parse embedding response: {e}")))?;
+
+    if let Some(account_id) = target.account_id {
+        circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));
+    }
+
+    Ok((parsed_response, status_code))
+}
+
 pub async fn execute_embeddings(
     db_pool: &DbPool,
     adapters: &[ProviderAdapterEnum],
@@ -98,127 +168,54 @@ pub async fn execute_embeddings(
 
         crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
 
-        // Adapter resolution.
-        let Some(adapter) = adapters
-            .iter()
-            .find(|a| a.id() == &target.provider)
-            .cloned()
-        else {
+        let Some(adapter) = adapters.iter().find(|a| a.id() == &target.provider) else {
             last_error = Some(CoreError::Internal(format!(
                 "no adapter registered for provider '{}'",
                 target.provider
             )));
             continue;
         };
-        let upstream_url = adapter.build_embeddings_url();
 
-        // Credentials decryption via master key.
-        let api_key =
-            match resolve_api_key(db_pool, master_key, target.account_id, &target.provider) {
-                Ok(k) => k,
-                Err(e) => {
-                    last_error = Some(e);
-                    continue;
-                }
-            };
-
-        // Dispatch upstream.
-        let response = match dispatch_embedding_request(
+        match dispatch_single_embedding(
+            db_pool,
             upstream_client,
-            &adapter,
-            &upstream_url,
-            &api_key,
-            &target.upstream_model,
+            circuit_breaker,
+            master_key,
+            adapter,
+            &target,
             &req,
         )
         .await
         {
-            Ok(r) => r,
-            Err(e) => {
-                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-                tracing::warn!(
-                    "Embedding target failed (connection error): provider={}, error={:?}",
-                    target.provider,
-                    e
+            Ok((parsed_response, status_code)) => {
+                let total_ms = started.elapsed().as_millis() as u64;
+                record_unary_usage(
+                    db_pool,
+                    &UnaryUsageArgs {
+                        request_id: RequestId::new(),
+                        api_key_id,
+                        provider_id: &target.provider,
+                        account_id: target.account_id,
+                        combo_id: target.combo_id,
+                        combo_target_id: target.combo_target_id,
+                        model_row_id: target.model_row_id,
+                        upstream_model_id: &target.upstream_model,
+                        prompt_tokens: Some(parsed_response.usage.prompt_tokens),
+                        completion_tokens: None,
+                        status_code,
+                        error_msg: None,
+                        total_ms,
+                        endpoint_kind: EndpointKind::Embedding,
+                    },
                 );
+
+                tracing::info!("Embedding request succeeded after {attempt} attempts");
+                return Ok(parsed_response);
+            }
+            Err(e) => {
                 last_error = Some(e);
-                continue;
             }
-        };
-
-        let status_code = response.status.as_u16();
-        let body_bytes = match response.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-                crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-                tracing::warn!(
-                    "Embedding target body read failed: provider={}, error={:?}",
-                    target.provider,
-                    err
-                );
-                last_error = Some(err);
-                continue;
-            }
-        };
-
-        if status_code >= 400 {
-            crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-            let err_text = String::from_utf8_lossy(&body_bytes);
-            tracing::warn!(
-                "Embedding target returned error status: provider={}, status={}, body={}",
-                target.provider,
-                status_code,
-                err_text
-            );
-            let err = map_upstream_status_error(
-                status_code,
-                target.provider.as_str(),
-                &target.upstream_model,
-                &err_text,
-            );
-            last_error = Some(err);
-            continue;
         }
-
-        // Parse upstream response into standard EmbeddingResponse.
-        let parsed_response: EmbeddingResponse = match serde_json::from_slice(&body_bytes) {
-            Ok(res) => res,
-            Err(e) => {
-                let err = CoreError::Parse(format!("failed to parse embedding response: {e}"));
-                last_error = Some(err);
-                continue;
-            }
-        };
-
-        if let Some(account_id) = target.account_id {
-            circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));
-        }
-
-        // Record usage row in openproxy-db.
-        let total_ms = started.elapsed().as_millis() as u64;
-        record_unary_usage(
-            db_pool,
-            &UnaryUsageArgs {
-                request_id: RequestId::new(),
-                api_key_id,
-                provider_id: &target.provider,
-                account_id: target.account_id,
-                combo_id: target.combo_id,
-                combo_target_id: target.combo_target_id,
-                model_row_id: target.model_row_id,
-                upstream_model_id: &target.upstream_model,
-                prompt_tokens: Some(parsed_response.usage.prompt_tokens),
-                completion_tokens: None,
-                status_code,
-                error_msg: None,
-                total_ms,
-                endpoint_kind: EndpointKind::Embedding,
-            },
-        );
-
-        tracing::info!("Embedding request succeeded after {attempt} attempts");
-        return Ok(parsed_response);
     }
 
     Err(last_error.unwrap_or_else(|| CoreError::Internal("No valid targets found".into())))

@@ -31,14 +31,31 @@ pub enum UpstreamError {
 
 impl fmt::Display for UpstreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((prefix, msg)) = self.error_details() {
+            write!(f, "upstream {prefix}: {msg}")
+        } else {
+            self.format_special(f)
+        }
+    }
+}
+
+impl UpstreamError {
+    fn error_details(&self) -> Option<(&'static str, &str)> {
+        match self {
+            UpstreamError::Connection(m) => Some(("connection error", m)),
+            UpstreamError::Tls(m) => Some(("TLS error", m)),
+            UpstreamError::Http(m) => Some(("HTTP error", m)),
+            UpstreamError::Decode(m) => Some(("decode error", m)),
+            UpstreamError::Invalid(m) => Some(("invalid request", m)),
+            _ => None,
+        }
+    }
+
+    fn format_special(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UpstreamError::Timeout(p) => write!(f, "upstream timeout in phase `{p}`"),
-            UpstreamError::Connection(m) => write!(f, "upstream connection error: {m}"),
-            UpstreamError::Tls(m) => write!(f, "upstream TLS error: {m}"),
             UpstreamError::Cancel => f.write_str("upstream call cancelled"),
-            UpstreamError::Http(m) => write!(f, "upstream HTTP error: {m}"),
-            UpstreamError::Decode(m) => write!(f, "upstream decode error: {m}"),
-            UpstreamError::Invalid(m) => write!(f, "upstream invalid request: {m}"),
+            _ => Ok(()),
         }
     }
 }

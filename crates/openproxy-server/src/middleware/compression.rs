@@ -18,6 +18,29 @@ use tower_http::compression::predicate::Predicate;
 pub struct TransportCompressionPredicate;
 
 impl TransportCompressionPredicate {
+    fn is_compressible_mime(content_type: &str) -> bool {
+        const COMPRESSIBLE_PREFIXES: &[&str] = &[
+            "application/json",
+            "text/json",
+            "text/html",
+            "text/css",
+            "text/javascript",
+            "application/javascript",
+            "application/x-javascript",
+            "text/plain",
+            "text/markdown",
+            "image/svg+xml",
+            "application/wasm",
+            "font/",
+            "application/font-",
+        ];
+
+        content_type.contains("+json")
+            || COMPRESSIBLE_PREFIXES
+                .iter()
+                .any(|prefix| content_type.starts_with(prefix))
+    }
+
     #[inline]
     fn should_compress_headers(headers: &HeaderMap) -> bool {
         // Do not double-compress if already encoded
@@ -40,25 +63,7 @@ impl TransportCompressionPredicate {
             return false;
         }
 
-        // Compressible MIME categories:
-        // - JSON API responses
-        // - Web assets (HTML, CSS, JS, WebAssembly)
-        // - Text documents (Plain, Markdown)
-        // - Vector graphics & font files
-        content_type.starts_with("application/json")
-            || content_type.starts_with("text/json")
-            || content_type.contains("+json")
-            || content_type.starts_with("text/html")
-            || content_type.starts_with("text/css")
-            || content_type.starts_with("text/javascript")
-            || content_type.starts_with("application/javascript")
-            || content_type.starts_with("application/x-javascript")
-            || content_type.starts_with("text/plain")
-            || content_type.starts_with("text/markdown")
-            || content_type.starts_with("image/svg+xml")
-            || content_type.starts_with("application/wasm")
-            || content_type.starts_with("font/")
-            || content_type.starts_with("application/font-")
+        Self::is_compressible_mime(&content_type)
     }
 }
 

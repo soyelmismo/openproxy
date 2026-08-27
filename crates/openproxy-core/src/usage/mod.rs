@@ -89,6 +89,49 @@ fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
     }
 }
 
+fn is_terminal_stage_event(event: &openproxy_types::usage::StageEvent) -> bool {
+    matches!(event.stage.as_str(), "completed" | "failed" | "cancelled")
+        || event.status_code.is_some_and(|s| s >= 400 && s != 0)
+        || event.error.is_some()
+}
+
+fn update_inflight_attempt(
+    item: &mut openproxy_types::usage::InflightAttempt,
+    event: &openproxy_types::usage::StageEvent,
+    rank: u8,
+    now_ms: u64,
+) {
+    item.stage = event.stage.clone();
+    item.stage_rank = rank;
+    item.updated_at_ms = now_ms;
+    item.elapsed_ms_at_event = event.elapsed_ms;
+    if let Some(c) = event.connect_ms {
+        item.connect_ms = Some(c);
+    }
+    if let Some(t) = event.ttft_ms {
+        item.ttft_ms = Some(t);
+    }
+    if event.status_code.is_some() {
+        item.status_code = event.status_code;
+    }
+    if event.error.is_some() {
+        item.error = event.error.clone();
+    }
+    if let Some(p) = &event.provider_id
+        && !p.is_empty()
+    {
+        item.provider_id = p.to_owned();
+    }
+    if let Some(m) = &event.upstream_model_id
+        && !m.is_empty()
+    {
+        item.upstream_model_id = m.to_owned();
+    }
+    if event.endpoint_kind.is_some() {
+        item.endpoint_kind = event.endpoint_kind;
+    }
+}
+
 fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
     let attempt_key = if event.trace_id.is_empty() {
         format!("{}:unknown", event.request_id)
@@ -101,13 +144,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let is_terminal = event.stage == "completed"
-        || event.stage == "failed"
-        || event.stage == "cancelled"
-        || event.status_code.is_some_and(|s| s >= 400 && s != 0)
-        || event.error.is_some();
-
-    if is_terminal {
+    if is_terminal_stage_event(&event) {
         INFLIGHT_REGISTRY.remove(&attempt_key);
     } else {
         let rank = stage_rank(&event.stage);
@@ -116,37 +153,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
 
         INFLIGHT_REGISTRY
             .entry(attempt_key.clone())
-            .and_modify(|item| {
-                item.stage = event.stage.clone();
-                item.stage_rank = rank;
-                item.updated_at_ms = now_ms;
-                item.elapsed_ms_at_event = event.elapsed_ms;
-                if let Some(c) = event.connect_ms {
-                    item.connect_ms = Some(c);
-                }
-                if let Some(t) = event.ttft_ms {
-                    item.ttft_ms = Some(t);
-                }
-                if status_opt.is_some() {
-                    item.status_code = status_opt;
-                }
-                if event.error.is_some() {
-                    item.error = event.error.clone();
-                }
-                if let Some(p) = &event.provider_id
-                    && !p.is_empty()
-                {
-                    item.provider_id = p.to_owned();
-                }
-                if let Some(m) = &event.upstream_model_id
-                    && !m.is_empty()
-                {
-                    item.upstream_model_id = m.to_owned();
-                }
-                if event.endpoint_kind.is_some() {
-                    item.endpoint_kind = event.endpoint_kind;
-                }
-            })
+            .and_modify(|item| update_inflight_attempt(item, &event, rank, now_ms))
             .or_insert_with(|| openproxy_types::usage::InflightAttempt {
                 attempt_key: attempt_key.clone(),
                 request_id: event.request_id.clone(),

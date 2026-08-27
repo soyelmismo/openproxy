@@ -101,24 +101,19 @@ pub struct ResolvedTimeouts {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum UpstreamPhase {
-    Dns,
-    Dial,
-    Tls,
-    Write,
-    Headers,
-    Body,
+    Dns = 0,
+    Dial = 1,
+    Tls = 2,
+    Write = 3,
+    Headers = 4,
+    Body = 5,
 }
 impl UpstreamPhase {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UpstreamPhase::Dns => "dns",
-            UpstreamPhase::Dial => "dial",
-            UpstreamPhase::Tls => "tls",
-            UpstreamPhase::Write => "write",
-            UpstreamPhase::Headers => "headers",
-            UpstreamPhase::Body => "body",
-        }
+    pub const fn as_str(&self) -> &'static str {
+        const NAMES: [&str; 6] = ["dns", "dial", "tls", "write", "headers", "body"];
+        NAMES[*self as usize]
     }
 }
 
@@ -137,18 +132,34 @@ pub enum UpstreamError {
 }
 impl std::fmt::Display for UpstreamError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UpstreamError::Timeout(p) => write!(f, "timeout in {p:?}"),
-            UpstreamError::Connection(m) => write!(f, "connection: {m}"),
-            UpstreamError::Tls(m) => write!(f, "tls: {m}"),
-            UpstreamError::Cancel => f.write_str("cancel"),
-            UpstreamError::Http(m) => write!(f, "http: {m}"),
-            UpstreamError::Decode(m) => write!(f, "decode: {m}"),
-            UpstreamError::Invalid(m) => write!(f, "invalid: {m}"),
+        if let Some((prefix, msg)) = self.prefixed_message() {
+            write!(f, "{prefix}: {msg}")
+        } else {
+            self.format_simple(f)
         }
     }
 }
 impl std::error::Error for UpstreamError {}
+
+impl UpstreamError {
+    fn prefixed_message(&self) -> Option<(&'static str, &str)> {
+        match self {
+            UpstreamError::Connection(m) => Some(("connection", m)),
+            UpstreamError::Tls(m) => Some(("tls", m)),
+            UpstreamError::Http(m) => Some(("http", m)),
+            UpstreamError::Decode(m) => Some(("decode", m)),
+            UpstreamError::Invalid(m) => Some(("invalid", m)),
+            _ => None,
+        }
+    }
+
+    fn format_simple(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpstreamError::Timeout(p) => write!(f, "timeout in {p:?}"),
+            UpstreamError::Cancel => f.write_str("cancel"),
+            _ => Ok(()),
+        }
+    }
 
 impl UpstreamError {
     pub fn to_core_error(&self, context: &str) -> openproxy_types::CoreError {

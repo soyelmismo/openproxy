@@ -15,8 +15,44 @@ pub const DEFAULT_SELECTION_WINDOW_SECS: u64 = 3600;
 /// documented default.
 pub const DEFAULT_LKGP_EXPLORATION_RATE: f64 = 0.1;
 
-pub fn execute_load_balancing(
+fn execute_round_robin(
     mut targets: Vec<ComboTarget>,
+    combo_id: ComboId,
+    rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+) -> Vec<ComboTarget> {
+    let n = targets.len();
+    let shift = {
+        let mut counters = rr_counters.lock();
+        let counter = counters.entry(combo_id).or_insert(0);
+        let s = (*counter % n as u64) as usize;
+        *counter = counter.wrapping_add(1);
+        s
+    };
+    targets.rotate_left(shift);
+    targets
+}
+
+fn execute_priority_strategy(
+    targets: Vec<ComboTarget>,
+    combo: &Combo,
+    selection_registry: &SelectionRegistry,
+) -> Vec<ComboTarget> {
+    let window_secs = combo
+        .selection_window_secs
+        .unwrap_or(DEFAULT_SELECTION_WINDOW_SECS);
+    match combo.priority_mode {
+        PriorityMode::Strict => targets,
+        PriorityMode::Lkgp => resolve_lkgp(targets, combo, selection_registry),
+        PriorityMode::Weighted => resolve_weighted(targets),
+        PriorityMode::LeastUsed => {
+            resolve_least_used(targets, window_secs, selection_registry)
+        }
+        PriorityMode::P2c => resolve_p2c(targets, window_secs, selection_registry),
+    }
+}
+
+pub fn execute_load_balancing(
+    targets: Vec<ComboTarget>,
     combo: &Combo,
     rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
     selection_registry: &SelectionRegistry,
@@ -26,57 +62,75 @@ pub fn execute_load_balancing(
     }
 
     match combo.strategy {
-        Strategy::RoundRobin => {
-            let n = targets.len();
-            let shift = {
-                let mut counters = rr_counters.lock();
-                let counter = counters.entry(combo.id).or_insert(0);
-                let s = (*counter % n as u64) as usize;
-                *counter = counter.wrapping_add(1);
-                s
-            };
-            targets.rotate_left(shift);
-            targets
-        }
+        Strategy::RoundRobin => execute_round_robin(targets, combo.id, rr_counters),
         Strategy::Shuffle => {
             let mut shuffled = targets;
             shuffled.shuffle(&mut rand::rng());
             shuffled
         }
-        Strategy::Priority => {
-            let window_secs = combo
-                .selection_window_secs
-                .unwrap_or(DEFAULT_SELECTION_WINDOW_SECS);
-            match combo.priority_mode {
-                PriorityMode::Strict => targets,
-                PriorityMode::Lkgp => resolve_lkgp(targets, combo, selection_registry),
-                PriorityMode::Weighted => resolve_weighted(targets),
-                PriorityMode::LeastUsed => {
-                    resolve_least_used(targets, window_secs, selection_registry)
-                }
-                PriorityMode::P2c => resolve_p2c(targets, window_secs, selection_registry),
-            }
-        }
+        Strategy::Priority => execute_priority_strategy(targets, combo, selection_registry),
+    }
+}
+
+fn sample_lkgp_exploration_target(
+    targets: &[ComboTarget],
+    window_secs: u64,
+    registry: &SelectionRegistry,
+    rng: &mut impl rand::Rng,
+) -> usize {
+    let untried_indices: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| registry.request_count_within(t.id, window_secs) == 0)
+        .map(|(i, _)| i)
+        .collect();
+
+    if !untried_indices.is_empty() {
+        let pick = rng.random_range(0..untried_indices.len());
+        return untried_indices[pick];
+    }
+
+    let cold_indices: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| registry.last_success_within(t.id, window_secs) == 0)
+        .map(|(i, _)| i)
+        .collect();
+
+    if !cold_indices.is_empty() {
+        let pick = rng.random_range(0..cold_indices.len());
+        cold_indices[pick]
+    } else {
+        rng.random_range(0..targets.len())
+    }
+}
+
+fn compare_lkgp_targets(
+    a: &ComboTarget,
+    b: &ComboTarget,
+    window_secs: u64,
+    registry: &SelectionRegistry,
+) -> std::cmp::Ordering {
+    let la = registry.last_success_within(a.id, window_secs);
+    let lb = registry.last_success_within(b.id, window_secs);
+
+    if la != lb {
+        return lb.cmp(&la);
+    }
+
+    let fa = registry.last_activity_within(a.id, window_secs);
+    let fb = registry.last_activity_within(b.id, window_secs);
+    let a_has_failed = fa > 0;
+    let b_has_failed = fb > 0;
+
+    match (a_has_failed, b_has_failed) {
+        (false, true) => std::cmp::Ordering::Less,
+        (true, false) => std::cmp::Ordering::Greater,
+        _ => a.priority_order.cmp(&b.priority_order),
     }
 }
 
 /// LKGP: prefer the target whose most recent success is the newest.
-/// Ties (and never-tried targets, which read back as `0`) are
-/// broken by `priority_order`. With probability
-/// `lkgp_exploration_rate` we pick a random target as the head.
-///
-/// **Priority-aware exploration**: the random pick is NOT uniform —
-/// it's weighted by `priority_order` so that targets the operator
-/// positioned first (lower `priority_order`) have a higher chance of
-/// being explored. This matches the user's intent: the first models
-/// in the combo are there because they're preferred for speed or
-/// intelligence, and the last ones are fallbacks that should get less
-/// traffic. A uniform random exploration would ignore this signal.
-///
-/// The weighting is inverse-linear: the target at position 0 gets
-/// weight `N`, position 1 gets `N-1`, ..., position N-1 gets `1`.
-/// This gives a smooth decay — the first target is N× more likely
-/// to be explored than the last, but the last still has a chance.
 fn resolve_lkgp(
     mut targets: Vec<ComboTarget>,
     combo: &Combo,
@@ -84,76 +138,37 @@ fn resolve_lkgp(
 ) -> Vec<ComboTarget> {
     let exploration_rate = combo
         .lkgp_exploration_rate
-        .unwrap_or(DEFAULT_LKGP_EXPLORATION_RATE);
-    let exploration_rate = exploration_rate.clamp(0.0, 1.0);
+        .unwrap_or(DEFAULT_LKGP_EXPLORATION_RATE)
+        .clamp(0.0, 1.0);
 
     let window_secs = combo
         .selection_window_secs
         .unwrap_or(DEFAULT_SELECTION_WINDOW_SECS);
 
-    // Exploration branch: with probability `exploration_rate`, sample
-    // a target to discover and refresh cold or untried providers.
     let mut rng = rand::rng();
     if exploration_rate > 0.0 && rng.random::<f64>() < exploration_rate && !targets.is_empty() {
-        // Prioritize exploring completely untried targets (request_count == 0 in window).
-        let untried_indices: Vec<usize> = targets
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| registry.request_count_within(t.id, window_secs) == 0)
-            .map(|(i, _)| i)
-            .collect();
-
-        let idx = if !untried_indices.is_empty() {
-            // Uniformly sample from untried targets to guarantee starved providers are tested
-            let pick = rng.random_range(0..untried_indices.len());
-            untried_indices[pick]
-        } else {
-            // All targets have been tried: find cold targets (no recent success in window)
-            let cold_indices: Vec<usize> = targets
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| registry.last_success_within(t.id, window_secs) == 0)
-                .map(|(i, _)| i)
-                .collect();
-
-            if !cold_indices.is_empty() {
-                let pick = rng.random_range(0..cold_indices.len());
-                cold_indices[pick]
-            } else {
-                rng.random_range(0..targets.len())
-            }
-        };
-
+        let idx = sample_lkgp_exploration_target(&targets, window_secs, registry, &mut rng);
         targets[..=idx].rotate_right(1);
         return targets;
     }
 
-    // Exploitation branch:
-    // 1. Working targets (sorted by `last_success` DESC).
-    // 2. Untried targets (no recent activity/attempts, sorted by `priority_order` ASC).
-    // 3. Degraded/failing targets (attempted and failed recently, sorted behind untried targets).
-    targets.sort_by(|a, b| {
-        let la = registry.last_success_within(a.id, window_secs);
-        let lb = registry.last_success_within(b.id, window_secs);
-
-        if la != lb {
-            return lb.cmp(&la);
-        }
-
-        // Neither has recent success (la == 0 && lb == 0):
-        // Prioritize unattempted targets over targets that have recently failed.
-        let fa = registry.last_activity_within(a.id, window_secs);
-        let fb = registry.last_activity_within(b.id, window_secs);
-        let a_has_failed = fa > 0;
-        let b_has_failed = fb > 0;
-
-        match (a_has_failed, b_has_failed) {
-            (false, true) => std::cmp::Ordering::Less,
-            (true, false) => std::cmp::Ordering::Greater,
-            _ => a.priority_order.cmp(&b.priority_order),
-        }
-    });
+    targets.sort_by(|a, b| compare_lkgp_targets(a, b, window_secs, registry));
     targets
+}
+
+fn pick_weighted_index(weights: &[u32], mut pick: u64) -> usize {
+    for (i, &w) in weights.iter().enumerate() {
+        let weight = u64::from(w);
+        if pick < weight {
+            return i;
+        }
+        pick -= weight;
+    }
+    0
+}
+
+fn target_effective_weight(t: &ComboTarget) -> u32 {
+    if t.weight <= 0 { 1 } else { t.weight as u32 }
 }
 
 /// Weighted random: each target's probability is proportional to
@@ -166,10 +181,7 @@ fn resolve_weighted(mut targets: Vec<ComboTarget>) -> Vec<ComboTarget> {
     if targets.is_empty() {
         return targets;
     }
-    let weights: Vec<u32> = targets
-        .iter()
-        .map(|t| if t.weight <= 0 { 1 } else { t.weight as u32 })
-        .collect();
+    let weights: Vec<u32> = targets.iter().map(target_effective_weight).collect();
     let total: u64 = weights.iter().map(|w| u64::from(*w)).sum();
     if total == 0 {
         // All-zero weights (shouldn't happen given the `<= 0` → `1`
@@ -177,16 +189,8 @@ fn resolve_weighted(mut targets: Vec<ComboTarget>) -> Vec<ComboTarget> {
         // priority order.
         return targets;
     }
-    let mut rng = rand::rng();
-    let mut pick = rng.random_range(0..total);
-    let mut idx = 0;
-    for (i, w) in weights.iter().enumerate() {
-        if pick < u64::from(*w) {
-            idx = i;
-            break;
-        }
-        pick -= u64::from(*w);
-    }
+    let pick = rand::rng().random_range(0..total);
+    let idx = pick_weighted_index(&weights, pick);
     targets[..=idx].rotate_right(1);
     targets
 }

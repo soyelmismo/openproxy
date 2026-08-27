@@ -38,6 +38,104 @@ pub type ImageTargets = UnaryTarget;
 pub type EmbeddingTarget = UnaryTarget;
 pub type EmbeddingTargets = UnaryTarget;
 
+fn is_target_allowed(key: Option<&crate::api_keys::ApiKey>, provider: &str, model: &str) -> bool {
+    let Some(key) = key else { return true };
+    key.is_provider_allowed(provider) && key.is_model_allowed(model, Some(provider))
+}
+
+fn resolve_single_target(
+    r: &rusqlite::Connection,
+    target: openproxy_types::ComboTarget,
+    req_model: &str,
+    combo_id: ComboId,
+    maybe_key: Option<&crate::api_keys::ApiKey>,
+) -> Option<UnaryTarget> {
+    let (provider, upstream_model, model_row_id) = if let Some(model_row_id) = target.model_row_id {
+        let model = models::get_by_row_id(r, model_row_id).ok().flatten()?;
+        (model.provider_id, model.model_id.as_str().to_string(), Some(model_row_id))
+    } else {
+        (target.provider_id.clone(), req_model.to_string(), None)
+    };
+
+    if !is_target_allowed(maybe_key, provider.as_str(), &upstream_model) {
+        return None;
+    }
+
+    Some(UnaryTarget {
+        provider,
+        account_id: target.account_id,
+        model_row_id,
+        combo_target_id: Some(target.id),
+        upstream_model,
+        combo_id: Some(combo_id),
+    })
+}
+
+fn resolve_combo_plan(
+    r: &rusqlite::Connection,
+    combo_id: ComboId,
+    targets: Vec<openproxy_types::ComboTarget>,
+    req_model: &str,
+    api_key_id: Option<ApiKeyId>,
+    endpoint_kind: EndpointKind,
+) -> Result<Vec<UnaryTarget>> {
+    let targets = routing::flatten_targets(r, targets)
+        .map_err(|e| CoreError::Validation(format!("flatten_targets failed: {e}")))?;
+    let targets = routing::expand_account_rotation(r, targets)
+        .map_err(|e| CoreError::Validation(format!("expand_account_rotation failed: {e}")))?;
+
+    let maybe_key = api_key_id.and_then(|key_id| crate::api_keys::get_by_id(r, key_id).ok().flatten());
+
+    let unary_targets: Vec<UnaryTarget> = targets
+        .into_iter()
+        .filter_map(|t| resolve_single_target(r, t, req_model, combo_id, maybe_key.as_ref()))
+        .collect();
+
+    if unary_targets.is_empty() {
+        return Err(CoreError::Validation(format!(
+            "combo has no permitted target suitable for {endpoint_kind}"
+        )));
+    }
+    Ok(unary_targets)
+}
+
+fn handle_model_not_found(
+    db_pool: &DbPool,
+    api_key_id: Option<ApiKeyId>,
+    model: &str,
+    hint: Option<&str>,
+    endpoint_kind: EndpointKind,
+    started: Instant,
+) -> Result<Vec<UnaryTarget>> {
+    record_unary_usage(
+        db_pool,
+        &UnaryUsageArgs {
+            request_id: RequestId::new(),
+            api_key_id,
+            provider_id: &ProviderId::new(""),
+            account_id: None,
+            combo_id: None,
+            combo_target_id: None,
+            model_row_id: None,
+            upstream_model_id: model,
+            prompt_tokens: None,
+            completion_tokens: None,
+            status_code: 404,
+            error_msg: Some("model_not_found".to_string()),
+            total_ms: started.elapsed().as_millis() as u64,
+            endpoint_kind,
+        },
+    );
+    let mut msg = format!("model not found: {model}");
+    if let Some(h) = hint {
+        let _ = write!(msg, " (hint: {h})");
+    }
+    Err(CoreError::ModelNotFound {
+        provider: "<unknown>".into(),
+        model: msg,
+    })
+}
+
 pub fn resolve_unary_targets(
     db_pool: &DbPool,
     routing_plan: RoutingPlan,
@@ -51,99 +149,10 @@ pub fn resolve_unary_targets(
             combo_id, targets, ..
         } => {
             let r = db_pool.reader();
-            let targets = routing::flatten_targets(&r, targets)
-                .map_err(|e| CoreError::Validation(format!("flatten_targets failed: {e}")))?;
-            let targets = routing::expand_account_rotation(&r, targets).map_err(|e| {
-                CoreError::Validation(format!("expand_account_rotation failed: {e}"))
-            })?;
-
-            let maybe_key = if let Some(key_id) = api_key_id {
-                crate::api_keys::get_by_id(&r, key_id).ok().flatten()
-            } else {
-                None
-            };
-
-            let mut unary_targets = Vec::with_capacity(targets.len());
-            for target in targets {
-                if let Some(model_row_id) = target.model_row_id {
-                    let (provider, upstream_model) = {
-                        let Ok(Some(model)) = models::get_by_row_id(&r, model_row_id) else {
-                            continue;
-                        };
-                        (model.provider_id, model.model_id.as_str().to_string())
-                    };
-                    if let Some(key) = &maybe_key {
-                        if !key.is_provider_allowed(provider.as_str()) {
-                            continue;
-                        }
-                        if !key.is_model_allowed(&upstream_model, Some(provider.as_str())) {
-                            continue;
-                        }
-                    }
-                    unary_targets.push(UnaryTarget {
-                        provider,
-                        account_id: target.account_id,
-                        model_row_id: Some(model_row_id),
-                        combo_target_id: Some(target.id),
-                        upstream_model,
-                        combo_id: Some(combo_id),
-                    });
-                } else {
-                    let provider = target.provider_id.clone();
-                    let upstream_model = req_model.to_string();
-                    if let Some(key) = &maybe_key {
-                        if !key.is_provider_allowed(provider.as_str()) {
-                            continue;
-                        }
-                        if !key.is_model_allowed(&upstream_model, Some(provider.as_str())) {
-                            continue;
-                        }
-                    }
-                    unary_targets.push(UnaryTarget {
-                        provider,
-                        account_id: target.account_id,
-                        model_row_id: None,
-                        combo_target_id: Some(target.id),
-                        upstream_model,
-                        combo_id: Some(combo_id),
-                    });
-                }
-            }
-            if unary_targets.is_empty() {
-                return Err(CoreError::Validation(format!(
-                    "combo has no permitted target suitable for {endpoint_kind}"
-                )));
-            }
-            Ok(unary_targets)
+            resolve_combo_plan(&r, combo_id, targets, req_model, api_key_id, endpoint_kind)
         }
         RoutingPlan::NotFound { model, hint } => {
-            record_unary_usage(
-                db_pool,
-                &UnaryUsageArgs {
-                    request_id: RequestId::new(),
-                    api_key_id,
-                    provider_id: &ProviderId::new(""),
-                    account_id: None,
-                    combo_id: None,
-                    combo_target_id: None,
-                    model_row_id: None,
-                    upstream_model_id: &model,
-                    prompt_tokens: None,
-                    completion_tokens: None,
-                    status_code: 404,
-                    error_msg: Some("model_not_found".to_string()),
-                    total_ms: started.elapsed().as_millis() as u64,
-                    endpoint_kind,
-                },
-            );
-            let mut msg = format!("model not found: {model}");
-            if let Some(h) = hint {
-                let _ = write!(msg, " (hint: {h})");
-            }
-            Err(CoreError::ModelNotFound {
-                provider: "<unknown>".into(),
-                model: msg,
-            })
+            handle_model_not_found(db_pool, api_key_id, &model, hint.as_deref(), endpoint_kind, started)
         }
     }
 }

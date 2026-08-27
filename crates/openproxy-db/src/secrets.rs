@@ -28,39 +28,35 @@ pub struct MasterKey {
     previous: Option<[u8; KEY_LEN]>,
 }
 
+fn decode_key_env_var(var_name: &str) -> Result<[u8; KEY_LEN]> {
+    let raw = std::env::var(var_name)
+        .map_err(|_| CoreError::Config(format!("env var {var_name} is not set")))?;
+    let decoded = BASE64
+        .decode(raw.trim())
+        .map_err(|e| CoreError::Config(format!("{var_name} is not valid base64: {e}")))?;
+    decoded.try_into().map_err(|v: Vec<u8>| {
+        CoreError::Config(format!(
+            "{var_name} must decode to {KEY_LEN} bytes, got {}",
+            v.len()
+        ))
+    })
+}
+
+fn load_optional_previous_key() -> Result<Option<[u8; KEY_LEN]>> {
+    if std::env::var_os(PREVIOUS_ENV_VAR).is_none() {
+        return Ok(None);
+    }
+    let bytes = decode_key_env_var(PREVIOUS_ENV_VAR)?;
+    tracing::info!("loaded OPENPROXY_MASTER_KEY_PREVIOUS for rotation fallback");
+    Ok(Some(bytes))
+}
+
 impl MasterKey {
     /// Load from `OPENPROXY_MASTER_KEY` env var, expected base64 of 32 bytes.
     /// Also loads `OPENPROXY_MASTER_KEY_PREVIOUS` if set (for key rotation).
     pub fn from_env() -> Result<Self> {
-        let raw = std::env::var(ENV_VAR)
-            .map_err(|_| CoreError::Config(format!("env var {ENV_VAR} is not set")))?;
-        let decoded = BASE64
-            .decode(raw.trim())
-            .map_err(|e| CoreError::Config(format!("{ENV_VAR} is not valid base64: {e}")))?;
-        let current: [u8; KEY_LEN] = decoded.try_into().map_err(|v: Vec<u8>| {
-            CoreError::Config(format!(
-                "{ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
-                v.len()
-            ))
-        })?;
-
-        // Load previous key for rotation (optional).
-        let previous = if let Ok(prev_raw) = std::env::var(PREVIOUS_ENV_VAR) {
-            let decoded = BASE64.decode(prev_raw.trim()).map_err(|e| {
-                CoreError::Config(format!("{PREVIOUS_ENV_VAR} is not valid base64: {e}"))
-            })?;
-            let bytes: [u8; KEY_LEN] = decoded.try_into().map_err(|v: Vec<u8>| {
-                CoreError::Config(format!(
-                    "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
-                    v.len()
-                ))
-            })?;
-            tracing::info!("loaded OPENPROXY_MASTER_KEY_PREVIOUS for rotation fallback");
-            Some(bytes)
-        } else {
-            None
-        };
-
+        let current = decode_key_env_var(ENV_VAR)?;
+        let previous = load_optional_previous_key()?;
         Ok(Self { current, previous })
     }
 

@@ -92,72 +92,58 @@ impl ProviderAdapter for OpenRouterAdapter {
             )
         })?;
 
-        let models: Vec<DiscoveredModel> = arr
-            .iter()
-            .filter_map(|raw| {
-                let mut entry: OpenRouterModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-                let id_string = entry.id.take()?;
-
-                // Derive capabilities from supported_parameters.
-                let caps = derive_capabilities(&entry);
-
-                // Derive model_type from id and modalities.
-                let model_type =
-                    infer_model_type_openrouter(&id_string, entry.architecture.as_ref());
-
-                // Extract modalities (skip empty arrays so they serialize
-                // as NULL rather than `[]`).
-                let input_modalities = entry.architecture.as_mut().and_then(|a| {
-                    if a.input_modalities.is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(&mut a.input_modalities))
-                    }
-                });
-                let output_modalities = entry.architecture.as_mut().and_then(|a| {
-                    if a.output_modalities.is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(&mut a.output_modalities))
-                    }
-                });
-
-                // Context: prefer top-level, fallback to top_provider.
-                let context_length = entry
-                    .context_length
-                    .or_else(|| entry.top_provider.as_ref().and_then(|t| t.context_length));
-
-                // Max output: from top_provider.
-                let max_output_tokens = entry
-                    .top_provider
-                    .as_ref()
-                    .and_then(|t| t.max_completion_tokens);
-
-                // Family: derive from canonical_slug or hugging_face_id or id.
-                let family = entry
-                    .canonical_slug
-                    .or(entry.hugging_face_id)
-                    .or_else(|| derive_family_from_id(&id_string));
-
-                let display_name = entry.name.or_else(|| Some(id_string.clone()));
-                Some(DiscoveredModel {
-                    model_id: ModelId::new(id_string),
-                    display_name,
-                    // OpenRouter is OpenAI-only on the wire for chat completions.
-                    target_format: TargetFormat::Openai,
-                    context_length,
-                    max_output_tokens,
-                    input_modalities,
-                    output_modalities,
-                    model_type: Some(model_type),
-                    family,
-                    capabilities: Some(caps),
-                })
-            })
-            .collect();
-
-        Ok(models)
+        Ok(arr.iter().filter_map(map_openrouter_entry).collect())
     }
+}
+
+fn extract_modalities(
+    arch: &mut Option<OpenRouterArchitecture>,
+) -> (Option<Vec<String>>, Option<Vec<String>>) {
+    let Some(a) = arch.as_mut() else {
+        return (None, None);
+    };
+    let input = (!a.input_modalities.is_empty()).then(|| std::mem::take(&mut a.input_modalities));
+    let output =
+        (!a.output_modalities.is_empty()).then(|| std::mem::take(&mut a.output_modalities));
+    (input, output)
+}
+
+fn derive_openrouter_family(entry: &OpenRouterModelEntry, id_string: &str) -> Option<String> {
+    entry
+        .canonical_slug
+        .clone()
+        .or_else(|| entry.hugging_face_id.clone())
+        .or_else(|| derive_family_from_id(id_string))
+}
+
+fn map_openrouter_entry(raw: &serde_json::Value) -> Option<DiscoveredModel> {
+    let mut entry: OpenRouterModelEntry = serde::Deserialize::deserialize(raw).ok()?;
+    let id_string = entry.id.take()?;
+    let caps = derive_capabilities(&entry);
+    let model_type = infer_model_type_openrouter(&id_string, entry.architecture.as_ref());
+    let family = derive_openrouter_family(&entry, &id_string);
+    let display_name = entry.name.or_else(|| Some(id_string.clone()));
+    let context_length = entry
+        .context_length
+        .or_else(|| entry.top_provider.as_ref().and_then(|t| t.context_length));
+    let max_output_tokens = entry
+        .top_provider
+        .as_ref()
+        .and_then(|t| t.max_completion_tokens);
+    let (input_modalities, output_modalities) = extract_modalities(&mut entry.architecture);
+
+    Some(DiscoveredModel {
+        model_id: ModelId::new(id_string),
+        display_name,
+        target_format: TargetFormat::Openai,
+        context_length,
+        max_output_tokens,
+        input_modalities,
+        output_modalities,
+        model_type: Some(model_type),
+        family,
+        capabilities: Some(caps),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,17 +181,11 @@ struct OpenRouterModelEntry {
     supported_parameters: Option<Vec<String>>,
 }
 
-/// Build a [`crate::capabilities::ModelCapabilities`] from an OpenRouter
-/// model entry's `supported_parameters` and `architecture`. Each field
-/// is set only when there's positive evidence; everything else stays
-/// `None` so the public `GET /v1/models` projection can distinguish
-/// "unknown" from "explicitly false".
-fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCapabilities {
-    use openproxy_types::ModelCapabilities;
-    let mut caps = ModelCapabilities::empty();
-
-    // vision: from architecture.input_modalities.
-    let has_image_input = entry.architecture.as_ref().is_some_and(|a| {
+fn derive_vision_capabilities(
+    caps: &mut openproxy_types::ModelCapabilities,
+    arch: Option<&OpenRouterArchitecture>,
+) {
+    let has_image_input = arch.is_some_and(|a| {
         a.input_modalities
             .iter()
             .any(|m| m == "image" || m == "video")
@@ -214,10 +194,12 @@ fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCa
         caps.vision = Some(true);
         caps.attachment = Some(true);
     }
+}
 
-    // tool_calling / reasoning / structured_output / temperature come
-    // straight from the supported_parameters list OpenRouter publishes.
-    let params = entry.supported_parameters.as_deref().unwrap_or(&[]);
+fn derive_params_capabilities(
+    caps: &mut openproxy_types::ModelCapabilities,
+    params: &[String],
+) {
     if params.iter().any(|p| p == "tools") {
         caps.tool_calling = Some(true);
     }
@@ -234,53 +216,64 @@ fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCa
     if params.iter().any(|p| p == "temperature") {
         caps.temperature = Some(true);
     }
+}
 
-    // If supported_parameters is missing entirely, fall back to the
-    // chat-model defaults so the model is still advertised as usable
-    // for tool_calling/structured_output/temperature. This matches
-    // the heuristic in `capabilities::infer_capabilities` for the
-    // no-evidence case.
+fn apply_params_fallback(caps: &mut openproxy_types::ModelCapabilities) {
+    caps.tool_calling.get_or_insert(true);
+    caps.structured_output.get_or_insert(true);
+    caps.temperature.get_or_insert(true);
+}
+
+/// Derive capabilities from the OpenRouter model entry. Every capability
+/// is set only when there's positive evidence; everything else stays
+/// `None` so the public `GET /v1/models` projection can distinguish
+/// "unknown" from "explicitly false".
+fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCapabilities {
+    use openproxy_types::ModelCapabilities;
+    let mut caps = ModelCapabilities::empty();
+    derive_vision_capabilities(&mut caps, entry.architecture.as_ref());
+
+    let params = entry.supported_parameters.as_deref().unwrap_or(&[]);
+    derive_params_capabilities(&mut caps, params);
+
     if params.is_empty() {
-        if caps.tool_calling.is_none() {
-            caps.tool_calling = Some(true);
-        }
-        if caps.structured_output.is_none() {
-            caps.structured_output = Some(true);
-        }
-        if caps.temperature.is_none() {
-            caps.temperature = Some(true);
-        }
+        apply_params_fallback(&mut caps);
     }
 
     caps
 }
 
+fn detect_non_text_modality(arch: &OpenRouterArchitecture) -> Option<&'static str> {
+    let has_text = arch.output_modalities.iter().any(|m| m == "text");
+    if has_text {
+        return None;
+    }
+    let has_image = arch.output_modalities.iter().any(|m| m == "image");
+    let has_audio = arch.output_modalities.iter().any(|m| m == "audio");
+    if has_image && !has_audio {
+        Some("image")
+    } else if has_audio && !has_image {
+        Some("audio")
+    } else {
+        None
+    }
+}
+
 /// Classify a model id into a coarse `model_type` string
 /// (`"chat" | "embedding" | "image" | "audio" | "rerank"`) using both
 /// the id's name and the `architecture.output_modalities` field.
-fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchitecture>) -> String {
+fn infer_model_type_openrouter(
+    id: &str,
+    architecture: Option<&OpenRouterArchitecture>,
+) -> String {
     let inferred = openproxy_types::capabilities::infer_model_type(id);
     if inferred != "chat" {
         return inferred.to_string();
     }
-
-    // Output modalities: only classify as image/audio if output is dedicated (does not include text)
-    if let Some(arch) = architecture {
-        let has_text = arch.output_modalities.iter().any(|m| m == "text");
-        let has_image = arch.output_modalities.iter().any(|m| m == "image");
-        let has_audio = arch.output_modalities.iter().any(|m| m == "audio");
-
-        if !has_text {
-            if has_image && !has_audio {
-                return "image".to_string();
-            }
-            if has_audio && !has_image {
-                return "audio".to_string();
-            }
-        }
+    match architecture.and_then(detect_non_text_modality) {
+        Some(kind) => kind.to_string(),
+        None => "chat".to_string(),
     }
-
-    "chat".to_string()
 }
 
 /// Best-effort extraction of a model "family" from a model id. The

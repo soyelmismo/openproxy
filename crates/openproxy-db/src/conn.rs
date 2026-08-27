@@ -88,17 +88,7 @@ impl DbPool {
             crate::error::map_db_error_ctx(format!("open {}", path.display())),
         )?;
 
-        // SQLite defaults to creating temporary files in /tmp or /var/tmp which might
-        // not be writable in some containers or could fill up quickly, causing
-        // "disk I/O error" during VACUUM or large GROUP BY operations.
-        if let Some(parent) = path.parent() {
-            let p_str = parent.to_string_lossy();
-            if !p_str.is_empty() {
-                // This PRAGMA is deprecated but still works and sets the global temp dir
-                let _ = writer.pragma_update(None, "temp_store_directory", &*p_str);
-            }
-        }
-
+        configure_temp_dir(&writer, path);
         configure_connection(&writer)?;
 
         // Readers: open multiple handles on the same file to avoid mutex contention
@@ -106,10 +96,7 @@ impl DbPool {
         let num_readers = 16;
         let mut readers = Vec::with_capacity(num_readers);
         for i in 0..num_readers {
-            let reader = Connection::open_with_flags(path, flags).map_err(
-                crate::error::map_db_error_ctx(format!("open reader {i} for {}", path.display())),
-            )?;
-            configure_connection(&reader)?;
+            let reader = open_and_configure_reader(path, flags, i)?;
             readers.push(Arc::new(Mutex::new(reader)));
         }
 
@@ -190,13 +177,20 @@ impl DbPool {
     }
 
     /// The filesystem path of the SQLite database file. Used by the
-    /// `POST /admin/api/debug/recover` endpoint to give the operator
-    /// the exact path for manual repair commands.
+    /// Number of reader handles in the pool.
+    pub fn reader_count(&self) -> usize {
+        self.readers.len()
+    }
+
+    /// Access the underlying path.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Close and reopen BOTH connections (writer + readers). This is
+    /// Reopen ALL connections (writer + readers) against the database file.
+    ///
+    /// This closes every existing `rusqlite::Connection` and opens a fresh
+    /// one in-place, preserving the same `DbPool` instance. This is
     /// necessary after a VACUUM that changes the DB file structure,
     /// or after an offline DB repair — the long-lived connections
     /// hold stale page caches that reference pages that no longer
@@ -213,33 +207,16 @@ impl DbPool {
     pub fn reopen(&self) -> Result<()> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
-        // Reopen the writer. We hold the writer lock (the caller
-        // must have acquired it) so this is safe.
-        // SAFETY: we're replacing the Connection inside the Mutex.
-        // The old Connection is dropped (closed) when we assign the
-        // new one. rusqlite::Connection::drop closes the SQLite
-        // handle.
         let new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
             crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
         )?;
         configure_connection(&new_writer)?;
 
-        // Reopen the readers. We need to take the reader locks too.
         let mut new_readers = Vec::with_capacity(self.readers.len());
         for i in 0..self.readers.len() {
-            let r = Connection::open_with_flags(&*self.path, flags).map_err(
-                crate::error::map_db_error_ctx(format!(
-                    "reopen reader {i} for {}",
-                    self.path.display()
-                )),
-            )?;
-            configure_connection(&r)?;
-            new_readers.push(r);
+            new_readers.push(reopen_and_configure_reader(&self.path, flags, i)?);
         }
 
-        // Replace the connections. The old connections are dropped
-        // (and their SQLite handles closed) when we assign the new
-        // ones.
         *self.writer.lock() = new_writer;
         for (i, new_r) in new_readers.into_iter().enumerate() {
             *self.readers[i].lock() = new_r;
@@ -263,24 +240,45 @@ impl DbPool {
     }
 }
 
+fn configure_temp_dir(conn: &Connection, path: &Path) {
+    if let Some(parent) = path.parent() {
+        let p_str = parent.to_string_lossy();
+        if !p_str.is_empty() {
+            let _ = conn.pragma_update(None, "temp_store_directory", &*p_str);
+        }
+    }
+}
+
+fn open_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Result<Connection> {
+    let reader = Connection::open_with_flags(path, flags).map_err(
+        crate::error::map_db_error_ctx(format!("open reader {idx} for {}", path.display())),
+    )?;
+    configure_connection(&reader)?;
+    Ok(reader)
+}
+
+fn reopen_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Result<Connection> {
+    let r = Connection::open_with_flags(path, flags).map_err(
+        crate::error::map_db_error_ctx(format!("reopen reader {idx} for {}", path.display())),
+    )?;
+    configure_connection(&r)?;
+    Ok(r)
+}
+
 /// Apply the standard pragmas required by spec §8/§9.
 fn configure_connection(conn: &Connection) -> Result<()> {
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(crate::error::map_db_error)?;
-    conn.pragma_update(None, "busy_timeout", 5000)
-        .map_err(crate::error::map_db_error)?;
-    conn.pragma_update(None, "synchronous", "NORMAL")
-        .map_err(crate::error::map_db_error)?;
-    conn.pragma_update(None, "wal_autocheckpoint", 1000)
-        .map_err(crate::error::map_db_error)?;
-    conn.pragma_update(None, "mmap_size", 8 * 1024 * 1024)
-        .map_err(crate::error::map_db_error)?;
-    conn.pragma_update(None, "cache_size", -2000)
-        .map_err(crate::error::map_db_error)?;
-    conn.pragma_update(None, "temp_store", "MEMORY")
-        .map_err(crate::error::map_db_error)?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON; \
+         PRAGMA busy_timeout = 5000; \
+         PRAGMA synchronous = NORMAL; \
+         PRAGMA wal_autocheckpoint = 1000; \
+         PRAGMA mmap_size = 8388608; \
+         PRAGMA cache_size = -2000; \
+         PRAGMA temp_store = MEMORY;",
+    )
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 

@@ -60,31 +60,40 @@ pub fn resolve_image_targets(
     Ok(consolidate_image_targets(targets))
 }
 
+fn merge_horde_target(existing: &mut ImageTargets, target: &ImageTargets) {
+    let already_present = existing
+        .upstream_model
+        .split(',')
+        .map(str::trim)
+        .any(|m| m == target.upstream_model.as_str());
+
+    if !already_present {
+        if existing.upstream_model.is_empty() {
+            existing.upstream_model = target.upstream_model.clone();
+        } else {
+            existing.upstream_model.push(',');
+            existing.upstream_model.push_str(&target.upstream_model);
+        }
+    }
+}
+
 pub fn consolidate_image_targets(targets: Vec<ImageTargets>) -> Vec<ImageTargets> {
     let mut consolidated: Vec<ImageTargets> = Vec::new();
     for target in targets {
-        if target.provider.as_str() == "horde"
-            && let Some(existing) = consolidated
+        let is_horde = target.provider.as_str() == "horde";
+        let existing = if is_horde {
+            consolidated
                 .iter_mut()
                 .find(|t| t.provider.as_str() == "horde" && t.account_id == target.account_id)
-        {
-            let already_present = existing
-                .upstream_model
-                .split(',')
-                .map(str::trim)
-                .any(|m| m == target.upstream_model.as_str());
+        } else {
+            None
+        };
 
-            if !already_present {
-                if existing.upstream_model.is_empty() {
-                    existing.upstream_model = target.upstream_model;
-                } else {
-                    existing.upstream_model.push(',');
-                    existing.upstream_model.push_str(&target.upstream_model);
-                }
-            }
-            continue;
+        if let Some(existing) = existing {
+            merge_horde_target(existing, &target);
+        } else {
+            consolidated.push(target);
         }
-        consolidated.push(target);
     }
     consolidated
 }
@@ -502,7 +511,46 @@ fn write_png_chunk(buf: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) {
 /// Extract an inpainting mask from the transparent alpha channel of a PNG image.
 /// Returns `Some(mask_png_bytes)` if transparency was found, or `None` if the image
 /// has no transparency, is opaque, or is not a valid 8-bit RGBA/GA PNG.
-pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
+struct PngHeader {
+    width: u32,
+    height: u32,
+    color_type: u8,
+    idat_data: Vec<u8>,
+}
+
+fn is_valid_ihdr_format(
+    bit_depth: u8,
+    compression: u8,
+    filter: u8,
+    interlace: u8,
+    color_type: u8,
+) -> bool {
+    bit_depth == 8
+        && compression == 0
+        && filter == 0
+        && interlace == 0
+        && matches!(color_type, 4 | 6)
+}
+
+fn parse_ihdr_chunk(data: &[u8]) -> Option<(u32, u32, u8)> {
+    if data.len() < 13 {
+        return None;
+    }
+    let width = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    let height = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let bit_depth = data[8];
+    let color_type = data[9];
+    let compression = data[10];
+    let filter = data[11];
+    let interlace = data[12];
+
+    if !is_valid_ihdr_format(bit_depth, compression, filter, interlace, color_type) {
+        return None;
+    }
+    Some((width, height, color_type))
+}
+
+fn parse_png_chunks(image_bytes: &[u8]) -> Option<PngHeader> {
     const PNG_SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     if !image_bytes.starts_with(&PNG_SIG) {
         return None;
@@ -529,26 +577,10 @@ pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
         }
 
         if chunk_type == b"IHDR" {
-            if chunk_len < 13 {
-                return None;
-            }
-            let data = &image_bytes[data_start..data_end];
-            width = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-            height = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-            let bit_depth = data[8];
-            color_type = data[9];
-            let compression = data[10];
-            let filter = data[11];
-            let interlace = data[12];
-
-            if bit_depth != 8
-                || compression != 0
-                || filter != 0
-                || interlace != 0
-                || (color_type != 6 && color_type != 4)
-            {
-                return None;
-            }
+            let (w, h, ct) = parse_ihdr_chunk(&image_bytes[data_start..data_end])?;
+            width = w;
+            height = h;
+            color_type = ct;
         } else if chunk_type == b"IDAT" {
             idat_data.extend_from_slice(&image_bytes[data_start..data_end]);
         } else if chunk_type == b"IEND" {
@@ -562,7 +594,43 @@ pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
-    let decompressed = miniz_oxide::inflate::decompress_to_vec_zlib(&idat_data).ok()?;
+    Some(PngHeader {
+        width,
+        height,
+        color_type,
+        idat_data,
+    })
+}
+
+fn unfilter_png_scanline(
+    filter_type: u8,
+    raw_data: &[u8],
+    prev_row: &[u8],
+    curr_row: &mut [u8],
+    bpp: usize,
+) {
+    for (i, &x) in raw_data.iter().enumerate() {
+        let a = if i >= bpp { curr_row[i - bpp] } else { 0 };
+        let b = prev_row[i];
+        let c = if i >= bpp { prev_row[i - bpp] } else { 0 };
+
+        curr_row[i] = match filter_type {
+            0 => x,
+            1 => x.wrapping_add(a),
+            2 => x.wrapping_add(b),
+            3 => x.wrapping_add(u16::midpoint(u16::from(a), u16::from(b)) as u8),
+            4 => x.wrapping_add(paeth_predictor(a, b, c)),
+            _ => x,
+        };
+    }
+}
+
+fn extract_mask_scanlines(
+    decompressed: &[u8],
+    width: u32,
+    height: u32,
+    color_type: u8,
+) -> Option<Vec<u8>> {
     let bpp: usize = if color_type == 6 { 4 } else { 2 };
     let line_len = (width as usize).checked_mul(bpp)?;
     let stride = 1 + line_len;
@@ -580,23 +648,9 @@ pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
     for y in 0..height as usize {
         let filter_type = decompressed[y * stride];
         let raw_data = &decompressed[y * stride + 1..(y + 1) * stride];
+        unfilter_png_scanline(filter_type, raw_data, &prev_row, &mut curr_row, bpp);
 
-        for (i, &x) in raw_data.iter().enumerate() {
-            let a = if i >= bpp { curr_row[i - bpp] } else { 0 };
-            let b = prev_row[i];
-            let c = if i >= bpp { prev_row[i - bpp] } else { 0 };
-
-            curr_row[i] = match filter_type {
-                0 => x,
-                1 => x.wrapping_add(a),
-                2 => x.wrapping_add(b),
-                3 => x.wrapping_add(u16::midpoint(u16::from(a), u16::from(b)) as u8),
-                4 => x.wrapping_add(paeth_predictor(a, b, c)),
-                _ => x,
-            };
-        }
-
-        mask_scanlines.push(0); // None filter for mask row
+        mask_scanlines.push(0);
         for px in 0..width as usize {
             let alpha = if color_type == 6 {
                 curr_row[px * 4 + 3]
@@ -611,15 +665,19 @@ pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
                 mask_scanlines.push(0);
             }
         }
-
         prev_row.copy_from_slice(&curr_row);
     }
 
-    if !has_transparency {
-        return None;
+    if has_transparency {
+        Some(mask_scanlines)
+    } else {
+        None
     }
+}
 
-    let compressed_mask = miniz_oxide::deflate::compress_to_vec_zlib(&mask_scanlines, 6);
+fn encode_grayscale_png(width: u32, height: u32, mask_scanlines: &[u8]) -> Vec<u8> {
+    const PNG_SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let compressed_mask = miniz_oxide::deflate::compress_to_vec_zlib(mask_scanlines, 6);
     let mut out = Vec::with_capacity(33 + compressed_mask.len() + 12);
     out.extend_from_slice(&PNG_SIG);
 
@@ -634,8 +692,22 @@ pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
     write_png_chunk(&mut out, *b"IHDR", &ihdr);
     write_png_chunk(&mut out, *b"IDAT", &compressed_mask);
     write_png_chunk(&mut out, *b"IEND", &[]);
+    out
+}
 
-    Some(out)
+/// Extract an inpainting mask from the transparent alpha channel of a PNG image.
+/// Returns `Some(mask_png_bytes)` if transparency was found, or `None` if the image
+/// has no transparency, is opaque, or is not a valid 8-bit RGBA/GA PNG.
+pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
+    let header = parse_png_chunks(image_bytes)?;
+    let decompressed = miniz_oxide::inflate::decompress_to_vec_zlib(&header.idat_data).ok()?;
+    let mask_scanlines =
+        extract_mask_scanlines(&decompressed, header.width, header.height, header.color_type)?;
+    Some(encode_grayscale_png(
+        header.width,
+        header.height,
+        &mask_scanlines,
+    ))
 }
 
 async fn dispatch_horde_img2img(

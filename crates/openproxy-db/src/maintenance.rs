@@ -42,119 +42,65 @@ pub fn list_user_tables(conn: &Connection) -> Result<Vec<String>> {
         .collect()
 }
 
-/// Known database tables in OpenProxy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DbTable {
-    Providers,
-    Accounts,
-    Models,
-    Combos,
-    ComboTargets,
-    Usage,
-    ApiKeys,
-    TargetCooldowns,
-    AppConfig,
-    OauthDeviceTickets,
-    ModelCapabilitiesSync,
-    Notifications,
-    FreeProxies,
-    SmartWarmupHistory,
-    ProxySources,
-    ProviderProxyCooldowns,
-    SchemaMigrations,
+macro_rules! define_db_tables {
+    ($(($variant:ident, $str:literal, $count_sql:literal)),* $(,)?) => {
+        /// Known database tables in OpenProxy.
+        #[repr(u8)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum DbTable {
+            $($variant),*
+        }
+
+        const TABLE_STRINGS: &[&str] = &[
+            $($str),*
+        ];
+
+        const COUNT_SQLS: &[&str] = &[
+            $($count_sql),*
+        ];
+
+        impl DbTable {
+            pub const ALL: &'static [DbTable] = &[
+                $(DbTable::$variant),*
+            ];
+
+            #[inline]
+            pub const fn as_str(&self) -> &'static str {
+                TABLE_STRINGS[*self as usize]
+            }
+
+            #[inline]
+            pub fn parse(s: &str) -> Option<Self> {
+                Self::ALL.iter().copied().find(|t| t.as_str() == s)
+            }
+
+            #[inline]
+            pub const fn count_sql(&self) -> &'static str {
+                COUNT_SQLS[*self as usize]
+            }
+        }
+    };
 }
 
-impl DbTable {
-    pub const ALL: &'static [DbTable] = &[
-        DbTable::Providers,
-        DbTable::Accounts,
-        DbTable::Models,
-        DbTable::Combos,
-        DbTable::ComboTargets,
-        DbTable::Usage,
-        DbTable::ApiKeys,
-        DbTable::TargetCooldowns,
-        DbTable::AppConfig,
-        DbTable::OauthDeviceTickets,
-        DbTable::ModelCapabilitiesSync,
-        DbTable::Notifications,
-        DbTable::FreeProxies,
-        DbTable::SmartWarmupHistory,
-        DbTable::ProxySources,
-        DbTable::ProviderProxyCooldowns,
-        DbTable::SchemaMigrations,
-    ];
-
-    #[inline]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            DbTable::Providers => "providers",
-            DbTable::Accounts => "accounts",
-            DbTable::Models => "models",
-            DbTable::Combos => "combos",
-            DbTable::ComboTargets => "combo_targets",
-            DbTable::Usage => "usage",
-            DbTable::ApiKeys => "api_keys",
-            DbTable::TargetCooldowns => "target_cooldowns",
-            DbTable::AppConfig => "app_config",
-            DbTable::OauthDeviceTickets => "oauth_device_tickets",
-            DbTable::ModelCapabilitiesSync => "model_capabilities_sync",
-            DbTable::Notifications => "notifications",
-            DbTable::FreeProxies => "free_proxies",
-            DbTable::SmartWarmupHistory => "smart_warmup_history",
-            DbTable::ProxySources => "proxy_sources",
-            DbTable::ProviderProxyCooldowns => "provider_proxy_cooldowns",
-            DbTable::SchemaMigrations => "schema_migrations",
-        }
-    }
-
-    #[inline]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "providers" => Some(DbTable::Providers),
-            "accounts" => Some(DbTable::Accounts),
-            "models" => Some(DbTable::Models),
-            "combos" => Some(DbTable::Combos),
-            "combo_targets" => Some(DbTable::ComboTargets),
-            "usage" => Some(DbTable::Usage),
-            "api_keys" => Some(DbTable::ApiKeys),
-            "target_cooldowns" => Some(DbTable::TargetCooldowns),
-            "app_config" => Some(DbTable::AppConfig),
-            "oauth_device_tickets" => Some(DbTable::OauthDeviceTickets),
-            "model_capabilities_sync" => Some(DbTable::ModelCapabilitiesSync),
-            "notifications" => Some(DbTable::Notifications),
-            "free_proxies" => Some(DbTable::FreeProxies),
-            "smart_warmup_history" => Some(DbTable::SmartWarmupHistory),
-            "proxy_sources" => Some(DbTable::ProxySources),
-            "provider_proxy_cooldowns" => Some(DbTable::ProviderProxyCooldowns),
-            "schema_migrations" => Some(DbTable::SchemaMigrations),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub const fn count_sql(&self) -> &'static str {
-        match self {
-            DbTable::Providers => "SELECT COUNT(*) FROM \"providers\"",
-            DbTable::Accounts => "SELECT COUNT(*) FROM \"accounts\"",
-            DbTable::Models => "SELECT COUNT(*) FROM \"models\"",
-            DbTable::Combos => "SELECT COUNT(*) FROM \"combos\"",
-            DbTable::ComboTargets => "SELECT COUNT(*) FROM \"combo_targets\"",
-            DbTable::Usage => "SELECT COUNT(*) FROM \"usage\"",
-            DbTable::ApiKeys => "SELECT COUNT(*) FROM \"api_keys\"",
-            DbTable::TargetCooldowns => "SELECT COUNT(*) FROM \"target_cooldowns\"",
-            DbTable::AppConfig => "SELECT COUNT(*) FROM \"app_config\"",
-            DbTable::OauthDeviceTickets => "SELECT COUNT(*) FROM \"oauth_device_tickets\"",
-            DbTable::ModelCapabilitiesSync => "SELECT COUNT(*) FROM \"model_capabilities_sync\"",
-            DbTable::Notifications => "SELECT COUNT(*) FROM \"notifications\"",
-            DbTable::FreeProxies => "SELECT COUNT(*) FROM \"free_proxies\"",
-            DbTable::SmartWarmupHistory => "SELECT COUNT(*) FROM \"smart_warmup_history\"",
-            DbTable::ProxySources => "SELECT COUNT(*) FROM \"proxy_sources\"",
-            DbTable::ProviderProxyCooldowns => "SELECT COUNT(*) FROM \"provider_proxy_cooldowns\"",
-            DbTable::SchemaMigrations => "SELECT COUNT(*) FROM \"schema_migrations\"",
-        }
-    }
-}
+define_db_tables!(
+    (Providers, "providers", "SELECT COUNT(*) FROM \"providers\""),
+    (Accounts, "accounts", "SELECT COUNT(*) FROM \"accounts\""),
+    (Models, "models", "SELECT COUNT(*) FROM \"models\""),
+    (Combos, "combos", "SELECT COUNT(*) FROM \"combos\""),
+    (ComboTargets, "combo_targets", "SELECT COUNT(*) FROM \"combo_targets\""),
+    (Usage, "usage", "SELECT COUNT(*) FROM \"usage\""),
+    (ApiKeys, "api_keys", "SELECT COUNT(*) FROM \"api_keys\""),
+    (TargetCooldowns, "target_cooldowns", "SELECT COUNT(*) FROM \"target_cooldowns\""),
+    (AppConfig, "app_config", "SELECT COUNT(*) FROM \"app_config\""),
+    (OauthDeviceTickets, "oauth_device_tickets", "SELECT COUNT(*) FROM \"oauth_device_tickets\""),
+    (ModelCapabilitiesSync, "model_capabilities_sync", "SELECT COUNT(*) FROM \"model_capabilities_sync\""),
+    (Notifications, "notifications", "SELECT COUNT(*) FROM \"notifications\""),
+    (FreeProxies, "free_proxies", "SELECT COUNT(*) FROM \"free_proxies\""),
+    (SmartWarmupHistory, "smart_warmup_history", "SELECT COUNT(*) FROM \"smart_warmup_history\""),
+    (ProxySources, "proxy_sources", "SELECT COUNT(*) FROM \"proxy_sources\""),
+    (ProviderProxyCooldowns, "provider_proxy_cooldowns", "SELECT COUNT(*) FROM \"provider_proxy_cooldowns\""),
+    (SchemaMigrations, "schema_migrations", "SELECT COUNT(*) FROM \"schema_migrations\""),
+);
 
 impl std::fmt::Display for DbTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

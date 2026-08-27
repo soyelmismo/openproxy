@@ -147,30 +147,61 @@ impl MiniMaxAdapter {
         api_key: &str,
         url: &str,
     ) -> Result<openproxy_types::AccountQuota> {
-        let mut req = UpstreamRequest::get(url);
-        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
-            req.headers.insert(http::header::AUTHORIZATION, v);
-        }
-        let cancel = CancellationToken::new();
-        let response = upstream
-            .call(req, TimeoutProfile::Quota, cancel)
-            .await
-            .map_err(|e| e.to_core_error(url))?;
-
-        if !response.status.is_success() {
-            return Err(CoreError::UpstreamConnection(format!(
-                "{}: status {}",
-                url,
-                response.status.as_u16()
-            )));
-        }
-
-        let body = response.collect().await.map_err(|e| e.to_core_error(url))?;
-
+        let body = send_minimax_quota_request(upstream, api_key, url).await?;
         let json: serde_json::Value =
             serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
         parse_minimax_quota(&json, url)
     }
+}
+
+async fn send_minimax_quota_request(
+    upstream: &Arc<UpstreamClient>,
+    api_key: &str,
+    url: &str,
+) -> Result<bytes::Bytes> {
+    let mut req = UpstreamRequest::get(url);
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    let cancel = CancellationToken::new();
+    let response = upstream
+        .call(req, TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| e.to_core_error(url))?;
+
+    if !response.status.is_success() {
+        return Err(CoreError::UpstreamConnection(format!(
+            "{url}: status {}",
+            response.status.as_u16()
+        )));
+    }
+
+    response.collect().await.map_err(|e| e.to_core_error(url))
+}
+
+fn is_preferred_minimax_model(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "general" || lower == "coding-plan"
+}
+
+fn is_secondary_minimax_model(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with("minimax-m")
+}
+
+fn select_minimax_quota_entry(entries: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    entries
+        .iter()
+        .find(|e| {
+            let name = e.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
+            is_preferred_minimax_model(name)
+        })
+        .or_else(|| {
+            entries.iter().find(|e| {
+                let name = e.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
+                is_secondary_minimax_model(name)
+            })
+        })
+        .or_else(|| entries.first())
 }
 
 fn parse_minimax_quota(
@@ -191,21 +222,8 @@ fn parse_minimax_quota(
         return Err(CoreError::Parse(format!("{url}: empty model_remains")));
     }
 
-    let target = entries
-        .iter()
-        .find(|e| {
-            let name = e.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
-            let lower = name.to_ascii_lowercase();
-            lower == "general" || lower == "coding-plan"
-        })
-        .or_else(|| {
-            entries.iter().find(|e| {
-                let name = e.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
-                name.to_ascii_lowercase().starts_with("minimax-m")
-            })
-        })
-        .or_else(|| entries.first())
-        .expect("non-empty checked above");
+    let target = select_minimax_quota_entry(entries)
+        .ok_or_else(|| CoreError::Parse(format!("{url}: no valid model entry")))?;
 
     let (session_used, session_limit) = extract_used_limit(
         target,

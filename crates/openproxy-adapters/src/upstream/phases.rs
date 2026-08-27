@@ -21,52 +21,49 @@ use std::time::{Duration, Instant};
 /// `UpstreamPhase::Body` for the body stream. This was the existing
 /// behavior of the soft-accumulation version, kept verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum UpstreamPhase {
     /// Resolving the hostname to one or more socket addresses.
-    Dns,
+    Dns = 0,
     /// Establishing the TCP connection to a resolved address.
-    Dial,
+    Dial = 1,
     /// Performing the TLS handshake (HTTPS only).
-    Tls,
+    Tls = 2,
     /// Writing the request line, headers, and (for non-streaming bodies)
     /// the full request body to the wire.
-    Write,
+    Write = 3,
     /// Waiting for the response status line and headers from the server.
-    Headers,
+    Headers = 4,
     /// Reading the response body, chunk-by-chunk. Each chunk is bounded
     /// by `body_chunk_ms`; the total body is bounded by `total_ms`.
-    Body,
+    Body = 5,
     /// The total request deadline (`total_ms`) fired while reading the
     /// body. This is distinct from `Body` (which means the per-chunk
     /// gap / `idle_chunk_ms` fired). The pipeline maps `Body` →
     /// `idle_chunk` and `Total` → `total` so the error message
     /// correctly identifies which timer killed the request.
-    Total,
+    Total = 6,
 }
 
 impl UpstreamPhase {
     /// Stable name used in tracing events and log lines.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UpstreamPhase::Dns => "dns",
-            UpstreamPhase::Dial => "dial",
-            UpstreamPhase::Tls => "tls",
-            UpstreamPhase::Write => "write",
-            UpstreamPhase::Headers => "headers",
-            UpstreamPhase::Body => "body",
-            UpstreamPhase::Total => "total",
-        }
+    pub const fn as_str(&self) -> &'static str {
+        const NAMES: [&str; 7] = ["dns", "dial", "tls", "write", "headers", "body", "total"];
+        NAMES[*self as usize]
     }
 
     /// Corresponding configuration key in timeouts config.
-    pub fn config_hint(&self) -> &'static str {
-        match self {
-            UpstreamPhase::Dns | UpstreamPhase::Dial | UpstreamPhase::Tls => "connect_ms",
-            UpstreamPhase::Write => "request_send_ms",
-            UpstreamPhase::Headers => "ttft_ms",
-            UpstreamPhase::Body => "idle_chunk_ms",
-            UpstreamPhase::Total => "total_ms",
-        }
+    pub const fn config_hint(&self) -> &'static str {
+        const HINTS: [&str; 7] = [
+            "connect_ms",
+            "connect_ms",
+            "connect_ms",
+            "request_send_ms",
+            "ttft_ms",
+            "idle_chunk_ms",
+            "total_ms",
+        ];
+        HINTS[*self as usize]
     }
 }
 
@@ -224,14 +221,15 @@ impl ResolvedPhaseDeadlines {
     /// The deadline for a given phase. `UpstreamPhase::Body` is special-cased
     /// to the per-chunk deadline; the total ceiling is checked separately.
     pub fn deadline_for(&self, phase: UpstreamPhase) -> Instant {
-        match phase {
-            UpstreamPhase::Dns => self.dns_deadline,
-            UpstreamPhase::Dial => self.dial_deadline,
-            UpstreamPhase::Tls => self.tls_deadline,
-            UpstreamPhase::Write => self.write_deadline,
-            UpstreamPhase::Headers => self.headers_deadline,
-            UpstreamPhase::Body => self.body_chunk_deadline,
-            UpstreamPhase::Total => self.total_deadline,
-        }
+        let deadlines = [
+            self.dns_deadline,
+            self.dial_deadline,
+            self.tls_deadline,
+            self.write_deadline,
+            self.headers_deadline,
+            self.body_chunk_deadline,
+            self.total_deadline,
+        ];
+        deadlines[phase as usize]
     }
 }

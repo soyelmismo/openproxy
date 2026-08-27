@@ -33,6 +33,20 @@ pub fn classify_opencode_target_format(id: &str) -> TargetFormat {
     }
 }
 
+fn append_format_auth_headers(
+    headers: &mut Vec<(String, String)>,
+    adapter: &impl ProviderAdapter,
+    api_key: &str,
+    target_format: TargetFormat,
+) {
+    if target_format == TargetFormat::Anthropic {
+        headers.push(("x-api-key".into(), api_key.to_string()));
+        headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
+    } else if let Some(auth) = adapter.build_auth_header(api_key) {
+        headers.push(auth);
+    }
+}
+
 /// Build headers for OpenCode requests (Anthropic vs OpenAI/Gemini branching).
 pub fn build_opencode_headers(
     adapter: &impl ProviderAdapter,
@@ -43,21 +57,7 @@ pub fn build_opencode_headers(
 
     // Only add auth headers if we have an API key.
     if !api_key.is_empty() {
-        match target_format {
-            TargetFormat::Anthropic => {
-                headers.push(("x-api-key".into(), api_key.to_string()));
-                headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
-            }
-            TargetFormat::Openai
-            | TargetFormat::Gemini
-            | TargetFormat::Atomesus
-            | TargetFormat::Fx => {
-                if let Some(auth) = adapter.build_auth_header(api_key) {
-                    headers.push(auth);
-                }
-            }
-            TargetFormat::Responses => unreachable!("Responses format handled natively"),
-        }
+        append_format_auth_headers(&mut headers, adapter, api_key, target_format);
     }
 
     headers.extend(OpenCodeSpoofer.headers());

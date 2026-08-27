@@ -303,18 +303,10 @@ fn map_row_err(e: rusqlite::Error, column: &'static str) -> CoreError {
 ///
 /// `avg_ttft_savings_ms` is always `None` in the MVP — we do not yet persist
 /// the per-target first-byte timings required to compute it.
-pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
-    let w = BuiltWhere::from_filter(f);
-
-    // Build the WHERE clause and append the `race_total > 1` predicate that
-    // defines "this row is part of a race" (rows with `race_total = 1` are
-    // sequential, non-race rows and are excluded).
+fn build_race_where_clause(where_sql: &str) -> String {
     let mut clauses: Vec<String> = Vec::new();
-    if !w.sql.is_empty() {
-        // Qualify all column references with `usage.` prefix to avoid
-        // "ambiguous column name" errors when JOINing with combo_targets
-        // (both tables have provider_id, combo_target_id, etc.).
-        let bare = w.sql.trim_start_matches("WHERE ");
+    if !where_sql.is_empty() {
+        let bare = where_sql.trim_start_matches("WHERE ");
         let qualified = bare
             .replace("created_at", "usage.created_at")
             .replace("provider_id", "usage.provider_id")
@@ -327,86 +319,90 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
         clauses.push(format!("({qualified})"));
     }
     clauses.push("usage.race_total > 1".to_string());
-    let where_clause = format!("WHERE {}", clauses.join(" AND "));
+    format!("WHERE {}", clauses.join(" AND "))
+}
 
-    let mut sql = String::new();
-    write!(
-        &mut sql,
+#[derive(Default)]
+struct RaceStatsAccumulator {
+    winners: u64,
+    losers: u64,
+    winner_pos_sum: f64,
+    winner_pos_n: u64,
+    race_ids: std::collections::HashSet<String>,
+    wins_by_target: std::collections::HashMap<i64, u64>,
+}
+
+impl RaceStatsAccumulator {
+    fn process_row(&mut self, row: &rusqlite::Row<'_>) -> rusqlite::Result<()> {
+        let request_id: String = row.get(0)?;
+        let race_lost: i64 = row.get(1)?;
+        let combo_target_id: Option<i64> = row.get(2)?;
+        let priority_order: Option<i64> = row.get(3)?;
+
+        self.race_ids.insert(request_id);
+
+        if race_lost == 0 {
+            self.winners += 1;
+            if let (Some(_tid), Some(pos)) = (combo_target_id, priority_order) {
+                self.winner_pos_sum += pos as f64;
+                self.winner_pos_n += 1;
+            }
+            if let Some(tid) = combo_target_id {
+                *self.wins_by_target.entry(tid).or_insert(0) += 1;
+            }
+        } else {
+            self.losers += 1;
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> RaceStats {
+        let avg_winner_position = if self.winner_pos_n > 0 {
+            Some(self.winner_pos_sum / self.winner_pos_n as f64)
+        } else {
+            None
+        };
+
+        let mut wins_by_target_sorted: Vec<(i64, u64)> = self.wins_by_target.into_iter().collect();
+        wins_by_target_sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        RaceStats {
+            total_races: self.race_ids.len() as u64,
+            winners: self.winners,
+            losers: self.losers,
+            avg_winner_position,
+            avg_ttft_savings_ms: None,
+            wins_by_target: wins_by_target_sorted,
+        }
+    }
+}
+
+pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
+    let w = BuiltWhere::from_filter(f);
+    let where_clause = build_race_where_clause(&w.sql);
+
+    let sql = format!(
         "SELECT usage.request_id, usage.race_lost, usage.combo_target_id, ct.priority_order \
          FROM usage \
          LEFT JOIN combo_targets AS ct ON ct.id = usage.combo_target_id \
-         {where_clause}",
-    )
-    .expect("writing to String never fails");
+         {where_clause}"
+    );
 
     let mut stmt = conn
         .prepare(&sql)
         .map_err(openproxy_db::error::map_db_error)?;
 
-    let mut winners: u64 = 0;
-    let mut losers: u64 = 0;
-
-    // Sum and count for `avg_winner_position`. We sum `priority_order` over
-    // race winners whose `combo_target_id` resolved to a non-null row in
-    // `combo_targets`; rows where the LEFT JOIN yielded NULL are excluded
-    // from the average but still count as a winner for `winners`.
-    let mut winner_pos_sum: f64 = 0.0;
-    let mut winner_pos_n: u64 = 0;
-
-    // (request_id, has_any_row) → we only need to know the set of distinct
-    // request_ids to count `total_races`. A small `HashSet<String>` is fine
-    // for the MVP; if this turns into a bottleneck we'd swap to a HyperLogLog.
-    let mut race_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // (combo_target_id, win_count). NULL combo_target_ids are skipped —
-    // they cannot be reported as a meaningful target identifier.
-    let mut wins_by_target: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
-
+    let mut acc = RaceStatsAccumulator::default();
     let mut rows = stmt
         .query(params_from_iter(w.params.iter().copied()))
         .map_err(openproxy_db::error::map_db_error)?;
 
     while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {
-        let request_id: String = row.get(0).map_err(openproxy_db::error::map_db_error)?;
-        let race_lost: i64 = row.get(1).map_err(openproxy_db::error::map_db_error)?;
-        let combo_target_id: Option<i64> = row.get(2).map_err(openproxy_db::error::map_db_error)?;
-        let priority_order: Option<i64> = row.get(3).map_err(openproxy_db::error::map_db_error)?;
-
-        race_ids.insert(request_id);
-
-        if race_lost == 0 {
-            winners += 1;
-            if let (Some(_tid), Some(pos)) = (combo_target_id, priority_order) {
-                winner_pos_sum += pos as f64;
-                winner_pos_n += 1;
-            }
-            if let Some(tid) = combo_target_id {
-                *wins_by_target.entry(tid).or_insert(0) += 1;
-            }
-        } else {
-            losers += 1;
-        }
+        acc.process_row(row)
+            .map_err(openproxy_db::error::map_db_error)?;
     }
 
-    let avg_winner_position = if winner_pos_n > 0 {
-        Some(winner_pos_sum / winner_pos_n as f64)
-    } else {
-        None
-    };
-
-    // Sort wins_by_target DESC by count, then ASC by target id for a stable
-    // ordering that matches the spec's contract.
-    let mut wins_by_target_sorted: Vec<(i64, u64)> = wins_by_target.into_iter().collect();
-    wins_by_target_sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-
-    Ok(RaceStats {
-        total_races: race_ids.len() as u64,
-        winners,
-        losers,
-        avg_winner_position,
-        avg_ttft_savings_ms: None,
-        wins_by_target: wins_by_target_sorted,
-    })
+    Ok(acc.finish())
 }
 
 // ---------------------------------------------------------------------------

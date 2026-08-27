@@ -84,7 +84,9 @@ pub struct ProxySummary {
     pub protocols: Vec<String>,
 }
 
-pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary> {
+fn fetch_proxy_stats(
+    conn: &Connection,
+) -> crate::error::Result<(usize, usize, usize, usize, Option<u32>)> {
     let mut stmt = conn
         .prepare(
             "SELECT \
@@ -100,63 +102,77 @@ pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-    let row = stmt
-        .query_row([], |r| {
-            let total: i64 = r.get(0)?;
-            let alive: Option<i64> = r.get(1)?;
-            let dead: Option<i64> = r.get(2)?;
-            let unknown: Option<i64> = r.get(3)?;
-            let avg_latency: Option<f64> = r.get(4)?;
-            Ok((
-                total as usize,
-                alive.unwrap_or(0) as usize,
-                dead.unwrap_or(0) as usize,
-                unknown.unwrap_or(0) as usize,
-                avg_latency.map(|l| l.round() as u32),
-            ))
-        })
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+    stmt.query_row([], |r| {
+        let total: i64 = r.get(0)?;
+        let alive: Option<i64> = r.get(1)?;
+        let dead: Option<i64> = r.get(2)?;
+        let unknown: Option<i64> = r.get(3)?;
+        let avg_latency: Option<f64> = r.get(4)?;
+        Ok((
+            total as usize,
+            alive.unwrap_or(0) as usize,
+            dead.unwrap_or(0) as usize,
+            unknown.unwrap_or(0) as usize,
+            avg_latency.map(|l| l.round() as u32),
+        ))
+    })
+    .map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(std::sync::Arc::new(e)),
+    })
+}
 
-    let mut sources_stmt = conn
-        .prepare("SELECT DISTINCT source FROM free_proxies WHERE source IS NOT NULL AND source != '' ORDER BY source ASC")
+fn fetch_distinct_column(conn: &Connection, col: &str) -> crate::error::Result<Vec<String>> {
+    let sql = format!(
+        "SELECT DISTINCT {col} FROM free_proxies WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col} ASC"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
         })?;
-    let sources_rows = sources_stmt.query_map([], |r| r.get(0)).map_err(|e| {
-        crate::error::CoreError::Database {
+    let rows = stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
-        }
-    })?;
-    let sources: Vec<String> = sources_rows.filter_map(std::result::Result::ok).collect();
+        })?;
+    Ok(rows.filter_map(std::result::Result::ok).collect())
+}
 
-    let mut proto_stmt = conn
-        .prepare("SELECT DISTINCT type FROM free_proxies WHERE type IS NOT NULL AND type != '' ORDER BY type ASC")
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-    let proto_rows =
-        proto_stmt
-            .query_map([], |r| r.get(0))
-            .map_err(|e| crate::error::CoreError::Database {
-                message: e.to_string(),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
-    let protocols: Vec<String> = proto_rows.filter_map(std::result::Result::ok).collect();
+pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary> {
+    let (total, alive, dead, unknown, avg_latency_ms) = fetch_proxy_stats(conn)?;
+    let sources = fetch_distinct_column(conn, "source")?;
+    let protocols = fetch_distinct_column(conn, "type")?;
 
     Ok(ProxySummary {
-        total: row.0,
-        alive: row.1,
-        dead: row.2,
-        unknown: row.3,
-        avg_latency_ms: row.4,
+        total,
+        alive,
+        dead,
+        unknown,
+        avg_latency_ms,
         sources,
         protocols,
+    })
+}
+
+fn row_to_free_proxy(row: &rusqlite::Row<'_>) -> rusqlite::Result<FreeProxy> {
+    Ok(FreeProxy {
+        id: row.get(0)?,
+        source: row.get(1)?,
+        host: row.get(2)?,
+        port: row.get(3)?,
+        r#type: row.get(4)?,
+        country_code: row.get(5)?,
+        status: row.get(6)?,
+        latency_ms: row.get(7)?,
+        last_validated: row.get(8)?,
+        username: row.get(9)?,
+        password: row.get(10)?,
+        priority: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -228,24 +244,7 @@ pub fn list_proxies(
     let rows = stmt
         .query_map(
             rusqlite::params_from_iter(params.iter().map(std::convert::AsRef::as_ref)),
-            |row| {
-                Ok(FreeProxy {
-                    id: row.get(0)?,
-                    source: row.get(1)?,
-                    host: row.get(2)?,
-                    port: row.get(3)?,
-                    r#type: row.get(4)?,
-                    country_code: row.get(5)?,
-                    status: row.get(6)?,
-                    latency_ms: row.get(7)?,
-                    last_validated: row.get(8)?,
-                    username: row.get(9)?,
-                    password: row.get(10)?,
-                    priority: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                })
-            },
+            row_to_free_proxy,
         )
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
@@ -262,6 +261,7 @@ pub fn list_proxies(
 }
 
 pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<FreeProxy>> {
+    use rusqlite::OptionalExtension;
     let mut stmt = conn
         .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, username, password, priority, created_at, updated_at FROM free_proxies WHERE id = ?1")
         .map_err(|e| crate::error::CoreError::Database {
@@ -269,33 +269,12 @@ pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<Fre
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-    let res = stmt.query_row(rusqlite::params![id], |row| {
-        Ok(FreeProxy {
-            id: row.get(0)?,
-            source: row.get(1)?,
-            host: row.get(2)?,
-            port: row.get(3)?,
-            r#type: row.get(4)?,
-            country_code: row.get(5)?,
-            status: row.get(6)?,
-            latency_ms: row.get(7)?,
-            last_validated: row.get(8)?,
-            username: row.get(9)?,
-            password: row.get(10)?,
-            priority: row.get(11)?,
-            created_at: row.get(12)?,
-            updated_at: row.get(13)?,
-        })
-    });
-
-    match res {
-        Ok(p) => Ok(Some(p)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(crate::error::CoreError::Database {
+    stmt.query_row(rusqlite::params![id], row_to_free_proxy)
+        .optional()
+        .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
-        }),
-    }
+        })
 }
 
 pub fn get_proxy_status_by_url(conn: &rusqlite::Connection, url: &str) -> Option<String> {
@@ -520,19 +499,22 @@ struct ProxiflyItem {
     geolocation: Option<ProxiflyGeo>,
 }
 
-async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
+async fn fetch_upstream_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+    name: &str,
+) -> crate::error::Result<T> {
     use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
     let client = UpstreamClient::new();
-    let req = UpstreamRequest::get("https://api.proxifly.dev/proxy?format=json&quantity=100");
+    let req = UpstreamRequest::get(url);
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     let res = client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly HTTP error: {e:?}")))?;
+        .map_err(|e| crate::error::CoreError::Internal(format!("{name} HTTP error: {e:?}")))?;
 
     if res.status != 200 {
         return Err(crate::error::CoreError::Internal(format!(
-            "Proxifly HTTP status: {}",
+            "{name} HTTP status: {}",
             res.status
         )));
     }
@@ -540,9 +522,17 @@ async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
     let body_bytes = res
         .collect()
         .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly body error: {e:?}")))?;
-    let items: Vec<ProxiflyItem> = serde_json::from_slice(&body_bytes)
-        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly JSON error: {e}")))?;
+        .map_err(|e| crate::error::CoreError::Internal(format!("{name} body error: {e:?}")))?;
+    serde_json::from_slice(&body_bytes)
+        .map_err(|e| crate::error::CoreError::Internal(format!("{name} JSON error: {e}")))
+}
+
+async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<ProxiflyItem> = fetch_upstream_json(
+        "https://api.proxifly.dev/proxy?format=json&quantity=100",
+        "Proxifly",
+    )
+    .await?;
 
     let list = items
         .into_iter()
@@ -566,100 +556,113 @@ async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
     Ok(list)
 }
 
-async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
-    let mut list = Vec::new();
+fn parse_proxy_host_port(proxy: &str) -> Option<(String, u16)> {
+    let (host, port_str) = proxy.rsplit_once(':')?;
+    let host = host.trim();
+    let port = port_str.trim().parse::<u16>().ok()?;
+    if host.is_empty() || port == 0 {
+        None
+    } else {
+        Some((host.to_string(), port))
+    }
+}
 
-    let sources = vec![
+fn parse_plain_proxy_lines(text: &str, src_name: &str, proto: &str) -> Vec<ScrapedProxy> {
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            let (host, port) = parse_proxy_host_port(trimmed)?;
+            Some(ScrapedProxy {
+                source: src_name.to_string(),
+                host,
+                port,
+                r#type: proto.to_string(),
+                country_code: None,
+                username: None,
+                password: None,
+                priority: 0,
+            })
+        })
+        .collect()
+}
+
+async fn fetch_github_proxy_file(
+    client: &Arc<openproxy_adapters::upstream::UpstreamClient>,
+    src_name: &str,
+    proto: &str,
+    url: &str,
+) -> Vec<ScrapedProxy> {
+    let req = openproxy_adapters::upstream::UpstreamRequest::get(url);
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    let Ok(res) = client
+        .call(
+            req,
+            openproxy_adapters::upstream::TimeoutProfile::ModelDiscovery,
+            cancel,
+        )
+        .await
+    else {
+        return Vec::new();
+    };
+    if res.status != 200 {
+        return Vec::new();
+    }
+    let Ok(body_bytes) = res.collect().await else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&body_bytes);
+    parse_plain_proxy_lines(&text, src_name, proto)
+}
+
+async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
+    let client = openproxy_adapters::upstream::UpstreamClient::new();
+    let mut list = Vec::new();
+    let sources: &[(&str, &str, &[&str])] = &[
         (
             "iplocate",
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/{}.txt",
-            vec!["http", "https", "socks4", "socks5"],
+            &["http", "https", "socks4", "socks5"],
         ),
         (
             "hideip",
             "https://raw.githubusercontent.com/zloi-user/hideip.me/main/{}.txt",
-            vec!["http", "socks4", "socks5"],
+            &["http", "socks4", "socks5"],
         ),
         (
             "r00tee",
             "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt",
-            vec!["socks5"],
+            &["socks5"],
         ),
         (
             "hookzof",
             "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
-            vec!["socks5"],
+            &["socks5"],
         ),
         (
             "anonymouswork",
             "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/https_proxies.txt",
-            vec!["https"],
+            &["https"],
         ),
         (
             "komutan234",
             "https://raw.githubusercontent.com/komutan234/Proxy-List-Free/main/proxies/http.txt",
-            vec!["http"],
+            &["http"],
         ),
         (
             "yuceltoluyag",
             "https://raw.githubusercontent.com/yuceltoluyag/GoodProxy/main/raw.txt",
-            vec!["http"],
+            &["http"],
         ),
     ];
 
-    for (src_name, url_template, protocols) in sources {
-        for proto in protocols {
+    for &(src_name, url_template, protocols) in sources {
+        for &proto in protocols {
             let url = url_template.replace("{}", proto);
-            let req = UpstreamRequest::get(&url);
-            let cancel = openproxy_adapters::upstream::CancellationToken::new();
-            let res = match client
-                .call(req, TimeoutProfile::ModelDiscovery, cancel)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("{} fetch error for {}: {:?}", src_name, proto, e);
-                    continue;
-                }
-            };
-            if res.status != 200 {
-                tracing::warn!("{} status error for {}: {}", src_name, proto, res.status);
-                continue;
-            }
-            let body_bytes = match res.collect().await {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!("{} body error for {}: {:?}", src_name, proto, e);
-                    continue;
-                }
-            };
-            let text = String::from_utf8_lossy(&body_bytes);
-            for line in text.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                if let Some(pos) = trimmed.rfind(':') {
-                    let host = trimmed[..pos].trim().to_string();
-                    if let Ok(port) = trimmed[pos + 1..].trim().parse::<u16>()
-                        && !host.is_empty()
-                        && port > 0
-                    {
-                        list.push(ScrapedProxy {
-                            source: src_name.to_string(),
-                            host,
-                            port,
-                            r#type: proto.to_string(),
-                            country_code: None,
-                            username: None,
-                            password: None,
-                            priority: 0,
-                        });
-                    }
-                }
-            }
+            let mut proxies = fetch_github_proxy_file(&client, src_name, proto, &url).await;
+            list.append(&mut proxies);
         }
     }
     Ok(list)
@@ -679,28 +682,11 @@ struct OneProxyApiResponse {
 }
 
 async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
-    let req = UpstreamRequest::get("https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced");
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    let res = client
-        .call(req, TimeoutProfile::ModelDiscovery, cancel)
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy HTTP error: {e:?}")))?;
-
-    if res.status != 200 {
-        return Err(crate::error::CoreError::Internal(format!(
-            "1proxy HTTP status: {}",
-            res.status
-        )));
-    }
-
-    let body_bytes = res
-        .collect()
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy body error: {e:?}")))?;
-    let body: OneProxyApiResponse = serde_json::from_slice(&body_bytes)
-        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy JSON error: {e}")))?;
+    let body: OneProxyApiResponse = fetch_upstream_json(
+        "https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced",
+        "1proxy",
+    )
+    .await?;
 
     let proxies = body.proxies.unwrap_or_default();
     let list = proxies
@@ -731,32 +717,11 @@ struct ProxyScrapeCdnItem {
 }
 
 async fn sync_proxyscrape_cdn() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
-    let req = UpstreamRequest::get(
+    let items: Vec<ProxyScrapeCdnItem> = fetch_upstream_json(
         "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json",
-    );
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    let res = client
-        .call(req, TimeoutProfile::ModelDiscovery, cancel)
-        .await
-        .map_err(|e| {
-            crate::error::CoreError::Internal(format!("ProxyScrape CDN HTTP error: {e:?}"))
-        })?;
-
-    if res.status != 200 {
-        return Err(crate::error::CoreError::Internal(format!(
-            "ProxyScrape CDN HTTP status: {}",
-            res.status
-        )));
-    }
-
-    let body_bytes = res.collect().await.map_err(|e| {
-        crate::error::CoreError::Internal(format!("ProxyScrape CDN body error: {e:?}"))
-    })?;
-    let items: Vec<ProxyScrapeCdnItem> = serde_json::from_slice(&body_bytes).map_err(|e| {
-        crate::error::CoreError::Internal(format!("ProxyScrape CDN JSON error: {e}"))
-    })?;
+        "ProxyScrape CDN",
+    )
+    .await?;
 
     let list = items
         .into_iter()
@@ -821,15 +786,17 @@ async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
     let body: GeonodeResponse = serde_json::from_slice(&body_bytes)
         .map_err(|e| crate::error::CoreError::Internal(format!("Geonode JSON error: {e}")))?;
 
-    let mut list = Vec::new();
-    for item in body.data {
-        if let Ok(port) = item.port.parse::<u16>() {
+    let list = body
+        .data
+        .into_iter()
+        .filter_map(|item| {
+            let port = item.port.parse::<u16>().ok()?;
             let proto = item
                 .protocols
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| "http".to_string());
-            list.push(ScrapedProxy {
+            Some(ScrapedProxy {
                 source: "geonode".to_string(),
                 host: item.ip,
                 port,
@@ -838,9 +805,9 @@ async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
                 username: None,
                 password: None,
                 priority: 0,
-            });
-        }
-    }
+            })
+        })
+        .collect();
     Ok(list)
 }
 
@@ -853,30 +820,11 @@ struct ClearProxyItem {
 }
 
 async fn sync_clearproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
-    let req = UpstreamRequest::get(
+    let items: Vec<ClearProxyItem> = fetch_upstream_json(
         "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/json/all.json",
-    );
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    let res = client
-        .call(req, TimeoutProfile::ModelDiscovery, cancel)
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy HTTP error: {e:?}")))?;
-
-    if res.status != 200 {
-        return Err(crate::error::CoreError::Internal(format!(
-            "ClearProxy HTTP status: {}",
-            res.status
-        )));
-    }
-
-    let body_bytes = res
-        .collect()
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy body error: {e:?}")))?;
-    let items: Vec<ClearProxyItem> = serde_json::from_slice(&body_bytes)
-        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy JSON error: {e}")))?;
+        "ClearProxy",
+    )
+    .await?;
 
     let list = items
         .into_iter()
@@ -901,41 +849,26 @@ struct VakhovItem {
     country_code: Option<String>,
 }
 
-async fn sync_vakhov() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
-    let req = UpstreamRequest::get("https://vakhov.github.io/fresh-proxy-list/proxylist.json");
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    let res = client
-        .call(req, TimeoutProfile::ModelDiscovery, cancel)
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("Vakhov HTTP error: {e:?}")))?;
-
-    if res.status != 200 {
-        return Err(crate::error::CoreError::Internal(format!(
-            "Vakhov HTTP status: {}",
-            res.status
-        )));
+fn parse_vakhov_port(port: &serde_json::Value) -> Option<u16> {
+    match port {
+        serde_json::Value::Number(n) => n.as_u64().map(|v| v as u16),
+        serde_json::Value::String(s) => s.parse::<u16>().ok(),
+        _ => None,
     }
+}
 
-    let body_bytes = res
-        .collect()
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("Vakhov body error: {e:?}")))?;
-    let items: Vec<VakhovItem> = serde_json::from_slice(&body_bytes)
-        .map_err(|e| crate::error::CoreError::Internal(format!("Vakhov JSON error: {e}")))?;
+async fn sync_vakhov() -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<VakhovItem> = fetch_upstream_json(
+        "https://vakhov.github.io/fresh-proxy-list/proxylist.json",
+        "Vakhov",
+    )
+    .await?;
 
-    let mut list = Vec::new();
-    for item in items {
-        let port_u16 = if let serde_json::Value::Number(ref n) = item.port {
-            n.as_u64().map(|v| v as u16)
-        } else if let serde_json::Value::String(ref s) = item.port {
-            s.parse::<u16>().ok()
-        } else {
-            None
-        };
-        if let Some(port) = port_u16 {
-            list.push(ScrapedProxy {
+    let list = items
+        .into_iter()
+        .filter_map(|item| {
+            let port = parse_vakhov_port(&item.port)?;
+            Some(ScrapedProxy {
                 source: "vakhov".to_string(),
                 host: item.ip,
                 port,
@@ -944,9 +877,9 @@ async fn sync_vakhov() -> crate::error::Result<Vec<ScrapedProxy>> {
                 username: None,
                 password: None,
                 priority: 0,
-            });
-        }
-    }
+            })
+        })
+        .collect();
     Ok(list)
 }
 
@@ -958,50 +891,29 @@ struct GProxyNetItem {
 }
 
 async fn sync_gproxynet() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
-    let req = UpstreamRequest::get(
+    let items: Vec<GProxyNetItem> = fetch_upstream_json(
         "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/proxies.json",
-    );
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    let res = client
-        .call(req, TimeoutProfile::ModelDiscovery, cancel)
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("GProxyNet HTTP error: {e:?}")))?;
+        "GProxyNet",
+    )
+    .await?;
 
-    if res.status != 200 {
-        return Err(crate::error::CoreError::Internal(format!(
-            "GProxyNet HTTP status: {}",
-            res.status
-        )));
-    }
-
-    let body_bytes = res
-        .collect()
-        .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("GProxyNet body error: {e:?}")))?;
-    let items: Vec<GProxyNetItem> = serde_json::from_slice(&body_bytes)
-        .map_err(|e| crate::error::CoreError::Internal(format!("GProxyNet JSON error: {e}")))?;
-
-    let mut list = Vec::new();
-    for item in items {
-        if let Some(pos) = item.proxy.rfind(':') {
-            let host = item.proxy[..pos].trim().to_string();
-            if let Ok(port) = item.proxy[pos + 1..].trim().parse::<u16>() {
-                let proto = item.protocol.unwrap_or_else(|| "http".to_string());
-                list.push(ScrapedProxy {
-                    source: "gproxynet".to_string(),
-                    host,
-                    port,
-                    r#type: proto.to_lowercase(),
-                    country_code: item.country.filter(|c| !c.is_empty()),
-                    username: None,
-                    password: None,
-                    priority: 0,
-                });
-            }
-        }
-    }
+    let list = items
+        .into_iter()
+        .filter_map(|item| {
+            let (host, port) = parse_proxy_host_port(&item.proxy)?;
+            let proto = item.protocol.unwrap_or_else(|| "http".to_string());
+            Some(ScrapedProxy {
+                source: "gproxynet".to_string(),
+                host,
+                port,
+                r#type: proto.to_lowercase(),
+                country_code: item.country.filter(|c| !c.is_empty()),
+                username: None,
+                password: None,
+                priority: 0,
+            })
+        })
+        .collect();
     Ok(list)
 }
 
@@ -1094,14 +1006,25 @@ fn resolve_scraped_sources<'a>(is_builtin: bool, id: &str, name: &'a str) -> Vec
     vec![name]
 }
 
-pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySource>> {
-    let mut stmt = conn
-        .prepare("SELECT id, name, url, priority, active, is_builtin, created_at, updated_at FROM proxy_sources ORDER BY priority DESC, name ASC")
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+fn row_to_proxy_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProxySource> {
+    Ok(ProxySource {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        url: row.get(2)?,
+        priority: row.get(3)?,
+        active: row.get::<_, i32>(4)? != 0,
+        is_builtin: row.get::<_, i32>(5)? != 0,
+        proxies_total: 0,
+        proxies_alive: 0,
+        proxies_dead: 0,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
 
+fn fetch_proxy_source_stats(
+    conn: &Connection,
+) -> crate::error::Result<std::collections::HashMap<String, Vec<(String, i64)>>> {
     let mut stats_stmt = conn
         .prepare("SELECT source, status, COUNT(*) FROM free_proxies GROUP BY source, status")
         .map_err(|e| crate::error::CoreError::Database {
@@ -1127,55 +1050,58 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
             .or_insert_with(Vec::new)
             .push((row.1, row.2));
     }
+    Ok(stats)
+}
 
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(ProxySource {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                url: row.get(2)?,
-                priority: row.get(3)?,
-                active: row.get::<_, i32>(4)? != 0,
-                is_builtin: row.get::<_, i32>(5)? != 0,
-                proxies_total: 0,
-                proxies_alive: 0,
-                proxies_dead: 0,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })
+fn apply_source_stats(
+    r: &mut ProxySource,
+    stats: &std::collections::HashMap<String, Vec<(String, i64)>>,
+) {
+    let sources = resolve_scraped_sources(r.is_builtin, &r.id, &r.name);
+    for s in sources {
+        if let Some(st) = stats.get(s) {
+            for (status, count) in st {
+                r.proxies_total += count;
+                if status == "alive" {
+                    r.proxies_alive += count;
+                } else if status == "dead" {
+                    r.proxies_dead += count;
+                }
+            }
+        }
+    }
+}
+
+pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySource>> {
+    let mut stmt = conn
+        .prepare("SELECT id, name, url, priority, active, is_builtin, created_at, updated_at FROM proxy_sources ORDER BY priority DESC, name ASC")
         .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-    rows.map(|row_res| {
-        let mut r = row_res.map_err(|e| crate::error::CoreError::Database {
+    let stats = fetch_proxy_source_stats(conn)?;
+    let rows = stmt
+        .query_map([], row_to_proxy_source)
+        .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-        let sources = resolve_scraped_sources(r.is_builtin, &r.id, &r.name);
-
-        for s in sources {
-            if let Some(st) = stats.get(s) {
-                for (status, count) in st {
-                    r.proxies_total += count;
-                    if status == "alive" {
-                        r.proxies_alive += count;
-                    } else if status == "dead" {
-                        r.proxies_dead += count;
-                    }
-                }
-            }
-        }
-
-        Ok(r)
-    })
-    .collect::<std::result::Result<Vec<_>, crate::error::CoreError>>()
+    let mut result = Vec::new();
+    for row_res in rows {
+        let mut r = row_res.map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(std::sync::Arc::new(e)),
+        })?;
+        apply_source_stats(&mut r, &stats);
+        result.push(r);
+    }
+    Ok(result)
 }
 
 pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Option<ProxySource>> {
+    use rusqlite::OptionalExtension;
     let mut stmt = conn
         .prepare("SELECT id, name, url, priority, active, is_builtin, created_at, updated_at FROM proxy_sources WHERE id = ?1")
         .map_err(|e| crate::error::CoreError::Database {
@@ -1183,75 +1109,20 @@ pub fn get_proxy_source(conn: &Connection, id: &str) -> crate::error::Result<Opt
             source: Some(std::sync::Arc::new(e)),
         })?;
 
-    let res = stmt.query_row(rusqlite::params![id], |row| {
-        Ok(ProxySource {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            url: row.get(2)?,
-            priority: row.get(3)?,
-            active: row.get::<_, i32>(4)? != 0,
-            is_builtin: row.get::<_, i32>(5)? != 0,
-            proxies_total: 0,
-            proxies_alive: 0,
-            proxies_dead: 0,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-        })
-    });
-
-    match res {
-        Ok(mut source) => {
-            let mut stats_stmt = conn
-                .prepare(
-                    "SELECT source, status, COUNT(*) FROM free_proxies GROUP BY source, status",
-                )
-                .map_err(|e| crate::error::CoreError::Database {
-                    message: e.to_string(),
-                    source: Some(std::sync::Arc::new(e)),
-                })?;
-            let mut stats = std::collections::HashMap::new();
-            let stats_rows = stats_stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                })
-                .map_err(|e| crate::error::CoreError::Database {
-                    message: e.to_string(),
-                    source: Some(std::sync::Arc::new(e)),
-                })?;
-            for row in stats_rows.flatten() {
-                stats
-                    .entry(row.0)
-                    .or_insert_with(Vec::new)
-                    .push((row.1, row.2));
-            }
-
-            let sources = resolve_scraped_sources(source.is_builtin, &source.id, &source.name);
-
-            for s in sources {
-                if let Some(st) = stats.get(s) {
-                    for (status, count) in st {
-                        source.proxies_total += count;
-                        if status == "alive" {
-                            source.proxies_alive += count;
-                        } else if status == "dead" {
-                            source.proxies_dead += count;
-                        }
-                    }
-                }
-            }
-
-            Ok(Some(source))
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(crate::error::CoreError::Database {
+    let res = stmt
+        .query_row(rusqlite::params![id], row_to_proxy_source)
+        .optional()
+        .map_err(|e| crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(std::sync::Arc::new(e)),
-        }),
-    }
+        })?;
+
+    let Some(mut r) = res else {
+        return Ok(None);
+    };
+    let stats = fetch_proxy_source_stats(conn)?;
+    apply_source_stats(&mut r, &stats);
+    Ok(Some(r))
 }
 
 pub fn create_proxy_source(
@@ -1310,6 +1181,47 @@ pub fn update_proxy_source(
 
 pub use openproxy_db::free_proxies::*;
 
+fn parse_custom_proxy_auth(auth_part: Option<&str>) -> (Option<String>, Option<String>) {
+    match auth_part {
+        Some(auth) => match auth.split_once(':') {
+            Some((u, p)) => (Some(u.trim().to_string()), Some(p.trim().to_string())),
+            None => (Some(auth.trim().to_string()), None),
+        },
+        None => (None, None),
+    }
+}
+
+fn parse_custom_proxy_line(line: &str, source_name: &str, priority: i32) -> Option<ScrapedProxy> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    let (proto, host_port) = trimmed.split_once("://").unwrap_or(("http", trimmed));
+    let (raw_host, rest) = host_port.split_once(':')?;
+    let (raw_port, auth_part) = rest
+        .split_once(':')
+        .map_or((rest, None), |(p, a)| (p, Some(a)));
+
+    let host = raw_host.trim().to_string();
+    let port = raw_port.trim().parse::<u16>().ok()?;
+    if host.is_empty() || port == 0 {
+        return None;
+    }
+
+    let (username, password) = parse_custom_proxy_auth(auth_part);
+    Some(ScrapedProxy {
+        source: source_name.to_string(),
+        host,
+        port,
+        r#type: proto.to_lowercase(),
+        country_code: None,
+        username,
+        password,
+        priority,
+    })
+}
+
 pub async fn fetch_custom_proxy_source(
     source_name: &str,
     url: &str,
@@ -1337,46 +1249,10 @@ pub async fn fetch_custom_proxy_source(
         crate::error::CoreError::Internal(format!("Custom proxy source body error: {e:?}"))
     })?;
     let text = String::from_utf8_lossy(&body_bytes);
-    let mut list = Vec::new();
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        let (proto, host_port) = trimmed.split_once("://").unwrap_or(("http", trimmed));
-
-        let Some((raw_host, rest)) = host_port.split_once(':') else {
-            continue;
-        };
-        let (raw_port, auth_part) = rest
-            .split_once(':')
-            .map_or((rest, None), |(p, a)| (p, Some(a)));
-
-        let host = raw_host.trim().to_string();
-        if let Ok(port) = raw_port.trim().parse::<u16>() {
-            let (username, password) = match auth_part {
-                Some(auth) => match auth.split_once(':') {
-                    Some((u, p)) => (Some(u.trim().to_string()), Some(p.trim().to_string())),
-                    None => (Some(auth.trim().to_string()), None),
-                },
-                None => (None, None),
-            };
-            if !host.is_empty() && port > 0 {
-                list.push(ScrapedProxy {
-                    source: source_name.to_string(),
-                    host,
-                    port,
-                    r#type: proto.to_lowercase(),
-                    country_code: None,
-                    username,
-                    password,
-                    priority,
-                });
-            }
-        }
-    }
+    let list = text
+        .lines()
+        .filter_map(|l| parse_custom_proxy_line(l, source_name, priority))
+        .collect();
 
     Ok(list)
 }
@@ -1392,6 +1268,39 @@ pub async fn sync_all_providers_with_container(
 ) -> crate::error::Result<SyncSummary> {
     let db_pool = services.db_pool()?;
     sync_all_providers(db_pool).await
+}
+
+async fn sync_single_source(
+    src: &ProxySource,
+    errors: &mut Vec<String>,
+    scraped: &mut Vec<ScrapedProxy>,
+    fetched: &mut usize,
+) {
+    if !src.active {
+        return;
+    }
+    if src.is_builtin {
+        if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id)
+            && let Ok(mut list) = (def.sync_fn)().await
+        {
+            *fetched += list.len();
+            scraped.append(&mut list);
+        }
+        return;
+    }
+
+    match fetch_custom_proxy_source(&src.name, &src.url, src.priority).await {
+        Ok(mut list) => {
+            *fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!(
+                "Custom proxy source '{}' sync failed: {}",
+                src.name, e
+            ));
+        }
+    }
 }
 
 pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<SyncSummary> {
@@ -1415,31 +1324,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
     if let Ok(Ok(custom_sources)) = sources_res {
         for src in custom_sources {
-            if !src.active {
-                continue;
-            }
-            if src.is_builtin {
-                if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id)
-                    && let Ok(mut list) = (def.sync_fn)().await
-                {
-                    scraped.append(&mut list);
-                    fetched += list.len();
-                }
-                continue;
-            }
-
-            match fetch_custom_proxy_source(&src.name, &src.url, src.priority).await {
-                Ok(mut list) => {
-                    fetched += list.len();
-                    scraped.append(&mut list);
-                }
-                Err(e) => {
-                    errors.push(format!(
-                        "Custom proxy source '{}' sync failed: {}",
-                        src.name, e
-                    ));
-                }
-            }
+            sync_single_source(&src, &mut errors, &mut scraped, &mut fetched).await;
         }
     }
 
@@ -1523,6 +1408,44 @@ pub async fn test_proxy_connection(
     }
 }
 
+type ParsedProxyTuple = (String, String, u16, Option<String>, Option<String>);
+
+fn fetch_proxy_test_target(
+    conn: &Connection,
+    id: &str,
+) -> crate::error::Result<ParsedProxyTuple> {
+    let mut stmt = conn
+        .prepare("SELECT type, host, port, username, password FROM free_proxies WHERE id = ?1")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(std::sync::Arc::new(e)),
+        })?;
+    stmt.query_row(rusqlite::params![id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, u16>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })
+    .map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(std::sync::Arc::new(e)),
+    })
+}
+
+fn apply_single_proxy_test_result(
+    conn: &Connection,
+    id: &str,
+    test_res: Result<i64, String>,
+) -> crate::error::Result<()> {
+    match test_res {
+        Ok(latency) => update_proxy_status(conn, id, "alive", Some(latency)),
+        Err(_) => update_proxy_status(conn, id, "dead", None),
+    }
+}
+
 pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::Result<FreeProxy> {
     let test_url = {
         let r = db_pool.reader();
@@ -1532,25 +1455,7 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
 
     let (r#type, host, port, username, password) = {
         let r = db_pool.reader();
-        let mut stmt = r
-            .prepare("SELECT type, host, port, username, password FROM free_proxies WHERE id = ?1")
-            .map_err(|e| crate::error::CoreError::Database {
-                message: e.to_string(),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
-        stmt.query_row(rusqlite::params![id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, u16>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-            ))
-        })
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?
+        fetch_proxy_test_target(&r, id)?
     };
 
     let test_res = test_proxy_connection(
@@ -1564,14 +1469,7 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
     .await;
 
     let w = db_pool.writer();
-    match test_res {
-        Ok(latency) => {
-            update_proxy_status(&w, id, "alive", Some(latency))?;
-        }
-        Err(_) => {
-            update_proxy_status(&w, id, "dead", None)?;
-        }
-    }
+    apply_single_proxy_test_result(&w, id, test_res)?;
 
     let p = get_proxy(&w, id)?.ok_or_else(|| crate::error::CoreError::NotFound {
         what: "proxy".to_string(),
@@ -1581,45 +1479,85 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
     Ok(p)
 }
 
+type ProxyTestCandidate = (String, String, String, u16, Option<String>, Option<String>);
+
+fn fetch_background_test_proxies(conn: &Connection) -> Vec<ProxyTestCandidate> {
+    let mut stmt = match conn.prepare(
+        "
+        SELECT id, type, host, port, username, password FROM free_proxies 
+        ORDER BY 
+            CASE status 
+                WHEN 'unknown' THEN 1 
+                WHEN 'alive' THEN 2 
+                ELSE 3 
+            END ASC,
+            priority DESC
+    ",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to prepare list query in background test: {}", e);
+            return Vec::new();
+        }
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, u16>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+        ))
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to query list in background test: {}", e);
+            return Vec::new();
+        }
+    };
+    rows.flatten().collect()
+}
+
+fn execute_proxy_batch_update(
+    conn: &mut Connection,
+    batch: Vec<(String, Result<i64, String>)>,
+) -> Result<(), crate::error::CoreError> {
+    let tx_db = conn.transaction().map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(std::sync::Arc::new(e)),
+    })?;
+    let now = chrono::Utc::now().to_rfc3339();
+    {
+        let mut stmt = tx_db
+            .prepare_cached(
+                "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
+            )
+            .map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(std::sync::Arc::new(e)),
+    })?;
+
+        for (id, test_res) in batch {
+            let (status, latency) = match test_res {
+                Ok(lat) => ("alive", Some(lat)),
+                Err(_) => ("dead", None),
+            };
+            let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
+        }
+    }
+    tx_db.commit().map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(std::sync::Arc::new(e)),
+    })?;
+    Ok(())
+}
+
 pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
     tokio::spawn(async move {
         let proxies = {
             let r = db_pool.reader();
-            let mut stmt = match r.prepare(
-                "
-                SELECT id, type, host, port, username, password FROM free_proxies 
-                ORDER BY 
-                    CASE status 
-                        WHEN 'unknown' THEN 1 
-                        WHEN 'alive' THEN 2 
-                        ELSE 3 
-                    END ASC,
-                    priority DESC
-            ",
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!("Failed to prepare list query in background test: {}", e);
-                    return;
-                }
-            };
-            let rows = match stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, u16>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            }) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!("Failed to query list in background test: {}", e);
-                    return;
-                }
-            };
-            rows.flatten().collect::<Vec<_>>()
+            fetch_background_test_proxies(&r)
         };
 
         if proxies.is_empty() {
@@ -1648,37 +1586,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 let pool = Arc::clone(&pool_writer);
                 let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
                     let mut w = pool.open_connection()?;
-                    let tx_db = w.transaction().map_err(|e| crate::error::CoreError::Database {
-                        message: e.to_string(),
-                        source: Some(std::sync::Arc::new(e)),
-                    })?;
-                    let now = chrono::Utc::now().to_rfc3339();
-                    {
-                        let mut stmt = tx_db
-                            .prepare_cached(
-                                "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
-                            )
-                            .map_err(|e| crate::error::CoreError::Database {
-                                message: e.to_string(),
-                                source: Some(std::sync::Arc::new(e)),
-                            })?;
-
-                        for (id, test_res) in batch {
-                            match test_res {
-                                Ok(latency) => {
-                                    let _ = stmt.execute(rusqlite::params!["alive", latency, now, now, id]);
-                                }
-                                Err(_) => {
-                                    let _ = stmt.execute(rusqlite::params!["dead", None::<i64>, now, now, id]);
-                                }
-                            }
-                        }
-                    }
-                    tx_db.commit().map_err(|e| crate::error::CoreError::Database {
-                        message: e.to_string(),
-                        source: Some(std::sync::Arc::new(e)),
-                    })?;
-                    Ok(())
+                    execute_proxy_batch_update(&mut w, batch)
                 })
                 .await;
             }
