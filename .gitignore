@@ -32,3 +32,6 @@ test-results/
 package-lock.json
 *.rcgu.o
 
+
+# runtime artifacts
+data/
