@@ -67,7 +67,8 @@ pub fn flatten_targets(conn: &Connection, targets: Vec<ComboTarget>) -> Result<V
         return Ok(targets);
     }
     let mut out = Vec::with_capacity(targets.len());
-    let mut visited = Vec::new();
+    // Use rust std collection for faster O(1) hash map indexing on lookups instead of linear search in Vec
+    let mut visited = std::collections::HashSet::new();
     for t in targets {
         if let Some(sub_id) = t.sub_combo_id {
             let sub_flat = resolve_combo_to_targets(conn, sub_id, &mut visited, 0)?;
@@ -82,7 +83,7 @@ pub fn flatten_targets(conn: &Connection, targets: Vec<ComboTarget>) -> Result<V
 fn resolve_combo_to_targets(
     conn: &Connection,
     combo_id: ComboId,
-    visited: &mut Vec<ComboId>,
+    visited: &mut std::collections::HashSet<ComboId>,
     depth: u32,
 ) -> Result<Vec<ComboTarget>> {
     if depth > 5 {
@@ -97,7 +98,7 @@ fn resolve_combo_to_targets(
             combo_id.0
         )));
     }
-    visited.push(combo_id);
+    visited.insert(combo_id);
 
     // Usa list_targets base (sin cooldown filter para audio/chat pre-flight)
     let targets = combos::list_targets(conn, combo_id)?;
@@ -110,7 +111,7 @@ fn resolve_combo_to_targets(
             flat.push(t);
         }
     }
-    visited.pop();
+    visited.remove(&combo_id);
     Ok(flat)
 }
 
