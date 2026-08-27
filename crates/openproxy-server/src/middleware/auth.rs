@@ -137,23 +137,14 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
                 .map(str::trim)
-        })
         .filter(|t| !t.is_empty())
 }
 
 fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let active = match core_api_keys::count_active(&state.db_pool().reader()) {
-        Ok(count) => count,
-        Err(e) => {
-            tracing::error!(
-                target: "openproxy::auth",
-                "failed to count active api keys: {e}"
-            );
-            return Err(ApiError(CoreError::Internal(
-                "Database error counting API keys".into(),
-            )));
-        }
-    };
+    let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(|e| {
+        tracing::error!(%e, "db error counting active keys");
+        ApiError(CoreError::Auth("missing api key".into()))
+    })?;
     if active == 0 && state.config().server.allow_anonymous {
         tracing::debug!(
             target: "openproxy::auth",
@@ -219,7 +210,10 @@ pub(crate) fn verify_key_credentials(
     let key_hash = core_api_keys::hash_key(token);
     let r = state.db_pool().reader();
     let key = core_api_keys::get_by_hash(&r, &key_hash)
-        .map_err(ApiError)?
+        .map_err(|e| {
+            tracing::error!(%e, "db error looking up api key");
+            ApiError(CoreError::Auth("invalid api key".into()))
+        })?
         .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
 
     validate_key_record(&key, required_scope)?;
