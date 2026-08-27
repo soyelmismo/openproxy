@@ -651,9 +651,16 @@ function renderRaceBlock(): TemplateResult {
 
 function renderByModelTable(): TemplateResult {
   const body = byModel.length
-    ? html`<div class="analytics-table-wrap"><table>
+    ? html`<div class="analytics-table-wrap table-wrap"><table class="by-model-table responsive-card-table">
         <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.metric.tokens")}</th><th class="num">Local Compress</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
-        <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td class="analytics-model-cell" title=${r.upstream_model_id}>${r.upstream_model_id}</td><td class="num">${fmtNumber(r.unique_requests)}</td><td class="num">${fmtNumber(r.total_prompt_tokens + r.total_completion_tokens)}</td><td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${r.avg_compression_savings_pct < 1 && r.avg_compression_savings_pct > 0 ? r.avg_compression_savings_pct.toFixed(2) : Math.round(r.avg_compression_savings_pct)}%` : "—"}</td><td class="num">${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
+        <tbody>${byModel.map((r) => html`<tr class="analytics-stat-card-row">
+          <td class="col-stat-provider" data-label="Provider"><strong>${r.provider_id}</strong></td>
+          <td class="analytics-model-cell col-stat-model" data-label="Model" title=${r.upstream_model_id}><code>${r.upstream_model_id}</code></td>
+          <td class="num col-stat-unique" data-label="Unique reqs">${fmtNumber(r.unique_requests)}</td>
+          <td class="num col-stat-tokens" data-label="Tokens">${fmtNumber(r.total_prompt_tokens + r.total_completion_tokens)}</td>
+          <td class="num col-stat-compress" data-label="Compress" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${r.avg_compression_savings_pct < 1 && r.avg_compression_savings_pct > 0 ? r.avg_compression_savings_pct.toFixed(2) : Math.round(r.avg_compression_savings_pct)}%` : "—"}</td>
+          <td class="num col-stat-cost" data-label="Cost">${fmtCost(r.total_cost_usd)}</td>
+        </tr>`)}</tbody>
       </table></div>`
     : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
   return card(t("analytics.chart.by_model"), body);
@@ -661,17 +668,17 @@ function renderByModelTable(): TemplateResult {
 
 function renderByProviderTable(): TemplateResult {
   const body = byProvider.length
-    ? html`<div class="analytics-table-wrap"><table>
+    ? html`<div class="analytics-table-wrap table-wrap"><table class="by-provider-table responsive-card-table">
         <thead><tr><th>${t("analytics.table.col_provider")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.table.col_total")}</th><th class="num">${t("analytics.table.col_winners")}</th><th class="num">${t("analytics.table.col_prompt_tok")}</th><th class="num">${t("analytics.table.col_completion_tok")}</th><th class="num">Local Compress</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
-        <tbody>${byProvider.map((r) => html`<tr>
-          <td>${r.provider_id}</td>
-          <td class="num">${fmtNumber(r.unique_requests)}</td>
-          <td class="num">${fmtNumber(r.total_rows)}</td>
-          <td class="num">${fmtNumber(r.winners)}</td>
-          <td class="num">${fmtNumber(r.total_prompt_tokens)}</td>
-          <td class="num">${fmtNumber(r.total_completion_tokens)}</td>
-          <td class="num" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${r.avg_compression_savings_pct < 1 && r.avg_compression_savings_pct > 0 ? r.avg_compression_savings_pct.toFixed(2) : Math.round(r.avg_compression_savings_pct)}%` : "—"}</td>
-          <td class="num">${fmtCost(r.total_cost_usd)}</td>
+        <tbody>${byProvider.map((r) => html`<tr class="analytics-stat-card-row">
+          <td class="col-stat-provider" data-label="Provider"><strong>${r.provider_id}</strong></td>
+          <td class="num col-stat-unique" data-label="Unique reqs">${fmtNumber(r.unique_requests)}</td>
+          <td class="num col-stat-total" data-label="Total rows">${fmtNumber(r.total_rows)}</td>
+          <td class="num col-stat-winners" data-label="Winners">${fmtNumber(r.winners)}</td>
+          <td class="num col-stat-prompt" data-label="Prompt tok">${fmtNumber(r.total_prompt_tokens)}</td>
+          <td class="num col-stat-completion" data-label="Compl tok">${fmtNumber(r.total_completion_tokens)}</td>
+          <td class="num col-stat-compress" data-label="Compress" style="color: var(--color-success)">${r.avg_compression_savings_pct != null ? `${r.avg_compression_savings_pct < 1 && r.avg_compression_savings_pct > 0 ? r.avg_compression_savings_pct.toFixed(2) : Math.round(r.avg_compression_savings_pct)}%` : "—"}</td>
+          <td class="num col-stat-cost" data-label="Cost">${fmtCost(r.total_cost_usd)}</td>
         </tr>`)}</tbody>
       </table></div>`
     : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
@@ -703,7 +710,7 @@ function renderMonthlyMatrix(): TemplateResult {
     const tt = pivot.totalsByMonth.get(m) ?? 0;
     return html`<th class="num">${fmtCost(tt)}</th>`;
   });
-  return card(t("analytics.monthly.title"), html`<div class="analytics-table-wrap"><table class="monthly-matrix">
+  return card(t("analytics.monthly.title"), html`<div class="analytics-table-wrap table-wrap"><table class="monthly-matrix">
     <thead>
       <tr><th>${t("analytics.monthly.col_provider")}</th>${pivot.months.map((m) => html`<th>${m}</th>`)}<th class="num">${t("analytics.monthly.col_total")}</th></tr>
     </thead>
@@ -726,17 +733,17 @@ function renderRecentErrors(): TemplateResult {
   if (slice.length === 0) {
     return card(t("analytics.errors.title"), html`<p class="empty">${t("analytics.empty.no_errors")}</p>`);
   }
-  const body = html`<div class="analytics-table-wrap"><table class="analytics-errors-table">
+  const body = html`<div class="analytics-table-wrap table-wrap"><table class="analytics-errors-table responsive-card-table">
     <thead><tr><th>${t("analytics.errors.col_time")}</th><th>${t("analytics.errors.col_provider")}</th><th>${t("analytics.errors.col_model")}</th><th>${t("analytics.errors.col_status")}</th><th>${t("analytics.errors.col_message")}</th><th><span class="sr-only">${t("analytics.errors.view")}</span></th></tr></thead>
     <tbody>${slice.map((e) => {
       const href = `#/logs?request_id=${e.request_id || ""}`;
-      return html`<tr>
-        <td><time datetime=${e.created_at || ""}>${fmtDateTime(e.created_at || "")}</time></td>
-        <td>${e.provider_id || ""}</td>
-        <td class="analytics-model-cell" title=${e.upstream_model_id || ""}>${e.upstream_model_id || ""}</td>
-        <td><span class="status-pill err">${e.status_code || "—"}</span></td>
-        <td>${e.error_msg_redacted || t("analytics.errors.no_message")}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
-        <td><a class="analytics-error-link" href=${href} aria-label=${t("analytics.errors.view")}>→</a></td>
+      return html`<tr class="analytics-error-card-row">
+        <td class="col-err-time" data-label="Time"><time datetime=${e.created_at || ""}>${fmtDateTime(e.created_at || "")}</time></td>
+        <td class="col-err-provider" data-label="Provider"><strong>${e.provider_id || ""}</strong></td>
+        <td class="analytics-model-cell col-err-model" data-label="Model" title=${e.upstream_model_id || ""}><code>${e.upstream_model_id || ""}</code></td>
+        <td class="col-err-status" data-label="Status"><span class="status-pill err">${e.status_code || "—"}</span></td>
+        <td class="col-err-msg" data-label="Message">${e.error_msg_redacted || t("analytics.errors.no_message")}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
+        <td class="col-err-action"><a class="analytics-error-link" href=${href} aria-label=${t("analytics.errors.view")}>→ Inspect</a></td>
       </tr>`;
     })}</tbody>
   </table></div>`;

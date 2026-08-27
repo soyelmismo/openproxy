@@ -4750,6 +4750,250 @@ abbr {
   .target-actions-wrap button.danger {
     flex: 0 0 44px;
   }
+
+  /* ----- Proxy Cards on Mobile ----- */
+  .proxy-card-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-2) !important;
+    padding: var(--space-3) !important;
+    background: var(--color-surface) !important;
+    border: var(--border-w) var(--border-style) var(--color-border) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box !important;
+    width: 100% !important;
+    position: relative;
+  }
+  .proxy-card-row td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+  }
+  .proxy-card-row .col-proxy-host {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding-right: 5rem !important;
+    font-size: var(--fs-md);
+  }
+  .proxy-card-row .col-proxy-status {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    width: auto !important;
+  }
+  .proxy-card-row .col-proxy-port,
+  .proxy-card-row .col-proxy-protocol,
+  .proxy-card-row .col-proxy-source,
+  .proxy-card-row .col-proxy-country,
+  .proxy-card-row .col-proxy-latency {
+    display: inline-flex !important;
+    width: auto !important;
+    font-size: var(--fs-xs);
+    margin-right: var(--space-2);
+  }
+  .proxy-port-code {
+    background: var(--color-surface-2);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+  }
+  .proxy-time-text {
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .proxy-actions-wrap {
+    display: flex;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .proxy-actions-wrap button {
+    flex: 1 1 auto;
+    min-height: 38px !important;
+    justify-content: center;
+  }
+
+  /* ----- Proxy Source Cards on Mobile ----- */
+  .proxy-source-card-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-2) !important;
+    padding: var(--space-3) !important;
+    background: var(--color-surface) !important;
+    border: var(--border-w) var(--border-style) var(--color-border) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box !important;
+    width: 100% !important;
+    position: relative;
+  }
+  .proxy-source-card-row td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+  }
+  .proxy-source-card-row .col-source-drag {
+    display: flex !important;
+    align-items: center;
+    gap: var(--space-2);
+    padding-bottom: var(--space-1) !important;
+  }
+  .proxy-source-card-row .col-source-name {
+    font-size: var(--fs-md);
+    color: var(--color-text);
+  }
+  .proxy-source-card-row .col-source-url {
+    font-size: var(--fs-xs);
+    word-break: break-all;
+  }
+  .proxy-source-card-row .col-source-priority,
+  .proxy-source-card-row .col-source-active,
+  .proxy-source-card-row .col-source-stats {
+    display: inline-flex !important;
+    align-items: center;
+    width: auto !important;
+    gap: var(--space-1);
+    margin-right: var(--space-3);
+  }
+  .source-actions-wrap {
+    display: flex;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .source-actions-wrap button {
+    flex: 1 1 auto;
+    min-height: 38px !important;
+    justify-content: center;
+  }
+
+  /* ----- Debug Log Cards on Mobile ----- */
+  .debug-log-card-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-2) !important;
+    padding: var(--space-3) !important;
+    background: var(--color-surface) !important;
+    border: var(--border-w) var(--border-style) var(--color-border) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box !important;
+    width: 100% !important;
+  }
+  .debug-log-card-row td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+  }
+  .debug-log-card-row .col-debug-time,
+  .debug-log-card-row .col-debug-level,
+  .debug-log-card-row .col-debug-target {
+    display: inline-flex !important;
+    width: auto !important;
+    margin-right: var(--space-2);
+  }
+  .debug-log-card-row .col-debug-rid,
+  .debug-log-card-row .col-debug-tid {
+    display: inline-flex !important;
+    width: auto !important;
+    margin-right: var(--space-2);
+  }
+  .debug-log-card-row .col-debug-rid::before { content: "Req: "; font-weight: 500; font-size: var(--fs-xs); color: var(--color-text-muted); margin-right: 3px; }
+  .debug-log-card-row .col-debug-tid::before { content: "Trace: "; font-weight: 500; font-size: var(--fs-xs); color: var(--color-text-muted); margin-right: 3px; }
+  .debug-log-card-row .col-debug-message {
+    padding-top: var(--space-1) !important;
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+  }
+
+  /* ----- Analytics Stat & Error Cards on Mobile ----- */
+  .analytics-stat-card-row,
+  .analytics-error-card-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-2) !important;
+    padding: var(--space-3) !important;
+    background: var(--color-surface) !important;
+    border: var(--border-w) var(--border-style) var(--color-border) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box !important;
+    width: 100% !important;
+  }
+  .analytics-stat-card-row td,
+  .analytics-error-card-row td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+    text-align: left !important;
+  }
+  .analytics-stat-card-row .col-stat-provider,
+  .analytics-stat-card-row .col-stat-model {
+    font-size: var(--fs-md);
+  }
+  .analytics-stat-card-row td.num {
+    display: inline-flex !important;
+    align-items: center;
+    width: auto !important;
+    font-size: var(--fs-xs);
+    margin-right: var(--space-3);
+  }
+  .analytics-stat-card-row td.num::before {
+    content: attr(data-label) ": ";
+    font-weight: 500;
+    color: var(--color-text-muted);
+    margin-right: 4px;
+  }
+  .analytics-error-card-row .col-err-time,
+  .analytics-error-card-row .col-err-provider,
+  .analytics-error-card-row .col-err-model,
+  .analytics-error-card-row .col-err-status {
+    display: inline-flex !important;
+    align-items: center;
+    width: auto !important;
+    font-size: var(--fs-xs);
+    margin-right: var(--space-2);
+  }
+  .analytics-error-card-row .col-err-action {
+    padding-top: var(--space-2) !important;
+    border-top: 1px dashed var(--color-border-soft);
+  }
+  .analytics-error-card-row .analytics-error-link {
+    display: inline-flex;
+    padding: 0.35rem 0.75rem;
+    background: var(--color-surface-2);
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+  }
+
+  /* ----- Key-Value Metrics Tables on Mobile ----- */
+  .responsive-kv-table {
+    width: 100% !important;
+  }
+  .responsive-kv-table tr {
+    display: flex !important;
+    justify-content: space-between !important;
+    padding: var(--space-2) 0 !important;
+    border-bottom: 1px dashed var(--color-border-soft) !important;
+  }
+  .responsive-kv-table th,
+  .responsive-kv-table td {
+    padding: 0 !important;
+    border: none !important;
+  }
 }
 
 

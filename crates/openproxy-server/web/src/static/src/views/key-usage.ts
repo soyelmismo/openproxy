@@ -149,7 +149,7 @@ function renderKeyUsage(): TemplateResult {
     <section class="detail-section">
       <div class="section-header"><h3>Headline metrics</h3></div>
       <div class="table-wrap">
-        <table>
+        <table class="key-usage-table responsive-kv-table">
           <tbody>
             <tr><th>Total rows</th><td>${total}</td></tr>
             <tr><th>Unique requests</th><td>${unique}</td></tr>

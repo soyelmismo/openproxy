@@ -321,13 +321,13 @@ function renderRow(entry: DebugLogEntry): TemplateResult {
   const spanPath: TemplateResult = entry.span_path
     ? html`<br><small class="muted debug-span-path" title=${entry.span_path}>${entry.span_path}</small>`
     : html``;
-  return html`<tr>
-    <td class="debug-time" title=${entry.timestamp} style="white-space:nowrap;font-family:var(--font-mono);font-size:0.8rem;">${formatTime(entry.timestamp)}</td>
-    <td class="debug-level" style="color:${lvlColor};font-weight:600;white-space:nowrap;">${entry.level}</td>
-    <td class="debug-target" title=${entry.target} style="font-family:var(--font-mono);font-size:0.8rem;">${entry.target}</td>
-    <td class="debug-rid">${ridCell}</td>
-    <td class="debug-tid">${tidCell}</td>
-    <td class="debug-message" style="word-break:break-word;">${entry.message}${spanPath}</td>
+  return html`<tr class="debug-log-card-row">
+    <td class="debug-time col-debug-time" data-label="Time" title=${entry.timestamp} style="white-space:nowrap;font-family:var(--font-mono);font-size:0.8rem;">${formatTime(entry.timestamp)}</td>
+    <td class="debug-level col-debug-level" data-label="Level" style="color:${lvlColor};font-weight:600;white-space:nowrap;">${entry.level}</td>
+    <td class="debug-target col-debug-target" data-label="Target" title=${entry.target} style="font-family:var(--font-mono);font-size:0.8rem;">${entry.target}</td>
+    <td class="debug-rid col-debug-rid" data-label="Request ID">${ridCell}</td>
+    <td class="debug-tid col-debug-tid" data-label="Trace ID">${tidCell}</td>
+    <td class="debug-message col-debug-message" data-label="Message" style="word-break:break-word;">${entry.message}${spanPath}</td>
   </tr>`;
 }
 
@@ -376,8 +376,8 @@ function renderDebugLogs(): TemplateResult {
         <input type="text" id="debug-filter-trace-id" placeholder="tr-def456" autocomplete="off" style="padding:0.25rem 0.5rem;border:1px solid var(--color-border-soft);min-width:12rem;background:var(--color-surface);color:var(--color-text);" @change=${onTidChange}>
       </div>
     </div>
-    <div class="debug-table-wrap" style="overflow-x:auto;">
-      <table class="debug-logs-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+    <div class="debug-table-wrap table-wrap" style="overflow-x:auto;">
+      <table class="debug-logs-table responsive-card-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
         <thead>
           <tr style="border-bottom:2px solid var(--color-border);text-align:left;">
             <th class="debug-time" style="padding:0.35rem 0.5rem;white-space:nowrap;">Time</th>

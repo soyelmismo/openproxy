@@ -152,23 +152,25 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
   const lastVal = formatTimeAgo(p.last_validated);
 
   return html`
-    <tr>
-      <td><strong>${p.host}</strong></td>
-      <td><code>${p.port}</code></td>
-      <td><span class="chip chip-protocol">${p.type.toUpperCase()}</span></td>
-      <td><span class="badge badge-source">${p.source}</span></td>
-      <td>
+    <tr class="proxy-card-row">
+      <td class="col-proxy-host" data-label="Host"><strong>${p.host}</strong></td>
+      <td class="col-proxy-port" data-label="Port"><code class="proxy-port-code">${p.port}</code></td>
+      <td class="col-proxy-protocol" data-label="Type"><span class="chip chip-protocol">${p.type.toUpperCase()}</span></td>
+      <td class="col-proxy-source" data-label="Source"><span class="badge badge-source">${p.source}</span></td>
+      <td class="col-proxy-status" data-label="Status">
         <span class="status-pill ${statusClass}">
           <span class="status-dot"></span>
           ${statusLabel}
         </span>
       </td>
-      <td><code>${country}</code></td>
-      <td class=${latencyClass}>${latencyText}</td>
-      <td><small>${lastVal}</small></td>
-      <td>
-        <button class="small" @click=${() => void testProxy(p.id)}>${t("common.retry")}</button>
-        <button class="small danger" @click=${() => void deleteProxy(p.id)}>${t("common.delete")}</button>
+      <td class="col-proxy-country" data-label="Country"><code class="proxy-country-code">${country}</code></td>
+      <td class="col-proxy-latency ${latencyClass}" data-label="Latency">${latencyText}</td>
+      <td class="col-proxy-validated" data-label="Checked"><small class="proxy-time-text">${lastVal}</small></td>
+      <td class="col-proxy-actions" data-label="Actions">
+        <div class="proxy-actions-wrap">
+          <button class="small" @click=${() => void testProxy(p.id)}>${t("common.retry")}</button>
+          <button class="small danger" @click=${() => void deleteProxy(p.id)}>${t("common.delete")}</button>
+        </div>
       </td>
     </tr>
   `;
@@ -279,7 +281,7 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
         ? html`<p class="empty">${t("common.empty")}</p>`
         : html`
           <div class="table-wrap">
-            <table>
+            <table class="proxies-table responsive-card-table">
               <thead>
                 <tr>
                   <th>${t("proxies.table.col_host")}</th>

@@ -3,10 +3,70 @@
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
 import { createView } from "../lib/view-utils.js";
-import { reloadProxySources, moveProxySource } from "../handlers/proxy-source-handlers.js";
+import { reloadProxySources, moveProxySource, reorderProxySources } from "../handlers/proxy-source-handlers.js";
 import type { ProxySource } from "../lib/types/api.js";
 
 let loadError: string | null = null;
+
+let sourceTouchDragState: {
+  draggedId: string;
+  rowEl: HTMLElement;
+  currentOverEl: HTMLElement | null;
+} | null = null;
+
+function onSourceTouchStart(sourceId: string, e: TouchEvent): void {
+  const handle = e.currentTarget as HTMLElement;
+  const row = handle.closest(".proxy-source-card-row") as HTMLElement | null;
+  if (!row) return;
+
+  sourceTouchDragState = {
+    draggedId: sourceId,
+    rowEl: row,
+    currentOverEl: null,
+  };
+
+  row.classList.add("touch-dragging");
+  if (navigator.vibrate) {
+    try { navigator.vibrate(15); } catch { /* ignore */ }
+  }
+}
+
+function onSourceTouchMove(e: TouchEvent): void {
+  if (!sourceTouchDragState) return;
+  const touch = e.touches[0];
+  if (!touch) return;
+
+  if (e.cancelable) e.preventDefault();
+
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  const overRow = el?.closest(".proxy-source-card-row") as HTMLElement | null;
+
+  if (sourceTouchDragState.currentOverEl && sourceTouchDragState.currentOverEl !== overRow) {
+    sourceTouchDragState.currentOverEl.classList.remove("drag-over");
+    sourceTouchDragState.currentOverEl = null;
+  }
+
+  if (overRow && overRow !== sourceTouchDragState.rowEl) {
+    overRow.classList.add("drag-over");
+    sourceTouchDragState.currentOverEl = overRow;
+  }
+}
+
+async function onSourceTouchEnd(): Promise<void> {
+  if (!sourceTouchDragState) return;
+  const { draggedId, rowEl, currentOverEl } = sourceTouchDragState;
+
+  rowEl.classList.remove("touch-dragging");
+  if (currentOverEl) {
+    currentOverEl.classList.remove("drag-over");
+    const dropTargetId = currentOverEl.getAttribute("data-drag-id");
+    if (dropTargetId && dropTargetId !== draggedId) {
+      await reorderProxySources(draggedId, dropTargetId);
+    }
+  }
+
+  sourceTouchDragState = null;
+}
 
 function renderPageHeader(): TemplateResult {
   return html`
@@ -54,7 +114,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
   return html`
     <div class="card table-card">
       <div class="table-wrap">
-        <table class="data-table">
+        <table class="proxy-sources-table responsive-card-table">
         <thead>
           <tr>
             <th></th>
@@ -71,21 +131,27 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
           ${sources.map(
             (s) => html`
               <tr
+                class="proxy-source-card-row"
                 draggable="true"
                 data-drag-id=${s.id}
                 @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", s.id); (e.target as HTMLElement).classList.add("dragging"); }}
                 @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
                 @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("drag-over"); }}
                 @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
-                @drop=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.remove("drag-over"); const draggedId = e.dataTransfer?.getData("text/plain"); if (draggedId) { import("../handlers/proxy-source-handlers.js").then(m => m.reorderProxySources(draggedId, s.id)); } }}
+                @drop=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.remove("drag-over"); const draggedId = e.dataTransfer?.getData("text/plain"); if (draggedId) { void reorderProxySources(draggedId, s.id); } }}
               >
-                <td class="drag-handle" style="white-space:nowrap;">
-                  <span title="Drag to reorder" style="cursor:grab;">⠿</span>
+                <td class="drag-handle col-source-drag" style="white-space:nowrap;"
+                    title="Drag to reorder"
+                    @touchstart=${(e: TouchEvent) => onSourceTouchStart(s.id, e)}
+                    @touchmove=${(e: TouchEvent) => onSourceTouchMove(e)}
+                    @touchend=${() => void onSourceTouchEnd()}
+                    @touchcancel=${() => void onSourceTouchEnd()}>
+                  <span style="cursor:grab;">⠿</span>
                   <button type="button" class="small" style="padding:1px 4px;margin-left:2px;" title="Move up" @click=${() => void moveProxySource(s.id, -1)}>▲</button>
                   <button type="button" class="small" style="padding:1px 4px;" title="Move down" @click=${() => void moveProxySource(s.id, 1)}>▼</button>
                 </td>
-                <td><strong>${s.name}</strong></td>
-                <td>
+                <td class="col-source-name" data-label="Name"><strong>${s.name}</strong></td>
+                <td class="col-source-url" data-label="URL">
                   <a
                     href=${s.url}
                     target="_blank"
@@ -96,8 +162,8 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                     ${s.url}
                   </a>
                 </td>
-                <td><span class="badge">${s.priority}</span></td>
-                <td>
+                <td class="col-source-priority" data-label="Priority"><span class="badge">${s.priority}</span></td>
+                <td class="col-source-active" data-label="Active">
                   <label class="switch" title="Toggle source active state">
                     <input
                       type="checkbox"
@@ -108,45 +174,47 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                     <span class="slider round"></span>
                   </label>
                 </td>
-                <td>
+                <td class="col-source-stats" data-label="Stats">
                   <span class="badge" title="Total Proxies">${s.proxies_total}</span>
                   <span class="badge success" title="Alive Proxies">${s.proxies_alive}</span>
                   <span class="badge danger" title="Dead Proxies">${s.proxies_dead}</span>
                 </td>
-                <td>${s.updated_at || s.created_at || "-"}</td>
-                <td class="actions-cell">
-                  <button
-                    type="button"
-                    class="secondary btn-sm"
-                    data-action="testProxySource"
-                    data-arg1=${s.id}
-                    title="Test source by fetching URL and counting proxies"
-                  >
-                    Test Source
-                  </button>
-                  <button
-                    type="button"
-                    class="secondary btn-sm"
-                    data-action="showEditProxySource"
-                    data-arg1=${s.id}
-                  >
-                    Edit
-                  </button>
-                  ${!s.is_builtin
-                    ? html`
-                        <button
-                          type="button"
-                          class="danger btn-sm"
-                          data-action="deleteProxySource"
-                          data-arg1=${s.id}
-                        >
-                          Delete
-                        </button>
-                      `
-                    : html`<span class="badge" style="margin-left: 0.5rem">Built-in</span>`}
+                <td class="col-source-updated" data-label="Updated"><small class="muted">${s.updated_at || s.created_at || "-"}</small></td>
+                <td class="actions-cell col-source-actions" data-label="Actions">
+                  <div class="source-actions-wrap">
+                    <button
+                      type="button"
+                      class="secondary btn-sm"
+                      data-action="testProxySource"
+                      data-arg1=${s.id}
+                      title="Test source by fetching URL and counting proxies"
+                    >
+                      🧪 Test
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary btn-sm"
+                      data-action="showEditProxySource"
+                      data-arg1=${s.id}
+                    >
+                      Edit
+                    </button>
+                    ${!s.is_builtin
+                      ? html`
+                          <button
+                            type="button"
+                            class="danger btn-sm"
+                            data-action="deleteProxySource"
+                            data-arg1=${s.id}
+                          >
+                            Delete
+                          </button>
+                        `
+                      : html``}
+                  </div>
                 </td>
               </tr>
-            `
+            `,
           )}
         </tbody>
       </table>
