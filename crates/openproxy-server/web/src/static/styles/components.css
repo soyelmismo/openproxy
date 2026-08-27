@@ -198,17 +198,33 @@ tr.selected { background: var(--color-primary-soft); }
 .modal-picker-bg { z-index: calc(var(--z-modal) + 1); }
 
 /* ----- Modal — responsive base overrides (≤768px) ----- */
-/* The modal has min-width: 400px and max-width: 640px
-   for desktop. Below 768px we strip the min-width ceiling
-   and clamp the width to the viewport so modals don't force
-   horizontal scroll on mobile. The desktop styles above
-   remain untouched. */
 @media (max-width: 768px) {
-  .modal-bg { padding: var(--space-3); }
+  .modal-bg {
+    padding: var(--space-2);
+    align-items: center;
+  }
   .modal {
     min-width: 0;
     max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 2rem);
     width: 100%;
+    display: flex;
+    flex-direction: column;
+    margin: auto;
+  }
+  .modal-body {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    padding: var(--space-3);
+  }
+  .modal-header,
+  .modal-footer {
+    padding: var(--space-2) var(--space-3);
+    flex-shrink: 0;
+  }
+  .modal-footer {
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
   .modal-picker { max-width: calc(100vw - 1rem); }
 }
@@ -226,6 +242,33 @@ tr.selected { background: var(--color-primary-soft); }
   max-width: 440px;
   width: calc(100vw - 2 * var(--space-6));
   align-items: flex-end;
+}
+
+@media (max-width: 768px) {
+  .toast-container {
+    bottom: var(--space-3);
+    right: var(--space-3);
+    left: var(--space-3);
+    width: auto;
+    max-width: 100%;
+    align-items: stretch;
+  }
+  #logs {
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .logs-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  .logs-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--space-2);
+  }
 }
 
 .toast {

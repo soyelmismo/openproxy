@@ -189,6 +189,26 @@ function maybeBootstrapDebugLogs(): void {
   });
 }
 
+let mobileNavOpen: boolean = false;
+
+export function toggleMobileNav(): void {
+  mobileNavOpen = !mobileNavOpen;
+  renderSidebar();
+}
+
+export function closeMobileNav(): void {
+  if (mobileNavOpen) {
+    mobileNavOpen = false;
+    renderSidebar();
+  }
+}
+
+function handleNavClick(): void {
+  if (window.innerWidth <= 768) {
+    closeMobileNav();
+  }
+}
+
 export function renderSidebar(): void {
   const sb = document.querySelector(".sidebar");
   if (!sb) return;
@@ -200,40 +220,71 @@ export function renderSidebar(): void {
   const healthText = !health ? "—" : (health.status === "ok" || health.status === "healthy") ? "healthy" : (health.status || "down");
   const collapsed = !!mutableState().ui?.sidebarCollapsed;
   document.body.classList.toggle("sidebar-collapsed", collapsed);
+  document.body.classList.toggle("mobile-nav-open", mobileNavOpen);
   const toggleLabel = collapsed ? "→" : "←";
 
   render(html`
-    <div class="brand">
-      <span class="nav-label" ?hidden=${collapsed}>OpenProxy</span>
-      ${collapsed ? html`<span>OP</span>` : html``}
+    <div class="mobile-topbar mobile-only">
+      <div class="brand">
+        <span>OpenProxy</span>
+      </div>
+      <div class="mobile-topbar-actions">
+        <span class="health-dot ${dotClass}" title="Health: ${healthText}"></span>
+        <button class="mobile-nav-toggle" type="button" data-action="toggleMobileNav"
+                aria-label=${mobileNavOpen ? "Close navigation" : "Open navigation"}>
+          ${mobileNavOpen ? "✕" : "☰"}
+        </button>
+      </div>
     </div>
-    <nav>${renderLink(HOME_LINK, collapsed)}${GROUPS.map((g: SidebarGroup) => html`
-      <div class="sidebar-nav-group">
-        <div class="sidebar-nav-group-label" ?hidden=${collapsed}>${g.label}</div>
-        ${g.links.map((l: SidebarLink) => renderLink(l, collapsed))}
-      </div>`)}</nav>
-    <div class="health">
-      ${collapsed
-        ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}"><span class="health-dot ${dotClass}"></span></span>`
-        : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}"></span> ${healthText}</span>`}
-    </div>
-    <div class="sidebar-footer">
-      <button class="sidebar-toggle" type="button" data-action="toggleSidebar"
-              title=${collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              aria-label=${collapsed ? "Expand sidebar" : "Collapse sidebar"}>${toggleLabel}</button>
-      <span id="theme-toggle-slot"></span>
-      <button class="sidebar-logout" type="button" data-action="logout"
-              title=${t("nav.logout")}
-              aria-label=${t("nav.logout")}
-              ?hidden=${collapsed}>${t("nav.logout")}</button>
+
+    <div class="sidebar-backdrop mobile-only" @click=${closeMobileNav} ?hidden=${!mobileNavOpen}></div>
+
+    <div class="sidebar-drawer">
+      <div class="brand desktop-only">
+        <span class="nav-label" ?hidden=${collapsed}>OpenProxy</span>
+        ${collapsed ? html`<span>OP</span>` : html``}
+      </div>
+      <div class="mobile-drawer-header mobile-only">
+        <div class="brand">OpenProxy</div>
+        <button class="mobile-nav-close" type="button" data-action="toggleMobileNav" aria-label="Close menu">✕</button>
+      </div>
+      <nav @click=${handleNavClick}>${renderLink(HOME_LINK, collapsed)}${GROUPS.map((g: SidebarGroup) => html`
+        <div class="sidebar-nav-group">
+          <div class="sidebar-nav-group-label" ?hidden=${collapsed}>${g.label}</div>
+          ${g.links.map((l: SidebarLink) => renderLink(l, collapsed))}
+        </div>`)}</nav>
+      <div class="health">
+        ${collapsed
+          ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}"><span class="health-dot ${dotClass}"></span></span>`
+          : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}"></span> ${healthText}</span>`}
+      </div>
+      <div class="sidebar-footer">
+        <button class="sidebar-toggle desktop-only" type="button" data-action="toggleSidebar"
+                title=${collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-label=${collapsed ? "Expand sidebar" : "Collapse sidebar"}>${toggleLabel}</button>
+        <span id="theme-toggle-slot"></span>
+        <button class="sidebar-logout" type="button" data-action="logout"
+                title=${t("nav.logout")}
+                aria-label=${t("nav.logout")}
+                ?hidden=${collapsed}>${t("nav.logout")}</button>
+      </div>
     </div>
   `, sb as HTMLElement);
   applyActiveState();
   mountThemeToggle();
 }
 
-window.addEventListener("hashchange", () => { queueMicrotask(applyActiveState); });
+window.addEventListener("hashchange", () => {
+  closeMobileNav();
+  queueMicrotask(applyActiveState);
+});
 queueMicrotask(applyActiveState);
+
+window.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (e.key === "Escape" && mobileNavOpen) {
+    closeMobileNav();
+  }
+});
 
 export function toggleSidebar(): void {
   const s = mutableState();

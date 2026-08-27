@@ -207,85 +207,234 @@ section.card {
   gap: var(--space-2);
 }
 
+/* Desktop defaults for drawer/mobile utilities */
+.mobile-only { display: none !important; }
+.desktop-only { display: inherit; }
+.sidebar-drawer { display: contents; }
+
 /* ============================================
    RESPONSIVE — mobile base.
    ------------------------------------------
    Two breakpoints only: 768px (tablet / mobile) and
    480px (small mobile). Desktop is the default
    block above; everything below this section is
-   progressive overrides. NO additional breakpoints.
+   progressive overrides.
    ============================================ */
 
 @media (max-width: 768px) {
-  /* App shell: drop the fixed sidebar column and stack
-     sidebar + main vertically. Sidebar becomes a top bar.
+  .mobile-only { display: inherit !important; }
+  .desktop-only { display: none !important; }
 
-     Important: we must beat the `body.sidebar-collapsed #app`
-     rule above, otherwise a user who left the sidebar collapsed
-     on desktop would still see a narrow sidebar column on
-     mobile. Repeating the body class in the selector keeps the
-     specificity the same (0,1,1,0), and putting it AFTER the
-     desktop rule lets the cascade flip the columns. */
   #app,
   body.sidebar-collapsed #app {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
+    height: 100dvh;
+    overflow: hidden;
   }
-
-  /* In mobile the sidebar is always expanded. If a user left it
-     collapsed from desktop (persisted in localStorage), we
-     force the nav labels and brand back to visible. The
-     .nav-label[hidden] rule above is overridden here. */
-  .sidebar nav a { justify-content: flex-start; }
-  .sidebar .brand { text-align: left; }
-  .nav-label[hidden] { display: inline !important; }
-
-  /* The collapse toggle and the theme toggle make no sense in
-     a mobile top-bar: the sidebar is always expanded, and the
-     theme toggle is absolutely positioned at bottom-left of
-     the sidebar (which is now a short strip on top). */
-  .sidebar-toggle,
-  .sidebar .theme-toggle { display: none; }
 
   .sidebar {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
+    padding: 0;
     border-right: none;
     border-bottom: var(--border-w) var(--border-style) var(--color-border);
-    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    display: block;
+    overflow: visible;
+    flex-direction: initial;
+    gap: initial;
+    z-index: 100;
   }
-  .sidebar .brand {
-    font-size: 0.9rem;
-    padding: 0.25rem 0.5rem;
-    border-bottom: none;
-    margin-bottom: 0;
-    flex: 0 0 auto;
+
+  .mobile-topbar {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.55rem 1rem;
+    min-height: 52px;
+    background: var(--color-surface);
+    border-bottom: var(--border-w) var(--border-style) var(--color-border);
+    position: relative;
+    z-index: 10;
   }
-  .sidebar nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    flex: 1 1 100%;
+
+  .mobile-topbar .brand {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0;
+    margin: 0;
+    border: none;
+    display: flex;
+    align-items: center;
   }
-  .sidebar nav a {
-    padding: 0.3rem 0.5rem;
-    font-size: 0.85rem;
+
+  .mobile-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
   }
-  .sidebar .health {
-    margin-top: 0;
-    padding-top: 0;
-    border-top: none;
+
+  .mobile-nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    color: var(--color-text);
+    font-size: 1.2rem;
+    cursor: pointer;
+    line-height: 1;
+    transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+  }
+  .mobile-nav-toggle:hover,
+  .mobile-nav-toggle:active {
+    background: var(--color-primary-soft);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 998;
+    transition: opacity var(--t-fast);
+  }
+  .sidebar-backdrop[hidden] {
+    display: none !important;
+  }
+
+  .sidebar-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 290px;
+    max-width: 85vw;
+    background: var(--color-surface);
+    z-index: 999;
+    transform: translateX(-100%);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-4);
+    gap: var(--space-3);
+    overflow-y: auto;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.35);
+    border-right: var(--border-w) var(--border-style) var(--color-border);
+  }
+
+  body.mobile-nav-open .sidebar-drawer {
+    transform: translateX(0);
+  }
+
+  .mobile-drawer-header {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: var(--space-3);
+    border-bottom: var(--border-w-2) var(--border-style) var(--color-border);
+    margin-bottom: var(--space-2);
+  }
+  .mobile-drawer-header .brand {
+    font-family: var(--font-display);
+    font-size: var(--fs-lg);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+  }
+  .mobile-nav-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: var(--border-w) var(--border-style) var(--color-border);
+    color: var(--color-text-muted);
+    font-size: 1.1rem;
+    cursor: pointer;
+  }
+  .mobile-nav-close:hover {
+    color: var(--color-text);
+    background: var(--color-surface-2);
+  }
+
+  .sidebar-drawer nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 0 auto;
+  }
+
+  .sidebar-drawer nav a {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.65rem 0.75rem;
+    min-height: 44px;
+    border-radius: var(--radius-md);
+    font-size: var(--fs-md);
+    justify-content: flex-start;
+  }
+  .sidebar-drawer .nav-label[hidden] {
+    display: inline !important;
+  }
+
+  .sidebar-drawer .sidebar-nav-group-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+    padding: 0.5rem 0.75rem 0.25rem;
+    font-weight: 600;
+  }
+
+  .sidebar-drawer .health {
+    margin-top: auto;
+    padding-top: var(--space-3);
+    border-top: var(--border-w) var(--border-style) var(--color-border-soft);
     font-size: var(--fs-xs);
     flex: 0 0 auto;
-    margin-left: auto;
+  }
+
+  .sidebar-drawer .sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    align-items: stretch;
+    padding-top: var(--space-2);
+  }
+
+  .sidebar-drawer .sidebar-logout {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+  }
+
+  main {
+    padding: var(--space-4) var(--space-3);
+    min-width: 0;
+    max-width: 100vw;
+    box-sizing: border-box;
+    padding-bottom: max(var(--space-4), env(safe-area-inset-bottom));
   }
 }
 
 @media (max-width: 480px) {
   /* Tighter main padding for small mobile. */
-  main { padding: var(--space-3); }
+  main { padding: var(--space-3) var(--space-2); }
 
   /* Smaller page header on small screens. */
   .page-header h2 { font-size: 1.1rem; }

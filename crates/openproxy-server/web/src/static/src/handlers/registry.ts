@@ -64,7 +64,7 @@ import {
   toggleModelPicker, filterModelPicker, removeModelFromKey,
 } from "../components/model-picker.js";
 import { mountThemeToggle } from "../components/theme-toggle.js";
-import { toggleSidebar, logout } from "../components/sidebar.js";
+import { toggleSidebar, toggleMobileNav, closeMobileNav, logout } from "../components/sidebar.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
@@ -293,6 +293,8 @@ export const HANDLERS = {
   // (data-action="toggleSidebar") and persists the choice to
   // localStorage.
   toggleSidebar,
+  toggleMobileNav,
+  closeMobileNav,
 
   // DASHBOARD-FIX (Bug 2 / Step 2f): sidebar Logout button. Wipes
   // the stored admin token and navigates to the login route. See
