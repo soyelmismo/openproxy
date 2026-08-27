@@ -616,8 +616,8 @@ class LiveLogsStore {
 
     for (const a of this.attemptsByKey.values()) {
       if (a.terminal) continue;
-      // Safety net: auto-expire stale inflight after 60s
-      if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 60_000)) {
+      // Safety net: auto-expire stale inflight after 30m (1800s)
+      if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 1_800_000)) {
         a.terminal = true;
         a.terminalKind = "failed";
         a.stage = "failed";

@@ -159,10 +159,10 @@ describe("liveLogsStore detail management", () => {
     expect(finished[0]?.terminalKind).toBe("failed");
   });
 
-  it("auto-expires stale inflight requests older than 60s", () => {
+  it("auto-expires stale inflight requests older than 30m", () => {
     liveLogsStore.clearForTest();
 
-    const staleTime = Date.now() - 70_000;
+    const staleTime = Date.now() - 1_900_000;
     liveLogsStore.dispatch({
       type: "attempt_event",
       cursor: 1,

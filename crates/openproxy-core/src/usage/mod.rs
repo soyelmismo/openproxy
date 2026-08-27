@@ -39,8 +39,8 @@ pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAtt
         .unwrap_or_default()
         .as_millis() as u64;
 
-    // Retain only fresh inflight attempts (<60s)
-    INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 60_000);
+    // Retain only fresh inflight attempts (<30m safety net)
+    INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 1_800_000);
 
     let mut list: Vec<_> = INFLIGHT_REGISTRY
         .iter()

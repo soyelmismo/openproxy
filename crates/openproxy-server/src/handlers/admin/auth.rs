@@ -5,7 +5,7 @@ pub(crate) fn authenticate_admin_ws(
     state: &AppState,
     headers: &HeaderMap,
     query_token: Option<&str>,
-    remote_addr: Option<&SocketAddr>,
+    _remote_addr: Option<&SocketAddr>,
 ) -> Result<(), ApiError> {
     // Dev convenience: when the operator explicitly opts in by setting
     // OPENPROXY_DASHBOARD_AUTH_BYPASS=1 in the server's environment, every
@@ -23,7 +23,7 @@ pub(crate) fn authenticate_admin_ws(
         if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS")
             && bypass == "1"
         {
-            if let Some(addr) = remote_addr
+            if let Some(addr) = _remote_addr
                 && !addr.ip().is_loopback()
             {
                 tracing::error!(

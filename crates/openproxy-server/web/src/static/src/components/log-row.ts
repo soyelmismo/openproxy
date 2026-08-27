@@ -16,9 +16,7 @@ export function renderLogPhaseHtml(attempt: AttemptState): TemplateResult {
     sublabel = attempt.row ? `total ${attempt.elapsedMsAtEvent}ms` : `${attempt.elapsedMsAtEvent}ms`;
   } else {
     const liveMs = attempt.elapsedMsAtEvent;
-    // Stale cap
-    const cap = phase === "streaming" ? 2_000 : 60_000;
-    const displayMs = liveMs > cap ? cap : liveMs;
+    const displayMs = liveMs;
     
     if (phase === "streaming" && attempt.ttftMs != null) {
       sublabel = `ttft ${attempt.ttftMs}ms`;
