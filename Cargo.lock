@@ -1935,6 +1935,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.23.1",
  "chrono",
+ "getrandom 0.4.3",
  "openproxy-types",
  "parking_lot",
  "rand 0.10.2",

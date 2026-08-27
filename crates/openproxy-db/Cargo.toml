@@ -23,3 +23,4 @@ zeroize = { workspace = true }
 regex = { workspace = true }
 rand.workspace = true
 thiserror.workspace = true
+getrandom = "0.4.3"
