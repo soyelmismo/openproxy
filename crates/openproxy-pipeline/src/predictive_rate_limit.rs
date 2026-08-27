@@ -181,7 +181,8 @@ impl TargetPredictiveState {
         if self.state == TargetRateState::Open {
             return false;
         }
-        if local_retry_count >= 1 && fingerprint != 0 && fingerprint == self.last_error_fingerprint {
+        if local_retry_count >= 1 && fingerprint != 0 && fingerprint == self.last_error_fingerprint
+        {
             return false;
         }
         if self.consecutive_failures >= 2 && local_retry_count >= 1 {
