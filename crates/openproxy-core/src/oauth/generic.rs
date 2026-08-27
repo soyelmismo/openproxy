@@ -6,7 +6,6 @@
 //! refresh through a token endpoint.
 
 use base64::Engine;
-use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -437,7 +436,7 @@ async fn call_oauth_endpoint(
 /// Generate a cryptographically random PKCE code verifier (43-128 chars).
 pub fn generate_code_verifier() -> String {
     let mut buf = [0u8; 32];
-    rand::rng().fill_bytes(&mut buf);
+    getrandom::fill(&mut buf).expect("getrandom failed");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
