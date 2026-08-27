@@ -134,7 +134,13 @@ fn compare_targets_with_quota(a: &TargetWithQuota, b: &TargetWithQuota) -> std::
         .target
         .priority_order
         .cmp(&b.resolved_target.target.priority_order)
-        .then_with(|| a.resolved_target.target.id.0.cmp(&b.resolved_target.target.id.0))
+        .then_with(|| {
+            a.resolved_target
+                .target
+                .id
+                .0
+                .cmp(&b.resolved_target.target.id.0)
+        })
         .then_with(|| a.priority.cmp(&b.priority))
         .then_with(|| {
             b.remaining_fraction

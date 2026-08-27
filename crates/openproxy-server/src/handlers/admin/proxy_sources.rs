@@ -35,7 +35,8 @@ fn validate_create_source_input(body: &CreateProxySourceInput) -> Result<(), Api
 
 fn spawn_source_sync_and_test(pool: Arc<openproxy_db::DbPool>) {
     tokio::spawn(async move {
-        let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await else {
+        let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await
+        else {
             return;
         };
         if summary.added > 0 || summary.fetched > 0 {
@@ -64,10 +65,7 @@ pub async fn update_source(
     Ok(Json(src))
 }
 
-fn validate_source_deletion(
-    conn: &rusqlite::Connection,
-    id: &str,
-) -> Result<(), ApiError> {
+fn validate_source_deletion(conn: &rusqlite::Connection, id: &str) -> Result<(), ApiError> {
     let Some(source) = get_proxy_source(conn, id)? else {
         return Err(ApiError(CoreError::Validation(format!(
             "proxy source '{id}' not found"

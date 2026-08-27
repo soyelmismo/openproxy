@@ -193,11 +193,10 @@ fn clean_object_schema(
     sanitize_schema_fields(map, is_schema_node, depth)
 }
 
-fn merge_items_into_properties(
-    properties_val: &mut Value,
-    items_val: &mut Value,
-) {
-    if let (Some(target_map), Some(source_map)) = (properties_val.as_object_mut(), items_val.as_object_mut()) {
+fn merge_items_into_properties(properties_val: &mut Value, items_val: &mut Value) {
+    if let (Some(target_map), Some(source_map)) =
+        (properties_val.as_object_mut(), items_val.as_object_mut())
+    {
         for (k, v) in std::mem::take(source_map) {
             target_map.entry(k).or_insert(v);
         }
@@ -223,7 +222,9 @@ fn normalize_object_schema(map: &mut serde_json::Map<String, Value>) {
     merge_items_into_properties(target_props, &mut items);
 }
 
-fn prune_invalid_properties(props: &mut serde_json::Map<String, Value>) -> std::collections::HashSet<String> {
+fn prune_invalid_properties(
+    props: &mut serde_json::Map<String, Value>,
+) -> std::collections::HashSet<String> {
     let mut dropped_keys = std::collections::HashSet::new();
     props.retain(|k, v| {
         if v.is_object() {
@@ -236,7 +237,10 @@ fn prune_invalid_properties(props: &mut serde_json::Map<String, Value>) -> std::
     dropped_keys
 }
 
-fn clean_and_collect_nullable(props: &mut serde_json::Map<String, Value>, depth: usize) -> std::collections::HashSet<String> {
+fn clean_and_collect_nullable(
+    props: &mut serde_json::Map<String, Value>,
+    depth: usize,
+) -> std::collections::HashSet<String> {
     let mut nullable_keys = std::collections::HashSet::new();
     for (k, v) in props.iter_mut() {
         if clean_json_schema_recursive(v, true, depth + 1) {
@@ -345,7 +349,10 @@ fn merge_union_required(map: &mut serde_json::Map<String, Value>, v: Value) {
     }
 }
 
-fn merge_union_branch(map: &mut serde_json::Map<String, Value>, branch_obj: serde_json::Map<String, Value>) {
+fn merge_union_branch(
+    map: &mut serde_json::Map<String, Value>,
+    branch_obj: serde_json::Map<String, Value>,
+) {
     for (k, v) in branch_obj {
         match k.as_str() {
             "properties" => merge_union_properties(map, v),
@@ -513,7 +520,9 @@ fn sanitize_schema_fields(
     is_schema_node: bool,
     depth: usize,
 ) -> bool {
-    let has_standard_keyword = map.keys().any(|k| ALLOWED_SCHEMA_FIELDS.contains(&k.as_str()));
+    let has_standard_keyword = map
+        .keys()
+        .any(|k| ALLOWED_SCHEMA_FIELDS.contains(&k.as_str()));
     let is_not_schema_payload =
         map.contains_key("functionCall") || map.contains_key("functionResponse");
     if is_schema_node && !has_standard_keyword && !map.is_empty() && !is_not_schema_payload {
@@ -634,7 +643,12 @@ fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
 
     for sub_schema in all_of {
         if let Value::Object(sub_map) = sub_schema {
-            merge_all_of_sub_schema(sub_map, &mut merged_properties, &mut merged_required, &mut other_fields);
+            merge_all_of_sub_schema(
+                sub_map,
+                &mut merged_properties,
+                &mut merged_required,
+                &mut other_fields,
+            );
         }
     }
 
@@ -657,10 +671,16 @@ fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: &s
     }
 }
 
-fn extract_constraint_hint(map: &serde_json::Map<String, Value>, field: &str, label: &str) -> Option<String> {
+fn extract_constraint_hint(
+    map: &serde_json::Map<String, Value>,
+    field: &str,
+    label: &str,
+) -> Option<String> {
     let val = map.get(field)?;
     (!val.is_null()).then(|| {
-        let val_str = val.as_str().map_or_else(|| val.to_string(), std::string::ToString::to_string);
+        let val_str = val
+            .as_str()
+            .map_or_else(|| val.to_string(), std::string::ToString::to_string);
         format!("{label}: {val_str}")
     })
 }

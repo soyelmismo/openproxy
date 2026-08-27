@@ -62,10 +62,7 @@ struct CooldownParams {
     cooldown_factor: u32,
 }
 
-fn update_cooldown(
-    repo: &dyn crate::repository::PipelineRepository,
-    params: CooldownParams,
-) {
+fn update_cooldown(repo: &dyn crate::repository::PipelineRepository, params: CooldownParams) {
     if params.combo_id.0 == -1 {
         return;
     }

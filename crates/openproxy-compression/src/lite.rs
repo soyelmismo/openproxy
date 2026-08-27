@@ -95,8 +95,7 @@ fn needs_normalization(s: &str) -> bool {
     let mut newline_run = 0;
     let mut line_has_trailing_ws = false;
     for &b in s.as_bytes() {
-        if let Some(res) =
-            check_byte_normalization(b, &mut newline_run, &mut line_has_trailing_ws)
+        if let Some(res) = check_byte_normalization(b, &mut newline_run, &mut line_has_trailing_ws)
         {
             return res;
         }
@@ -220,11 +219,7 @@ fn extract_data_image_format(url: &str) -> &str {
         return "unknown";
     };
     let fmt = rest.split_once(';').map_or(rest, |(f, _)| f);
-    if fmt.is_empty() {
-        "unknown"
-    } else {
-        fmt
-    }
+    if fmt.is_empty() { "unknown" } else { fmt }
 }
 
 fn try_replace_image_part(part: &mut serde_json::Value) -> bool {
@@ -289,11 +284,7 @@ fn clean_text_unicode(text: &str) -> Option<String> {
         .replace("\r\n", "\n")
         .replace('\r', "\n")
         .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
-    if cleaned != text {
-        Some(cleaned)
-    } else {
-        None
-    }
+    if cleaned != text { Some(cleaned) } else { None }
 }
 
 pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {

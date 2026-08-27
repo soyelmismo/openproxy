@@ -74,7 +74,10 @@ impl RaceSink {
     }
 
     fn try_register_winner(&self, target: usize, worker_id: usize) -> Result<(), StreamSinkError> {
-        match self.winner.compare_exchange(0, target, Ordering::AcqRel, Ordering::Acquire) {
+        match self
+            .winner
+            .compare_exchange(0, target, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(_) => {
                 self.cancel_other_workers(worker_id);
                 Ok(())

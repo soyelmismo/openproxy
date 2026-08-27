@@ -500,7 +500,9 @@ fn find_safe_split_point(input: &str) -> usize {
     (1..=check_len)
         .rev()
         .map(|partial_len| input.len() - partial_len)
-        .find(|&split_byte| input.is_char_boundary(split_byte) && is_partial_open_tag_tail(&input[split_byte..]))
+        .find(|&split_byte| {
+            input.is_char_boundary(split_byte) && is_partial_open_tag_tail(&input[split_byte..])
+        })
         .unwrap_or(input.len())
 }
 

@@ -36,40 +36,40 @@ impl KiroAdapter {
         }
     }
 
-fn map_kiro_discovered_model(item: &serde_json::Value) -> Option<DiscoveredModel> {
-    let model_id_str = item
-        .get("modelId")
-        .and_then(|v| v.as_str())
-        .or_else(|| item.get("id").and_then(|v| v.as_str()))?;
-    let display_name_str = item
-        .get("modelName")
-        .and_then(|v| v.as_str())
-        .or_else(|| item.get("name").and_then(|v| v.as_str()))
-        .unwrap_or(model_id_str);
+    fn map_kiro_discovered_model(item: &serde_json::Value) -> Option<DiscoveredModel> {
+        let model_id_str = item
+            .get("modelId")
+            .and_then(|v| v.as_str())
+            .or_else(|| item.get("id").and_then(|v| v.as_str()))?;
+        let display_name_str = item
+            .get("modelName")
+            .and_then(|v| v.as_str())
+            .or_else(|| item.get("name").and_then(|v| v.as_str()))
+            .unwrap_or(model_id_str);
 
-    let caps = openproxy_types::ModelCapabilities {
-        vision: Some(true),
-        tool_calling: Some(true),
-        reasoning: Some(true),
-        thinking: Some(true),
-        attachment: None,
-        structured_output: None,
-        temperature: None,
-    };
+        let caps = openproxy_types::ModelCapabilities {
+            vision: Some(true),
+            tool_calling: Some(true),
+            reasoning: Some(true),
+            thinking: Some(true),
+            attachment: None,
+            structured_output: None,
+            temperature: None,
+        };
 
-    Some(DiscoveredModel {
-        model_id: ModelId::new(model_id_str),
-        display_name: Some(display_name_str.to_string()),
-        target_format: TargetFormat::Openai,
-        context_length: Some(200_000),
-        max_output_tokens: Some(64_000),
-        input_modalities: None,
-        output_modalities: None,
-        model_type: Some("chat".to_string()),
-        family: None,
-        capabilities: Some(caps),
-    })
-}
+        Some(DiscoveredModel {
+            model_id: ModelId::new(model_id_str),
+            display_name: Some(display_name_str.to_string()),
+            target_format: TargetFormat::Openai,
+            context_length: Some(200_000),
+            max_output_tokens: Some(64_000),
+            input_modalities: None,
+            output_modalities: None,
+            model_type: Some("chat".to_string()),
+            family: None,
+            capabilities: Some(caps),
+        })
+    }
 
     fn parse_models_response(json: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         let models_arr = json
@@ -77,8 +77,10 @@ fn map_kiro_discovered_model(item: &serde_json::Value) -> Option<DiscoveredModel
             .and_then(|v| v.as_array())
             .or_else(|| json.get("availableModels").and_then(|v| v.as_array()))?;
 
-        let discovered: Vec<DiscoveredModel> =
-            models_arr.iter().filter_map(Self::map_kiro_discovered_model).collect();
+        let discovered: Vec<DiscoveredModel> = models_arr
+            .iter()
+            .filter_map(Self::map_kiro_discovered_model)
+            .collect();
 
         (!discovered.is_empty()).then_some(discovered)
     }
@@ -521,13 +523,9 @@ impl KiroAdapter {
                 discover_kiro_profile_arn(upstream, access_token, &base_url, &region).await;
         }
 
-        let Some(data) = fetch_kiro_usage_limits_json(
-            upstream,
-            access_token,
-            &base_url,
-            profile_arn.as_deref(),
-        )
-        .await?
+        let Some(data) =
+            fetch_kiro_usage_limits_json(upstream, access_token, &base_url, profile_arn.as_deref())
+                .await?
         else {
             return Ok(empty_kiro_quota());
         };

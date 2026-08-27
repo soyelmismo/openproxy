@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc, NaiveDateTime};
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 pub fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, chrono::ParseError> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {

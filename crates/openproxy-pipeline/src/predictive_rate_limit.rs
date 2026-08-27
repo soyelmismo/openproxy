@@ -79,16 +79,23 @@ impl TargetPredictiveState {
             && now_ms.saturating_sub(self.last_429_at_ms) > MEMORY_DECAY_IDLE_MS;
 
         if is_eligible {
-            self.learned_burst = self.learned_burst.saturating_add(5).min(DEFAULT_BURST_CAPACITY);
+            self.learned_burst = self
+                .learned_burst
+                .saturating_add(5)
+                .min(DEFAULT_BURST_CAPACITY);
             self.last_429_at_ms = now_ms;
         }
     }
 
     pub fn evaluate(&self, now_ms: u64) -> TargetReadiness {
         match self.state {
-            TargetRateState::Open => self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms)),
+            TargetRateState::Open => {
+                self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms))
+            }
             TargetRateState::HalfOpen if self.in_flight == 0 => TargetReadiness::Probe,
-            TargetRateState::HalfOpen => self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms)),
+            TargetRateState::HalfOpen => {
+                self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms))
+            }
             TargetRateState::Closed if self.window_count >= self.learned_burst => {
                 let window_end = self.window_start_ms + self.window_duration_ms;
                 self.saturated_readiness(window_end.saturating_sub(now_ms))
@@ -239,12 +246,7 @@ impl PredictiveRateLimiter {
 
     /// Intenta adquirir el permiso para el target. Retorna true si es admitido
     /// (Ready o Probe) y reserva 1 petición en vuelo y contador de ventana.
-    pub fn acquire_target(
-        &self,
-        combo_id: ComboId,
-        target_id: ComboTargetId,
-        now_ms: u64,
-    ) -> bool {
+    pub fn acquire_target(&self, combo_id: ComboId, target_id: ComboTargetId, now_ms: u64) -> bool {
         let key = Self::compute_key(combo_id, target_id);
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
@@ -302,8 +304,8 @@ impl PredictiveRateLimiter {
         state.learned_burst = std::cmp::max(1, state.window_count.saturating_sub(1));
         state.state = TargetRateState::Open;
 
-        let penalty_ms = retry_after_secs
-            .map_or(DEFAULT_WINDOW_DURATION_MS, |s| (s * 1000).max(3000));
+        let penalty_ms =
+            retry_after_secs.map_or(DEFAULT_WINDOW_DURATION_MS, |s| (s * 1000).max(3000));
         state.reset_at_ms = now_ms + penalty_ms;
     }
 
@@ -312,12 +314,7 @@ impl PredictiveRateLimiter {
     /// brevemente para que el chain-skip salte al siguiente target.
     /// El penalty crece con fallos consecutivos (15s base, duplica cada fallo,
     /// cap 120s) para adaptarse a targets persistentemente rotos.
-    pub fn report_upstream_error(
-        &self,
-        combo_id: ComboId,
-        target_id: ComboTargetId,
-        now_ms: u64,
-    ) {
+    pub fn report_upstream_error(&self, combo_id: ComboId, target_id: ComboTargetId, now_ms: u64) {
         let key = Self::compute_key(combo_id, target_id);
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
@@ -332,7 +329,9 @@ impl PredictiveRateLimiter {
         let consecutive = state.window_count.saturating_add(1).min(8);
         state.window_count = consecutive;
         let base_ms: u64 = 15_000;
-        let penalty_ms = base_ms.saturating_mul(1u64 << consecutive.min(3)).min(120_000);
+        let penalty_ms = base_ms
+            .saturating_mul(1u64 << consecutive.min(3))
+            .min(120_000);
         state.reset_at_ms = now_ms + penalty_ms;
     }
 }
@@ -364,7 +363,10 @@ mod tests {
         let readiness = limiter.evaluate_target(combo, target, now);
         match readiness {
             TargetReadiness::Saturated { learned_burst, .. } => {
-                assert_eq!(learned_burst, 2, "debe aprender que el límite de ráfaga es 2");
+                assert_eq!(
+                    learned_burst, 2,
+                    "debe aprender que el límite de ráfaga es 2"
+                );
             }
             _ => panic!("debe estar saturado tras 429"),
         }
@@ -388,7 +390,10 @@ mod tests {
         limiter.report_success(combo, target, None, None, now);
 
         // Vuelve a estar Ready
-        assert_eq!(limiter.evaluate_target(combo, target, now), TargetReadiness::Ready);
+        assert_eq!(
+            limiter.evaluate_target(combo, target, now),
+            TargetReadiness::Ready
+        );
     }
 
     #[test]
@@ -427,7 +432,10 @@ mod tests {
         let shard = limiter.shard_for(key);
         let map = shard.inner.lock();
         let state = map.get(&key).unwrap();
-        assert_eq!(state.learned_burst, 2, "burst debe haber crecido elásticamente a 2");
+        assert_eq!(
+            state.learned_burst, 2,
+            "burst debe haber crecido elásticamente a 2"
+        );
     }
 
     #[test]
@@ -446,7 +454,10 @@ mod tests {
         assert!(!limiter.acquire_target(combo, target_a, now));
 
         // Target B is completely independent and Ready
-        assert_eq!(limiter.evaluate_target(combo, target_b, now), TargetReadiness::Ready);
+        assert_eq!(
+            limiter.evaluate_target(combo, target_b, now),
+            TargetReadiness::Ready
+        );
         assert!(limiter.acquire_target(combo, target_b, now));
     }
 
@@ -471,15 +482,27 @@ mod tests {
         // En una nueva petición:
         // Evaluamos Target 1 -> Saturated (debe saltarse si hay alternativas)
         let t1_ready = limiter.evaluate_target(combo, target_1, now);
-        assert!(matches!(t1_ready, TargetReadiness::Saturated { learned_burst: 1, .. }));
+        assert!(matches!(
+            t1_ready,
+            TargetReadiness::Saturated {
+                learned_burst: 1,
+                ..
+            }
+        ));
 
         // Target 2 está listo y atiende la petición
-        assert_eq!(limiter.evaluate_target(combo, target_2, now), TargetReadiness::Ready);
+        assert_eq!(
+            limiter.evaluate_target(combo, target_2, now),
+            TargetReadiness::Ready
+        );
         assert!(limiter.acquire_target(combo, target_2, now));
         limiter.report_success(combo, target_2, None, None, now);
 
         // Target 3 sigue listo
-        assert_eq!(limiter.evaluate_target(combo, target_3, now), TargetReadiness::Ready);
+        assert_eq!(
+            limiter.evaluate_target(combo, target_3, now),
+            TargetReadiness::Ready
+        );
     }
 
     #[test]
@@ -495,7 +518,10 @@ mod tests {
 
         // Target debe estar Saturated
         let r = limiter.evaluate_target(combo, target, now);
-        assert!(matches!(r, TargetReadiness::Saturated { .. }), "upstream error debe saturar");
+        assert!(
+            matches!(r, TargetReadiness::Saturated { .. }),
+            "upstream error debe saturar"
+        );
 
         // learned_burst NO fue reducido (sigue en default 1000)
         let key = PredictiveRateLimiter::compute_key(combo, target);
@@ -503,19 +529,29 @@ mod tests {
         let reset_at = {
             let map = shard.inner.lock();
             let state = map.get(&key).unwrap();
-            assert_eq!(state.learned_burst, DEFAULT_BURST_CAPACITY, "upstream error no reduce burst");
+            assert_eq!(
+                state.learned_burst, DEFAULT_BURST_CAPACITY,
+                "upstream error no reduce burst"
+            );
             state.reset_at_ms
         };
 
         // Tras expirar penalty, debe pasar a HalfOpen/Probe
         let after = reset_at + 1;
         let r2 = limiter.evaluate_target(combo, target, after);
-        assert_eq!(r2, TargetReadiness::Probe, "debe pasar a Probe tras penalty");
+        assert_eq!(
+            r2,
+            TargetReadiness::Probe,
+            "debe pasar a Probe tras penalty"
+        );
 
         // Probe exitoso recupera
         assert!(limiter.acquire_target(combo, target, after));
         limiter.report_success(combo, target, None, None, after);
-        assert_eq!(limiter.evaluate_target(combo, target, after), TargetReadiness::Ready);
+        assert_eq!(
+            limiter.evaluate_target(combo, target, after),
+            TargetReadiness::Ready
+        );
     }
 
     #[test]
@@ -549,9 +585,15 @@ mod tests {
         let penalty_2 = reset_2 - now;
 
         // El segundo penalty debe ser >= que el primero (escalado exponencial)
-        assert!(penalty_2 >= penalty_1, "penalty debe escalar: {penalty_2} >= {penalty_1}");
+        assert!(
+            penalty_2 >= penalty_1,
+            "penalty debe escalar: {penalty_2} >= {penalty_1}"
+        );
 
         // Y debe estar capeado a <= 120s
-        assert!(penalty_2 <= 120_000, "penalty debe estar capeado: {penalty_2} <= 120000");
+        assert!(
+            penalty_2 <= 120_000,
+            "penalty debe estar capeado: {penalty_2} <= 120000"
+        );
     }
 }

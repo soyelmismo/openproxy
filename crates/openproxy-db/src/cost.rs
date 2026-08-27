@@ -162,7 +162,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         );
     }
     let (cost_usd, tps) = compute(price, input);
-    let (error_msg_for_db, error_msg_redacted_for_db) = prepare_usage_error_msg(input.error_msg.as_ref());
+    let (error_msg_for_db, error_msg_redacted_for_db) =
+        prepare_usage_error_msg(input.error_msg.as_ref());
 
     let rowid = insert_usage_record(
         conn,
@@ -228,7 +229,12 @@ fn update_backfill_price(
                                 (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
                  WHERE provider_id = ?3 AND upstream_model_id = ?4 \
                    AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
-                params![p.input_per_1m, p.output_per_1m, provider_id, upstream_model_id],
+                params![
+                    p.input_per_1m,
+                    p.output_per_1m,
+                    provider_id,
+                    upstream_model_id
+                ],
             )
             .map_err(crate::error::map_db_error),
         None => conn

@@ -162,12 +162,7 @@ fn is_image_editing_model(lower: &str) -> bool {
 }
 
 fn is_native_audio_model(lower: &str) -> bool {
-    const AUDIO_CHAT_KW: &[&str] = &[
-        "gpt-4o-audio",
-        "gpt-4-audio",
-        "native-audio",
-        "stepaudio",
-    ];
+    const AUDIO_CHAT_KW: &[&str] = &["gpt-4o-audio", "gpt-4-audio", "native-audio", "stepaudio"];
     AUDIO_CHAT_KW.iter().any(|k| lower.contains(k))
 }
 

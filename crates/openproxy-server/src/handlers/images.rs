@@ -273,7 +273,11 @@ fn decode_base64_image(raw: &str) -> Result<bytes::Bytes, ApiError> {
     };
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64_clean)
-        .map_err(|e| ApiError(CoreError::Validation(format!("invalid base64 image data: {e}"))))?;
+        .map_err(|e| {
+            ApiError(CoreError::Validation(format!(
+                "invalid base64 image data: {e}"
+            )))
+        })?;
     Ok(bytes.into())
 }
 

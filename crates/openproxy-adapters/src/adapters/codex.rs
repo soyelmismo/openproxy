@@ -63,36 +63,36 @@ impl CodexAdapter {
         }
     }
 
-fn build_hardcoded_codex_model(
-    (id, name, ctx, _max_ctx, vision): (&str, &str, i64, i64, bool),
-) -> DiscoveredModel {
-    let input_modalities = if vision {
-        Some(vec!["text".to_string(), "image".to_string()])
-    } else {
-        Some(vec!["text".to_string()])
-    };
-    let caps = openproxy_types::ModelCapabilities {
-        vision: Some(vision),
-        tool_calling: Some(true),
-        reasoning: Some(true),
-        thinking: Some(true),
-        attachment: None,
-        structured_output: None,
-        temperature: None,
-    };
-    DiscoveredModel {
-        model_id: ModelId::new(id),
-        display_name: Some(name.to_string()),
-        target_format: TargetFormat::Responses,
-        context_length: Some(ctx),
-        max_output_tokens: Some(32_768),
-        input_modalities,
-        output_modalities: Some(vec!["text".to_string()]),
-        model_type: Some("chat".to_string()),
-        family: Some("gpt".to_string()),
-        capabilities: Some(caps),
+    fn build_hardcoded_codex_model(
+        (id, name, ctx, _max_ctx, vision): (&str, &str, i64, i64, bool),
+    ) -> DiscoveredModel {
+        let input_modalities = if vision {
+            Some(vec!["text".to_string(), "image".to_string()])
+        } else {
+            Some(vec!["text".to_string()])
+        };
+        let caps = openproxy_types::ModelCapabilities {
+            vision: Some(vision),
+            tool_calling: Some(true),
+            reasoning: Some(true),
+            thinking: Some(true),
+            attachment: None,
+            structured_output: None,
+            temperature: None,
+        };
+        DiscoveredModel {
+            model_id: ModelId::new(id),
+            display_name: Some(name.to_string()),
+            target_format: TargetFormat::Responses,
+            context_length: Some(ctx),
+            max_output_tokens: Some(32_768),
+            input_modalities,
+            output_modalities: Some(vec!["text".to_string()]),
+            model_type: Some("chat".to_string()),
+            family: Some("gpt".to_string()),
+            capabilities: Some(caps),
+        }
     }
-}
 
     fn hardcoded_models() -> Vec<DiscoveredModel> {
         // Models from codex-rs/models-manager/models.json (official Codex bundled catalog)

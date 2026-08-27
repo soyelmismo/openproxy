@@ -286,7 +286,11 @@ pub fn update_model_type(conn: &Connection, id: ModelRowId, model_type: &str) ->
     Ok(())
 }
 
-fn update_model_display_name(conn: &Connection, id: ModelRowId, display_name: Option<&str>) -> Result<()> {
+fn update_model_display_name(
+    conn: &Connection,
+    id: ModelRowId,
+    display_name: Option<&str>,
+) -> Result<()> {
     if let Some(dn) = display_name {
         conn.execute(
             "UPDATE models SET display_name = ?1 WHERE id = ?2",
@@ -297,7 +301,11 @@ fn update_model_display_name(conn: &Connection, id: ModelRowId, display_name: Op
     Ok(())
 }
 
-fn update_model_type_opt(conn: &Connection, id: ModelRowId, model_type: Option<&str>) -> Result<()> {
+fn update_model_type_opt(
+    conn: &Connection,
+    id: ModelRowId,
+    model_type: Option<&str>,
+) -> Result<()> {
     if let Some(mt) = model_type {
         conn.execute(
             "UPDATE models SET model_type = ?1 WHERE id = ?2",
@@ -308,7 +316,11 @@ fn update_model_type_opt(conn: &Connection, id: ModelRowId, model_type: Option<&
     Ok(())
 }
 
-fn update_model_target_format(conn: &Connection, id: ModelRowId, target_format: Option<TargetFormat>) -> Result<()> {
+fn update_model_target_format(
+    conn: &Connection,
+    id: ModelRowId,
+    target_format: Option<TargetFormat>,
+) -> Result<()> {
     if let Some(tf) = target_format {
         conn.execute(
             "UPDATE models SET target_format = ?1 WHERE id = ?2",

@@ -157,37 +157,37 @@ impl CancellationToken {
     /// lane sent the first token). This closes the cancellation window
     /// — losers' HTTP connections are dropped at the transport level,
     /// stopping upstream token generation immediately.
-fn is_initially_cancelled(
-    rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
-    race_token: &CancellationToken,
-) -> bool {
-    rx.borrow_and_update().is_some() || race_token.is_cancelled()
-}
+    fn is_initially_cancelled(
+        rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
+        race_token: &CancellationToken,
+    ) -> bool {
+        rx.borrow_and_update().is_some() || race_token.is_cancelled()
+    }
 
-fn spawn_cancel_forwarder(
-    mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
-    mut cancel_rx: watch::Receiver<bool>,
-    inner: CancellationToken,
-) {
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                res = rx.changed() => {
-                    if res.is_err() || rx.borrow().is_some() {
-                        inner.cancel();
-                        return;
+    fn spawn_cancel_forwarder(
+        mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
+        mut cancel_rx: watch::Receiver<bool>,
+        inner: CancellationToken,
+    ) {
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    res = rx.changed() => {
+                        if res.is_err() || rx.borrow().is_some() {
+                            inner.cancel();
+                            return;
+                        }
                     }
-                }
-                res = cancel_rx.changed() => {
-                    if res.is_err() || *cancel_rx.borrow() {
-                        inner.cancel();
-                        return;
+                    res = cancel_rx.changed() => {
+                        if res.is_err() || *cancel_rx.borrow() {
+                            inner.cancel();
+                            return;
+                        }
                     }
                 }
             }
-        }
-    });
-}
+        });
+    }
 
     /// Build a combined token that flips to "cancelled" when EITHER the
     /// `watch::Receiver<bool>` transitions to `true` OR the provided

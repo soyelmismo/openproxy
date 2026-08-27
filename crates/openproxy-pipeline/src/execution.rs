@@ -108,7 +108,11 @@ impl Pipeline {
     }
 }
 
-fn do_auto_populate(repo: &dyn crate::repository::PipelineRepository, combo_id: openproxy_types::ids::ComboId, combo_name: &str) -> Result<usize> {
+fn do_auto_populate(
+    repo: &dyn crate::repository::PipelineRepository,
+    combo_id: openproxy_types::ids::ComboId,
+    combo_name: &str,
+) -> Result<usize> {
     if !repo.list_targets(combo_id)?.is_empty() {
         return Ok(0);
     }
@@ -289,11 +293,7 @@ fn resolve_targets_blocking(
     }
 
     let _ = repo.list_targets(combo.id)?;
-    let ordered = repo.resolve_target_order_with_mode(
-        combo,
-        rr_counters,
-        selection_registry,
-    )?;
+    let ordered = repo.resolve_target_order_with_mode(combo, rr_counters, selection_registry)?;
     repo.expand_account_rotation(ordered)
 }
 

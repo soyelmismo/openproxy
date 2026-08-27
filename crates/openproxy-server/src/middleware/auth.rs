@@ -177,10 +177,7 @@ pub(crate) fn authenticate(
     }))
 }
 
-fn validate_key_record(
-    key: &core_api_keys::ApiKey,
-    required_scope: &str,
-) -> Result<(), ApiError> {
+fn validate_key_record(key: &core_api_keys::ApiKey, required_scope: &str) -> Result<(), ApiError> {
     if !key.is_active {
         return Err(ApiError(CoreError::Auth(
             "api key revoked or inactive".into(),

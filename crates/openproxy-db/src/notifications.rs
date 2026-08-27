@@ -116,8 +116,16 @@ fn build_notification_chunk_params(
             ))
         })?;
         params.push(payload_str.into());
-        params.push(row.1.as_ref().map_or(rusqlite::types::Value::Null, |k| k.to_owned().into()));
-        params.push(row.2.as_ref().map_or(rusqlite::types::Value::Null, |p| p.to_owned().into()));
+        params.push(
+            row.1
+                .as_ref()
+                .map_or(rusqlite::types::Value::Null, |k| k.to_owned().into()),
+        );
+        params.push(
+            row.2
+                .as_ref()
+                .map_or(rusqlite::types::Value::Null, |p| p.to_owned().into()),
+        );
     }
     Ok(params)
 }

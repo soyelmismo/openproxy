@@ -87,19 +87,63 @@ define_db_tables!(
     (Accounts, "accounts", "SELECT COUNT(*) FROM \"accounts\""),
     (Models, "models", "SELECT COUNT(*) FROM \"models\""),
     (Combos, "combos", "SELECT COUNT(*) FROM \"combos\""),
-    (ComboTargets, "combo_targets", "SELECT COUNT(*) FROM \"combo_targets\""),
+    (
+        ComboTargets,
+        "combo_targets",
+        "SELECT COUNT(*) FROM \"combo_targets\""
+    ),
     (Usage, "usage", "SELECT COUNT(*) FROM \"usage\""),
     (ApiKeys, "api_keys", "SELECT COUNT(*) FROM \"api_keys\""),
-    (TargetCooldowns, "target_cooldowns", "SELECT COUNT(*) FROM \"target_cooldowns\""),
-    (AppConfig, "app_config", "SELECT COUNT(*) FROM \"app_config\""),
-    (OauthDeviceTickets, "oauth_device_tickets", "SELECT COUNT(*) FROM \"oauth_device_tickets\""),
-    (ModelCapabilitiesSync, "model_capabilities_sync", "SELECT COUNT(*) FROM \"model_capabilities_sync\""),
-    (Notifications, "notifications", "SELECT COUNT(*) FROM \"notifications\""),
-    (FreeProxies, "free_proxies", "SELECT COUNT(*) FROM \"free_proxies\""),
-    (SmartWarmupHistory, "smart_warmup_history", "SELECT COUNT(*) FROM \"smart_warmup_history\""),
-    (ProxySources, "proxy_sources", "SELECT COUNT(*) FROM \"proxy_sources\""),
-    (ProviderProxyCooldowns, "provider_proxy_cooldowns", "SELECT COUNT(*) FROM \"provider_proxy_cooldowns\""),
-    (SchemaMigrations, "schema_migrations", "SELECT COUNT(*) FROM \"schema_migrations\""),
+    (
+        TargetCooldowns,
+        "target_cooldowns",
+        "SELECT COUNT(*) FROM \"target_cooldowns\""
+    ),
+    (
+        AppConfig,
+        "app_config",
+        "SELECT COUNT(*) FROM \"app_config\""
+    ),
+    (
+        OauthDeviceTickets,
+        "oauth_device_tickets",
+        "SELECT COUNT(*) FROM \"oauth_device_tickets\""
+    ),
+    (
+        ModelCapabilitiesSync,
+        "model_capabilities_sync",
+        "SELECT COUNT(*) FROM \"model_capabilities_sync\""
+    ),
+    (
+        Notifications,
+        "notifications",
+        "SELECT COUNT(*) FROM \"notifications\""
+    ),
+    (
+        FreeProxies,
+        "free_proxies",
+        "SELECT COUNT(*) FROM \"free_proxies\""
+    ),
+    (
+        SmartWarmupHistory,
+        "smart_warmup_history",
+        "SELECT COUNT(*) FROM \"smart_warmup_history\""
+    ),
+    (
+        ProxySources,
+        "proxy_sources",
+        "SELECT COUNT(*) FROM \"proxy_sources\""
+    ),
+    (
+        ProviderProxyCooldowns,
+        "provider_proxy_cooldowns",
+        "SELECT COUNT(*) FROM \"provider_proxy_cooldowns\""
+    ),
+    (
+        SchemaMigrations,
+        "schema_migrations",
+        "SELECT COUNT(*) FROM \"schema_migrations\""
+    ),
 );
 
 impl std::fmt::Display for DbTable {

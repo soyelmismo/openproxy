@@ -1081,12 +1081,12 @@ pub fn list_proxy_sources(conn: &Connection) -> crate::error::Result<Vec<ProxySo
         })?;
 
     let stats = fetch_proxy_source_stats(conn)?;
-    let rows = stmt
-        .query_map([], row_to_proxy_source)
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+    let rows =
+        stmt.query_map([], row_to_proxy_source)
+            .map_err(|e| crate::error::CoreError::Database {
+                message: e.to_string(),
+                source: Some(std::sync::Arc::new(e)),
+            })?;
 
     let mut result = Vec::new();
     for row_res in rows {
@@ -1410,10 +1410,7 @@ pub async fn test_proxy_connection(
 
 type ParsedProxyTuple = (String, String, u16, Option<String>, Option<String>);
 
-fn fetch_proxy_test_target(
-    conn: &Connection,
-    id: &str,
-) -> crate::error::Result<ParsedProxyTuple> {
+fn fetch_proxy_test_target(conn: &Connection, id: &str) -> crate::error::Result<ParsedProxyTuple> {
     let mut stmt = conn
         .prepare("SELECT type, host, port, username, password FROM free_proxies WHERE id = ?1")
         .map_err(|e| crate::error::CoreError::Database {
@@ -1523,10 +1520,12 @@ fn execute_proxy_batch_update(
     conn: &mut Connection,
     batch: Vec<(String, Result<i64, String>)>,
 ) -> Result<(), crate::error::CoreError> {
-    let tx_db = conn.transaction().map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    let tx_db = conn
+        .transaction()
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(std::sync::Arc::new(e)),
+        })?;
     let now = chrono::Utc::now().to_rfc3339();
     {
         let mut stmt = tx_db
@@ -1546,10 +1545,12 @@ fn execute_proxy_batch_update(
             let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
         }
     }
-    tx_db.commit().map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    tx_db
+        .commit()
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(std::sync::Arc::new(e)),
+        })?;
     Ok(())
 }
 
@@ -1584,11 +1585,12 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 }
 
                 let pool = Arc::clone(&pool_writer);
-                let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
-                    let mut w = pool.open_connection()?;
-                    execute_proxy_batch_update(&mut w, batch)
-                })
-                .await;
+                let _ =
+                    tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
+                        let mut w = pool.open_connection()?;
+                        execute_proxy_batch_update(&mut w, batch)
+                    })
+                    .await;
             }
         });
 

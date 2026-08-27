@@ -68,10 +68,7 @@ impl CredentialManager {
     }
 }
 
-fn resolve_target_model(
-    t: &ComboTarget,
-    models_map: &HashMap<i64, Model>,
-) -> Option<Model> {
+fn resolve_target_model(t: &ComboTarget, models_map: &HashMap<i64, Model>) -> Option<Model> {
     let Some(model_row_id) = t.model_row_id else {
         let err = CoreError::Internal(format!(
             "execute_single called on a sub-combo target (id={})",
@@ -106,10 +103,7 @@ fn resolve_anonymous_credentials(
     {
         Some((String::new(), None, None))
     } else {
-        tracing::error!(
-            "combo_target {} has no account_id after expansion",
-            t.id.0
-        );
+        tracing::error!("combo_target {} has no account_id after expansion", t.id.0);
         None
     }
 }
@@ -139,9 +133,11 @@ fn extract_provider_custom_meta(
             }
         }
         "antigravity" => {
-            let proj = maps.antigravity_map.get(&account_id).cloned().or_else(|| {
-                CredentialManager::antigravity_project_from_account(raw_account)
-            });
+            let proj = maps
+                .antigravity_map
+                .get(&account_id)
+                .cloned()
+                .or_else(|| CredentialManager::antigravity_project_from_account(raw_account));
             let metadata = raw_account.oauth_provider_specific.clone();
             ProviderCustomFields {
                 antigravity_project: proj,

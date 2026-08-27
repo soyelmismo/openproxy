@@ -168,18 +168,14 @@ pub fn anthropic_sse_event_to_openai_chunks(
         AnthropicSseEvent::Ping
         | AnthropicSseEvent::ContentBlockStart { .. }
         | AnthropicSseEvent::ContentBlockStop { .. } => Vec::new(),
-        AnthropicSseEvent::MessageStart { .. } => {
-            build_role_chunk(chunk_id, created, model)
-        }
+        AnthropicSseEvent::MessageStart { .. } => build_role_chunk(chunk_id, created, model),
         AnthropicSseEvent::ContentBlockDelta { delta, .. } => {
             build_content_chunk(chunk_id, created, model, delta)
         }
         AnthropicSseEvent::MessageDelta { delta, usage } => {
             build_message_delta_chunk(chunk_id, created, model, delta, usage.as_ref())
         }
-        AnthropicSseEvent::MessageStop => {
-            build_message_stop_chunks(chunk_id, created, model)
-        }
+        AnthropicSseEvent::MessageStop => build_message_stop_chunks(chunk_id, created, model),
     }
 }
 
@@ -353,7 +349,11 @@ impl<S> OpenAIToAnthropicSseStream<S> {
 
     fn handle_tool_call_item(&mut self, tc: &OpenAIToolCallProbe<'_>, out: &mut bytes::BytesMut) {
         if let Some(id) = &tc.id {
-            let name = tc.function.as_ref().and_then(|f| f.name.as_deref()).unwrap_or_default();
+            let name = tc
+                .function
+                .as_ref()
+                .and_then(|f| f.name.as_deref())
+                .unwrap_or_default();
             self.transition_tool_block(id, name, out);
         }
 

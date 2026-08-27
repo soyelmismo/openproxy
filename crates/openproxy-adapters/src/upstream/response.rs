@@ -192,42 +192,42 @@ impl UpstreamBodyStream {
     /// `body_chunk_ms` does NOT apply. This is intentional: a stub
     /// SSE event (`event: message_start`, empty `data:`) that
     /// arrives before the first real token should NOT start the
-fn compute_min_deadline(
-    is_streaming: bool,
-    last_chunk_at: Option<Instant>,
-    body_chunk_ms: u64,
-    total_deadline: Instant,
-) -> Instant {
-    if !is_streaming {
-        return total_deadline;
-    }
-    match last_chunk_at {
-        Some(last) => {
-            let chunk_gap_deadline = last + Duration::from_millis(body_chunk_ms);
-            std::cmp::min(chunk_gap_deadline, total_deadline)
+    fn compute_min_deadline(
+        is_streaming: bool,
+        last_chunk_at: Option<Instant>,
+        body_chunk_ms: u64,
+        total_deadline: Instant,
+    ) -> Instant {
+        if !is_streaming {
+            return total_deadline;
         }
-        None => total_deadline,
+        match last_chunk_at {
+            Some(last) => {
+                let chunk_gap_deadline = last + Duration::from_millis(body_chunk_ms);
+                std::cmp::min(chunk_gap_deadline, total_deadline)
+            }
+            None => total_deadline,
+        }
     }
-}
 
-fn timeout_error_for_gap(last_chunk_at: Option<Instant>) -> UpstreamError {
-    if last_chunk_at.is_some() {
-        UpstreamError::Timeout(UpstreamPhase::Body)
-    } else {
-        UpstreamError::Timeout(UpstreamPhase::Total)
+    fn timeout_error_for_gap(last_chunk_at: Option<Instant>) -> UpstreamError {
+        if last_chunk_at.is_some() {
+            UpstreamError::Timeout(UpstreamPhase::Body)
+        } else {
+            UpstreamError::Timeout(UpstreamPhase::Total)
+        }
     }
-}
 
-#[cfg(feature = "upstream-hyper")]
-fn map_stream_frame<E: std::fmt::Display>(
-    res: Option<Result<hyper::body::Frame<Bytes>, E>>,
-) -> UpstreamResult<Option<Bytes>> {
-    match res {
-        Some(Ok(frame)) => Ok(Some(frame.into_data().unwrap_or_default())),
-        Some(Err(e)) => Err(UpstreamError::Http(e.to_string())),
-        None => Ok(None),
+    #[cfg(feature = "upstream-hyper")]
+    fn map_stream_frame<E: std::fmt::Display>(
+        res: Option<Result<hyper::body::Frame<Bytes>, E>>,
+    ) -> UpstreamResult<Option<Bytes>> {
+        match res {
+            Some(Ok(frame)) => Ok(Some(frame.into_data().unwrap_or_default())),
+            Some(Err(e)) => Err(UpstreamError::Http(e.to_string())),
+            None => Ok(None),
+        }
     }
-}
 
     /// Pull the next chunk from the upstream body stream.
     ///

@@ -117,9 +117,7 @@ async fn execute_race_worker(mut req: PipelineRequest, ctx: RaceContext) {
     }
 }
 
-fn extract_direct_sink(
-    req: &PipelineRequest,
-) -> Option<tokio::sync::mpsc::Sender<bytes::Bytes>> {
+fn extract_direct_sink(req: &PipelineRequest) -> Option<tokio::sync::mpsc::Sender<bytes::Bytes>> {
     match req.stream_sink.as_ref() {
         Some(crate::race_sink::StreamSink::Direct(tx)) => Some(tx.clone()),
         _ => {

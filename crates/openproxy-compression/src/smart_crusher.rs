@@ -193,7 +193,10 @@ fn json_value_to_csv_cell(val: &Value) -> String {
 fn format_csv_row(obj: &serde_json::Map<String, Value>, fields: &[&str]) -> String {
     fields
         .iter()
-        .map(|field| obj.get(*field).map_or_else(String::new, json_value_to_csv_cell))
+        .map(|field| {
+            obj.get(*field)
+                .map_or_else(String::new, json_value_to_csv_cell)
+        })
         .collect::<Vec<_>>()
         .join(",")
 }

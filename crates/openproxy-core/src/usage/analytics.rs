@@ -244,7 +244,12 @@ impl BuiltWhere {
         let mut clauses: Vec<&'static str> = Vec::new();
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
-        push_date_filters(f.from.as_deref(), f.to.as_deref(), &mut clauses, &mut params);
+        push_date_filters(
+            f.from.as_deref(),
+            f.to.as_deref(),
+            &mut clauses,
+            &mut params,
+        );
         push_entity_filters(f, &mut clauses, &mut params);
 
         let joined = clauses.join(" AND ");

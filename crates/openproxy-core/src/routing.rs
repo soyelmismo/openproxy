@@ -26,7 +26,10 @@ use openproxy_db::combos;
 use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use rusqlite::{Connection, OptionalExtension};
 
-fn fetch_healthy_account_ids(conn: &Connection, provider_id: &ProviderId) -> Result<Vec<AccountId>> {
+fn fetch_healthy_account_ids(
+    conn: &Connection,
+    provider_id: &ProviderId,
+) -> Result<Vec<AccountId>> {
     let mut stmt = conn
         .prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC")
         .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;

@@ -226,9 +226,9 @@ fn is_allowed_origin(origin: &str, host: &str) -> bool {
         "https://127.0.0.1",
     ];
 
-    LOCAL_ORIGIN_PREFIXES.iter().any(|prefix| {
-        origin == *prefix || origin.starts_with(&format!("{prefix}:"))
-    })
+    LOCAL_ORIGIN_PREFIXES
+        .iter()
+        .any(|prefix| origin == *prefix || origin.starts_with(&format!("{prefix}:")))
 }
 
 fn check_cswsh_origin(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
@@ -578,8 +578,8 @@ async fn run_ws_usage_event_loop(
 ) {
     let mut usage_rx = state.usage_tx().subscribe();
     let mut stage_rx = state.stage_tx().subscribe();
-    let mut notification_rx = openproxy_core::notifications::try_get_tx()
-        .map(tokio::sync::broadcast::Sender::subscribe);
+    let mut notification_rx =
+        openproxy_core::notifications::try_get_tx().map(tokio::sync::broadcast::Sender::subscribe);
 
     loop {
         tokio::select! {
@@ -608,8 +608,7 @@ async fn run_ws_usage_event_loop(
 
 pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
     let (ws_sender, ws_receiver) = socket.split();
-    let (outbox_tx, outbox_rx) =
-        tokio::sync::mpsc::channel::<String>(WS_OUTBOX_CAPACITY);
+    let (outbox_tx, outbox_rx) = tokio::sync::mpsc::channel::<String>(WS_OUTBOX_CAPACITY);
     let sender_task = spawn_ws_sender_task(ws_sender, outbox_rx);
 
     let (last_known_id, snapshot) = fetch_initial_history_snapshot(&state);
@@ -761,8 +760,7 @@ pub(crate) fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, A
     use chrono::{Datelike, Duration, Utc};
     let now = Utc::now();
 
-    if let Some(range) =
-        compute_calendar_preset(preset, now.year(), now.month(), now.date_naive())
+    if let Some(range) = compute_calendar_preset(preset, now.year(), now.month(), now.date_naive())
     {
         return Ok(Some(range));
     }
@@ -782,7 +780,9 @@ fn parse_provider_filter(provider_id: Option<String>) -> Result<Option<ProviderI
     provider_id
         .map(|s| {
             if s.is_empty() {
-                Err(CoreError::Validation("provider_id must not be empty".into()))
+                Err(CoreError::Validation(
+                    "provider_id must not be empty".into(),
+                ))
             } else {
                 Ok(ProviderId::new(s))
             }

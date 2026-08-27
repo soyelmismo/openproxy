@@ -450,20 +450,18 @@ impl Service<Uri> for PhasedConnector {
     }
 }
 
-fn resolve_call_proxy_config(
-) -> Result<Option<ProxyConfig>, Box<dyn std::error::Error + Send + Sync>> {
+fn resolve_call_proxy_config()
+-> Result<Option<ProxyConfig>, Box<dyn std::error::Error + Send + Sync>> {
     let proxy_opt = CALL_PROXY
         .try_with(std::clone::Clone::clone)
         .unwrap_or(None);
     if let Some(ref proxy_url) = proxy_opt {
-        parse_proxy_url(proxy_url)
-            .map(Some)
-            .map_err(|e| {
-                Box::new(PhasedConnectorError {
-                    phase: UpstreamPhase::Dns,
-                    kind: PhasedErrorKind::InvalidUri(format!("Invalid proxy config: {e}")),
-                }) as Box<dyn std::error::Error + Send + Sync>
-            })
+        parse_proxy_url(proxy_url).map(Some).map_err(|e| {
+            Box::new(PhasedConnectorError {
+                phase: UpstreamPhase::Dns,
+                kind: PhasedErrorKind::InvalidUri(format!("Invalid proxy config: {e}")),
+            }) as Box<dyn std::error::Error + Send + Sync>
+        })
     } else {
         Ok(None)
     }
@@ -607,9 +605,7 @@ async fn proxy_tunnel_phase(
         Ok(Ok(s)) => Ok(s),
         Ok(Err(e)) => Err(PhasedConnectorError {
             phase: UpstreamPhase::Dial,
-            kind: PhasedErrorKind::Io(io::Error::other(format!(
-                "Proxy handshake failed: {e}"
-            ))),
+            kind: PhasedErrorKind::Io(io::Error::other(format!("Proxy handshake failed: {e}"))),
         }),
         Err(_) => Err(PhasedConnectorError {
             phase: UpstreamPhase::Dial,
@@ -711,8 +707,7 @@ async fn run_phased_connect(
     let proxy_config_opt = resolve_call_proxy_config()?;
     let (dial_host, dial_port) = resolve_dial_target(proxy_config_opt.as_ref(), &host, port);
 
-    let stream =
-        establish_raw_tcp_stream(dial_host, dial_port, connect_deadline, timeouts).await?;
+    let stream = establish_raw_tcp_stream(dial_host, dial_port, connect_deadline, timeouts).await?;
     let stream = proxy_tunnel_phase(
         stream,
         proxy_config_opt.as_ref(),
@@ -1009,11 +1004,9 @@ async fn socks4_tunnel(
     let mut resp = [0u8; 8];
     stream.read_exact(&mut resp).await?;
     if resp[0] != 0x00 || resp[1] != 0x5a {
-        return Err(io::Error::other(format!(
-            "SOCKS4 connection rejected: code={}",
-            resp[1]
-        ))
-        .into());
+        return Err(
+            io::Error::other(format!("SOCKS4 connection rejected: code={}", resp[1])).into(),
+        );
     }
     Ok(stream)
 }
@@ -1060,10 +1053,9 @@ async fn http_connect_tunnel(
     let resp_str = String::from_utf8_lossy(&headers_buf);
     let first_line = resp_str.lines().next().unwrap_or("");
     if !first_line.contains(" 200 ") {
-        return Err(io::Error::other(format!(
-            "HTTP CONNECT proxy returned error: {first_line}"
-        ))
-        .into());
+        return Err(
+            io::Error::other(format!("HTTP CONNECT proxy returned error: {first_line}")).into(),
+        );
     }
     Ok(stream)
 }

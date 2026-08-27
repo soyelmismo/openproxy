@@ -303,7 +303,11 @@ fn check_duplicate_target(conn: &Connection, input: &AddTargetInput) -> Result<(
     if target_exists {
         return Err(CoreError::Validation(format!(
             "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
-            input.combo_id.0, input.provider_id, input.account_id, input.model_row_id, input.sub_combo_id
+            input.combo_id.0,
+            input.provider_id,
+            input.account_id,
+            input.model_row_id,
+            input.sub_combo_id
         )));
     }
     Ok(())
@@ -351,7 +355,11 @@ fn map_add_target_error(input: &AddTargetInput, err: rusqlite::Error) -> CoreErr
         )),
         crate::error::DbErrorKind::UniqueViolation => CoreError::Validation(format!(
             "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
-            input.combo_id.0, input.provider_id, input.account_id, input.model_row_id, input.sub_combo_id
+            input.combo_id.0,
+            input.provider_id,
+            input.account_id,
+            input.model_row_id,
+            input.sub_combo_id
         )),
         _ => crate::error::map_db_error_ctx("insert combo_target")(err),
     }
@@ -454,8 +462,9 @@ pub fn reconnect_orphan_targets(
 /// detector — it visits every node — and will catch anything this
 /// probe misses.
 fn fetch_sub_combo_ids(conn: &Connection, current_level: &[i64]) -> Result<Vec<i64>> {
-    let json_arr = serde_json::to_string(current_level)
-        .map_err(crate::error::map_db_error_ctx("Failed to serialize current_level"))?;
+    let json_arr = serde_json::to_string(current_level).map_err(crate::error::map_db_error_ctx(
+        "Failed to serialize current_level",
+    ))?;
     let query = "SELECT DISTINCT sub_combo_id FROM combo_targets \
                  WHERE combo_id IN (SELECT value FROM json_each(?)) AND sub_combo_id IS NOT NULL";
 
@@ -1295,7 +1304,10 @@ pub fn resolve_combo_to_targets(
     Ok(flat)
 }
 
-fn fetch_healthy_accounts(conn: &rusqlite::Connection, provider_id: &ProviderId) -> Result<Vec<AccountId>> {
+fn fetch_healthy_accounts(
+    conn: &rusqlite::Connection,
+    provider_id: &ProviderId,
+) -> Result<Vec<AccountId>> {
     let mut stmt = conn
         .prepare(account_healthy_ids_select!(
             "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"

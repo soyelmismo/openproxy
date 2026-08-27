@@ -81,10 +81,18 @@ async fn try_proactive_oauth_refresh(
     pipeline: &crate::Pipeline,
     current: &mut crate::context::ResolvedTarget,
 ) {
-    let Some(account_id) = current.target.account_id else { return; };
-    let Some(custom_meta) = current.custom_meta.as_mut() else { return; };
-    let Some(refresh_token) = custom_meta.maybe_refresh.as_ref() else { return; };
-    let Some(registry) = pipeline.config.oauth_provider_registry.as_ref() else { return; };
+    let Some(account_id) = current.target.account_id else {
+        return;
+    };
+    let Some(custom_meta) = current.custom_meta.as_mut() else {
+        return;
+    };
+    let Some(refresh_token) = custom_meta.maybe_refresh.as_ref() else {
+        return;
+    };
+    let Some(registry) = pipeline.config.oauth_provider_registry.as_ref() else {
+        return;
+    };
 
     let provider_id_str = current.target.provider_id.as_str();
     tracing::info!(
@@ -129,7 +137,8 @@ impl PipelineStage for TimeoutResolutionStage {
         let current = ctx.current_target.as_ref().ok_or_else(|| {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
-        let cloned_model = current.model.clone(); let model = &cloned_model;
+        let cloned_model = current.model.clone();
+        let model = &cloned_model;
 
         let model_overrides =
             match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
@@ -221,9 +230,7 @@ fn resolve_target_format(
     }
 }
 
-fn prepare_messages_for_formatting(
-    ctx: &PipelineContext,
-) -> &[openproxy_types::OpenAIMessage] {
+fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::OpenAIMessage] {
     let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
         if openproxy_compression::would_compress(
             &ctx.req.openai_request.messages,
@@ -260,8 +267,10 @@ impl PipelineStage for DispatchStage {
         let current = ctx.current_target.as_mut().ok_or_else(|| {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
-        let cloned_target = current.target.clone(); let target = &cloned_target;
-        let cloned_model = current.model.clone(); let model = &cloned_model;
+        let cloned_target = current.target.clone();
+        let target = &cloned_target;
+        let cloned_model = current.model.clone();
+        let model = &cloned_model;
         let attempt = ctx.current_target_attempt;
         let race_size = ctx.race_size;
         let started = ctx.started.unwrap_or_else(std::time::Instant::now);
@@ -358,12 +367,18 @@ async fn try_lazy_fetch_antigravity_project(
     if current.target.provider_id.as_str() != "antigravity" {
         return;
     }
-    let Some(custom_meta) = current.custom_meta.as_mut() else { return; };
+    let Some(custom_meta) = current.custom_meta.as_mut() else {
+        return;
+    };
     if custom_meta.antigravity_project.is_some() {
         return;
     }
-    let Some(ref meta_str) = custom_meta.antigravity_metadata else { return; };
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str) else { return; };
+    let Some(ref meta_str) = custom_meta.antigravity_metadata else {
+        return;
+    };
+    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str) else {
+        return;
+    };
 
     tracing::info!(
         "Lazy fetching antigravity projectId for target {}",
@@ -398,7 +413,9 @@ fn update_circuit_breaker_on_result(
     model: &openproxy_types::models::Model,
     result: &PipelineResult,
 ) {
-    let Some(aid) = target.account_id else { return; };
+    let Some(aid) = target.account_id else {
+        return;
+    };
     let key = crate::circuit_breaker::CircuitBreakerKey::from_target(
         aid,
         target.rate_limit_scope,
@@ -440,16 +457,23 @@ fn update_predictive_limiter_on_result(
     let now = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
     match &result.error {
         None => {
-            pipeline.predictive_limiter.report_success(combo_id, target_id, None, None, now);
+            pipeline
+                .predictive_limiter
+                .report_success(combo_id, target_id, None, None, now);
         }
         Some(CoreError::Cancelled(_) | CoreError::RaceLost) => {
-            pipeline.predictive_limiter.release_in_flight(combo_id, target_id);
+            pipeline
+                .predictive_limiter
+                .release_in_flight(combo_id, target_id);
         }
         Some(CoreError::RateLimited { retry_after_ms, .. }) => {
             let retry_after_secs = Some(*retry_after_ms / 1000);
-            pipeline
-                .predictive_limiter
-                .report_rate_limited(combo_id, target_id, retry_after_secs, now);
+            pipeline.predictive_limiter.report_rate_limited(
+                combo_id,
+                target_id,
+                retry_after_secs,
+                now,
+            );
         }
         Some(_) => record_predictive_limiter_upstream_error(
             &pipeline.predictive_limiter,
@@ -530,7 +554,8 @@ impl PipelineStage for CustomAdapterStage {
                 "missing current_target in pipeline context".into(),
             ));
         };
-        let cloned_target = current.target.clone(); let target = &cloned_target;
+        let cloned_target = current.target.clone();
+        let target = &cloned_target;
         let Some(_adapter) = ctx
             .pipeline
             .config

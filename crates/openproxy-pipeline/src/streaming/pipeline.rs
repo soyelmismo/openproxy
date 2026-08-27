@@ -52,10 +52,7 @@ fn is_race_cancelled(ctx: &StreamContext<'_>) -> bool {
         .is_some_and(openproxy_adapters::CancellationToken::is_cancelled)
 }
 
-fn map_upstream_stream_error(
-    e: UpstreamError,
-    ctx: &StreamContext<'_>,
-) -> Option<CoreError> {
+fn map_upstream_stream_error(e: UpstreamError, ctx: &StreamContext<'_>) -> Option<CoreError> {
     match e {
         UpstreamError::Timeout(UpstreamPhase::Body) => Some(CoreError::UpstreamTimeout {
             phase: "idle_chunk".into(),

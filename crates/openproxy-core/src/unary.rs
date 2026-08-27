@@ -52,7 +52,11 @@ fn resolve_single_target(
 ) -> Option<UnaryTarget> {
     let (provider, upstream_model, model_row_id) = if let Some(model_row_id) = target.model_row_id {
         let model = models::get_by_row_id(r, model_row_id).ok().flatten()?;
-        (model.provider_id, model.model_id.as_str().to_string(), Some(model_row_id))
+        (
+            model.provider_id,
+            model.model_id.as_str().to_string(),
+            Some(model_row_id),
+        )
     } else {
         (target.provider_id.clone(), req_model.to_string(), None)
     };
@@ -84,7 +88,8 @@ fn resolve_combo_plan(
     let targets = routing::expand_account_rotation(r, targets)
         .map_err(|e| CoreError::Validation(format!("expand_account_rotation failed: {e}")))?;
 
-    let maybe_key = api_key_id.and_then(|key_id| crate::api_keys::get_by_id(r, key_id).ok().flatten());
+    let maybe_key =
+        api_key_id.and_then(|key_id| crate::api_keys::get_by_id(r, key_id).ok().flatten());
 
     let unary_targets: Vec<UnaryTarget> = targets
         .into_iter()
@@ -151,9 +156,14 @@ pub fn resolve_unary_targets(
             let r = db_pool.reader();
             resolve_combo_plan(&r, combo_id, targets, req_model, api_key_id, endpoint_kind)
         }
-        RoutingPlan::NotFound { model, hint } => {
-            handle_model_not_found(db_pool, api_key_id, &model, hint.as_deref(), endpoint_kind, started)
-        }
+        RoutingPlan::NotFound { model, hint } => handle_model_not_found(
+            db_pool,
+            api_key_id,
+            &model,
+            hint.as_deref(),
+            endpoint_kind,
+            started,
+        ),
     }
 }
 

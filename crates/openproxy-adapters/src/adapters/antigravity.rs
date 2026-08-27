@@ -64,77 +64,77 @@ impl AntigravityAdapter {
         }
     }
 
-fn extract_antigravity_model_capabilities(
-    model_data: &serde_json::Value,
-) -> openproxy_types::ModelCapabilities {
-    let supports_thinking = model_data
-        .get("supportsThinking")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let supports_images = model_data
-        .get("supportsImages")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let tool_formatter_type = model_data
-        .get("toolFormatterType")
-        .and_then(|v| v.as_str())
-        .is_some();
-    let supports_cumulative_context = model_data
-        .get("supportsCumulativeContext")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    fn extract_antigravity_model_capabilities(
+        model_data: &serde_json::Value,
+    ) -> openproxy_types::ModelCapabilities {
+        let supports_thinking = model_data
+            .get("supportsThinking")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let supports_images = model_data
+            .get("supportsImages")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let tool_formatter_type = model_data
+            .get("toolFormatterType")
+            .and_then(|v| v.as_str())
+            .is_some();
+        let supports_cumulative_context = model_data
+            .get("supportsCumulativeContext")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
 
-    openproxy_types::ModelCapabilities {
-        vision: Some(supports_images),
-        tool_calling: Some(tool_formatter_type || supports_cumulative_context),
-        reasoning: Some(supports_thinking),
-        thinking: Some(supports_thinking),
-        attachment: Some(supports_images),
-        structured_output: None,
-        temperature: None,
+        openproxy_types::ModelCapabilities {
+            vision: Some(supports_images),
+            tool_calling: Some(tool_formatter_type || supports_cumulative_context),
+            reasoning: Some(supports_thinking),
+            thinking: Some(supports_thinking),
+            attachment: Some(supports_images),
+            structured_output: None,
+            temperature: None,
+        }
     }
-}
 
-fn map_antigravity_discovered_model(
-    model_id: &str,
-    model_data: &serde_json::Value,
-) -> DiscoveredModel {
-    let display_name = model_data
-        .get("displayName")
-        .and_then(|d| d.as_str())
-        .map(std::string::ToString::to_string);
+    fn map_antigravity_discovered_model(
+        model_id: &str,
+        model_data: &serde_json::Value,
+    ) -> DiscoveredModel {
+        let display_name = model_data
+            .get("displayName")
+            .and_then(|d| d.as_str())
+            .map(std::string::ToString::to_string);
 
-    let context_length = model_data
-        .get("maxTokens")
-        .and_then(serde_json::Value::as_u64)
-        .or_else(|| {
-            model_data
-                .get("contextLength")
-                .and_then(serde_json::Value::as_u64)
-        })
-        .map(|v| v as i64);
+        let context_length = model_data
+            .get("maxTokens")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                model_data
+                    .get("contextLength")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .map(|v| v as i64);
 
-    let max_output_tokens = model_data
-        .get("maxOutputTokens")
-        .and_then(serde_json::Value::as_u64)
-        .map(|v| v as i64)
-        .or(Some(8192));
+        let max_output_tokens = model_data
+            .get("maxOutputTokens")
+            .and_then(serde_json::Value::as_u64)
+            .map(|v| v as i64)
+            .or(Some(8192));
 
-    let capabilities = Self::extract_antigravity_model_capabilities(model_data);
+        let capabilities = Self::extract_antigravity_model_capabilities(model_data);
 
-    DiscoveredModel {
-        model_id: ModelId::new(model_id),
-        display_name,
-        target_format: TargetFormat::Gemini,
-        context_length,
-        max_output_tokens,
-        input_modalities: None,
-        output_modalities: None,
-        model_type: Some("chat".to_string()),
-        family: None,
-        capabilities: Some(capabilities),
+        DiscoveredModel {
+            model_id: ModelId::new(model_id),
+            display_name,
+            target_format: TargetFormat::Gemini,
+            context_length,
+            max_output_tokens,
+            input_modalities: None,
+            output_modalities: None,
+            model_type: Some("chat".to_string()),
+            family: None,
+            capabilities: Some(capabilities),
+        }
     }
-}
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     fn parse_models_response(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
@@ -423,7 +423,10 @@ async fn try_fetch_models_quota_endpoint(
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
     let cancel = CancellationToken::new();
-    let resp = upstream.call(req, TimeoutProfile::Quota, cancel).await.ok()?;
+    let resp = upstream
+        .call(req, TimeoutProfile::Quota, cancel)
+        .await
+        .ok()?;
     if !resp.status.is_success() {
         return None;
     }
@@ -458,7 +461,10 @@ fn extract_tier_from_load_code_assist(json: &serde_json::Value) -> Option<&str> 
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
-            return t.get("name").or_else(|| t.get("id")).and_then(|v| v.as_str());
+            return t
+                .get("name")
+                .or_else(|| t.get("id"))
+                .and_then(|v| v.as_str());
         }
     }
     None
@@ -466,7 +472,10 @@ fn extract_tier_from_load_code_assist(json: &serde_json::Value) -> Option<&str> 
 
 const PLAN_KEYWORDS: &[(&[&str], &str)] = &[
     (&["ULTRA"], "Ultra"),
-    (&["PRO", "PREMIUM", "GOOGLE_ONE", "ONE_AI", "GOOGLE ONE"], "Pro"),
+    (
+        &["PRO", "PREMIUM", "GOOGLE_ONE", "ONE_AI", "GOOGLE ONE"],
+        "Pro",
+    ),
     (&["ENTERPRISE"], "Enterprise"),
     (&["BUSINESS", "STANDARD"], "Business"),
     (&["PLUS"], "Plus"),
@@ -501,7 +510,10 @@ async fn try_fetch_code_assist_plan(
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
     let cancel = CancellationToken::new();
-    let resp = upstream.call(req, TimeoutProfile::Quota, cancel).await.ok()?;
+    let resp = upstream
+        .call(req, TimeoutProfile::Quota, cancel)
+        .await
+        .ok()?;
     if !resp.status.is_success() {
         return None;
     }
@@ -528,20 +540,14 @@ impl AntigravityAdapter {
                 if let Ok(summary_quota) = &summary_res {
                     merge_summary_into_models_quota(&mut models_quota, summary_quota);
                 }
-                models_quota.plan_name = resolve_final_plan_name(
-                    models_quota.plan_name,
-                    &summary_res,
-                    plan_result,
-                );
+                models_quota.plan_name =
+                    resolve_final_plan_name(models_quota.plan_name, &summary_res, plan_result);
                 Ok(models_quota)
             }
             (Err(_models_err), Ok(mut summary_quota)) => {
                 let current_plan = summary_quota.plan_name.clone();
-                summary_quota.plan_name = resolve_final_plan_name(
-                    current_plan,
-                    &Ok(summary_quota.clone()),
-                    plan_result,
-                );
+                summary_quota.plan_name =
+                    resolve_final_plan_name(current_plan, &Ok(summary_quota.clone()), plan_result);
                 Ok(summary_quota)
             }
             (Err(models_err), Err(_)) => Err(models_err),
@@ -774,8 +780,7 @@ fn parse_quota_bucket(
         NORMALIZED_BASE.saturating_sub(remaining)
     };
 
-    let is_weekly =
-        window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
+    let is_weekly = window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
 
     AntigravityQuotaBucket {
         plan_name: group_plan.map(std::string::ToString::to_string),

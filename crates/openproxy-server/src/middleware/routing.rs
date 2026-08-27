@@ -104,10 +104,7 @@ fn filter_combo_targets_by_auth(
                 .ok()
                 .flatten();
             if let Some(m) = model
-                && !auth.is_model_allowed(
-                    m.model_id.as_str(),
-                    Some(target.provider_id.as_str()),
-                )
+                && !auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str()))
             {
                 return false;
             }

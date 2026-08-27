@@ -524,7 +524,8 @@ impl UsageRecordBuilder<'_> {
             self.req.request_body_json.clone(),
             &self.req.openai_request,
         );
-        let response_body_json = optional_when_recording(recording, self.response_body_json.clone());
+        let response_body_json =
+            optional_when_recording(recording, self.response_body_json.clone());
         let request_headers = optional_when_recording(recording, self.request_headers.clone());
         let response_headers = optional_when_recording(recording, self.response_headers.clone());
 

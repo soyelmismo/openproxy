@@ -42,7 +42,8 @@ async fn execute_proxy_worker(req: PipelineRequest, ctx: ProxyRaceContext) {
         if w.is_none() {
             *w = Some((result, ctx.proxy_id));
         }
-        ctx.running.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        ctx.running
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         ctx.all_done.notify_one();
         return;
     }

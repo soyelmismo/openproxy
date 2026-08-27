@@ -274,7 +274,9 @@ fn translate_string_tool_choice(s: &str) -> Option<serde_json::Value> {
     }
 }
 
-fn translate_object_tool_choice(obj: &serde_json::Map<String, serde_json::Value>) -> Option<serde_json::Value> {
+fn translate_object_tool_choice(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
     let choice_type = obj.get("type").and_then(|v| v.as_str())?;
     if choice_type == "function" {
         let name = obj
@@ -527,7 +529,9 @@ fn emit_anthropic_user_and_tools(
     }
 }
 
-fn extract_anthropic_json_schema_response_format(extra_req: &serde_json::Map<String, serde_json::Value>) -> Option<serde_json::Value> {
+fn extract_anthropic_json_schema_response_format(
+    extra_req: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
     let output_config = extra_req.get("output_config")?;
     let format = output_config.get("format")?;
     if format.get("type").and_then(|v| v.as_str()) != Some("json_schema") {
@@ -603,9 +607,17 @@ fn map_openai_finish_reason_to_anthropic(finish_reason: Option<&str>) -> Option<
     }
 }
 
-fn build_anthropic_content_from_openai_choice(choice: &crate::translation::Choice) -> Vec<serde_json::Value> {
+fn build_anthropic_content_from_openai_choice(
+    choice: &crate::translation::Choice,
+) -> Vec<serde_json::Value> {
     let mut content = Vec::new();
-    if let Some(s) = choice.message.content.as_ref().and_then(|c| c.as_str()).filter(|s| !s.is_empty()) {
+    if let Some(s) = choice
+        .message
+        .content
+        .as_ref()
+        .and_then(|c| c.as_str())
+        .filter(|s| !s.is_empty())
+    {
         content.push(serde_json::json!({
             "type": "text",
             "text": s.to_string()
@@ -614,9 +626,16 @@ fn build_anthropic_content_from_openai_choice(choice: &crate::translation::Choic
     if let Some(tool_calls) = &choice.message.tool_calls {
         for tc in tool_calls {
             if let (Some(id), Some(function)) = (tc.get("id"), tc.get("function")) {
-                let name = function.get("name").and_then(|n| n.as_str()).unwrap_or_default();
-                let arguments_str = function.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
-                let input = serde_json::from_str::<serde_json::Value>(arguments_str).unwrap_or_else(|_| serde_json::json!({}));
+                let name = function
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or_default();
+                let arguments_str = function
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("{}");
+                let input = serde_json::from_str::<serde_json::Value>(arguments_str)
+                    .unwrap_or_else(|_| serde_json::json!({}));
                 content.push(serde_json::json!({
                     "type": "tool_use",
                     "id": id,
@@ -711,8 +730,14 @@ fn warn_consecutive_same_roles(conversation: &[AnthropicMessage]) {
 }
 
 fn log_tool_id_diagnostics(tool_use_ids: &[String], tool_result_ids: &[String]) {
-    let use_set: std::collections::HashSet<&str> = tool_use_ids.iter().map(std::string::String::as_str).collect();
-    let result_set: std::collections::HashSet<&str> = tool_result_ids.iter().map(std::string::String::as_str).collect();
+    let use_set: std::collections::HashSet<&str> = tool_use_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
+    let result_set: std::collections::HashSet<&str> = tool_result_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
     let missing_results: Vec<&str> = use_set.difference(&result_set).copied().collect();
     let orphan_results: Vec<&str> = result_set.difference(&use_set).copied().collect();
 

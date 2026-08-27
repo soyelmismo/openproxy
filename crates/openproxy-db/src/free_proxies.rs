@@ -132,15 +132,17 @@ fn fetch_alive_proxy_url(
         .optional()
         .map_err(crate::error::map_db_error)?;
 
-    Ok(exists_and_alive.map(|(host, port, proto, username, password)| {
-        format_proxy_url(
-            &proto,
-            &host,
-            port,
-            username.as_deref(),
-            password.as_deref(),
-        )
-    }))
+    Ok(
+        exists_and_alive.map(|(host, port, proto, username, password)| {
+            format_proxy_url(
+                &proto,
+                &host,
+                port,
+                username.as_deref(),
+                password.as_deref(),
+            )
+        }),
+    )
 }
 
 fn check_current_proxy(
@@ -271,7 +273,9 @@ pub fn get_or_assign_provider_proxy(
     };
 
     let is_per_account = provider.proxy_rotation_mode == "account";
-    if let Some(url) = check_current_proxy(conn, provider_id, &provider, account_id, is_per_account)? {
+    if let Some(url) =
+        check_current_proxy(conn, provider_id, &provider, account_id, is_per_account)?
+    {
         return Ok(Some(url));
     }
 
@@ -301,7 +305,13 @@ pub fn get_candidate_proxies_for_provider(
         .filter(|item| !is_provider_proxy_in_cooldown(conn, provider_id.as_str(), &item.0))
         .take(limit)
         .map(|item| {
-            let url = format_proxy_url(&item.3, &item.1, item.2, item.4.as_deref(), item.5.as_deref());
+            let url = format_proxy_url(
+                &item.3,
+                &item.1,
+                item.2,
+                item.4.as_deref(),
+                item.5.as_deref(),
+            );
             (item.0, url)
         })
         .collect();

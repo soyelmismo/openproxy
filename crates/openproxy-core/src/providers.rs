@@ -203,10 +203,7 @@ pub fn extract_domain(base_url: &str) -> Option<String> {
 }
 
 fn is_compound_tld(second_to_last: &str, last: &str) -> bool {
-    matches!(
-        second_to_last,
-        "co" | "com" | "org" | "net" | "gov" | "edu"
-    ) && last.len() == 2
+    matches!(second_to_last, "co" | "com" | "org" | "net" | "gov" | "edu") && last.len() == 2
 }
 
 /// Extract apex/root domain from host (e.g. "api.fireworks.ai" -> "fireworks.ai").

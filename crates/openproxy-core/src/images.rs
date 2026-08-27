@@ -701,8 +701,12 @@ fn encode_grayscale_png(width: u32, height: u32, mask_scanlines: &[u8]) -> Vec<u
 pub fn extract_png_alpha_mask(image_bytes: &[u8]) -> Option<Vec<u8>> {
     let header = parse_png_chunks(image_bytes)?;
     let decompressed = miniz_oxide::inflate::decompress_to_vec_zlib(&header.idat_data).ok()?;
-    let mask_scanlines =
-        extract_mask_scanlines(&decompressed, header.width, header.height, header.color_type)?;
+    let mask_scanlines = extract_mask_scanlines(
+        &decompressed,
+        header.width,
+        header.height,
+        header.color_type,
+    )?;
     Some(encode_grayscale_png(
         header.width,
         header.height,

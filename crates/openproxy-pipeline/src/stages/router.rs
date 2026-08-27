@@ -67,11 +67,8 @@ impl PipelineStage for RouterStage {
         ctx.combo = Some(combo.clone());
 
         let flat_targets = resolve_initial_targets(ctx, &combo).await?;
-        let mut eligible = partition_healthy_targets(
-            &ctx.pipeline.circuit_breaker,
-            flat_targets,
-            combo.id.0,
-        );
+        let mut eligible =
+            partition_healthy_targets(&ctx.pipeline.circuit_breaker, flat_targets, combo.id.0);
 
         if eligible.is_empty() {
             eligible = try_repopulate_targets(ctx, &combo).await?;

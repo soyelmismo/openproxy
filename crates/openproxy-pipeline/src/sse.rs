@@ -428,11 +428,16 @@ fn extract_gemini_candidates(probe: &GeminiSseProbe) -> &[GeminiCandidateProbe] 
 
 fn extract_gemini_usage_metadata(probe: &GeminiSseProbe) -> Option<&GeminiUsageProbe> {
     probe.usage_metadata.as_ref().or_else(|| {
-        probe.response.as_ref().and_then(|r| r.usage_metadata.as_ref())
+        probe
+            .response
+            .as_ref()
+            .and_then(|r| r.usage_metadata.as_ref())
     })
 }
 
-fn extract_gemini_content_and_reasoning(candidates: &[GeminiCandidateProbe]) -> (String, Option<String>) {
+fn extract_gemini_content_and_reasoning(
+    candidates: &[GeminiCandidateProbe],
+) -> (String, Option<String>) {
     let mut content_parts = String::new();
     let mut reasoning_parts = String::new();
     if let Some(candidate) = candidates.first()
@@ -691,23 +696,21 @@ fn translate_anthropic_message_delta(
         _ => None,
     };
 
-    let usage = data.get("usage").map(|u| {
-        crate::translation::OpenAIUsage {
-            prompt_tokens: u
-                .get("input_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(u32::MAX),
-            completion_tokens: u
-                .get("output_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(u32::MAX),
-            total_tokens: 0,
-            prompt_tokens_details: None,
-        }
+    let usage = data.get("usage").map(|u| crate::translation::OpenAIUsage {
+        prompt_tokens: u
+            .get("input_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(u32::MAX),
+        completion_tokens: u
+            .get("output_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(u32::MAX),
+        total_tokens: 0,
+        prompt_tokens_details: None,
     });
 
     let chunk = serde_json::json!({
@@ -751,9 +754,15 @@ pub fn translate_anthropic_sse_payload(
         .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
 
     match event_type {
-        "message_start" => Ok(Some(build_anthropic_message_start_chunk(chunk_id, created, model))),
-        "content_block_delta" => Ok(translate_anthropic_content_delta(&data, chunk_id, created, model)),
-        "message_delta" => Ok(Some(translate_anthropic_message_delta(&data, chunk_id, created, model))),
+        "message_start" => Ok(Some(build_anthropic_message_start_chunk(
+            chunk_id, created, model,
+        ))),
+        "content_block_delta" => Ok(translate_anthropic_content_delta(
+            &data, chunk_id, created, model,
+        )),
+        "message_delta" => Ok(Some(translate_anthropic_message_delta(
+            &data, chunk_id, created, model,
+        ))),
         _ => Ok(None),
     }
 }

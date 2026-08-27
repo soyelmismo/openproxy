@@ -75,9 +75,7 @@ pub async fn get_combo(
     Ok(Json(combo))
 }
 
-fn build_skipped_target_entry(
-    t: &types_combos::ComboTargetWithModel,
-) -> Option<serde_json::Value> {
+fn build_skipped_target_entry(t: &types_combos::ComboTargetWithModel) -> Option<serde_json::Value> {
     use serde_json::json;
     if t.sub_combo_id.is_some() {
         return Some(json!({
@@ -179,9 +177,7 @@ pub async fn test_combo_targets(
                     tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
                     break;
                 }
-                results.push(
-                    run_and_format_single_combo_target(&s, &t, cancel_rx.clone()).await,
-                );
+                results.push(run_and_format_single_combo_target(&s, &t, cancel_rx.clone()).await);
             }
             results
         };
@@ -422,9 +418,11 @@ fn parse_target_active(body: &serde_json::Value) -> Result<Option<bool>, ApiErro
     let Some(v) = body.get("active") else {
         return Ok(None);
     };
-    v.as_bool()
-        .map(Some)
-        .ok_or_else(|| ApiError(CoreError::Validation("active must be a boolean when present".into())))
+    v.as_bool().map(Some).ok_or_else(|| {
+        ApiError(CoreError::Validation(
+            "active must be a boolean when present".into(),
+        ))
+    })
 }
 
 fn parse_combo_target_updates(
@@ -436,8 +434,8 @@ fn parse_combo_target_updates(
     let cooldown_mode = parse_nullable_str(body, "cooldown_mode")?;
     let cooldown_base_secs = parse_nullable_u64(body, "cooldown_base_secs")?;
     let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
-    let cooldown_factor = parse_nullable_u64(body, "cooldown_factor")?
-        .map(|opt| opt.map(|f| f as u32));
+    let cooldown_factor =
+        parse_nullable_u64(body, "cooldown_factor")?.map(|opt| opt.map(|f| f as u32));
 
     let updates = ComboTargetUpdates {
         priority_order,

@@ -36,7 +36,14 @@ enum TargetLoopOutcome {
 
 fn extract_execution_plan(
     ctx: &mut PipelineContext,
-) -> Result<(openproxy_types::Combo, Vec<crate::context::ResolvedTarget>, usize), CoreError> {
+) -> Result<
+    (
+        openproxy_types::Combo,
+        Vec<crate::context::ResolvedTarget>,
+        usize,
+    ),
+    CoreError,
+> {
     let Some(combo) = ctx.combo.clone() else {
         return Err(CoreError::Validation("No combo resolved".to_string()));
     };
@@ -73,7 +80,9 @@ async fn execute_sequential_targets(
 ) -> Result<PipelineResult, CoreError> {
     let mut overall_attempt: u8 = 1;
     for idx in 0..to_run.len() {
-        match execute_single_target_step(ctx, combo, to_run, idx, race_size, &mut overall_attempt).await {
+        match execute_single_target_step(ctx, combo, to_run, idx, race_size, &mut overall_attempt)
+            .await
+        {
             TargetLoopOutcome::Finish(res) => return Ok(res),
             TargetLoopOutcome::Continue(res) => last_result = res,
             TargetLoopOutcome::Skip => {}
@@ -102,13 +111,19 @@ async fn execute_single_target_step(
     }
 
     if combo.preventive_rate_limit {
-        let _ = ctx.pipeline.predictive_limiter.acquire_target(combo.id, target.target.id, now_ms);
+        let _ = ctx
+            .pipeline
+            .predictive_limiter
+            .acquire_target(combo.id, target.target.id, now_ms);
     }
 
-    let step = run_target_with_retries(ctx, combo, target, race_size, to_run.len(), overall_attempt).await;
+    let step =
+        run_target_with_retries(ctx, combo, target, race_size, to_run.len(), overall_attempt).await;
     *overall_attempt = overall_attempt.saturating_add(1);
     match step {
-        TargetStepResult::Success(r) | TargetStepResult::ClientDisconnected(r) => TargetLoopOutcome::Finish(r),
+        TargetStepResult::Success(r) | TargetStepResult::ClientDisconnected(r) => {
+            TargetLoopOutcome::Finish(r)
+        }
         TargetStepResult::Failed(r) => TargetLoopOutcome::Continue(Some(r)),
     }
 }
@@ -185,8 +200,12 @@ fn resolve_target_proxy_mode(
     let Ok(Some(prov)) = openproxy_db::providers::get(&conn, &target.target.provider_id) else {
         return (false, String::new());
     };
-    let is_incremental_mode = matches!(prov.proxy_rotation_mode.as_str(), "incremental_race" | "incremental");
-    let can_incremental_race = prov.use_proxies && is_incremental_mode && target.target.account_id.is_none();
+    let is_incremental_mode = matches!(
+        prov.proxy_rotation_mode.as_str(),
+        "incremental_race" | "incremental"
+    );
+    let can_incremental_race =
+        prov.use_proxies && is_incremental_mode && target.target.account_id.is_none();
     (can_incremental_race, prov.proxy_rotation_errors)
 }
 
@@ -217,15 +236,25 @@ fn resolve_base_retry_delay(
         .or_else(|| is_proxy_rotated.then_some(std::time::Duration::ZERO))
 }
 
-fn calculate_upstream_delay(err: &CoreError, base_delay: std::time::Duration) -> std::time::Duration {
+fn calculate_upstream_delay(
+    err: &CoreError,
+    base_delay: std::time::Duration,
+) -> std::time::Duration {
     match err {
-        CoreError::RateLimited { is_proxy_rotated: true, .. }
-        | CoreError::UpstreamError { status: 429, is_proxy_rotated: true, .. } => {
-            std::time::Duration::ZERO
+        CoreError::RateLimited {
+            is_proxy_rotated: true,
+            ..
         }
-        CoreError::RateLimited { retry_after_ms, is_proxy_rotated: false, .. } => {
-            std::time::Duration::from_millis(*retry_after_ms).max(base_delay)
-        }
+        | CoreError::UpstreamError {
+            status: 429,
+            is_proxy_rotated: true,
+            ..
+        } => std::time::Duration::ZERO,
+        CoreError::RateLimited {
+            retry_after_ms,
+            is_proxy_rotated: false,
+            ..
+        } => std::time::Duration::from_millis(*retry_after_ms).max(base_delay),
         _ => base_delay,
     }
 }
@@ -269,7 +298,8 @@ async fn try_incremental_proxy_race(
         "triggering incremental proxy race"
     );
     *overall_attempt = overall_attempt.saturating_add(1);
-    *target_local_retry_count = target_local_retry_count.saturating_add(candidate_proxies.len() as u8);
+    *target_local_retry_count =
+        target_local_retry_count.saturating_add(candidate_proxies.len() as u8);
 
     let race_res = crate::proxy_race::run_proxy_race(
         &ctx.pipeline,
@@ -299,7 +329,12 @@ struct TargetRetryState {
 }
 
 impl TargetRetryState {
-    fn new(ctx: &PipelineContext, target: &crate::context::ResolvedTarget, race_size: usize, total_targets: usize) -> Self {
+    fn new(
+        ctx: &PipelineContext,
+        target: &crate::context::ResolvedTarget,
+        race_size: usize,
+        total_targets: usize,
+    ) -> Self {
         let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
         let (can_incremental_race, proxy_rotation_errors) = resolve_target_proxy_mode(ctx, target);
         Self {
@@ -409,7 +444,13 @@ async fn compute_and_wait_retry_delay(
     err: &CoreError,
     overall_attempt: &mut u8,
 ) -> Option<PipelineResult> {
-    let delay = check_retry_delay(&state.policy, state.target_local_retry_count, err, combo.id.0, target)?;
+    let delay = check_retry_delay(
+        &state.policy,
+        state.target_local_retry_count,
+        err,
+        combo.id.0,
+        target,
+    )?;
 
     tracing::debug!(
         combo_id = combo.id.0,
@@ -427,7 +468,17 @@ async fn compute_and_wait_retry_delay(
     state.target_local_retry_count = state.target_local_retry_count.saturating_add(1);
     *overall_attempt = overall_attempt.saturating_add(1);
 
-    Some(execute_single_target(ctx, combo, target, *overall_attempt, state.race_size, state.total_targets).await)
+    Some(
+        execute_single_target(
+            ctx,
+            combo,
+            target,
+            *overall_attempt,
+            state.race_size,
+            state.total_targets,
+        )
+        .await,
+    )
 }
 
 async fn perform_retry_iteration(
@@ -438,7 +489,12 @@ async fn perform_retry_iteration(
     err: &CoreError,
     overall_attempt: &mut u8,
 ) -> RetryStep {
-    if !should_retry_target(err, state.target_local_retry_count, &state.policy, ctx.pipeline.config.idle_chunk_retryable) {
+    if !should_retry_target(
+        err,
+        state.target_local_retry_count,
+        &state.policy,
+        ctx.pipeline.config.idle_chunk_retryable,
+    ) {
         return RetryStep::Abort;
     }
     state.track_failure(err);
@@ -447,19 +503,15 @@ async fn perform_retry_iteration(
         return RetryStep::ClientDisconnected(disc);
     }
 
-    if let Some(step) = try_trigger_incremental_race_fallback(ctx, combo, target, state, overall_attempt).await {
+    if let Some(step) =
+        try_trigger_incremental_race_fallback(ctx, combo, target, state, overall_attempt).await
+    {
         return step;
     }
 
-    let Some(next_res) = compute_and_wait_retry_delay(
-        ctx,
-        combo,
-        target,
-        state,
-        err,
-        overall_attempt,
-    )
-    .await else {
+    let Some(next_res) =
+        compute_and_wait_retry_delay(ctx, combo, target, state, err, overall_attempt).await
+    else {
         return RetryStep::Abort;
     };
 
@@ -481,7 +533,15 @@ fn finalize_target_result(
             .mark_client_response(result.usage_tuple.clone());
         TargetStepResult::Success(result)
     } else {
-        log_target_failure(ctx, combo, target, &result, target_local_retry_count, overall_attempt, total_targets);
+        log_target_failure(
+            ctx,
+            combo,
+            target,
+            &result,
+            target_local_retry_count,
+            overall_attempt,
+            total_targets,
+        );
         TargetStepResult::Failed(result)
     }
 }
@@ -495,7 +555,15 @@ async fn run_target_with_retries(
     overall_attempt: &mut u8,
 ) -> TargetStepResult {
     let mut state = TargetRetryState::new(ctx, target, race_size, total_targets);
-    let mut result = execute_single_target(ctx, combo, target, *overall_attempt, race_size, total_targets).await;
+    let mut result = execute_single_target(
+        ctx,
+        combo,
+        target,
+        *overall_attempt,
+        race_size,
+        total_targets,
+    )
+    .await;
 
     while let Some(e) = &result.error {
         match perform_retry_iteration(ctx, combo, target, &mut state, e, overall_attempt).await {
@@ -507,11 +575,21 @@ async fn run_target_with_retries(
                 result = r;
             }
             RetryStep::Abort => break,
-            RetryStep::ClientDisconnected(disc) => return TargetStepResult::ClientDisconnected(disc),
+            RetryStep::ClientDisconnected(disc) => {
+                return TargetStepResult::ClientDisconnected(disc);
+            }
         }
     }
 
-    finalize_target_result(ctx, combo, target, result, state.target_local_retry_count, *overall_attempt, total_targets)
+    finalize_target_result(
+        ctx,
+        combo,
+        target,
+        result,
+        state.target_local_retry_count,
+        *overall_attempt,
+        total_targets,
+    )
 }
 
 fn log_target_failure(
@@ -523,8 +601,13 @@ fn log_target_failure(
     overall_attempt: u8,
     total_targets: usize,
 ) {
-    let Some(e) = result.error.as_ref() else { return; };
-    let is_rate_limit = matches!(e, CoreError::RateLimited { .. } | CoreError::UpstreamError { status: 429, .. });
+    let Some(e) = result.error.as_ref() else {
+        return;
+    };
+    let is_rate_limit = matches!(
+        e,
+        CoreError::RateLimited { .. } | CoreError::UpstreamError { status: 429, .. }
+    );
     let retryable = RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable);
     if is_rate_limit {
         tracing::warn!(
@@ -614,14 +697,23 @@ fn should_skip_preventive_target(
     if !combo.preventive_rate_limit {
         return false;
     }
-    let readiness = pipeline.predictive_limiter.evaluate_target(combo.id, target.target.id, now_ms);
-    let crate::predictive_rate_limit::TargetReadiness::Saturated { learned_burst, window_count, reset_in_ms } = readiness else {
+    let readiness = pipeline
+        .predictive_limiter
+        .evaluate_target(combo.id, target.target.id, now_ms);
+    let crate::predictive_rate_limit::TargetReadiness::Saturated {
+        learned_burst,
+        window_count,
+        reset_in_ms,
+    } = readiness
+    else {
         return false;
     };
 
     let has_healthy_alternative = remaining_targets.iter().any(|alt| {
         !matches!(
-            pipeline.predictive_limiter.evaluate_target(combo.id, alt.target.id, now_ms),
+            pipeline
+                .predictive_limiter
+                .evaluate_target(combo.id, alt.target.id, now_ms),
             crate::predictive_rate_limit::TargetReadiness::Saturated { .. }
         )
     });

@@ -220,10 +220,7 @@ async fn resolve_refresh_key_and_label(
     Ok((api_key, label))
 }
 
-fn apply_provider_auto_activation(
-    s: &AppState,
-    provider: &ProviderId,
-) -> Result<u64, ApiError> {
+fn apply_provider_auto_activation(s: &AppState, provider: &ProviderId) -> Result<u64, ApiError> {
     let w = s.db_pool().writer();
     let p = core_providers::get(&w, provider)?;
     let keyword = p.and_then(|pp| pp.auto_activate_keyword);

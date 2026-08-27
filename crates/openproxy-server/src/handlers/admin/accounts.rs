@@ -214,7 +214,8 @@ pub(crate) fn resolve_refresh_account(
 ) -> Result<(Option<AccountId>, String), ApiError> {
     let w = s.db_pool().writer();
     let provider_row = core_providers::get(&w, provider).map_err(ApiError)?;
-    let accounts_list = core_accounts::list(&w, Some(provider), s.master_key().as_ref()).map_err(ApiError)?;
+    let accounts_list =
+        core_accounts::list(&w, Some(provider), s.master_key().as_ref()).map_err(ApiError)?;
 
     let is_auth_none = provider_row
         .as_ref()

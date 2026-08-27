@@ -132,7 +132,11 @@ fn map_horde_cluster_model(
     let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
     let (family, out_mods, m_type) = if is_image {
-        (Some(infer_horde_family(&name)), vec!["image".into()], "image")
+        (
+            Some(infer_horde_family(&name)),
+            vec!["image".into()],
+            "image",
+        )
     } else {
         (
             openproxy_types::capabilities::infer_family(&name).or_else(|| Some("instruct".into())),
@@ -174,8 +178,7 @@ async fn fetch_horde_cluster_models(
     model_type: &'static str,
 ) -> Vec<DiscoveredModel> {
     let url = format!("{base_url}/status/models?type={model_type}");
-    let Ok(json_val) =
-        crate::adapters::upstream_get_json(upstream_client, &url, header_refs).await
+    let Ok(json_val) = crate::adapters::upstream_get_json(upstream_client, &url, header_refs).await
     else {
         return Vec::new();
     };
@@ -522,54 +525,56 @@ impl HordeAdapter {
             .find_map(extract_image_from_content)
     }
 
-fn extract_caption_from_object(obj: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    for key in [
-        "caption",
-        "text",
-        "interrogation",
-        "description",
-        "summary",
-        "result",
-    ] {
-        if let Some(s) = obj.get(key).and_then(|v| v.as_str())
-            && !s.trim().is_empty()
-        {
-            return Some(s.trim().to_string());
+    fn extract_caption_from_object(
+        obj: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<String> {
+        for key in [
+            "caption",
+            "text",
+            "interrogation",
+            "description",
+            "summary",
+            "result",
+        ] {
+            if let Some(s) = obj.get(key).and_then(|v| v.as_str())
+                && !s.trim().is_empty()
+            {
+                return Some(s.trim().to_string());
+            }
         }
+        serde_json::to_string(obj).ok()
     }
-    serde_json::to_string(obj).ok()
-}
 
-fn parse_form_result_caption(forms: &[serde_json::Value]) -> Option<String> {
-    for form in forms {
-        let Some(result) = form.get("result") else {
-            continue;
-        };
-        if let Some(s) = result.as_str()
-            && !s.trim().is_empty()
-        {
-            return Some(s.trim().to_string());
+    fn parse_form_result_caption(forms: &[serde_json::Value]) -> Option<String> {
+        for form in forms {
+            let Some(result) = form.get("result") else {
+                continue;
+            };
+            if let Some(s) = result.as_str()
+                && !s.trim().is_empty()
+            {
+                return Some(s.trim().to_string());
+            }
+            if let Some(obj) = result.as_object()
+                && let Some(cap) = Self::extract_caption_from_object(obj)
+            {
+                return Some(cap);
+            }
         }
-        if let Some(obj) = result.as_object()
-            && let Some(cap) = Self::extract_caption_from_object(obj)
-        {
-            return Some(cap);
-        }
+        None
     }
-    None
-}
 
-fn parse_generations_caption(gens: &[serde_json::Value]) -> Option<String> {
-    for item in gens {
-        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-            return Some(text.trim().to_string());
+    fn parse_generations_caption(gens: &[serde_json::Value]) -> Option<String> {
+        for item in gens {
+            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                return Some(text.trim().to_string());
+            }
+            if let Some(img) = item.get("img").and_then(|v| v.as_str()) {
+                return Some(img.trim().to_string());
+            }
         }
-        if let Some(img) = item.get("img").and_then(|v| v.as_str()) {
-            return Some(img.trim().to_string());
-        }
+        None
     }
-    None
-}
 
     /// Parse caption string from a Horde interrogate status response.
     pub fn parse_interrogate_status_caption(status_json: &serde_json::Value) -> Option<String> {
@@ -738,7 +743,8 @@ fn parse_generations_caption(gens: &[serde_json::Value]) -> Option<String> {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
             if let Some(res) =
-                Self::poll_interrogate_step(upstream_client, &status_url, api_key, &cancel_token).await
+                Self::poll_interrogate_step(upstream_client, &status_url, api_key, &cancel_token)
+                    .await
             {
                 if res.is_err() {
                     cancel_interrogate_job(upstream_client, base_url, job_id, api_key).await;
@@ -770,14 +776,7 @@ fn parse_generations_caption(gens: &[serde_json::Value]) -> Option<String> {
             cancel_token.clone(),
         )
         .await?;
-        Self::poll_interrogate_job(
-            upstream_client,
-            base_url,
-            api_key,
-            &job_id,
-            cancel_token,
-        )
-        .await
+        Self::poll_interrogate_job(upstream_client, base_url, api_key, &job_id, cancel_token).await
     }
 }
 
@@ -819,9 +818,7 @@ fn apply_horde_auth_headers(req: &mut UpstreamRequest, api_key: &str, include_be
         req.headers
             .insert(http::header::HeaderName::from_static("apikey"), val);
     }
-    if let Ok(val) =
-        http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
-    {
+    if let Ok(val) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
         req.headers
             .insert(http::header::HeaderName::from_static("client-agent"), val);
     }
@@ -957,7 +954,10 @@ pub fn aspect_ratio_to_dimensions(ar: &str) -> (u32, u32) {
     ASPECT_RATIO_DIMENSIONS
         .iter()
         .find(|(ratio, _)| *ratio == ar)
-        .map_or((DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION), |(_, dim)| *dim)
+        .map_or(
+            (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
+            |(_, dim)| *dim,
+        )
 }
 
 /// Parse dimensions from size string (e.g. "1024x1024") or aspect ratio (e.g. "16:9"),
@@ -1129,9 +1129,7 @@ fn resolve_source_processing(
     }
 }
 
-fn extract_lora_and_ti_tags(
-    raw_prompt: &str,
-) -> (String, Vec<HordeLora>, Vec<HordeTi>) {
+fn extract_lora_and_ti_tags(raw_prompt: &str) -> (String, Vec<HordeLora>, Vec<HordeTi>) {
     let mut loras = Vec::new();
     let mut tis = Vec::new();
     let mut without_tags = String::with_capacity(raw_prompt.len());

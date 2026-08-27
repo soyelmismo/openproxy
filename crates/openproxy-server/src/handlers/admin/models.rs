@@ -86,8 +86,15 @@ pub async fn create_custom_model(
 fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> {
     tokio::task::block_in_place(|| {
         let r = s.db_pool().reader();
-        let p = openproxy_core::free_proxies::get_proxy(&r, pid).ok().flatten()?;
-        Some(format!("{}://{}:{}", p.r#type.to_lowercase(), p.host, p.port))
+        let p = openproxy_core::free_proxies::get_proxy(&r, pid)
+            .ok()
+            .flatten()?;
+        Some(format!(
+            "{}://{}:{}",
+            p.r#type.to_lowercase(),
+            p.host,
+            p.port
+        ))
     })
 }
 
@@ -331,7 +338,15 @@ async fn resolve_test_credentials(
     model_row_id: i64,
     account_id: Option<AccountId>,
     start: std::time::Instant,
-) -> Result<(Option<AccountId>, String, String, Option<core_accounts::Account>), TestResult> {
+) -> Result<
+    (
+        Option<AccountId>,
+        String,
+        String,
+        Option<core_accounts::Account>,
+    ),
+    TestResult,
+> {
     let (is_anonymous, accounts_list) = {
         let r = s.db_pool().reader();
         let provider_row = core_providers::get(&r, &model.provider_id).unwrap_or_default();
@@ -469,11 +484,8 @@ fn build_chat_format_test_payload(
     use openproxy_adapters::adapters::gemini::openai_to_gemini;
     use openproxy_pipeline::translation::openai_to_anthropic;
 
-    let url = adapter.build_chat_url_for_account(
-        effective_target_format,
-        &model.model_id,
-        account_label,
-    );
+    let url =
+        adapter.build_chat_url_for_account(effective_target_format, &model.model_id, account_label);
 
     match effective_target_format {
         openproxy_core::models::TargetFormat::Anthropic => {
@@ -486,11 +498,7 @@ fn build_chat_format_test_payload(
             serde_json::to_value(&anthropic_req)
                 .map(|v| (url, v))
                 .map_err(|e| {
-                    test_error_result(
-                        model_row_id,
-                        500,
-                        &format!("serialize anthropic req: {e}"),
-                    )
+                    test_error_result(model_row_id, 500, &format!("serialize anthropic req: {e}"))
                 })
         }
         openproxy_core::models::TargetFormat::Gemini => {
@@ -537,11 +545,7 @@ fn build_chat_format_test_payload(
                 )
                 .map_err(|err| test_error_result(model_row_id, 500, &err.to_string()))?;
             let v = serde_json::from_slice::<serde_json::Value>(&req_bytes).map_err(|e| {
-                test_error_result(
-                    model_row_id,
-                    500,
-                    &format!("serialize responses req: {e}"),
-                )
+                test_error_result(model_row_id, 500, &format!("serialize responses req: {e}"))
             })?;
             Ok((url, v))
         }
@@ -562,7 +566,9 @@ fn build_chat_format_test_payload(
         }
         _ => serde_json::to_value(openai_req)
             .map(|v| (url, v))
-            .map_err(|e| test_error_result(model_row_id, 500, &format!("serialize openai req: {e}"))),
+            .map_err(|e| {
+                test_error_result(model_row_id, 500, &format!("serialize openai req: {e}"))
+            }),
     }
 }
 
@@ -687,18 +693,11 @@ pub(crate) async fn run_test_for_model(
     };
 
     // 3. Resolve account & credentials
-    let (_account_id_opt, account_label, api_key, raw_account_opt) = match resolve_test_credentials(
-        s,
-        &model,
-        model_row_id,
-        account_id,
-        start,
-    )
-    .await
-    {
-        Ok(creds) => creds,
-        Err(err_res) => return (err_res, None),
-    };
+    let (_account_id_opt, account_label, api_key, raw_account_opt) =
+        match resolve_test_credentials(s, &model, model_row_id, account_id, start).await {
+            Ok(creds) => creds,
+            Err(err_res) => return (err_res, None),
+        };
 
     // 4. Build request
     let openai_req = build_test_openai_request(model.model_id.as_str());
@@ -720,13 +719,8 @@ pub(crate) async fn run_test_for_model(
     ) = if is_stt {
         build_stt_test_payload(&adapter, &model)
     } else if is_embedding || is_image || is_tts {
-        let (u, v) = build_audio_or_specialized_payload(
-            &adapter,
-            &model,
-            is_embedding,
-            is_image,
-            is_tts,
-        );
+        let (u, v) =
+            build_audio_or_specialized_payload(&adapter, &model, is_embedding, is_image, is_tts);
         (u, v, None)
     } else {
         match build_chat_format_test_payload(
@@ -742,8 +736,11 @@ pub(crate) async fn run_test_for_model(
         }
     };
 
-    let custom_meta =
-        build_custom_provider_meta(model.provider_id.as_str(), raw_account_opt.as_ref(), &api_key);
+    let custom_meta = build_custom_provider_meta(
+        model.provider_id.as_str(),
+        raw_account_opt.as_ref(),
+        &api_key,
+    );
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
 
     let dummy_target = openproxy_types::context::ResolvedTarget {

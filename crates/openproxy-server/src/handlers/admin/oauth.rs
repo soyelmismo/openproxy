@@ -54,8 +54,7 @@ pub async fn oauth_authorize(
 
     validate_authorize_flow(&provider, &provider_impl)?;
     let redirect_uri = get_oauth_redirect_uri();
-    let (auth_url, code_verifier, _, state) =
-        provider_impl.build_auth_url(&redirect_uri).await?;
+    let (auth_url, code_verifier, _, state) = provider_impl.build_auth_url(&redirect_uri).await?;
 
     Ok(Json(serde_json::json!({
         "authorization_url": auth_url,
@@ -76,15 +75,7 @@ fn resolve_or_create_oauth_account(
     tokio::task::block_in_place(|| {
         let w = s.db_pool().writer();
         let provider_id = ProviderId::new(provider);
-        core_accounts::create(
-            &w,
-            &provider_id,
-            None,
-            s.master_key(),
-            None,
-            10,
-            None,
-        )
+        core_accounts::create(&w, &provider_id, None, s.master_key(), None, 10, None)
     })
     .map_err(ApiError)
 }
@@ -106,8 +97,8 @@ async fn save_oauth_token_and_notify(
     custom_provider_specific: Option<String>,
 ) -> Result<(), ApiError> {
     let expires_at = compute_oauth_expires_at(token.expires_in);
-    let provider_specific = custom_provider_specific
-        .or_else(|| provider_impl.provider_specific_from_token(token));
+    let provider_specific =
+        custom_provider_specific.or_else(|| provider_impl.provider_specific_from_token(token));
     let email = provider_impl.email_from_token(token);
 
     tokio::task::block_in_place(|| {
@@ -180,15 +171,7 @@ pub async fn oauth_exchange(
         .await?;
 
     let account_id = resolve_or_create_oauth_account(&s, &provider, account_id_input)?;
-    save_oauth_token_and_notify(
-        &s,
-        &provider,
-        &provider_impl,
-        account_id,
-        &token,
-        None,
-    )
-    .await?;
+    save_oauth_token_and_notify(&s, &provider, &provider_impl, account_id, &token, None).await?;
 
     Ok(Json(serde_json::json!({
         "account_id": account_id.0,
@@ -232,14 +215,16 @@ fn validate_active_ticket(s: &AppState, device_code: &str) -> Result<(), ApiErro
         let w = s.db_pool().writer();
         match openproxy_core::oauth::tickets::lookup_active(&w, device_code)? {
             openproxy_core::oauth::tickets::TicketStatus::Active(_) => Ok(()),
-            openproxy_core::oauth::tickets::TicketStatus::Expired => Err(ApiError(CoreError::Validation(
-                "device_code has expired; restart the OAuth flow".into(),
-            ))),
+            openproxy_core::oauth::tickets::TicketStatus::Expired => Err(ApiError(
+                CoreError::Validation("device_code has expired; restart the OAuth flow".into()),
+            )),
             openproxy_core::oauth::tickets::TicketStatus::Consumed
-            | openproxy_core::oauth::tickets::TicketStatus::Unknown => Err(ApiError(CoreError::NotFound {
-                what: "oauth_device_ticket".into(),
-                id: device_code.to_string(),
-            })),
+            | openproxy_core::oauth::tickets::TicketStatus::Unknown => {
+                Err(ApiError(CoreError::NotFound {
+                    what: "oauth_device_ticket".into(),
+                    id: device_code.to_string(),
+                }))
+            }
         }
     })
 }
@@ -272,9 +257,7 @@ pub async fn oauth_device_poll(
         .get("device_code")
         .and_then(|v| v.as_str())
         .ok_or_else(|| CoreError::Validation("missing 'device_code'".into()))?;
-    let account_id_input = input
-        .get("account_id")
-        .and_then(serde_json::Value::as_i64);
+    let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
 
     validate_active_ticket(&s, device_code)?;
 

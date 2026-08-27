@@ -44,9 +44,7 @@ fn execute_priority_strategy(
         PriorityMode::Strict => targets,
         PriorityMode::Lkgp => resolve_lkgp(targets, combo, selection_registry),
         PriorityMode::Weighted => resolve_weighted(targets),
-        PriorityMode::LeastUsed => {
-            resolve_least_used(targets, window_secs, selection_registry)
-        }
+        PriorityMode::LeastUsed => resolve_least_used(targets, window_secs, selection_registry),
         PriorityMode::P2c => resolve_p2c(targets, window_secs, selection_registry),
     }
 }

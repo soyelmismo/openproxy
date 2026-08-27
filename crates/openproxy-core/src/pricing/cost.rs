@@ -246,8 +246,7 @@ fn execute_usage_insert(
 
 /// Insert a usage row. Returns the new UsageId.
 pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
-    let price =
-        pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
+    let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
     warn_missing_pricing(input, price.as_ref());
     let (cost_usd, tps) = compute(price, input);
     let db_err_msgs = sanitize_db_error_msg(input.error_msg.as_deref());

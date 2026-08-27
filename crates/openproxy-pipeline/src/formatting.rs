@@ -165,7 +165,8 @@ impl TargetFormatter for ResponsesFormatter {
         if let Some(tools) = format_responses_tools(req.openai_request.tools.as_deref()) {
             obj.insert("tools".to_string(), tools);
         }
-        if let Some(choice) = format_responses_tool_choice(req.openai_request.tool_choice.as_ref()) {
+        if let Some(choice) = format_responses_tool_choice(req.openai_request.tool_choice.as_ref())
+        {
             obj.insert("tool_choice".to_string(), choice);
         }
 
@@ -288,10 +289,7 @@ fn apply_responses_reasoning_and_tier(
     }
 }
 
-fn compute_responses_prompt_cache_key(
-    instructions_str: &str,
-    tools: Option<&[Value]>,
-) -> String {
+fn compute_responses_prompt_cache_key(instructions_str: &str, tools: Option<&[Value]>) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
     let mut hasher = Sha256::new();

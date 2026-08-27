@@ -269,13 +269,10 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
     let provider_id = m.provider_id.as_str();
     let full_id = format!("{provider_id}/{model_id}");
 
-    let caps = m
-        .capabilities_json
-        .as_deref()
-        .map_or_else(
-            || capabilities::infer_capabilities(model_id),
-            |json| capabilities::ModelCapabilities::from_json(Some(json)),
-        );
+    let caps = m.capabilities_json.as_deref().map_or_else(
+        || capabilities::infer_capabilities(model_id),
+        |json| capabilities::ModelCapabilities::from_json(Some(json)),
+    );
 
     let context_length = m
         .context_length

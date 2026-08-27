@@ -88,8 +88,7 @@ pub struct UpstreamDispatcher {
     pub(crate) record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
 }
 
-#[derive(Debug)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ProxyRotationTrigger {
     Status(u16),
     ConnectError,
@@ -212,16 +211,25 @@ impl UpstreamDispatcher {
         let override_proxy_id = override_proxy_id.map(str::to_string);
         tokio::task::spawn_blocking(move || {
             let conn = conn_clone.lock();
-            let Some(provider) = openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None) else {
+            let Some(provider) = openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None)
+            else {
                 return false;
             };
             if !provider.use_proxies {
                 return false;
             }
             let is_per_account = provider.proxy_rotation_mode == "account";
-            let bad_proxy_id = find_bad_proxy_id(&provider, &conn, override_proxy_id.as_deref(), is_per_account, account_id);
+            let bad_proxy_id = find_bad_proxy_id(
+                &provider,
+                &conn,
+                override_proxy_id.as_deref(),
+                is_per_account,
+                account_id,
+            );
 
-            if should_rotate_proxy(&provider, trigger) && let Some(ref bad_proxy) = bad_proxy_id {
+            if should_rotate_proxy(&provider, trigger)
+                && let Some(ref bad_proxy) = bad_proxy_id
+            {
                 tracing::warn!(
                     provider = %provider_id,
                     account_id = ?account_id,
@@ -374,8 +382,7 @@ impl UpstreamDispatcher {
                 elapsed_ms = connect_and_send_ms,
                 "client cancelled during upstream send; aborting attempt"
             );
-            let core_err =
-                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
+            let core_err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
             return self.record_and_fail(
                 req,
                 combo,
@@ -498,8 +505,7 @@ impl UpstreamDispatcher {
         ttft_ms: Option<u64>,
     ) -> PipelineResult {
         let retry_after_ms = retry_after_header.and_then(parse_retry_after_ms);
-        let is_rate_limited_status =
-            status_code == 429 || status_code == 408 || status_code == 503;
+        let is_rate_limited_status = status_code == 429 || status_code == 408 || status_code == 503;
         let retry_ms = retry_after_ms.unwrap_or(300_000);
 
         let trigger = if is_rate_limited_status {
@@ -563,17 +569,15 @@ impl UpstreamDispatcher {
             dctx.fail_ctx_code(&err, Some(connect_and_send_ms), ttft_ms, status_code),
         )
     }
-
 }
 
-fn is_horde_vision_request(
-    target: &ComboTarget,
-    model: &Model,
-    req: &PipelineRequest,
-) -> bool {
+fn is_horde_vision_request(target: &ComboTarget, model: &Model, req: &PipelineRequest) -> bool {
     target.provider_id.as_str() == "horde"
         && (openproxy_adapters::HordeAdapter::is_vision_model(model.model_id.as_str())
-            || openproxy_adapters::HordeAdapter::extract_image_from_messages(&req.openai_request.messages).is_some())
+            || openproxy_adapters::HordeAdapter::extract_image_from_messages(
+                &req.openai_request.messages,
+            )
+            .is_some())
 }
 
 fn populate_upstream_headers(upstream_request: &mut UpstreamRequest, headers: &[(String, String)]) {
@@ -637,17 +641,19 @@ fn translate_non_streaming_body(
         }
         openproxy_types::TargetFormat::Anthropic => {
             let anthropic_resp: crate::translation::AnthropicResponse =
-                <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(response_body_raw)
-                    .map_err(|e| CoreError::Parse(format!("parse anthropic response: {e}")))?;
+                <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(
+                    response_body_raw,
+                )
+                .map_err(|e| CoreError::Parse(format!("parse anthropic response: {e}")))?;
             Ok(crate::translation::anthropic_to_openai(&anthropic_resp))
         }
         openproxy_types::TargetFormat::Gemini => {
             let adapter = openproxy_adapters::GeminiAdapter::new();
             adapter.translate_non_streaming_response(target_format, response_body_raw.clone())
         }
-        openproxy_types::TargetFormat::Atomesus | openproxy_types::TargetFormat::Fx => {
-            Ok(translate_simple_text_response(response_body_raw, req.openai_request.model.clone()))
-        }
+        openproxy_types::TargetFormat::Atomesus | openproxy_types::TargetFormat::Fx => Ok(
+            translate_simple_text_response(response_body_raw, req.openai_request.model.clone()),
+        ),
     }
 }
 
@@ -853,40 +859,36 @@ impl UpstreamDispatcher {
                     .collect::<std::collections::BTreeMap<String, String>>(),
             );
         let resp_json = serde_json::to_value(&openai_response).unwrap_or_default();
-        let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
-            &self.tracker,
-            req,
-            combo,
-            target,
-        )
-        .proxy_url(upstream_request.proxy)
-        .proxy_status(upstream_request.proxy_status)
-        .model_opt(Some(model))
-        .err_opt(None)
-        .connect_ms_opt(Some(connect_and_send_ms))
-        .ttft_ms_opt(Some(connect_and_send_ms))
-        .total_ms(total_ms_now)
-        .status_code(200)
-        .attempt(attempt)
-        .race_size(race_size)
-        .trace_id(trace_id.clone())
-        .prompt_tokens_opt(Some(prompt_tokens))
-        .completion_tokens_opt(Some(completion_tokens))
-        .cached_tokens(None)
-        .response_body_json(Some(resp_json))
-        .request_headers(Some(request_headers_btm))
-        .response_headers(None)
-        .is_streaming(false)
-        .stream_complete(true)
-        .stop_reason(None)
-        .record()
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
-                None
-            }
-        };
+        let usage_tuple =
+            match crate::usage_tracker::UsageRecordBuilder::new(&self.tracker, req, combo, target)
+                .proxy_url(upstream_request.proxy)
+                .proxy_status(upstream_request.proxy_status)
+                .model_opt(Some(model))
+                .err_opt(None)
+                .connect_ms_opt(Some(connect_and_send_ms))
+                .ttft_ms_opt(Some(connect_and_send_ms))
+                .total_ms(total_ms_now)
+                .status_code(200)
+                .attempt(attempt)
+                .race_size(race_size)
+                .trace_id(trace_id.clone())
+                .prompt_tokens_opt(Some(prompt_tokens))
+                .completion_tokens_opt(Some(completion_tokens))
+                .cached_tokens(None)
+                .response_body_json(Some(resp_json))
+                .request_headers(Some(request_headers_btm))
+                .response_headers(None)
+                .is_streaming(false)
+                .stream_complete(true)
+                .stop_reason(None)
+                .record()
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
+                    None
+                }
+            };
 
         PipelineResult {
             status_code: 200,
@@ -926,8 +928,7 @@ impl UpstreamDispatcher {
                     elapsed_ms = params.started.elapsed().as_millis() as u64,
                     "client cancelled during upstream body read; aborting attempt"
                 );
-                let err =
-                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
+                let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
                 Err(self.record_and_fail(
                     params.req.clone(),
                     params.combo,
@@ -961,7 +962,11 @@ impl UpstreamDispatcher {
                 self.check_and_trigger_proxy_rotation(
                     &params.target.provider_id,
                     params.target.account_id,
-                    params.req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                    params
+                        .req
+                        .proxy_override
+                        .as_ref()
+                        .map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                     None,
                 )
@@ -983,7 +988,11 @@ impl UpstreamDispatcher {
                 self.check_and_trigger_proxy_rotation(
                     &params.target.provider_id,
                     params.target.account_id,
-                    params.req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
+                    params
+                        .req
+                        .proxy_override
+                        .as_ref()
+                        .map(|(pid, _)| pid.as_str()),
                     crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
                     None,
                 )
@@ -1022,7 +1031,11 @@ impl UpstreamDispatcher {
         args: NonStreamingSuccessArgs,
     ) -> PipelineResult {
         let prompt_tokens = args.openai_response.usage.as_ref().map(|u| u.prompt_tokens);
-        let completion_tokens = args.openai_response.usage.as_ref().map(|u| u.completion_tokens);
+        let completion_tokens = args
+            .openai_response
+            .usage
+            .as_ref()
+            .map(|u| u.completion_tokens);
         let cached_tokens = args
             .openai_response
             .usage
@@ -1090,7 +1103,8 @@ impl UpstreamDispatcher {
         upstream_request: UpstreamRequest,
     ) -> PipelineResult {
         let send_start = Instant::now();
-        let reason = *params.req.client_disconnected.borrow(); if let Some(reason) = reason {
+        let reason = *params.req.client_disconnected.borrow();
+        if let Some(reason) = reason {
             let elapsed = send_start.elapsed().as_millis() as u64;
             tracing::warn!(
                 combo_id = params.combo.id.0,
@@ -1188,7 +1202,9 @@ impl UpstreamDispatcher {
         if !(200..300).contains(&status_code) {
             let retry_after_header = response_headers
                 .as_ref()
-                .and_then(|h: &std::collections::BTreeMap<String, String>| h.get("retry-after").or_else(|| h.get("Retry-After")))
+                .and_then(|h: &std::collections::BTreeMap<String, String>| {
+                    h.get("retry-after").or_else(|| h.get("Retry-After"))
+                })
                 .map(String::as_str);
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             return self
@@ -1285,8 +1301,12 @@ impl UpstreamDispatcher {
             proxy_status: None,
         };
 
-        let mut upstream_request = UpstreamRequest::post_json(params.url.to_string(), params.body_bytes.clone());
-        match self.resolve_and_assign_proxy(&params.req, params.target).await {
+        let mut upstream_request =
+            UpstreamRequest::post_json(params.url.to_string(), params.body_bytes.clone());
+        match self
+            .resolve_and_assign_proxy(&params.req, params.target)
+            .await
+        {
             Ok((proxy_url, proxy_status)) => {
                 upstream_request.proxy = proxy_url.clone();
                 upstream_request.proxy_status = proxy_status.clone();
@@ -1328,24 +1348,29 @@ impl UpstreamDispatcher {
             })
             .await
         } else {
-            self.dispatch_upstream_non_streaming(params, dctx, upstream_request).await
+            self.dispatch_upstream_non_streaming(params, dctx, upstream_request)
+                .await
         }
     }
 
     pub(crate) async fn dispatch_upstream(&self, params: DispatchParams<'_>) -> PipelineResult {
-        let (dctx, mut upstream_request) = match self.setup_upstream_request_and_context(&params).await {
-            Ok(res) => res,
-            Err(err_res) => return err_res,
-        };
+        let (dctx, mut upstream_request) =
+            match self.setup_upstream_request_and_context(&params).await {
+                Ok(res) => res,
+                Err(err_res) => return err_res,
+            };
 
         if is_horde_vision_request(params.target, params.model, &params.req) {
-            return self.dispatch_horde_vision(params, dctx, upstream_request).await;
+            return self
+                .dispatch_horde_vision(params, dctx, upstream_request)
+                .await;
         }
 
         upstream_request.is_streaming = true;
         populate_upstream_headers(&mut upstream_request, params.headers);
 
-        self.dispatch_by_stream_mode(params, dctx, upstream_request).await
+        self.dispatch_by_stream_mode(params, dctx, upstream_request)
+            .await
     }
 
     fn fail_stream_with_error(
@@ -1566,8 +1591,9 @@ impl UpstreamDispatcher {
             .and_then(|u| u.prompt_tokens_details.as_ref())
             .and_then(|d| d.cached_tokens);
 
-        let response_body_json: Option<serde_json::Value> =
-            acc.as_ref().map(|a| a.finish(args.chunk_id, args.created, args.model_name));
+        let response_body_json: Option<serde_json::Value> = acc
+            .as_ref()
+            .map(|a| a.finish(args.chunk_id, args.created, args.model_name));
         let final_response = if matches!(
             params.req.stream_sink.as_ref(),
             Some(crate::race_sink::StreamSink::Discard)

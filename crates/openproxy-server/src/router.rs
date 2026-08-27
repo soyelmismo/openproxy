@@ -256,9 +256,18 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        assert_eq!(response.headers().get(axum::http::header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+                .unwrap(),
+            "nosniff"
+        );
         assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
-        assert_eq!(response.headers().get("content-security-policy").unwrap(), "default-src 'self'");
+        assert_eq!(
+            response.headers().get("content-security-policy").unwrap(),
+            "default-src 'self'"
+        );
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -310,9 +319,18 @@ mod tests {
             "application/json"
         );
 
-        assert_eq!(response.headers().get(axum::http::header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+                .unwrap(),
+            "nosniff"
+        );
         assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
-        assert_eq!(response.headers().get("content-security-policy").unwrap(), "default-src 'self'");
+        assert_eq!(
+            response.headers().get("content-security-policy").unwrap(),
+            "default-src 'self'"
+        );
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();

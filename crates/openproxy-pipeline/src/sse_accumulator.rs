@@ -389,7 +389,9 @@ impl ResponseAccumulator {
         if !self.raw_response_body.contains("\"error\":") {
             return None;
         }
-        self.raw_response_body.lines().find_map(extract_error_from_line)
+        self.raw_response_body
+            .lines()
+            .find_map(extract_error_from_line)
     }
 
     fn append_delta_content_if_present(&mut self, payload: &str) {
@@ -598,7 +600,10 @@ impl ResponseAccumulator {
     fn build_finish_choice(&self) -> Map<String, Value> {
         let mut choice = Map::new();
         choice.insert("index".to_string(), Value::Number(0u64.into()));
-        choice.insert("message".to_string(), Value::Object(self.build_finish_message()));
+        choice.insert(
+            "message".to_string(),
+            Value::Object(self.build_finish_message()),
+        );
         choice.insert(
             "finish_reason".to_string(),
             self.stop_reason

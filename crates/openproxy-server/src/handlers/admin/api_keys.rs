@@ -157,13 +157,12 @@ pub async fn regenerate_api_key(
     })))
 }
 
-fn fetch_api_key_usage(
-    r: &rusqlite::Connection,
-    id: i64,
-) -> Result<serde_json::Value, ApiError> {
+fn fetch_api_key_usage(r: &rusqlite::Connection, id: i64) -> Result<serde_json::Value, ApiError> {
     let key_id = ApiKeyId(id);
     if core_api_keys::get_by_id(r, key_id)?.is_none() {
-        return Err(ApiError(CoreError::Internal(format!("api_key {id} not found"))));
+        return Err(ApiError(CoreError::Internal(format!(
+            "api_key {id} not found"
+        ))));
     }
     let head = core_api_keys::usage_summary(r, key_id)?;
     let detailed = core_usage::summary(

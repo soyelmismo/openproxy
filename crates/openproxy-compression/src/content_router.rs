@@ -187,11 +187,7 @@ fn route_single_message(msg: &mut OpenAIMessage) -> Option<String> {
         None
     });
 
-    if mutated {
-        applied_tech
-    } else {
-        None
-    }
+    if mutated { applied_tech } else { None }
 }
 
 /// Content-shape routing: for each tool/assistant message, detect the
@@ -199,7 +195,10 @@ fn route_single_message(msg: &mut OpenAIMessage) -> Option<String> {
 /// for JSON arrays, LogCompressor for build logs, DiffCompressor for
 /// git diffs).
 pub fn apply_content_routing(messages: &mut [OpenAIMessage]) -> Vec<String> {
-    messages.iter_mut().filter_map(route_single_message).collect()
+    messages
+        .iter_mut()
+        .filter_map(route_single_message)
+        .collect()
 }
 
 // ─── Per-type detectors ────────────────────────────────────────────────────

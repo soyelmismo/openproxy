@@ -196,10 +196,7 @@ fn derive_vision_capabilities(
     }
 }
 
-fn derive_params_capabilities(
-    caps: &mut openproxy_types::ModelCapabilities,
-    params: &[String],
-) {
+fn derive_params_capabilities(caps: &mut openproxy_types::ModelCapabilities, params: &[String]) {
     if params.iter().any(|p| p == "tools") {
         caps.tool_calling = Some(true);
     }
@@ -262,10 +259,7 @@ fn detect_non_text_modality(arch: &OpenRouterArchitecture) -> Option<&'static st
 /// Classify a model id into a coarse `model_type` string
 /// (`"chat" | "embedding" | "image" | "audio" | "rerank"`) using both
 /// the id's name and the `architecture.output_modalities` field.
-fn infer_model_type_openrouter(
-    id: &str,
-    architecture: Option<&OpenRouterArchitecture>,
-) -> String {
+fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchitecture>) -> String {
     let inferred = openproxy_types::capabilities::infer_model_type(id);
     if inferred != "chat" {
         return inferred.to_string();

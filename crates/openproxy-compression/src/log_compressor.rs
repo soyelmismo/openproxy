@@ -193,7 +193,11 @@ fn is_make_log(head: &[&str]) -> bool {
 fn is_generic_log(head: &[&str]) -> bool {
     const GENERIC_TOKENS: &[&str] = &["error", "fail", "warn", "traceback", "panic", "exception"];
     head.iter()
-        .filter(|l| GENERIC_TOKENS.iter().any(|t| contains_case_insensitive_ascii(l, t)))
+        .filter(|l| {
+            GENERIC_TOKENS
+                .iter()
+                .any(|t| contains_case_insensitive_ascii(l, t))
+        })
         .count()
         >= 5
 }
@@ -327,11 +331,7 @@ fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize
     }
 }
 
-fn collect_warning_indices(
-    lines: &[&str],
-    kinds: &[LineKind],
-    selected: &mut BTreeSet<usize>,
-) {
+fn collect_warning_indices(lines: &[&str], kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
     let mut warning_seen: HashSet<String> = HashSet::new();
     let mut warnings_kept = 0;
     for (i, (kind, line)) in kinds.iter().zip(lines.iter()).enumerate() {

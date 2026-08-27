@@ -69,10 +69,11 @@ fn apply_migration_batch(conn: &mut Connection, pending: &[&Migration]) -> Resul
     }
 
     let insert_sql = build_versions_insert_sql(pending);
-    tx.execute_batch(&insert_sql).map_err(|e| CoreError::Migration {
-        version: 0,
-        message: format!("insert into schema_migrations: {e}"),
-    })?;
+    tx.execute_batch(&insert_sql)
+        .map_err(|e| CoreError::Migration {
+            version: 0,
+            message: format!("insert into schema_migrations: {e}"),
+        })?;
 
     tx.commit().map_err(|e| CoreError::Migration {
         version: 0,

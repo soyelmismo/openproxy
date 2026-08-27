@@ -411,7 +411,9 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
 fn fetch_unnormalized_rows(conn: &Connection, table: &str) -> Result<Vec<(String, String)>> {
     let sql =
         format!("SELECT provider_id, model_id FROM {table} WHERE model_id_normalized IS NULL");
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -507,11 +509,7 @@ fn compute_usage_row_cost(
     let prompt = f64::from(prompt_tokens.unwrap_or(0));
     let completion = f64::from(completion_tokens.unwrap_or(0));
     let cost = p.input_per_1m * prompt / 1_000_000.0 + p.output_per_1m * completion / 1_000_000.0;
-    if cost > 0.0 {
-        Some(cost)
-    } else {
-        None
-    }
+    if cost > 0.0 { Some(cost) } else { None }
 }
 
 pub fn recompute_costs(conn: &Connection) -> Result<usize> {
@@ -749,10 +747,7 @@ fn fetch_candidate_normalized_ids(conn: &Connection) -> Result<Vec<String>> {
 type TargetDescriptor = (i64, String, i64);
 type TargetsByNormIdMap = HashMap<String, Vec<TargetDescriptor>>;
 type ComboTargetKey = (i64, i64, i64);
-type ExistingTargetsAndMaxOrders = (
-    std::collections::HashSet<ComboTargetKey>,
-    HashMap<i64, i32>,
-);
+type ExistingTargetsAndMaxOrders = (std::collections::HashSet<ComboTargetKey>, HashMap<i64, i32>);
 
 fn fetch_targets_by_norm_id(
     conn: &Connection,
@@ -821,10 +816,7 @@ fn fetch_existing_targets_and_max_orders(
     combo_ids: &[i64],
 ) -> Result<ExistingTargetsAndMaxOrders> {
     if combo_ids.is_empty() {
-        return Ok((
-            std::collections::HashSet::new(),
-            HashMap::new(),
-        ));
+        return Ok((std::collections::HashSet::new(), HashMap::new()));
     }
     let rows = openproxy_db::batch::query_in_chunks(
         conn,
@@ -981,12 +973,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     let empty_targets = Vec::new();
     for norm_id in &normalized_ids {
         let targets = targets_by_norm_id.get(norm_id).unwrap_or(&empty_targets);
-        sync_single_candidate_combo(
-            conn,
-            norm_id,
-            targets,
-            &mut state,
-        )?;
+        sync_single_candidate_combo(conn, norm_id, targets, &mut state)?;
     }
 
     if !is_in_tx {
@@ -1064,11 +1051,10 @@ async fn run_single_sync_iteration(
     };
 
     let db_pool_clone = Arc::clone(db_pool);
-    let count = tokio::task::spawn_blocking(move || {
-        process_models_dev_sync_payload(&db_pool_clone, &body)
-    })
-    .await
-    .unwrap_or(0);
+    let count =
+        tokio::task::spawn_blocking(move || process_models_dev_sync_payload(&db_pool_clone, &body))
+            .await
+            .unwrap_or(0);
 
     if count > 0 {
         tracing::info!("models.dev sync: complete");

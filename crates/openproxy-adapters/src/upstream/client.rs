@@ -413,8 +413,7 @@ impl UpstreamClient {
             res
         };
 
-        let response =
-            race_dispatch(send_fut, &deadlines, phase_hint, cancel_for_send).await?;
+        let response = race_dispatch(send_fut, &deadlines, phase_hint, cancel_for_send).await?;
 
         Ok(wrap_upstream_response(
             response,
@@ -433,11 +432,13 @@ fn build_host_key_and_uri(url: &str) -> UpstreamResult<(Uri, HostKey, String)> {
         .map_err(|e: http::uri::InvalidUri| UpstreamError::Invalid(e.to_string()))?;
     let scheme = Scheme::from_uri(uri.scheme_str().unwrap_or("http"));
     let host = uri.host().unwrap_or("").to_string();
-    let port = uri.port_u16().unwrap_or(if matches!(scheme, Scheme::Https) {
-        443
-    } else {
-        80
-    });
+    let port = uri
+        .port_u16()
+        .unwrap_or(if matches!(scheme, Scheme::Https) {
+            443
+        } else {
+            80
+        });
     let host_key = HostKey::new(scheme, &host, port);
     Ok((uri, host_key, host))
 }
@@ -452,9 +453,9 @@ fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Byt
     };
     let mut builder = Request::builder().method(spec.method).uri(&spec.url);
     {
-        let headers = builder.headers_mut().ok_or_else(|| {
-            UpstreamError::Invalid("failed to build request headers".to_string())
-        })?;
+        let headers = builder
+            .headers_mut()
+            .ok_or_else(|| UpstreamError::Invalid("failed to build request headers".to_string()))?;
         *headers = spec.headers;
         if let Some(len) = body_len
             && !headers.contains_key(http::header::CONTENT_LENGTH)

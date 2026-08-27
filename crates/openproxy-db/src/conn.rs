@@ -258,9 +258,9 @@ fn open_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Resul
 }
 
 fn reopen_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Result<Connection> {
-    let r = Connection::open_with_flags(path, flags).map_err(
-        crate::error::map_db_error_ctx(format!("reopen reader {idx} for {}", path.display())),
-    )?;
+    let r = Connection::open_with_flags(path, flags).map_err(crate::error::map_db_error_ctx(
+        format!("reopen reader {idx} for {}", path.display()),
+    ))?;
     configure_connection(&r)?;
     Ok(r)
 }

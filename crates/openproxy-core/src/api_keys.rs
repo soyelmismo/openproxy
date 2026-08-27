@@ -129,8 +129,9 @@ impl ApiKey {
     /// Returns whether the specified model is permitted by this key's
     /// `allowed_models`, `blacklisted_models`, and `blacklisted_providers`.
     pub fn is_model_allowed(&self, model: &str, provider_id: Option<&str>) -> bool {
-        let (prov_from_model, bare_model) =
-            model.split_once('/').map_or((None, model), |(p, m)| (Some(p), m));
+        let (prov_from_model, bare_model) = model
+            .split_once('/')
+            .map_or((None, model), |(p, m)| (Some(p), m));
         let effective_prov = provider_id.or(prov_from_model);
         let full_id = effective_prov.and_then(|p| {
             if model.starts_with(&format!("{p}/")) {
@@ -657,8 +658,7 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
     let scopes_json = params
         .scopes
         .map(|s| {
-            serde_json::to_string(s)
-                .map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
+            serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
         })
         .transpose()?;
     let allowed_models_json = serialize_optional_json(params.allowed_models, "allowed_models")?;

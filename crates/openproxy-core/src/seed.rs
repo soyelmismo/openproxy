@@ -83,8 +83,8 @@ fn seed_single_adapter(
     let auth = AuthType::parse(conf.auth_type.as_str()).expect("builtin auth_type is valid");
     let fmt = ProviderFormat::parse(conf.format.as_str()).expect("builtin format is valid");
     let extra_headers = serialize_extra_headers(&conf.extra_headers);
-    let rate_limit_scope = providers::RateLimitScope::parse(&conf.rate_limit_scope)
-        .expect("builtin scope is valid");
+    let rate_limit_scope =
+        providers::RateLimitScope::parse(&conf.rate_limit_scope).expect("builtin scope is valid");
 
     providers::create(
         conn,

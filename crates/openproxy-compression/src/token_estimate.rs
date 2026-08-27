@@ -133,11 +133,7 @@ pub fn message_content_to_text(msg: &OpenAIMessage) -> String {
 }
 
 fn flush_whitespace_run(ws_run: usize) -> usize {
-    if ws_run > 4 {
-        ws_run / 10
-    } else {
-        ws_run
-    }
+    if ws_run > 4 { ws_run / 10 } else { ws_run }
 }
 
 /// Char-based heuristic fallback (~4 chars/token for Latin, ~2 for CJK).

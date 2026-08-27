@@ -260,15 +260,8 @@ where
     let mut total_affected = 0;
 
     for chunk in items.chunks(max_rows_per_chunk) {
-        total_affected += execute_batch_insert_chunk(
-            conn,
-            prefix,
-            table,
-            columns,
-            chunk,
-            suffix,
-            &mut row_fn,
-        )?;
+        total_affected +=
+            execute_batch_insert_chunk(conn, prefix, table, columns, chunk, suffix, &mut row_fn)?;
     }
 
     Ok(total_affected)

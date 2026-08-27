@@ -57,7 +57,9 @@ fn normalize_choice_content(
     delta: &mut FastDelta<'_>,
     think_extractor: &mut crate::think_extractor::ThinkStreamExtractor,
 ) -> bool {
-    let Some(content) = delta.content.as_ref() else { return false; };
+    let Some(content) = delta.content.as_ref() else {
+        return false;
+    };
     let mut modified = false;
     let (clean_content, extracted_reasoning) = think_extractor.process(content);
     if clean_content != *content {
@@ -65,8 +67,8 @@ fn normalize_choice_content(
         modified = true;
     }
 
-    let has_native_reasoning = delta.reasoning_content.is_some()
-        || delta.extra.contains_key("reasoning_content");
+    let has_native_reasoning =
+        delta.reasoning_content.is_some() || delta.extra.contains_key("reasoning_content");
     if !extracted_reasoning.is_empty() && !has_native_reasoning {
         delta.reasoning_content = Some(std::borrow::Cow::Owned(extracted_reasoning));
         modified = true;
@@ -78,7 +80,9 @@ fn normalize_choice_tool_calls(
     delta: &mut FastDelta<'_>,
     tool_call_acc: &mut ToolCallAccumulator,
 ) -> bool {
-    let Some(tool_calls) = &mut delta.tool_calls else { return false; };
+    let Some(tool_calls) = &mut delta.tool_calls else {
+        return false;
+    };
     let mut modified = false;
     for tc in tool_calls {
         if let Some(func) = &mut tc.function
@@ -442,15 +446,13 @@ fn parse_translated_sse_line(
     model_name: &str,
 ) -> Result<Option<crate::sse::UpstreamSseChunk>, CoreError> {
     match target_format {
-        openproxy_types::TargetFormat::Responses => {
-            crate::sse::parse_responses_sse_stream_line(
-                line,
-                chunk_id,
-                created,
-                model_name,
-                &mut state.responses_sse_state,
-            )
-        }
+        openproxy_types::TargetFormat::Responses => crate::sse::parse_responses_sse_stream_line(
+            line,
+            chunk_id,
+            created,
+            model_name,
+            &mut state.responses_sse_state,
+        ),
         openproxy_types::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
         openproxy_types::TargetFormat::Atomesus => {
             crate::sse::parse_atomesus_sse_line(line, chunk_id, created, model_name)
@@ -462,10 +464,9 @@ fn parse_translated_sse_line(
             crate::sse::parse_gemini_sse_line(line, chunk_id, created, model_name)
         }
         openproxy_types::TargetFormat::Anthropic => {
-            let Some(payload) = crate::sse::parse_anthropic_sse_stream_line(
-                line,
-                &mut state.current_event_type,
-            )? else {
+            let Some(payload) =
+                crate::sse::parse_anthropic_sse_stream_line(line, &mut state.current_event_type)?
+            else {
                 return Ok(None);
             };
             crate::sse::translate_anthropic_sse_event(
@@ -488,7 +489,10 @@ fn parse_translated_sse_line(
 // `process_translated_format` handles Gemini and Anthropic by first
 // translating to OpenAI shape and then forwarding.
 impl ChunkProcessor<'_> {
-    fn check_race_cancelled(&mut self, ctx: &StreamContext<'_>) -> Option<crate::streaming::ChunkEvent> {
+    fn check_race_cancelled(
+        &mut self,
+        ctx: &StreamContext<'_>,
+    ) -> Option<crate::streaming::ChunkEvent> {
         if ctx
             .req
             .race_cancel
@@ -516,10 +520,8 @@ impl ChunkProcessor<'_> {
         {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(
-                    crate::race_sink::StreamSinkError::Lost,
-                    fail_ctx,
-                ),
+                self.dispatcher
+                    .fail_on_sink_send_error(crate::race_sink::StreamSinkError::Lost, fail_ctx),
             )));
         }
         self.state.done_sent = true;
@@ -531,7 +533,8 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         json_payload: &str,
     ) -> Option<crate::streaming::ChunkEvent> {
-        let (code, message, provider_name) = parse_inline_error(json_payload, ctx.target.provider_id.as_str())?;
+        let (code, message, provider_name) =
+            parse_inline_error(json_payload, ctx.target.provider_id.as_str())?;
 
         tracing::warn!(
             combo_id = ctx.combo.id.0,
@@ -661,7 +664,11 @@ impl ChunkProcessor<'_> {
         Ok(crate::streaming::ChunkEvent::Skip)
     }
 
-    fn prepare_content_chunk_bytes(&mut self, json_payload: &str, line_bytes: &[u8]) -> bytes::Bytes {
+    fn prepare_content_chunk_bytes(
+        &mut self,
+        json_payload: &str,
+        line_bytes: &[u8],
+    ) -> bytes::Bytes {
         let effective_payload = match self.state.normalizer.process_chunk(json_payload) {
             StreamAction::Mutate(s) => Some(s),
             _ => None,
@@ -755,10 +762,8 @@ impl ChunkProcessor<'_> {
         {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(
-                    crate::race_sink::StreamSinkError::Lost,
-                    fail_ctx,
-                ),
+                self.dispatcher
+                    .fail_on_sink_send_error(crate::race_sink::StreamSinkError::Lost, fail_ctx),
             )));
         }
         self.state.done_sent = true;
