@@ -336,8 +336,12 @@ pub trait ProviderAdapter: Send + Sync {
     }
 
     /// Normalize an OpenAI request view before serialization.
-    /// Default: pass through unchanged.
-    fn normalize_openai_request(&self, _view: &mut openproxy_types::OpenAIRequestView) {}
+    /// Default: strip known client-only non-standard parameters like `disabled`.
+    fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
+        if view.extra.contains_key("disabled") {
+            view.extra.to_mut().remove("disabled");
+        }
+    }
 
     /// Allows the adapter to wrap or mutate the final request body before it is dispatched upstream.
     fn wrap_request_body(

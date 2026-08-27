@@ -169,10 +169,12 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
 
         view.temperature = None;
 
-        // Remove null fields from extra
+        // Remove unsupported/null fields from extra
         let has_nulls = view.extra.values().any(serde_json::Value::is_null);
-        if has_nulls {
+        let has_disabled = view.extra.contains_key("disabled");
+        if has_nulls || has_disabled {
             let extra_mut = view.extra.to_mut();
+            extra_mut.remove("disabled");
             extra_mut.retain(|_, v| !v.is_null());
         }
 

@@ -49,6 +49,9 @@ impl TargetFormatter for OpenaiFormatter {
                     .collect(),
             );
         }
+        if view.extra.contains_key("disabled") {
+            view.extra.to_mut().remove("disabled");
+        }
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
@@ -466,5 +469,87 @@ mod tests {
         assert_eq!(super::normalize_effort("none"), "none");
         assert_eq!(super::normalize_effort("unknown"), "medium");
         assert_eq!(super::normalize_effort(""), "medium");
+    }
+
+    #[test]
+    fn test_openai_formatter_strips_disabled() {
+        use openproxy_adapters::adapters::nvidia_nim::NvidiaNimAdapter;
+        use openproxy_adapters::adapters::ProviderAdapterEnum;
+        use openproxy_types::models::Model;
+        use openproxy_types::ModelId;
+        use openproxy_types::ModelRowId;
+        use openproxy_types::OpenAIRequest;
+        use openproxy_types::ProviderId;
+        use openproxy_types::TargetFormat;
+        use std::sync::Arc;
+
+        let adapter = ProviderAdapterEnum::NvidiaNim(NvidiaNimAdapter::new());
+        let mut extra = serde_json::Map::new();
+        extra.insert("disabled".to_string(), json!(true));
+        extra.insert("custom_val".to_string(), json!("ok"));
+
+        let openai_req = OpenAIRequest {
+            model: "test-model".to_string(),
+            messages: vec![OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("hello")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            }],
+            extra,
+            ..Default::default()
+        };
+
+        let req = PipelineRequest {
+            request_id: openproxy_types::RequestId::new(),
+            trace_id: openproxy_types::TraceId::new(),
+            combo_id: openproxy_types::ComboId(1),
+            openai_request: Arc::new(openai_req.clone()),
+            client_disconnected: tokio::sync::watch::channel(None).1,
+            stream_sink: None,
+            api_key_id: None,
+            combo_override: None,
+            targets_override: None,
+            request_headers: std::collections::BTreeMap::new(),
+            request_body_json: None,
+            race_cancelled: false,
+            race_cancel: None,
+            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            compressed_messages: Arc::new(std::sync::OnceLock::new()),
+            proxy_override: None,
+        };
+
+        let model = Model {
+            row_id: ModelRowId(1),
+            provider_id: ProviderId::new("nvidia-nim"),
+            model_id: ModelId::new("deepseek-ai/deepseek-v4-flash-0731"),
+            display_name: Some("test".to_string()),
+            target_format: TargetFormat::Openai,
+            discovered_at: "2026-01-01T00:00:00Z".to_string(),
+            expires_at: None,
+            timeout_overrides_json: None,
+            active: true,
+            last_test_status: None,
+            last_test_at: None,
+            custom: false,
+            context_length: None,
+            max_output_tokens: None,
+            capabilities_json: None,
+            family: None,
+            model_type: "chat".to_string(),
+            input_modalities_json: None,
+            output_modalities_json: None,
+        };
+
+        let formatter = OpenaiFormatter;
+        let formatted = formatter
+            .format_request(&req, &model, &openai_req.messages, true, &adapter)
+            .expect("formatting must succeed");
+
+        let json_val: Value = serde_json::from_slice(&formatted).unwrap();
+        assert!(json_val.get("disabled").is_none());
+        assert_eq!(json_val.get("custom_val"), Some(&json!("ok")));
     }
 }
