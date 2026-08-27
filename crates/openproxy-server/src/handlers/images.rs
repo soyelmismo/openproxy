@@ -312,6 +312,7 @@ async fn process_multipart_field(
     } else if name == "model" {
         *model_name = field.text().await.unwrap_or_default();
     } else {
+        let value = field.text().await.unwrap_or_default();
         form_fields.push((name, value));
     }
 }

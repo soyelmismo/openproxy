@@ -155,12 +155,6 @@ pub fn oauth_user_agent() -> String {
     format!("vscode/1.X.X (Antigravity/{})", version())
 }
 
-fn insert_header_str(headers: &mut http::HeaderMap, name: &'static str, val: &str) {
-    if let Ok(v) = HeaderValue::from_str(val) {
-        headers.insert(name, v);
-    }
-}
-
 fn is_valid_project_id(pid: &str) -> bool {
     !pid.is_empty() && pid != "test-project" && pid != "project-id"
 }

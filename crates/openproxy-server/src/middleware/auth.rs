@@ -137,6 +137,7 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
                 .map(str::trim)
+        })
         .filter(|t| !t.is_empty())
 }
 
