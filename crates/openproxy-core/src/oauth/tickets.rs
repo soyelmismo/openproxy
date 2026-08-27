@@ -128,7 +128,7 @@ fn classify_ticket_status(ticket: DeviceTicket) -> TicketStatus {
     if ticket.consumed_at.is_some() {
         return TicketStatus::Consumed;
     }
-    match chrono::DateTime::parse_from_rfc3339(&ticket.expires_at) {
+    match openproxy_types::timestamp::parse_timestamp(&ticket.expires_at) {
         Ok(dt) if dt > chrono::Utc::now() => TicketStatus::Active(ticket),
         _ => TicketStatus::Expired,
     }
@@ -356,7 +356,7 @@ mod tests {
         let TicketStatus::Active(t) = status else {
             panic!("expected Active, got {status:?}");
         };
-        let dt = chrono::DateTime::parse_from_rfc3339(&t.expires_at)
+        let dt = openproxy_types::timestamp::parse_timestamp(&t.expires_at)
             .expect("parse expires_at")
             .with_timezone(&chrono::Utc);
         let lifetime_secs = (dt - chrono::Utc::now()).num_seconds();

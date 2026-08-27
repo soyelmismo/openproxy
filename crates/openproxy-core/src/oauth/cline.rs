@@ -268,7 +268,7 @@ fn parse_expires_in(data: &ClineAuthResponseData) -> Option<u64> {
         return Some(secs);
     }
     if let Some(ref ts) = data.expires_at
-        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
+        && let Ok(dt) = openproxy_types::timestamp::parse_timestamp(ts)
     {
         let diff = dt
             .with_timezone(&chrono::Utc)

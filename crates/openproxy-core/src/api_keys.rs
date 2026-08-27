@@ -279,7 +279,7 @@ pub fn is_expired(expires_at: Option<&str>, now: DateTime<Utc>) -> Result<bool> 
     let Some(s) = expires_at else {
         return Ok(false);
     };
-    let dt = DateTime::parse_from_rfc3339(s)
+    let dt = openproxy_types::timestamp::parse_timestamp(s)
         .map_err(|e| CoreError::Database {
             message: format!("invalid expires_at {s:?}: {e}"),
             source: None,

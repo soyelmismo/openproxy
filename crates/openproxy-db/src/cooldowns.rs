@@ -142,7 +142,7 @@ pub fn is_provider_proxy_in_cooldown(
     };
 
     let now = chrono::Utc::now();
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&until_str) {
+    if let Ok(dt) = openproxy_types::timestamp::parse_timestamp(&until_str) {
         return now < dt.with_timezone(&chrono::Utc);
     }
     if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&until_str, "%Y-%m-%d %H:%M:%S") {

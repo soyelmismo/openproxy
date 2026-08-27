@@ -753,7 +753,7 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
     let Some(ts) = db_expires_at else {
         return false; // no expiry set → don't know when it expires → assume fresh
     };
-    let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(ts) else {
+    let Ok(expires_at) = openproxy_types::timestamp::parse_timestamp(ts) else {
         return false;
     };
     let expires_at = expires_at.with_timezone(&chrono::Utc);
@@ -792,7 +792,7 @@ pub fn oauth_expires_soon(account: &crate::accounts::Account, provider_id: &str)
         return false;
     };
 
-    let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(expires_at) else {
+    let Ok(expires_at) = openproxy_types::timestamp::parse_timestamp(expires_at) else {
         return false;
     };
     let expires_at = expires_at.with_timezone(&chrono::Utc);
@@ -1031,7 +1031,7 @@ fn filter_accounts_due(accounts: Vec<crate::accounts::Account>) -> Vec<crate::ac
         .into_iter()
         .filter(|a| {
             if let Some(ref expires_at) = a.expires_at {
-                let expires_at = match chrono::DateTime::parse_from_rfc3339(expires_at) {
+                let expires_at = match openproxy_types::timestamp::parse_timestamp(expires_at) {
                     Ok(dt) => dt.with_timezone(&chrono::Utc),
                     Err(_) => return false,
                 };

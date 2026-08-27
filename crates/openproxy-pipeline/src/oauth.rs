@@ -42,7 +42,7 @@ pub fn pipeline_token_needs_refresh(
     let Some(ts) = db_expires_at else {
         return false;
     };
-    let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(ts) else {
+    let Ok(expires_at) = openproxy_types::timestamp::parse_timestamp(ts) else {
         return false;
     };
     let expires_at = expires_at.with_timezone(&chrono::Utc);

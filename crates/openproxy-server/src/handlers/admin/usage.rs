@@ -792,15 +792,8 @@ fn parse_provider_filter(provider_id: Option<String>) -> Result<Option<ProviderI
 }
 
 pub(crate) fn parse_usage_timestamp(s: &str, field_name: &str) -> Result<String, ApiError> {
-    use chrono::{DateTime, NaiveDateTime, Utc};
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(iso_z(dt.with_timezone(&Utc)));
-    }
-    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(iso_z(DateTime::from_naive_utc_and_offset(naive, Utc)));
-    }
-    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(iso_z(DateTime::from_naive_utc_and_offset(naive, Utc)));
+    if let Ok(dt) = openproxy_types::timestamp::parse_timestamp(s) {
+        return Ok(iso_z(dt));
     }
     Err(CoreError::Validation(format!(
         "'{field_name}' parameter '{s}' must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or SQLite format (2026-06-18 07:00:00)"
