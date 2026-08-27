@@ -24,6 +24,9 @@ pub struct TargetPredictiveState {
     pub window_count: u32,
     pub in_flight: u32,
     pub success_streak: u32,
+    pub consecutive_failures: u32,
+    pub consecutive_same_fingerprint: u32,
+    pub last_error_fingerprint: u64,
     pub window_start_ms: u64,
     pub window_duration_ms: u64,
     pub reset_at_ms: u64,
@@ -39,6 +42,9 @@ impl Default for TargetPredictiveState {
             window_count: 0,
             in_flight: 0,
             success_streak: 0,
+            consecutive_failures: 0,
+            consecutive_same_fingerprint: 0,
+            last_error_fingerprint: 0,
             window_start_ms: 0,
             window_duration_ms: DEFAULT_WINDOW_DURATION_MS,
             reset_at_ms: 0,
@@ -46,6 +52,29 @@ impl Default for TargetPredictiveState {
             last_success_at_ms: 0,
         }
     }
+}
+
+pub fn compute_error_fingerprint(err: &openproxy_types::CoreError) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    err.http_status().hash(&mut hasher);
+    match err {
+        openproxy_types::CoreError::UpstreamError { status, body, .. } => {
+            status.hash(&mut hasher);
+            let prefix = &body[..body.len().min(64)];
+            prefix.hash(&mut hasher);
+        }
+        openproxy_types::CoreError::UpstreamConnection(msg) => {
+            let prefix = &msg[..msg.len().min(64)];
+            prefix.hash(&mut hasher);
+        }
+        openproxy_types::CoreError::UpstreamTimeout { phase, .. } => {
+            phase.hash(&mut hasher);
+        }
+        _ => {
+            err.to_string().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 impl TargetPredictiveState {
@@ -138,11 +167,47 @@ impl TargetPredictiveState {
     ) {
         self.in_flight = self.in_flight.saturating_sub(1);
         self.last_success_at_ms = now_ms;
+        self.consecutive_failures = 0;
+        self.consecutive_same_fingerprint = 0;
+        self.last_error_fingerprint = 0;
 
         self.recover_from_half_open();
         self.update_window_duration(reset_window_secs);
         self.calibrate_from_remaining_header(remaining_header);
         self.advance_elastic_streak();
+    }
+
+    pub fn should_retry(&self, fingerprint: u64, local_retry_count: u8) -> bool {
+        if self.state == TargetRateState::Open {
+            return false;
+        }
+        if local_retry_count >= 1 && fingerprint != 0 && fingerprint == self.last_error_fingerprint {
+            return false;
+        }
+        if self.consecutive_failures >= 2 && local_retry_count >= 1 {
+            return false;
+        }
+        true
+    }
+
+    pub fn report_upstream_error_with_fingerprint(&mut self, fingerprint: u64, now_ms: u64) {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.success_streak = 0;
+        self.state = TargetRateState::Open;
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+
+        if fingerprint != 0 && fingerprint == self.last_error_fingerprint {
+            self.consecutive_same_fingerprint = self.consecutive_same_fingerprint.saturating_add(1);
+        } else {
+            self.consecutive_same_fingerprint = 1;
+            self.last_error_fingerprint = fingerprint;
+        }
+
+        let consecutive = self.consecutive_failures.min(8);
+        let base_ms: u64 = 15_000;
+        let multiplier = 1u64 << consecutive.saturating_sub(1).min(3);
+        let penalty_ms = base_ms.saturating_mul(multiplier).min(120_000);
+        self.reset_at_ms = now_ms + penalty_ms;
     }
 
     fn recover_from_half_open(&mut self) {
@@ -256,6 +321,25 @@ impl PredictiveRateLimiter {
         state.try_acquire()
     }
 
+    /// Determina si un reintento local en el target está justificado o debe
+    /// abortarse inmediatamente (Fast-Fail) para saltar al siguiente target del combo.
+    pub fn should_retry(
+        &self,
+        combo_id: ComboId,
+        target_id: ComboTargetId,
+        fingerprint: u64,
+        local_retry_count: u8,
+        now_ms: u64,
+    ) -> bool {
+        let key = Self::compute_key(combo_id, target_id);
+        let shard = self.shard_for(key);
+        let mut map = shard.inner.lock();
+        let state = map.entry(key).or_default();
+
+        state.refresh(now_ms);
+        state.should_retry(fingerprint, local_retry_count)
+    }
+
     /// Decrementa peticiones en vuelo (en caso de cancelación o fallo temprano).
     pub fn release_in_flight(&self, combo_id: ComboId, target_id: ComboTargetId) {
         let key = Self::compute_key(combo_id, target_id);
@@ -299,6 +383,7 @@ impl PredictiveRateLimiter {
         state.in_flight = state.in_flight.saturating_sub(1);
         state.last_429_at_ms = now_ms;
         state.success_streak = 0;
+        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
 
         // El límite real de ráfaga era lo alcanzado antes del 429
         state.learned_burst = std::cmp::max(1, state.window_count.saturating_sub(1));
@@ -310,29 +395,24 @@ impl PredictiveRateLimiter {
     }
 
     /// Reporta error upstream genérico (5xx, timeout, connection error).
-    /// Penalty más suave que 429: no reduce `learned_burst`, solo bloquea
-    /// brevemente para que el chain-skip salte al siguiente target.
-    /// El penalty crece con fallos consecutivos (15s base, duplica cada fallo,
-    /// cap 120s) para adaptarse a targets persistentemente rotos.
     pub fn report_upstream_error(&self, combo_id: ComboId, target_id: ComboTargetId, now_ms: u64) {
+        self.report_upstream_error_with_fingerprint(combo_id, target_id, 0, now_ms);
+    }
+
+    /// Reporta error upstream con fingerprint para detección de patrones repetitivos.
+    pub fn report_upstream_error_with_fingerprint(
+        &self,
+        combo_id: ComboId,
+        target_id: ComboTargetId,
+        fingerprint: u64,
+        now_ms: u64,
+    ) {
         let key = Self::compute_key(combo_id, target_id);
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
 
-        state.in_flight = state.in_flight.saturating_sub(1);
-        state.success_streak = 0;
-        state.state = TargetRateState::Open;
-
-        // Penalty escalado: 15s * 2^(consecutive_errors - 1), cap 120s.
-        // No tocamos learned_burst (no es rate limit, es inestabilidad).
-        let consecutive = state.window_count.saturating_add(1).min(8);
-        state.window_count = consecutive;
-        let base_ms: u64 = 15_000;
-        let penalty_ms = base_ms
-            .saturating_mul(1u64 << consecutive.min(3))
-            .min(120_000);
-        state.reset_at_ms = now_ms + penalty_ms;
+        state.report_upstream_error_with_fingerprint(fingerprint, now_ms);
     }
 }
 
@@ -595,5 +675,56 @@ mod tests {
             penalty_2 <= 120_000,
             "penalty debe estar capeado: {penalty_2} <= 120000"
         );
+    }
+
+    #[test]
+    fn test_fingerprint_fast_fail_repeating_error() {
+        let limiter = PredictiveRateLimiter::new();
+        let combo = ComboId(1);
+        let target = ComboTargetId(500);
+        let now = 100_000;
+
+        let err1 = openproxy_types::CoreError::UpstreamError {
+            status: 500,
+            provider: "opencode-zen".to_string(),
+            model: "muse-spark".to_string(),
+            body: "{\"type\":\"error\",\"error\":{\"type\":\"error\",\"message\":\"Internal server error\"}}".to_string(),
+            is_proxy_rotated: false,
+        };
+        let fp1 = compute_error_fingerprint(&err1);
+
+        // Primer fallo: se reporta
+        assert!(limiter.acquire_target(combo, target, now));
+        limiter.report_upstream_error_with_fingerprint(combo, target, fp1, now);
+
+        // Si se evalúa retry local con el MISMO fingerprint en intento local 1, debe dar Fast-Fail (false)
+        let can_retry = limiter.should_retry(combo, target, fp1, 1, now);
+        assert!(
+            !can_retry,
+            "debe hacer fast-fail ante el mismo fingerprint repetitivo"
+        );
+    }
+
+    #[test]
+    fn test_success_resets_failure_fingerprints() {
+        let limiter = PredictiveRateLimiter::new();
+        let combo = ComboId(1);
+        let target = ComboTargetId(600);
+        let mut now = 100_000;
+
+        let err = openproxy_types::CoreError::UpstreamConnection("connect error".to_string());
+        let fp = compute_error_fingerprint(&err);
+
+        assert!(limiter.acquire_target(combo, target, now));
+        limiter.report_upstream_error_with_fingerprint(combo, target, fp, now);
+
+        // Expirar cooldown
+        now += 30_000;
+        assert!(limiter.acquire_target(combo, target, now));
+        // Éxito
+        limiter.report_success(combo, target, None, None, now);
+
+        // Verificar que un nuevo error ahora sí permitiría retry normal en intento 0
+        assert!(limiter.should_retry(combo, target, fp, 0, now));
     }
 }

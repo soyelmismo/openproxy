@@ -479,7 +479,7 @@ fn update_predictive_limiter_on_result(
             &pipeline.predictive_limiter,
             combo_id,
             target_id,
-            result.status_code,
+            result,
             now,
         ),
     }
@@ -489,14 +489,17 @@ fn record_predictive_limiter_upstream_error(
     limiter: &crate::predictive_rate_limit::PredictiveRateLimiter,
     combo_id: openproxy_types::ComboId,
     target_id: openproxy_types::ComboTargetId,
-    status_code: u16,
+    result: &PipelineResult,
     now: u64,
 ) {
-    if status_code == 429 {
+    if result.status_code == 429 {
         limiter.report_rate_limited(combo_id, target_id, None, now);
     } else {
-        // 5xx, timeout, connection error → penalty suave con escalado
-        limiter.report_upstream_error(combo_id, target_id, now);
+        let fingerprint = result
+            .error
+            .as_ref()
+            .map_or(0, crate::predictive_rate_limit::compute_error_fingerprint);
+        limiter.report_upstream_error_with_fingerprint(combo_id, target_id, fingerprint, now);
     }
 }
 

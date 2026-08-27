@@ -497,6 +497,29 @@ async fn perform_retry_iteration(
     ) {
         return RetryStep::Abort;
     }
+
+    if combo.preventive_rate_limit {
+        let fingerprint = crate::predictive_rate_limit::compute_error_fingerprint(err);
+        let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
+        if !ctx.pipeline.predictive_limiter.should_retry(
+            combo.id,
+            target.target.id,
+            fingerprint,
+            state.target_local_retry_count,
+            now_ms,
+        ) {
+            tracing::info!(
+                combo_id = combo.id.0,
+                target_id = target.target.id.0,
+                provider = %target.target.provider_id,
+                target_local_retry_count = state.target_local_retry_count,
+                fingerprint,
+                "preventive health: fast-fail triggered on repeating/degraded target; advancing in chain"
+            );
+            return RetryStep::Abort;
+        }
+    }
+
     state.track_failure(err);
 
     if let Some(disc) = check_client_cancellation(ctx, combo.id.0, target) {
