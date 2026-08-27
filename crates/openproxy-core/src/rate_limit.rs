@@ -24,6 +24,8 @@ pub struct RateLimitConfig {
     pub max_requests: u32,
     /// Window duration.
     pub window: Duration,
+    /// Maximum capacity of the rate limiter's internal storage map.
+    pub max_capacity: usize,
 }
 
 impl Default for RateLimitConfig {
@@ -31,6 +33,7 @@ impl Default for RateLimitConfig {
         Self {
             max_requests: 60, // 60 requests per minute per key
             window: Duration::from_mins(1),
+            max_capacity: 100_000,
         }
     }
 }
@@ -82,6 +85,13 @@ impl RateLimiter for SlidingWindowRateLimiter {
             return false;
         }
 
+        if self.windows.len() >= self.config.max_capacity {
+            self.cleanup();
+            if self.windows.len() >= self.config.max_capacity {
+                self.windows.clear();
+            }
+        }
+
         self.windows.insert(key, (1, now));
         true
     }
@@ -103,6 +113,7 @@ mod tests {
         let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
             max_requests: 3,
             window: Duration::from_mins(1),
+            ..Default::default()
         });
         let key = RateLimitKey::Key(ApiKeyId(1));
         assert!(rl.check(key));
@@ -116,6 +127,7 @@ mod tests {
         let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
             max_requests: 2,
             window: Duration::from_mins(1),
+            ..Default::default()
         });
         let key1 = RateLimitKey::Key(ApiKeyId(1));
         let key2 = RateLimitKey::Key(ApiKeyId(2));
@@ -132,11 +144,34 @@ mod tests {
         let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
             max_requests: 1,
             window: Duration::from_millis(50),
+            ..Default::default()
         });
         let key = RateLimitKey::Key(ApiKeyId(1));
         assert!(rl.check(key));
         assert!(!rl.check(key)); // blocked
         std::thread::sleep(Duration::from_millis(60));
         assert!(rl.check(key)); // window reset
+    }
+
+    #[test]
+    fn bounds_memory_growth() {
+        let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
+            max_requests: 1,
+            window: Duration::from_mins(1),
+            max_capacity: 2,
+        });
+
+        let key1 = RateLimitKey::Key(ApiKeyId(1));
+        let key2 = RateLimitKey::Key(ApiKeyId(2));
+        let key3 = RateLimitKey::Key(ApiKeyId(3));
+
+        // Insert first two keys, staying within capacity
+        assert!(rl.check(key1));
+        assert!(rl.check(key2));
+        assert_eq!(rl.windows.len(), 2);
+
+        // Third key should trigger cleanup, and since none are expired, clear the map
+        assert!(rl.check(key3));
+        assert_eq!(rl.windows.len(), 1); // Only key3 remains
     }
 }
