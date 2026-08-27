@@ -19,11 +19,17 @@
 //! platform-specific machine GUID). The `x-vscode-sessionid` is a
 //! UUID generated once per process launch.
 
-use http::HeaderValue;
+use http::{HeaderValue, header::HeaderName};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::sync::LazyLock;
 use uuid::Uuid;
+
+static HEADER_X_CLIENT_NAME: HeaderName = HeaderName::from_static("x-client-name");
+static HEADER_X_CLIENT_VERSION: HeaderName = HeaderName::from_static("x-client-version");
+static HEADER_X_MACHINE_ID: HeaderName = HeaderName::from_static("x-machine-id");
+static HEADER_X_VSCODE_SESSIONID: HeaderName = HeaderName::from_static("x-vscode-sessionid");
+static HEADER_X_GOOG_USER_PROJECT: HeaderName = HeaderName::from_static("x-goog-user-project");
 
 /// Known stable Antigravity version (must be >= the version Google's
 /// API requires to accept requests). Updated from the
@@ -47,6 +53,9 @@ static VERSION: LazyLock<String> = LazyLock::new(|| {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| KNOWN_STABLE_VERSION.to_string())
 });
+
+static HEADER_VAL_VERSION: LazyLock<HeaderValue> =
+    LazyLock::new(|| HeaderValue::from_str(&VERSION).expect("version must be valid ascii"));
 
 fn version() -> &'static str {
     &VERSION
@@ -78,6 +87,10 @@ static MACHINE_ID: LazyLock<String> = LazyLock::new(|| {
     out
 });
 
+static HEADER_VAL_MACHINE_ID: LazyLock<HeaderValue> =
+    LazyLock::new(|| HeaderValue::from_str(&MACHINE_ID).expect("machine_id must be valid ascii"));
+
+#[cfg(test)]
 fn machine_id() -> &'static str {
     &MACHINE_ID
 }
@@ -112,7 +125,11 @@ fn hostname() -> Option<&'static str> {
 
 static SESSION_ID: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().to_string());
 
+static HEADER_VAL_SESSION_ID: LazyLock<HeaderValue> =
+    LazyLock::new(|| HeaderValue::from_str(&SESSION_ID).expect("session_id must be valid ascii"));
+
 /// Per-launch session ID. Generated once per process lifetime.
+#[cfg(test)]
 fn session_id() -> &'static str {
     &SESSION_ID
 }
@@ -128,6 +145,9 @@ fn user_agent() -> String {
         KNOWN_STABLE_ELECTRON,
     )
 }
+
+static HEADER_VAL_USER_AGENT: LazyLock<HeaderValue> =
+    LazyLock::new(|| HeaderValue::from_str(&user_agent()).expect("user_agent must be valid ascii"));
 
 /// Native OAuth User-Agent (used for token exchange / refresh / userinfo):
 /// `vscode/1.X.X (Antigravity/{version})`
@@ -153,14 +173,19 @@ fn is_valid_project_id(pid: &str) -> bool {
 /// set to the project ID (required for the API to route the request
 /// to the correct Cloud Code project).
 pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Option<&str>) {
-    insert_header_str(headers, http::header::USER_AGENT.as_str(), &user_agent());
-    headers.insert("x-client-name", HeaderValue::from_static("antigravity"));
-    insert_header_str(headers, "x-client-version", version());
-    insert_header_str(headers, "x-machine-id", machine_id());
-    insert_header_str(headers, "x-vscode-sessionid", session_id());
+    headers.insert(http::header::USER_AGENT, HEADER_VAL_USER_AGENT.clone());
+    headers.insert(
+        &HEADER_X_CLIENT_NAME,
+        HeaderValue::from_static("antigravity"),
+    );
+    headers.insert(&HEADER_X_CLIENT_VERSION, HEADER_VAL_VERSION.clone());
+    headers.insert(&HEADER_X_MACHINE_ID, HEADER_VAL_MACHINE_ID.clone());
+    headers.insert(&HEADER_X_VSCODE_SESSIONID, HEADER_VAL_SESSION_ID.clone());
 
-    if let Some(pid) = project_id.filter(|p| is_valid_project_id(p)) {
-        insert_header_str(headers, "x-goog-user-project", pid);
+    if let Some(pid) = project_id.filter(|p| is_valid_project_id(p))
+        && let Ok(v) = HeaderValue::from_str(pid)
+    {
+        headers.insert(&HEADER_X_GOOG_USER_PROJECT, v);
     }
 }
 
