@@ -31,7 +31,7 @@
 //! ±10% of cl100k_base for mixed English/code content. This is
 //! sufficient for cost tracking and compression savings.
 
-use openproxy_types::message::OpenAIMessage;
+use crate::message::OpenAIMessage;
 use std::sync::LazyLock;
 use tiktoken_rs::{CoreBPE, cl100k_base};
 

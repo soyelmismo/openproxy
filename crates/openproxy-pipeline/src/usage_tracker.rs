@@ -391,7 +391,7 @@ impl<'a> UsageRecordBuilder<'a> {
         let (prompt_tokens, prompt_tokens_estimated) = match self.prompt_tokens {
             Some(t) if t > 0 => (Some(t), false),
             _ => {
-                let est = openproxy_compression::token_estimate::estimate_prompt_tokens(
+                let est = openproxy_types::token_estimate::estimate_prompt_tokens(
                     &self.req.openai_request.messages,
                 );
                 if est > 0 {
@@ -419,7 +419,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 if completion_text.is_empty() {
                     (None, false)
                 } else {
-                    let est = openproxy_compression::token_estimate::estimate_completion_tokens(
+                    let est = openproxy_types::token_estimate::estimate_completion_tokens(
                         completion_text,
                     );
                     tracing::debug!(
