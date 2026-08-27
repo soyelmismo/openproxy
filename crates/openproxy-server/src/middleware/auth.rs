@@ -372,17 +372,19 @@ fn inject_deepseek_reasoning_if_needed(parsed: &mut openproxy_types::OpenAIReque
 async fn read_request_body_capped(
     body: axum::body::Body,
     limit: usize,
-) -> Result<bytes::Bytes, axum::response::Response> {
+) -> Result<bytes::Bytes, Box<axum::response::Response>> {
     match axum::body::to_bytes(body, limit).await {
         Ok(b) => Ok(b),
         Err(e) => {
             let err_str = e.to_string();
             if err_str.contains("length limit exceeded") {
-                Err(axum::response::IntoResponse::into_response(
+                Err(Box::new(axum::response::IntoResponse::into_response(
                     axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                ))
+                )))
             } else {
-                Err(ApiError(openproxy_types::CoreError::Parse(err_str)).into_response())
+                Err(Box::new(
+                    ApiError(openproxy_types::CoreError::Parse(err_str)).into_response(),
+                ))
             }
         }
     }
@@ -398,7 +400,7 @@ pub async fn auth_middleware(
 
     let bytes = match read_request_body_capped(body, 32 * 1024 * 1024).await {
         Ok(b) => b,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
 
     let mut parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
