@@ -139,6 +139,7 @@ impl Pipeline {
                 failure_threshold: 5,
                 unhealthy_duration_ms: 60_000,
             }),
+            Arc::new(crate::predictive_rate_limit::PredictiveRateLimiter::new()),
         )
     }
 
@@ -148,6 +149,7 @@ impl Pipeline {
         record_bodies_and_headers: Arc<AtomicBool>,
         selection_registry: Arc<SelectionRegistry>,
         circuit_breaker: CircuitBreakerRegistry,
+        predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
     ) -> Self {
         let compression_stats_cell = Arc::new(RwLock::new(None));
         let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
@@ -178,7 +180,7 @@ impl Pipeline {
             selection_registry,
             record_bodies_and_headers,
             compression_stats_cell,
-            predictive_limiter: Arc::new(crate::predictive_rate_limit::PredictiveRateLimiter::new()),
+            predictive_limiter,
             tracker,
             dispatcher,
             repo,

@@ -1,4 +1,6 @@
-use openproxy_types::ids::{ComboId, ComboTargetId};
+use openproxy_types::combos::ComboTarget;
+use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
+use openproxy_types::providers::RateLimitScope;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -282,7 +284,37 @@ impl PredictiveRateLimiter {
             .map_or(0, |d| d.as_millis() as u64)
     }
 
-    fn compute_key(combo_id: ComboId, target_id: ComboTargetId) -> u64 {
+    pub fn compute_target_key(target: &ComboTarget) -> u64 {
+        Self::compute_key_parts(
+            &target.provider_id,
+            target.account_id,
+            target.model_row_id,
+            target.rate_limit_scope,
+        )
+    }
+
+    pub fn compute_key_parts(
+        provider_id: &ProviderId,
+        account_id: Option<AccountId>,
+        model_row_id: Option<ModelRowId>,
+        scope: RateLimitScope,
+    ) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        if let Some(aid) = account_id {
+            aid.0.hash(&mut hasher);
+            if scope == RateLimitScope::Model {
+                model_row_id.unwrap_or(ModelRowId(0)).0.hash(&mut hasher);
+            }
+        } else {
+            provider_id.0.hash(&mut hasher);
+            if scope == RateLimitScope::Model {
+                model_row_id.unwrap_or(ModelRowId(0)).0.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    pub fn compute_key(combo_id: ComboId, target_id: ComboTargetId) -> u64 {
         let mut hasher = DefaultHasher::new();
         combo_id.0.hash(&mut hasher);
         target_id.0.hash(&mut hasher);
@@ -294,14 +326,8 @@ impl PredictiveRateLimiter {
         &self.shards[idx]
     }
 
-    /// Evalúa la disponibilidad predictiva del target sin modificar contadores.
-    pub fn evaluate_target(
-        &self,
-        combo_id: ComboId,
-        target_id: ComboTargetId,
-        now_ms: u64,
-    ) -> TargetReadiness {
-        let key = Self::compute_key(combo_id, target_id);
+    /// Evalúa la disponibilidad predictiva del target por clave sin modificar contadores.
+    pub fn evaluate_key(&self, key: u64, now_ms: u64) -> TargetReadiness {
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
@@ -310,10 +336,20 @@ impl PredictiveRateLimiter {
         state.evaluate(now_ms)
     }
 
-    /// Intenta adquirir el permiso para el target. Retorna true si es admitido
-    /// (Ready o Probe) y reserva 1 petición en vuelo y contador de ventana.
-    pub fn acquire_target(&self, combo_id: ComboId, target_id: ComboTargetId, now_ms: u64) -> bool {
+    /// Evalúa la disponibilidad predictiva del target sin modificar contadores (compatibilidad).
+    pub fn evaluate_target(
+        &self,
+        combo_id: ComboId,
+        target_id: ComboTargetId,
+        now_ms: u64,
+    ) -> TargetReadiness {
         let key = Self::compute_key(combo_id, target_id);
+        self.evaluate_key(key, now_ms)
+    }
+
+    /// Intenta adquirir el permiso para el target por clave. Retorna true si es admitido
+    /// (Ready o Probe) y reserva 1 petición en vuelo y contador de ventana.
+    pub fn acquire_key(&self, key: u64, now_ms: u64) -> bool {
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
@@ -322,8 +358,30 @@ impl PredictiveRateLimiter {
         state.try_acquire()
     }
 
-    /// Determina si un reintento local en el target está justificado o debe
+    /// Intenta adquirir el permiso para el target (compatibilidad).
+    pub fn acquire_target(&self, combo_id: ComboId, target_id: ComboTargetId, now_ms: u64) -> bool {
+        let key = Self::compute_key(combo_id, target_id);
+        self.acquire_key(key, now_ms)
+    }
+
+    /// Determina si un reintento local en el target está justificado por clave o debe
     /// abortarse inmediatamente (Fast-Fail) para saltar al siguiente target del combo.
+    pub fn should_retry_key(
+        &self,
+        key: u64,
+        fingerprint: u64,
+        local_retry_count: u8,
+        now_ms: u64,
+    ) -> bool {
+        let shard = self.shard_for(key);
+        let mut map = shard.inner.lock();
+        let state = map.entry(key).or_default();
+
+        state.refresh(now_ms);
+        state.should_retry(fingerprint, local_retry_count)
+    }
+
+    /// Determina si un reintento local en el target está justificado (compatibilidad).
     pub fn should_retry(
         &self,
         combo_id: ComboId,
@@ -333,17 +391,11 @@ impl PredictiveRateLimiter {
         now_ms: u64,
     ) -> bool {
         let key = Self::compute_key(combo_id, target_id);
-        let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
-        let state = map.entry(key).or_default();
-
-        state.refresh(now_ms);
-        state.should_retry(fingerprint, local_retry_count)
+        self.should_retry_key(key, fingerprint, local_retry_count, now_ms)
     }
 
-    /// Decrementa peticiones en vuelo (en caso de cancelación o fallo temprano).
-    pub fn release_in_flight(&self, combo_id: ComboId, target_id: ComboTargetId) {
-        let key = Self::compute_key(combo_id, target_id);
+    /// Decrementa peticiones en vuelo por clave (en caso de cancelación o fallo temprano).
+    pub fn release_in_flight_key(&self, key: u64) {
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
         if let Some(state) = map.get_mut(&key) {
@@ -351,7 +403,28 @@ impl PredictiveRateLimiter {
         }
     }
 
-    /// Reporta éxito HTTP 200 OK para calibración elástica (Additive Increase).
+    /// Decrementa peticiones en vuelo (compatibilidad).
+    pub fn release_in_flight(&self, combo_id: ComboId, target_id: ComboTargetId) {
+        let key = Self::compute_key(combo_id, target_id);
+        self.release_in_flight_key(key);
+    }
+
+    /// Reporta éxito HTTP 200 OK por clave para calibración elástica (Additive Increase).
+    pub fn report_success_key(
+        &self,
+        key: u64,
+        remaining_header: Option<u32>,
+        reset_window_secs: Option<u64>,
+        now_ms: u64,
+    ) {
+        let shard = self.shard_for(key);
+        let mut map = shard.inner.lock();
+        let state = map.entry(key).or_default();
+
+        state.apply_success(remaining_header, reset_window_secs, now_ms);
+    }
+
+    /// Reporta éxito HTTP 200 OK (compatibilidad).
     pub fn report_success(
         &self,
         combo_id: ComboId,
@@ -361,22 +434,16 @@ impl PredictiveRateLimiter {
         now_ms: u64,
     ) {
         let key = Self::compute_key(combo_id, target_id);
-        let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
-        let state = map.entry(key).or_default();
-
-        state.apply_success(remaining_header, reset_window_secs, now_ms);
+        self.report_success_key(key, remaining_header, reset_window_secs, now_ms);
     }
 
-    /// Reporta HTTP 429 Too Many Requests (Multiplicative Decrease / Burst Cap).
-    pub fn report_rate_limited(
+    /// Reporta HTTP 429 Too Many Requests por clave (Multiplicative Decrease / Burst Cap).
+    pub fn report_rate_limited_key(
         &self,
-        combo_id: ComboId,
-        target_id: ComboTargetId,
+        key: u64,
         retry_after_secs: Option<u64>,
         now_ms: u64,
     ) {
-        let key = Self::compute_key(combo_id, target_id);
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
@@ -395,12 +462,43 @@ impl PredictiveRateLimiter {
         state.reset_at_ms = now_ms + penalty_ms;
     }
 
-    /// Reporta error upstream genérico (5xx, timeout, connection error).
+    /// Reporta HTTP 429 Too Many Requests (compatibilidad).
+    pub fn report_rate_limited(
+        &self,
+        combo_id: ComboId,
+        target_id: ComboTargetId,
+        retry_after_secs: Option<u64>,
+        now_ms: u64,
+    ) {
+        let key = Self::compute_key(combo_id, target_id);
+        self.report_rate_limited_key(key, retry_after_secs, now_ms);
+    }
+
+    /// Reporta error upstream genérico por clave (5xx, timeout, connection error).
+    pub fn report_upstream_error_key(&self, key: u64, now_ms: u64) {
+        self.report_upstream_error_with_fingerprint_key(key, 0, now_ms);
+    }
+
+    /// Reporta error upstream genérico (compatibilidad).
     pub fn report_upstream_error(&self, combo_id: ComboId, target_id: ComboTargetId, now_ms: u64) {
         self.report_upstream_error_with_fingerprint(combo_id, target_id, 0, now_ms);
     }
 
-    /// Reporta error upstream con fingerprint para detección de patrones repetitivos.
+    /// Reporta error upstream con fingerprint por clave para detección de patrones repetitivos.
+    pub fn report_upstream_error_with_fingerprint_key(
+        &self,
+        key: u64,
+        fingerprint: u64,
+        now_ms: u64,
+    ) {
+        let shard = self.shard_for(key);
+        let mut map = shard.inner.lock();
+        let state = map.entry(key).or_default();
+
+        state.report_upstream_error_with_fingerprint(fingerprint, now_ms);
+    }
+
+    /// Reporta error upstream con fingerprint para detección de patrones repetitivos (compatibilidad).
     pub fn report_upstream_error_with_fingerprint(
         &self,
         combo_id: ComboId,
@@ -409,11 +507,7 @@ impl PredictiveRateLimiter {
         now_ms: u64,
     ) {
         let key = Self::compute_key(combo_id, target_id);
-        let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
-        let state = map.entry(key).or_default();
-
-        state.report_upstream_error_with_fingerprint(fingerprint, now_ms);
+        self.report_upstream_error_with_fingerprint_key(key, fingerprint, now_ms);
     }
 }
 
@@ -727,5 +821,57 @@ mod tests {
 
         // Verificar que un nuevo error ahora sí permitiría retry normal en intento 0
         assert!(limiter.should_retry(combo, target, fp, 0, now));
+    }
+
+    #[test]
+    fn test_account_and_model_key_isolation() {
+        let limiter = PredictiveRateLimiter::new();
+        let prov = ProviderId("openai".to_string());
+        let acc1 = Some(AccountId(10));
+        let acc2 = Some(AccountId(20));
+        let model1 = Some(ModelRowId(100));
+        let model2 = Some(ModelRowId(200));
+
+        let k_acc1 = PredictiveRateLimiter::compute_key_parts(
+            &prov,
+            acc1,
+            model1,
+            RateLimitScope::Account,
+        );
+        let k_acc2 = PredictiveRateLimiter::compute_key_parts(
+            &prov,
+            acc2,
+            model1,
+            RateLimitScope::Account,
+        );
+        assert_ne!(k_acc1, k_acc2, "Diferentes cuentas deben tener claves distintas");
+
+        let k_model1 = PredictiveRateLimiter::compute_key_parts(
+            &prov,
+            acc1,
+            model1,
+            RateLimitScope::Model,
+        );
+        let k_model2 = PredictiveRateLimiter::compute_key_parts(
+            &prov,
+            acc1,
+            model2,
+            RateLimitScope::Model,
+        );
+        assert_ne!(k_model1, k_model2, "Diferentes modelos en scope Model deben tener claves distintas");
+
+        let now = 100_000;
+        assert!(limiter.acquire_key(k_acc1, now));
+        limiter.report_rate_limited_key(k_acc1, Some(60), now);
+
+        assert_eq!(
+            limiter.evaluate_key(k_acc1, now),
+            TargetReadiness::Saturated {
+                learned_burst: 1,
+                window_count: 1,
+                reset_in_ms: 60_000,
+            }
+        );
+        assert_eq!(limiter.evaluate_key(k_acc2, now), TargetReadiness::Ready);
     }
 }

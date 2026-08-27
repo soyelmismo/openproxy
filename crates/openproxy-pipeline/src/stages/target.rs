@@ -353,7 +353,7 @@ impl PipelineStage for DispatchStage {
             .await;
 
         update_circuit_breaker_on_result(&ctx.pipeline, target, model, &result);
-        update_predictive_limiter_on_result(&ctx.pipeline, combo.id, target.id, &result);
+        update_predictive_limiter_on_result(&ctx.pipeline, target, &result);
 
         // Do not call next.execute here. We are the final stage of target execution.
         Ok(result)
@@ -450,35 +450,33 @@ fn update_circuit_breaker_on_result(
 
 fn update_predictive_limiter_on_result(
     pipeline: &crate::Pipeline,
-    combo_id: openproxy_types::ComboId,
-    target_id: openproxy_types::ComboTargetId,
+    target: &openproxy_types::ComboTarget,
     result: &PipelineResult,
 ) {
+    let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(target);
     let now = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
     match &result.error {
         None => {
             pipeline
                 .predictive_limiter
-                .report_success(combo_id, target_id, None, None, now);
+                .report_success_key(key, None, None, now);
         }
         Some(CoreError::Cancelled(_) | CoreError::RaceLost) => {
             pipeline
                 .predictive_limiter
-                .release_in_flight(combo_id, target_id);
+                .release_in_flight_key(key);
         }
         Some(CoreError::RateLimited { retry_after_ms, .. }) => {
             let retry_after_secs = Some(*retry_after_ms / 1000);
-            pipeline.predictive_limiter.report_rate_limited(
-                combo_id,
-                target_id,
+            pipeline.predictive_limiter.report_rate_limited_key(
+                key,
                 retry_after_secs,
                 now,
             );
         }
         Some(_) => record_predictive_limiter_upstream_error(
             &pipeline.predictive_limiter,
-            combo_id,
-            target_id,
+            key,
             result,
             now,
         ),
@@ -487,19 +485,18 @@ fn update_predictive_limiter_on_result(
 
 fn record_predictive_limiter_upstream_error(
     limiter: &crate::predictive_rate_limit::PredictiveRateLimiter,
-    combo_id: openproxy_types::ComboId,
-    target_id: openproxy_types::ComboTargetId,
+    key: u64,
     result: &PipelineResult,
     now: u64,
 ) {
     if result.status_code == 429 {
-        limiter.report_rate_limited(combo_id, target_id, None, now);
+        limiter.report_rate_limited_key(key, None, now);
     } else {
         let fingerprint = result
             .error
             .as_ref()
             .map_or(0, crate::predictive_rate_limit::compute_error_fingerprint);
-        limiter.report_upstream_error_with_fingerprint(combo_id, target_id, fingerprint, now);
+        limiter.report_upstream_error_with_fingerprint_key(key, fingerprint, now);
     }
 }
 

@@ -65,6 +65,7 @@ impl PipelineRunner {
             state.record_bodies_and_flags(),
             state.selection_registry(),
             state.circuit_breaker(),
+            state.predictive_limiter(),
         )
     }
 

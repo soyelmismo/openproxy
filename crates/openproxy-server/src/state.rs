@@ -114,6 +114,7 @@ pub struct AppState {
     /// next, and the `prune_idle` sweep in the background task
     /// can clean up stale entries.
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
+    predictive_limiter: Arc<openproxy_pipeline::PredictiveRateLimiter>,
     /// VACUUM maintenance settings (runtime-editable via the dashboard
     /// config view or `PUT /admin/api/config/maintenance`). The
     /// background task reads these on every tick.
@@ -238,6 +239,7 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
+        let predictive_limiter = Arc::new(openproxy_pipeline::PredictiveRateLimiter::new());
         spawn_memory_cleanup(
             &supervisor,
             Arc::clone(&selection_registry),
@@ -277,6 +279,7 @@ impl AppState {
             quota_protection_cell,
             selection_registry,
             circuit_breaker,
+            predictive_limiter,
             maintenance_cell,
             vacuum_status,
             background_tx,
@@ -359,6 +362,7 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
+        let predictive_limiter = Arc::new(openproxy_pipeline::PredictiveRateLimiter::new());
         spawn_memory_cleanup(
             &supervisor,
             Arc::clone(&selection_registry),
@@ -395,6 +399,7 @@ impl AppState {
             quota_protection_cell: Arc::new(RwLock::new(config.quota_protection)),
             selection_registry,
             circuit_breaker,
+            predictive_limiter,
             maintenance_cell,
             vacuum_status,
             background_tx,
@@ -647,6 +652,10 @@ impl AppState {
     /// the clone shares the same underlying map.
     pub fn circuit_breaker(&self) -> openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry {
         self.circuit_breaker.clone()
+    }
+
+    pub fn predictive_limiter(&self) -> Arc<openproxy_pipeline::PredictiveRateLimiter> {
+        Arc::clone(&self.predictive_limiter)
     }
 
     pub fn background_tx(

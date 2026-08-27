@@ -105,8 +105,10 @@ async fn execute_single_target_step(
         return TargetLoopOutcome::Finish(disc);
     }
     let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
+    let target_key =
+        crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target.target);
     let remaining = &to_run[idx + 1..];
-    if should_skip_preventive_target(&ctx.pipeline, combo, target, remaining, now_ms) {
+    if should_skip_preventive_target(&ctx.pipeline, combo, target, target_key, remaining, now_ms) {
         let skip_trace_id = format!("{}:{}", ctx.req.trace_id, *overall_attempt);
         ctx.pipeline.tracker.record_predictive_skipped_row(
             &ctx.req,
@@ -132,7 +134,7 @@ async fn execute_single_target_step(
         let _ = ctx
             .pipeline
             .predictive_limiter
-            .acquire_target(combo.id, target.target.id, now_ms);
+            .acquire_key(target_key, now_ms);
     }
 
     let step =
@@ -517,11 +519,13 @@ async fn perform_retry_iteration(
     }
 
     if combo.preventive_rate_limit {
+        let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(
+            &target.target,
+        );
         let fingerprint = crate::predictive_rate_limit::compute_error_fingerprint(err);
         let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
-        if !ctx.pipeline.predictive_limiter.should_retry(
-            combo.id,
-            target.target.id,
+        if !ctx.pipeline.predictive_limiter.should_retry_key(
+            key,
             fingerprint,
             state.target_local_retry_count,
             now_ms,
@@ -732,6 +736,7 @@ fn should_skip_preventive_target(
     pipeline: &crate::Pipeline,
     combo: &openproxy_types::Combo,
     target: &crate::context::ResolvedTarget,
+    target_key: u64,
     remaining_targets: &[crate::context::ResolvedTarget],
     now_ms: u64,
 ) -> bool {
@@ -740,7 +745,7 @@ fn should_skip_preventive_target(
     }
     let readiness = pipeline
         .predictive_limiter
-        .evaluate_target(combo.id, target.target.id, now_ms);
+        .evaluate_key(target_key, now_ms);
     let crate::predictive_rate_limit::TargetReadiness::Saturated {
         learned_burst,
         window_count,
@@ -751,10 +756,10 @@ fn should_skip_preventive_target(
     };
 
     let has_healthy_alternative = remaining_targets.iter().any(|alt| {
+        let alt_key =
+            crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&alt.target);
         !matches!(
-            pipeline
-                .predictive_limiter
-                .evaluate_target(combo.id, alt.target.id, now_ms),
+            pipeline.predictive_limiter.evaluate_key(alt_key, now_ms),
             crate::predictive_rate_limit::TargetReadiness::Saturated { .. }
         )
     });
@@ -764,6 +769,8 @@ fn should_skip_preventive_target(
             combo_id = combo.id.0,
             target_id = target.target.id.0,
             provider = %target.target.provider_id,
+            account_id = ?target.target.account_id,
+            model_row_id = ?target.target.model_row_id,
             learned_burst,
             window_count,
             reset_in_ms,
