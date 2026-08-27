@@ -42,7 +42,7 @@
 //!   so we don't re-redact. If a future caller logs raw secrets, the
 //!   `cost::redact_error_msg` regex is available to apply here too.
 
-use std::collections::VecDeque;
+use arraydeque::{ArrayDeque, Wrapping};
 use std::sync::{LazyLock, OnceLock};
 
 use chrono::Utc;
@@ -96,16 +96,16 @@ static DEBUG_LOG_BUFFER: LazyLock<Mutex<DebugLogBuffer>> =
     LazyLock::new(|| Mutex::new(DebugLogBuffer::new()));
 static FILE_LOG_SENDER: OnceLock<mpsc::Sender<DebugLogEntry>> = OnceLock::new();
 
-/// Internal struct holding the VecDeque + the monotonic seq counter.
+/// Internal struct holding the ArrayDeque + the monotonic seq counter.
 struct DebugLogBuffer {
-    entries: VecDeque<DebugLogEntry>,
+    entries: ArrayDeque<DebugLogEntry, BUFFER_CAPACITY, Wrapping>,
     next_seq: u64,
 }
 
 impl DebugLogBuffer {
     fn new() -> Self {
         Self {
-            entries: VecDeque::with_capacity(BUFFER_CAPACITY),
+            entries: ArrayDeque::new(),
             next_seq: 1,
         }
     }
@@ -113,10 +113,7 @@ impl DebugLogBuffer {
     fn push(&mut self, mut entry: DebugLogEntry) {
         entry.seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
-        if self.entries.len() >= BUFFER_CAPACITY {
-            self.entries.pop_front();
-        }
-        self.entries.push_back(entry);
+        let _ = self.entries.push_back(entry);
     }
 }
 
