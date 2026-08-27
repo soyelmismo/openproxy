@@ -209,6 +209,42 @@ async fn fetch_remote_image(
     url: &str,
     upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
 ) -> Result<bytes::Bytes, ApiError> {
+    let uri: axum::http::Uri = url
+        .parse()
+        .map_err(|e| ApiError(CoreError::Validation(format!("invalid image URL: {e}"))))?;
+
+    let host = uri
+        .host()
+        .ok_or_else(|| ApiError(CoreError::Validation("image URL must have a host".into())))?;
+
+    let port = uri.port_u16().unwrap_or_else(|| {
+        if uri.scheme_str() == Some("https") {
+            443
+        } else {
+            80
+        }
+    });
+
+    if port != 80 && port != 443 {
+        return Err(ApiError(CoreError::Validation(
+            "non-standard ports are not allowed".into(),
+        )));
+    }
+
+    let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+        ApiError(CoreError::Validation(format!(
+            "failed to resolve image URL host: {e}"
+        )))
+    })?;
+
+    for addr in addrs {
+        if openproxy_adapters::upstream::is_private_or_reserved(&addr.ip()) {
+            return Err(ApiError(CoreError::Validation(
+                "private or reserved IP addresses are not allowed".into(),
+            )));
+        }
+    }
+
     let req = openproxy_adapters::UpstreamRequest::get(url);
     let cancel = openproxy_adapters::CancellationToken::new();
     let resp = upstream_client
@@ -276,7 +312,6 @@ async fn process_multipart_field(
     } else if name == "model" {
         *model_name = field.text().await.unwrap_or_default();
     } else {
-        let value = field.text().await.unwrap_or_default();
         form_fields.push((name, value));
     }
 }
