@@ -907,7 +907,7 @@ impl UpstreamDispatcher {
         dctx: &DispatchContext<'_>,
         connect_and_send_ms: u64,
         ttft_ms: u64,
-    ) -> Result<bytes::Bytes, PipelineResult> {
+    ) -> Result<bytes::Bytes, Box<PipelineResult>> {
         let non_streaming_body_deadline = params.started
             + std::time::Duration::from_millis(params.resolved_timeouts.total.as_millis() as u64);
         let mut remaining = non_streaming_body_deadline
@@ -929,7 +929,7 @@ impl UpstreamDispatcher {
                     "client cancelled during upstream body read; aborting attempt"
                 );
                 let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
-                Err(self.record_and_fail(
+                Err(Box::new(self.record_and_fail(
                     params.req.clone(),
                     params.combo,
                     params.target,
@@ -939,14 +939,14 @@ impl UpstreamDispatcher {
                         Some(ttft_ms),
                         err.http_status(),
                     ),
-                ))
+                )))
             }
             Ok(Err(UpstreamError::Timeout(phase))) => {
                 let err = CoreError::UpstreamTimeout {
                     phase: phase.as_str().to_string(),
                     ms: params.started.elapsed().as_millis() as u64,
                 };
-                Err(self.record_and_fail(
+                Err(Box::new(self.record_and_fail(
                     params.req.clone(),
                     params.combo,
                     params.target,
@@ -956,7 +956,7 @@ impl UpstreamDispatcher {
                         Some(ttft_ms),
                         err.http_status(),
                     ),
-                ))
+                )))
             }
             Ok(Err(e)) => {
                 self.check_and_trigger_proxy_rotation(
@@ -972,7 +972,7 @@ impl UpstreamDispatcher {
                 )
                 .await;
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
-                Err(self.record_and_fail(
+                Err(Box::new(self.record_and_fail(
                     params.req.clone(),
                     params.combo,
                     params.target,
@@ -982,7 +982,7 @@ impl UpstreamDispatcher {
                         Some(ttft_ms),
                         err.http_status(),
                     ),
-                ))
+                )))
             }
             Err(_elapsed) => {
                 self.check_and_trigger_proxy_rotation(
@@ -1009,7 +1009,7 @@ impl UpstreamDispatcher {
                     elapsed_ms = elapsed,
                     "non-streaming body read exceeded total_ms; aborting attempt"
                 );
-                Err(self.record_and_fail(
+                Err(Box::new(self.record_and_fail(
                     params.req.clone(),
                     params.combo,
                     params.target,
@@ -1019,7 +1019,7 @@ impl UpstreamDispatcher {
                         Some(ttft_ms),
                         err.http_status(),
                     ),
-                ))
+                )))
             }
         }
     }
@@ -1196,7 +1196,7 @@ impl UpstreamDispatcher {
             .await
         {
             Ok(b) => b,
-            Err(fail_res) => return fail_res,
+            Err(fail_res) => return *fail_res,
         };
 
         if !(200..300).contains(&status_code) {
@@ -1291,7 +1291,7 @@ impl UpstreamDispatcher {
     async fn setup_upstream_request_and_context<'a>(
         &self,
         params: &DispatchParams<'a>,
-    ) -> Result<(DispatchContext<'a>, UpstreamRequest), PipelineResult> {
+    ) -> Result<(DispatchContext<'a>, UpstreamRequest), Box<PipelineResult>> {
         let mut dctx = DispatchContext {
             attempt: params.attempt,
             race_size: params.race_size,
@@ -1321,7 +1321,7 @@ impl UpstreamDispatcher {
                     params.target,
                     dctx.fail_ctx_code(&e, None, None, e.http_status()),
                 );
-                Err(fail_result)
+                Err(Box::new(fail_result))
             }
         }
     }
@@ -1357,7 +1357,7 @@ impl UpstreamDispatcher {
         let (dctx, mut upstream_request) =
             match self.setup_upstream_request_and_context(&params).await {
                 Ok(res) => res,
-                Err(err_res) => return err_res,
+                Err(err_res) => return *err_res,
             };
 
         if is_horde_vision_request(params.target, params.model, &params.req) {
