@@ -339,6 +339,11 @@ fn apply_combo_general_updates(
     if let Some(window) = parse_nullable_u64(body, "selection_window_secs")? {
         core_combos::update_selection_window(w, id, window)?;
     }
+    if let Some(v) = body.get("preventive_rate_limit")
+        && let Some(enabled) = v.as_bool()
+    {
+        core_combos::update_preventive_rate_limit(w, id, enabled)?;
+    }
     Ok(())
 }
 

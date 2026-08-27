@@ -19,6 +19,8 @@ pub mod execution;
 pub mod formatting;
 pub mod load_balancing;
 pub mod oauth;
+pub mod predictive_rate_limit;
+pub use predictive_rate_limit::{PredictiveRateLimiter, TargetRateState, TargetReadiness};
 pub mod proxy_race;
 pub mod quotas;
 pub mod racing;

@@ -52,6 +52,8 @@ pub struct Combo {
     pub lkgp_exploration_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_window_secs: Option<u64>,
+    #[serde(default)]
+    pub preventive_rate_limit: bool,
 }
 
 fn default_target_weight() -> i32 {

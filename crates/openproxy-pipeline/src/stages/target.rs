@@ -344,6 +344,7 @@ impl PipelineStage for DispatchStage {
             .await;
 
         update_circuit_breaker_on_result(&ctx.pipeline, target, model, &result);
+        update_predictive_limiter_on_result(&ctx.pipeline, combo.id, target.id, &result);
 
         // Do not call next.execute here. We are the final stage of target execution.
         Ok(result)
@@ -426,6 +427,38 @@ fn update_circuit_breaker_on_result(
         }
         _ => {
             pipeline.circuit_breaker.record_success(key);
+        }
+    }
+}
+
+fn update_predictive_limiter_on_result(
+    pipeline: &crate::Pipeline,
+    combo_id: openproxy_types::ComboId,
+    target_id: openproxy_types::ComboTargetId,
+    result: &PipelineResult,
+) {
+    let now = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
+    match &result.error {
+        None => {
+            pipeline.predictive_limiter.report_success(combo_id, target_id, None, None, now);
+        }
+        Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)) => {
+            pipeline.predictive_limiter.release_in_flight(combo_id, target_id);
+        }
+        Some(CoreError::RateLimited { retry_after_ms, .. }) => {
+            let retry_after_secs = Some(*retry_after_ms / 1000);
+            pipeline
+                .predictive_limiter
+                .report_rate_limited(combo_id, target_id, retry_after_secs, now);
+        }
+        Some(_) => {
+            if result.status_code == 429 {
+                pipeline
+                    .predictive_limiter
+                    .report_rate_limited(combo_id, target_id, None, now);
+            } else {
+                pipeline.predictive_limiter.release_in_flight(combo_id, target_id);
+            }
         }
     }
 }

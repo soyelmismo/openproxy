@@ -377,6 +377,7 @@ pub fn build_synthetic_combo(
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        preventive_rate_limit: false,
     };
     (combo, vec![target])
 }

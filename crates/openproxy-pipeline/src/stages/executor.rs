@@ -34,10 +34,20 @@ impl PipelineStage for UpstreamExecutorStage {
         }
 
         let mut overall_attempt: u8 = 1;
-        for target in &to_run {
+        for (idx, target) in to_run.iter().enumerate() {
             if let Some(disc) = check_client_cancellation(ctx, combo.id.0, target) {
                 return Ok(disc);
             }
+            let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
+            let remaining = &to_run[idx + 1..];
+            if should_skip_preventive_target(&ctx.pipeline, &combo, target, remaining, now_ms) {
+                continue;
+            }
+
+            if combo.preventive_rate_limit {
+                let _ = ctx.pipeline.predictive_limiter.acquire_target(combo.id, target.target.id, now_ms);
+            }
+
             let step = run_target_with_retries(ctx, &combo, target, race_size, to_run.len(), &mut overall_attempt).await;
             match step {
                 TargetStepResult::Success(r) | TargetStepResult::ClientDisconnected(r) => return Ok(r),
@@ -417,4 +427,42 @@ pub(crate) fn matches_proxy_rotation_errors(err: &CoreError, rotation_errors_csv
             .split(',')
             .map(str::trim)
             .any(|part| error_matches_part(err, part))
+}
+
+fn should_skip_preventive_target(
+    pipeline: &crate::Pipeline,
+    combo: &openproxy_types::Combo,
+    target: &crate::context::ResolvedTarget,
+    remaining_targets: &[crate::context::ResolvedTarget],
+    now_ms: u64,
+) -> bool {
+    if !combo.preventive_rate_limit {
+        return false;
+    }
+    let readiness = pipeline.predictive_limiter.evaluate_target(combo.id, target.target.id, now_ms);
+    let crate::predictive_rate_limit::TargetReadiness::Saturated { learned_burst, window_count, reset_in_ms } = readiness else {
+        return false;
+    };
+
+    let has_healthy_alternative = remaining_targets.iter().any(|alt| {
+        !matches!(
+            pipeline.predictive_limiter.evaluate_target(combo.id, alt.target.id, now_ms),
+            crate::predictive_rate_limit::TargetReadiness::Saturated { .. }
+        )
+    });
+
+    if has_healthy_alternative {
+        tracing::info!(
+            combo_id = combo.id.0,
+            target_id = target.target.id.0,
+            provider = %target.target.provider_id,
+            learned_burst,
+            window_count,
+            reset_in_ms,
+            "preventive_rate_limit: predicted rate limit 429; skipping target and advancing in chain"
+        );
+        return true;
+    }
+
+    false
 }

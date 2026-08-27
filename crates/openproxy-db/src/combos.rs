@@ -48,7 +48,8 @@ crate::def_table_select!(
     "combos",
     "id, name, strategy, race_size, created_at, context_window, \
      priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
-     cooldown_factor, lkgp_exploration_rate, selection_window_secs"
+     cooldown_factor, lkgp_exploration_rate, selection_window_secs, \
+     COALESCE(preventive_rate_limit, 0)"
 );
 
 crate::def_table_select!(
@@ -996,6 +997,11 @@ pub fn update_cooldown_factor(conn: &Connection, id: ComboId, factor: Option<u32
     update_combo_column(conn, id, "cooldown_factor", factor.map(i64::from))
 }
 
+/// Update the preventive_rate_limit toggle for a combo.
+pub fn update_preventive_rate_limit(conn: &Connection, id: ComboId, enabled: bool) -> Result<()> {
+    update_combo_column(conn, id, "preventive_rate_limit", i64::from(enabled))
+}
+
 /// Update the LKGP exploration rate. `None` clears the column back
 /// to `NULL`, which the pipeline interprets as the default 0.1
 /// (10%). A non-`None` value must be in `[0.0, 1.0]`; outside that
@@ -1096,6 +1102,7 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         cooldown_factor: @opt_u32(10),
         lkgp_exploration_rate: 11,
         selection_window_secs: @opt_u64(12),
+        preventive_rate_limit: @bool(13),
     })
 }
 

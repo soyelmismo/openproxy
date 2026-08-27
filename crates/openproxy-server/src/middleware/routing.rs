@@ -206,6 +206,7 @@ fn translate_plan_to_targets(
                     cooldown_factor: None,
                     lkgp_exploration_rate: None,
                     selection_window_secs: None,
+                    preventive_rate_limit: false,
                 };
                 Ok((combo_id, Some(synthetic_combo), Some(targets)))
             } else if has_key_restrictions {

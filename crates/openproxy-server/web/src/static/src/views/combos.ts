@@ -100,6 +100,10 @@ async function onUpdateContextWindow(e: Event): Promise<void> {
   if (raw !== "" && !Number.isFinite(val)) return;
   await patchCombo(detailComboId!, { context_window: val });
 }
+async function onTogglePreventiveRateLimit(e: Event): Promise<void> {
+  const checked = (e.target as HTMLInputElement).checked;
+  await patchCombo(detailComboId!, { preventive_rate_limit: checked });
+}
 async function onUpdateTargetWeight(targetId: number, e: Event): Promise<void> {
   if (e.type === "input") return;
   const raw = (e.target as HTMLInputElement).value.trim();
@@ -429,6 +433,10 @@ function renderComboDetail(): TemplateResult {
   return html`
     <div class="page-header"><a href="#/combos" class="back-link">← All combos</a><h2>${combo.name}</h2>
       <div class="actions"><span class="chip">${combo.strategy}</span><span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title="Rate Limit Preventivo: Predice 429s por target y salta proactivamente al siguiente target del combo sin consumir intentos.">
+          <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${onTogglePreventiveRateLimit}>
+          ⚡ Predictive RL
+        </label>
         <label>Race size: <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${onUpdateRaceSize} @input=${onUpdateRaceSize} class="race-input"></label>
         <button class="danger" @click=${onDeleteCombo}>Delete</button></div></div>
     <div class="combo-context-window-bar"><label>Context window:

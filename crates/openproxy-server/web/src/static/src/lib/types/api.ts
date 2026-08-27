@@ -313,6 +313,8 @@ export interface Combo {
   /** Selection window (seconds) for `least_used` / `p2c` modes. `null`
    *  = default 3600 (1 hour). */
   selection_window_secs?: number | null;
+  /** Rate limiting preventivo y adaptativo. Si está activo, predice 429s y salta al siguiente target. */
+  preventive_rate_limit?: boolean;
 }
 
 /** @see crates/openproxy-core/src/combos.rs:47 */

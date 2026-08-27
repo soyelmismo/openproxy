@@ -280,6 +280,7 @@ mod tests {
             cooldown_factor: None,
             lkgp_exploration_rate: Some(0.0), // Disable exploration for deterministic exploitation tests
             selection_window_secs: Some(3600),
+            preventive_rate_limit: false,
         }
     }
 
