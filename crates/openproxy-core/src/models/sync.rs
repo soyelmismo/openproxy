@@ -305,6 +305,7 @@ pub fn generate_events(
         })
         .collect();
 
+    #[allow(clippy::collapsible_if)]
     if !new_models_rows.is_empty() {
         if let Ok(results) = crate::notifications::insert_many(
             tx,

@@ -124,6 +124,7 @@ impl GenericOAuthProvider {
                 );
             }
         }
+        #[allow(clippy::collapsible_if)]
         if let Some(user_agent) = self.spec.user_agent {
             if let Ok(value) = http::HeaderValue::from_str(&user_agent()) {
                 req.headers.insert(http::header::USER_AGENT, value);
