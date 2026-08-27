@@ -20,6 +20,7 @@ pub struct ValidatedApiToken {
     pub allowed_combos: Option<Vec<i64>>,
     pub blacklisted_providers: Option<Vec<String>>,
     pub blacklisted_models: Option<Vec<String>>,
+    pub scopes: Vec<String>,
 }
 
 impl ValidatedApiToken {
@@ -180,6 +181,7 @@ pub(crate) fn authenticate(
         allowed_combos: key.allowed_combos,
         blacklisted_providers: key.blacklisted_providers,
         blacklisted_models: key.blacklisted_models,
+        scopes: key.scopes,
     }))
 }
 
@@ -418,12 +420,20 @@ pub async fn auth_middleware(
     }
 
     let requested_model = &parsed.model;
-    if let Some(token) = &auth_result
-        && !token.is_model_allowed(requested_model, None)
-    {
-        return Err(ApiError(CoreError::Auth(format!(
-            "model '{requested_model}' not allowed or blacklisted for this key"
-        ))));
+    if let Some(token) = &auth_result {
+        if !token.scopes.iter().any(|s| s == "chat") {
+            return Err(ApiError(CoreError::Auth(
+                "api key lacks required scope".into(),
+            )));
+        }
+
+        if !token.is_model_allowed(requested_model, None) {
+            return Err(ApiError(CoreError::Auth(format!(
+                "model '{requested_model}' not allowed or blacklisted for this key"
+            ))));
+        }
+
+        verify_combo_authorization(&state, Some(token), requested_model)?;
     }
 
     parts.extensions.insert(ParsedChatRequest {
