@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(res_cd["skipped"], true);
 
         // Test active not skipped
-        let mut t_active = t_cd.clone();
+        let mut t_active = t_cd;
         t_active.in_cooldown = false;
         assert!(build_skipped_target_entry(&t_active).is_none());
     }
