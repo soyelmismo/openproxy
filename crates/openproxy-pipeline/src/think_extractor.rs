@@ -62,6 +62,24 @@ fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
         .position(|w| w.eq_ignore_ascii_case(needle_bytes))
 }
 
+#[inline]
+fn safe_slice_to(s: &str, end: usize) -> &str {
+    let mut e = std::cmp::min(end, s.len());
+    while e > 0 && !s.is_char_boundary(e) {
+        e -= 1;
+    }
+    &s[..e]
+}
+
+#[inline]
+fn safe_slice_from(s: &str, start: usize) -> &str {
+    let mut s_idx = std::cmp::min(start, s.len());
+    while s_idx < s.len() && !s.is_char_boundary(s_idx) {
+        s_idx += 1;
+    }
+    &s[s_idx..]
+}
+
 /// Extract `<think>` blocks from a non-streaming `OpenAIResponse`'s
 /// message content and move them to `reasoning_content`.
 ///
@@ -151,14 +169,20 @@ fn find_matching_close_tag(after_open: &str) -> Option<&'static str> {
 }
 
 fn parse_think_segment(remaining: &str, tag_idx: usize) -> (&str, &str, &str) {
-    let content_before = &remaining[..tag_idx];
-    let after_open = &remaining[tag_idx..];
+    let content_before = safe_slice_to(remaining, tag_idx);
+    let after_open = safe_slice_from(remaining, tag_idx);
     let close_tag = find_matching_close_tag(after_open);
-    let after_tag_content = &after_open[after_open.find('>').map_or(after_open.len(), |p| p + 1)..];
+    let after_tag_content = safe_slice_from(
+        after_open,
+        after_open.find('>').map_or(after_open.len(), |p| p + 1),
+    );
 
     let (think_text, rest) = match close_tag {
         Some(ct) => match find_ignore_ascii_case(after_tag_content, ct) {
-            Some(pos) => (&after_tag_content[..pos], &after_tag_content[pos + ct.len()..]),
+            Some(pos) => (
+                safe_slice_to(after_tag_content, pos),
+                safe_slice_from(after_tag_content, pos + ct.len()),
+            ),
             None => (after_tag_content, ""),
         },
         None => (after_tag_content, ""),
