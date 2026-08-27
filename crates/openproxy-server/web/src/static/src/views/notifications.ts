@@ -1139,15 +1139,15 @@ function renderCard(r: NotificationRow): TemplateResult {
         ${ago ? html`<span class="notification-card-ago">${ago}</span>` : nothing}
         ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")}></span>` : nothing}
       </div>
-    </div>
-    <div class="notification-card-actions">
-      ${payloadProviderId(r)
-        ? html`<button class="small" @click=${() => { void onViewProvider(r); }}>${t("notifications.action.view_provider")}</button>`
-        : nothing}
-      ${showAddToCombo
-        ? html`<button class="small" @click=${() => onAddToComboClick(r)}>${t("notifications.action.add_to_combo")}</button>`
-        : nothing}
-      <button class="small danger" @click=${() => { void onDismiss(r); }}>${t("notifications.action.dismiss")}</button>
+      <div class="notification-card-actions">
+        ${payloadProviderId(r)
+          ? html`<button class="small" @click=${() => { void onViewProvider(r); }}>${t("notifications.action.view_provider")}</button>`
+          : nothing}
+        ${showAddToCombo
+          ? html`<button class="small" @click=${() => onAddToComboClick(r)}>${t("notifications.action.add_to_combo")}</button>`
+          : nothing}
+        <button class="small danger" @click=${() => { void onDismiss(r); }}>${t("notifications.action.dismiss")}</button>
+      </div>
     </div>
   </div>`;
 }
