@@ -574,31 +574,106 @@
 .log-row.predict-skipped:hover { opacity: 0.85; background: var(--color-surface-2); }
 .log-status--skipped { color: var(--color-text-muted); font-weight: 500; text-transform: uppercase; font-size: 0.75rem; }
 
-/* `overflow: hidden` + ellipsis on `> span` keeps long values from
- * pushing the row wider than the viewport, mirroring the old grid
- * behaviour. Combined with `min-width` per column, each cell gets
- * a stable footprint that matches the original grid tracks. */
+/* Strict column footprints with flex: 0 0 <width>, min-width, max-width and ellipsis so rows NEVER desynchronize */
 .log-row > span {
-  flex: 0 0 auto;
-  min-width: 0;
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+}
+
+.log-row .log-time {
+  flex: 0 0 160px !important;
+  width: 160px !important;
+  min-width: 160px !important;
+  max-width: 160px !important;
+  color: var(--color-text-muted);
+}
+.log-row .log-phase {
+  flex: 0 0 160px !important;
+  width: 160px !important;
+  min-width: 160px !important;
+  max-width: 160px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+}
+.log-row .log-phase .log-phase-sub {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  box-sizing: border-box;
 }
-/* Strict column footprints with flex: 0 0 <width> so rows never desynchronize */
-.log-row .log-time        { flex: 0 0 150px; width: 150px; color: var(--color-text-muted); }
-.log-row .log-phase       { flex: 0 0 145px; width: 145px; }
-.log-row .log-type        { flex: 0 0 82px;  width: 82px;  display: inline-flex; align-items: center; }
-.log-row .log-client      { flex: 0 0 36px;  width: 36px;  display: inline-flex; align-items: center; justify-content: center; }
-.log-row .log-status      { flex: 0 0 60px;  width: 60px;  font-weight: 600; }
-.log-row .log-provider    { flex: 0 0 130px; width: 130px; }
-.log-row .log-model       { flex: 1 0 180px; min-width: 180px; }
-.log-row .log-tokens      { flex: 0 0 110px; width: 110px; }
-.log-row .log-latency     { flex: 0 0 80px;  width: 80px;  color: var(--color-text-muted); }
-.log-row .log-cost        { flex: 0 0 70px;  width: 70px;  color: var(--color-primary); }
-.log-row .log-cache       { flex: 0 0 85px;  width: 85px; }
-.log-row .log-compression { flex: 0 0 80px;  width: 80px;  color: var(--color-success, #22c55e); font-size: 0.85em; }
+.log-row .log-type {
+  flex: 0 0 96px !important;
+  width: 96px !important;
+  min-width: 96px !important;
+  max-width: 96px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+}
+.log-row .log-client {
+  flex: 0 0 36px !important;
+  width: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.log-row .log-status {
+  flex: 0 0 65px !important;
+  width: 65px !important;
+  min-width: 65px !important;
+  max-width: 65px !important;
+  font-weight: 600;
+}
+.log-row .log-provider {
+  flex: 0 0 130px !important;
+  width: 130px !important;
+  min-width: 130px !important;
+  max-width: 130px !important;
+}
+.log-row .log-model {
+  flex: 0 0 220px !important;
+  width: 220px !important;
+  min-width: 220px !important;
+  max-width: 220px !important;
+}
+.log-row .log-tokens {
+  flex: 0 0 120px !important;
+  width: 120px !important;
+  min-width: 120px !important;
+  max-width: 120px !important;
+}
+.log-row .log-latency {
+  flex: 0 0 85px !important;
+  width: 85px !important;
+  min-width: 85px !important;
+  max-width: 85px !important;
+  color: var(--color-text-muted);
+}
+.log-row .log-cost {
+  flex: 0 0 75px !important;
+  width: 75px !important;
+  min-width: 75px !important;
+  max-width: 75px !important;
+  color: var(--color-primary);
+}
+.log-row .log-cache {
+  flex: 0 0 90px !important;
+  width: 90px !important;
+  min-width: 90px !important;
+  max-width: 90px !important;
+}
+.log-row .log-compression {
+  flex: 0 0 85px !important;
+  width: 85px !important;
+  min-width: 85px !important;
+  max-width: 85px !important;
+  color: var(--color-success, #22c55e);
+  font-size: 0.85em;
+}
 .log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
 
 .log-type-tag {
@@ -613,6 +688,10 @@
   background: var(--color-surface-2);
   color: var(--color-text);
   border: 1px solid var(--color-border);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .log-type-tag--chat {
   background: rgba(59, 130, 246, 0.1);
