@@ -315,13 +315,102 @@ function renderCooldownBar(combo: Combo): TemplateResult {
   return html`<div class="combo-settings-bar"><label><abbr title=${COOLDOWN_MODE_TOOLTIPS[cm]}>Cooldown mode</abbr><select @change=${onUpdateCooldownMode}>${cooldownModeOptions(cm)}</select></label>${params}</div>`;
 }
 
+let touchDragState: {
+  draggedId: number;
+  rowEl: HTMLElement;
+  currentOverEl: HTMLElement | null;
+} | null = null;
+
+function onTouchStartHandle(targetId: number, e: TouchEvent): void {
+  const handle = e.currentTarget as HTMLElement;
+  const row = handle.closest(".combo-target-card-row") as HTMLElement | null;
+  if (!row) return;
+
+  touchDragState = {
+    draggedId: targetId,
+    rowEl: row,
+    currentOverEl: null,
+  };
+
+  row.classList.add("touch-dragging");
+  if (navigator.vibrate) {
+    try { navigator.vibrate(15); } catch { /* ignore */ }
+  }
+}
+
+function onTouchMoveHandle(e: TouchEvent): void {
+  if (!touchDragState) return;
+  const touch = e.touches[0];
+  if (!touch) return;
+
+  if (e.cancelable) e.preventDefault();
+
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  const overRow = el?.closest(".combo-target-card-row") as HTMLElement | null;
+
+  if (touchDragState.currentOverEl && touchDragState.currentOverEl !== overRow) {
+    touchDragState.currentOverEl.classList.remove("drag-over");
+    touchDragState.currentOverEl = null;
+  }
+
+  if (overRow && overRow !== touchDragState.rowEl) {
+    overRow.classList.add("drag-over");
+    touchDragState.currentOverEl = overRow;
+  }
+}
+
+async function onTouchEndHandle(): Promise<void> {
+  if (!touchDragState) return;
+  const { draggedId, rowEl, currentOverEl } = touchDragState;
+
+  rowEl.classList.remove("touch-dragging");
+  if (currentOverEl) {
+    currentOverEl.classList.remove("drag-over");
+    const dropTargetIdStr = currentOverEl.getAttribute("data-drag-id");
+    const dropTargetId = dropTargetIdStr ? parseInt(dropTargetIdStr, 10) : 0;
+    if (dropTargetId && dropTargetId !== draggedId) {
+      await executeTargetReorder(draggedId, dropTargetId);
+    }
+  }
+
+  touchDragState = null;
+}
+
+async function executeTargetReorder(draggedId: number, dropTargetId: number): Promise<void> {
+  if (!detailComboId || draggedId === dropTargetId) return;
+  let currentTargets: ComboTargetWithModel[];
+  try {
+    currentTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
+  } catch {
+    showToast("Reorder failed: could not fetch current targets", "error");
+    return;
+  }
+  const ordered = [...currentTargets].sort((a, b) => a.priority_order - b.priority_order);
+  const fromIdx = ordered.findIndex((x) => x.id === draggedId);
+  const toIdx = ordered.findIndex((x) => x.id === dropTargetId);
+  if (fromIdx < 0 || toIdx < 0) {
+    showToast("Reorder failed: target not found in current list", "error");
+    return;
+  }
+  const [moved] = ordered.splice(fromIdx, 1);
+  if (!moved) return;
+  ordered.splice(toIdx, 0, moved);
+  try {
+    await api(`/combos/${detailComboId}/targets/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ target_ids: ordered.map((x) => x.id) }),
+    });
+    detailTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
+    requestUpdate();
+    showToast("Target priority updated", "success");
+  } catch (err: unknown) {
+    showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error");
+  }
+}
+
 function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): TemplateResult {
   const isSub = t.sub_combo_id != null;
   const cdBadge = t.in_cooldown ? html` <span class="badge badge-cooldown" title="Cooldown — ${t.cooldown_reason ?? ""} until ${t.cooldown_until ?? ""}">⏸</span>` : html``;
-  // Provider-inactive badge: the target is still visible and reorderable,
-  // but it won't be used for routing until the provider is reactivated.
-  // This is NOT the same as cooldown — cooldown is transient (auto-clears
-  // after a timeout), provider-inactive is a manual admin action.
   const inactiveBadge = (t.provider_active === false)
     ? html` <span class="badge badge-inactive" title="Provider is inactive — this target is not used for routing. Reactivate the provider in the Providers page to enable it.">⚠ inactive</span>`
     : html``;
@@ -344,14 +433,6 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
       ${(t.cooldown_mode === "flat" || t.cooldown_mode === "exponential") ? html`<input type="number" min="0" placeholder="sec" style="width:48px;font-size:0.75rem;padding:2px 4px" .value=${t.cooldown_base_secs != null ? String(t.cooldown_base_secs) : ""} @change=${(e: Event) => onUpdateTargetCooldownBase(t.id, e)} class="cw-input" title="Base seconds (0 = disabled)">` : html``}
     </div>
   </td>`;
-  // Look up the latest test-all result for this target row. The
-  // cache is keyed by combo id (see `testAllTargets` in
-  // combo-handlers.ts); we fall back to `—` when the user hasn't
-  // run a test yet, or when this row was added after the last run.
-  // For sub-combo rows the backend always returns `skipped: true`
-  // with `status: 0`, so we surface that as a muted "skipped" pill
-  // rather than a red "err" pill (status 0 would otherwise map
-  // to `lost` via `statusPillClass`).
   const testResults: ComboTestResult[] | undefined = detailComboId != null
     ? state.comboTestResults[detailComboId]
     : undefined;
@@ -360,9 +441,6 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   if (!tr) {
     lastTestCell = html`<span class="muted">—</span>`;
   } else if (tr.skipped) {
-    // Skipped rows (sub-combo, in-cooldown) get a neutral pill —
-    // `status: 0` would otherwise render as `lost` (red) which is
-    // misleading; the row wasn't tested, not failed.
     const reason = tr.error_msg ?? "skipped";
     lastTestCell = html`<span class="status-pill off" title=${reason}>skipped</span> <small>${reason}</small>`;
   } else {
@@ -374,58 +452,38 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   return html`<tr draggable="true" data-drag-id=${String(t.id)} class="combo-target-card-row"
     @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(t.id)); (e.target as HTMLElement).classList.add("dragging"); }}
     @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
-    @dragover=${(e: DragEvent) => { e.preventDefault(); const tr = (e.currentTarget as HTMLElement); tr.classList.add("drag-over"); }}
+    @dragover=${(e: DragEvent) => { e.preventDefault(); const row = (e.currentTarget as HTMLElement); row.classList.add("drag-over"); }}
     @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
     @drop=${async (e: DragEvent) => {
       e.preventDefault();
       (e.currentTarget as HTMLElement).classList.remove("drag-over");
       const draggedId = parseInt(e.dataTransfer?.getData("text/plain") || "0", 10);
       if (!draggedId || draggedId === t.id || !detailComboId) return;
-      // Re-fetch the current targets from the server to ensure we
-      // have the latest IDs (the local detailTargets may be stale
-      // if a target was added/deleted but the view hasn't re-mounted
-      // yet — the backend rejects reorder if the IDs don't match
-      // exactly).
-      let currentTargets: ComboTargetWithModel[];
-      try {
-        currentTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
-      } catch {
-        showToast("Reorder failed: could not fetch current targets", "error");
-        return;
-      }
-      const ordered = [...currentTargets].sort((a, b) => a.priority_order - b.priority_order);
-      const fromIdx = ordered.findIndex((x) => x.id === draggedId);
-      const toIdx = ordered.findIndex((x) => x.id === t.id);
-      if (fromIdx < 0 || toIdx < 0) {
-        showToast("Reorder failed: target not found in current list", "error");
-        return;
-      }
-      const [moved] = ordered.splice(fromIdx, 1);
-      ordered.splice(toIdx, 0, moved!);
-      try {
-        await api(`/combos/${detailComboId}/targets/reorder`, { method: "POST", body: JSON.stringify({ target_ids: ordered.map((x) => x.id) }) });
-        detailTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
-        requestUpdate();
-      } catch (err: unknown) { showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
+      await executeTargetReorder(draggedId, t.id);
     }}
   >
-    <td class="drag-handle col-target-drag" title="Drag to reorder">⠿</td>
+    <td class="drag-handle col-target-drag"
+        title="Drag to reorder (touch & hold or mouse drag)"
+        @touchstart=${(e: TouchEvent) => onTouchStartHandle(t.id, e)}
+        @touchmove=${(e: TouchEvent) => onTouchMoveHandle(e)}
+        @touchend=${() => void onTouchEndHandle()}
+        @touchcancel=${() => void onTouchEndHandle()}>⠿</td>
     <td class="col-target-order" data-label="#">${t.priority_order}</td>
     <td class="col-target-provider" data-label="Provider">${providerCell}</td>
     <td class="col-target-account" data-label="Account">${accountCell}</td>
-    <td class="col-target-model" data-label="Model">${modelCell}</td>
+    <td class="col-target-model" data-label="Model"><div class="target-model-title">${modelCell}</div></td>
     <td class="col-target-context" data-label="Context">${contextCell}</td>
     ${weightCell}
     ${cooldownCell}
     <td class="last-test-cell col-target-test-status" data-label="Last test">${lastTestCell}</td>
     <td class="col-target-actions" data-label="Actions">
       <div class="target-actions-wrap">
-        ${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}
-        <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸" : "▶"}</button>
-        <button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button>
-        <button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>
-        ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}
-        <button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button>
+        ${!isSub ? html`<button class="small primary" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪 Test</button>` : html``}
+        <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸ Pause" : "▶ Resume"}</button>
+        <button class="small reorder-btn" title="Move Up" @click=${() => onChangePriority(t.id, -1)}>▲</button>
+        <button class="small reorder-btn" title="Move Down" @click=${() => onChangePriority(t.id, 1)}>▼</button>
+        ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄 Reset CD</button>` : html``}
+        <button class="small danger" title="Remove target" @click=${() => onDeleteTarget(t.id)}>×</button>
       </div>
     </td>
   </tr>`;

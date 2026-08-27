@@ -343,6 +343,31 @@
   font-size: var(--fs-sm);
 }
 
+/* Drag & Drop targets */
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 1.15rem;
+  color: var(--color-text-muted);
+  text-align: center;
+  touch-action: none;
+}
+.drag-handle:active,
+.drag-handle:hover {
+  color: var(--color-primary);
+}
+.combo-target-card-row.dragging,
+.combo-target-card-row.touch-dragging {
+  opacity: 0.6;
+  background: var(--color-primary-soft) !important;
+  border-color: var(--color-primary) !important;
+}
+.combo-target-card-row.drag-over {
+  border-top: 2px solid var(--color-primary) !important;
+  box-shadow: 0 -2px 8px var(--color-primary-soft);
+}
+
 /* ----- Combo settings bars (priority mode + cooldown) -----
    Rendered below the page-header / context-window-bar in the
    combo detail view. Each bar holds a `<select>` for the mode and
@@ -4616,6 +4641,7 @@ abbr {
     box-sizing: border-box !important;
     width: 100% !important;
     position: relative;
+    touch-action: pan-y;
   }
   .combo-target-card-row td {
     display: block !important;
@@ -4624,29 +4650,64 @@ abbr {
     background: transparent !important;
     width: 100% !important;
   }
+  
+  /* Touch Drag Handle on Mobile */
   .combo-target-card-row .col-target-drag {
-    display: none !important;
-  }
-  .combo-target-card-row .col-target-order {
-    position: absolute;
+    position: absolute !important;
     top: var(--space-3);
     left: var(--space-3);
-    width: 24px !important;
-    height: 24px;
+    width: 38px !important;
+    height: 38px !important;
     display: flex !important;
     align-items: center;
     justify-content: center;
+    font-size: 1.4rem;
+    color: var(--color-text-muted);
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    z-index: 2;
+  }
+  .combo-target-card-row .col-target-drag:active {
     background: var(--color-primary-soft);
     color: var(--color-primary);
-    font-weight: 700;
-    font-size: var(--fs-xs);
-    border-radius: var(--radius-pill);
+    cursor: grabbing;
   }
+
+  .combo-target-card-row .col-target-order {
+    position: absolute;
+    top: var(--space-3);
+    left: calc(var(--space-3) + 44px);
+    width: 26px !important;
+    height: 38px;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-primary);
+    font-weight: 700;
+    font-size: var(--fs-sm);
+  }
+
   .combo-target-card-row .col-target-model {
-    padding-left: 2.2rem !important;
+    padding-left: 4.8rem !important;
+    padding-right: var(--space-2) !important;
+    min-height: 38px;
+    display: flex !important;
+    align-items: center;
     font-weight: 600;
     font-size: var(--fs-sm);
   }
+  .target-model-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+
   .combo-target-card-row .col-target-provider,
   .combo-target-card-row .col-target-account,
   .combo-target-card-row .col-target-context {
@@ -4680,6 +4741,11 @@ abbr {
     min-height: 38px !important;
     justify-content: center;
     font-size: var(--fs-sm);
+  }
+  .target-actions-wrap button.reorder-btn {
+    flex: 0 0 40px;
+    font-weight: bold;
+    font-size: 0.9rem;
   }
   .target-actions-wrap button.danger {
     flex: 0 0 44px;
