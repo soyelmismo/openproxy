@@ -18,6 +18,14 @@ import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 
+function summarizeApiKey(key: string): string {
+  const trimmed = key.trim();
+  if (trimmed.length <= 10) return trimmed;
+  const prefix = trimmed.slice(0, 6);
+  const suffix = trimmed.slice(-4);
+  return `${prefix}...${suffix}`;
+}
+
 export function showCreateAccount(providerId: string): void {
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
@@ -32,11 +40,11 @@ export function showCreateAccount(providerId: string): void {
         <form @submit=${(e: Event) => { e.preventDefault(); void createAccount(providerId, e, wrapper); }}>
           <div class="modal-body">
             <div class="field">
-              <label for="account-label">Label</label>
-              <input id="account-label" name="label" type="text" required>
+              <label for="account-label">Label (optional)</label>
+              <input id="account-label" name="label" type="text" placeholder="auto-generated from key if empty">
             </div>
             <div class="field">
-              <label for="account-secret">Secret / token (optional)</label>
+              <label for="account-secret">API Key / Secret</label>
               <input id="account-secret" name="secret" type="password" placeholder="paste the API key here">
             </div>
             <div class="field">
@@ -72,11 +80,14 @@ export async function createAccount(providerId: string, e: Event, wrapper?: HTML
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
+  const rawLabel = (f.get("label") || "").toString().trim();
+  const rawSecret = (f.get("secret") || "").toString().trim();
+  const label = rawLabel || (rawSecret ? summarizeApiKey(rawSecret) : null);
   const scopes = (f.get("scopes") || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const body = {
     provider_id: providerId,
-    label: f.get("label"),
-    api_key: f.get("secret") || null,
+    label,
+    api_key: rawSecret || null,
     scopes,
   };
   try {

@@ -317,12 +317,20 @@ pub fn create_account(
 ) -> Result<AccountId> {
     let provider = ProviderId::new(input.provider_id);
     let priority = input.priority.unwrap_or(100);
+    let effective_label = match input.label.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Some(s.to_string()),
+        _ => input
+            .api_key
+            .as_deref()
+            .filter(|k| !k.trim().is_empty())
+            .map(openproxy_db::accounts::summarize_api_key),
+    };
     accounts::create(
         conn,
         &provider,
         input.api_key.as_deref(),
         master_key,
-        input.label.as_deref(),
+        effective_label.as_deref(),
         priority,
         input.extra_config_json.as_deref(),
     )
@@ -1179,6 +1187,7 @@ mod tests {
             .find(|a| a.id == id2)
             .expect("present");
         assert_eq!(a.priority, 100, "default priority is 100");
+        assert_eq!(a.label.as_deref(), Some("sk-another"), "auto-generated summarized label");
     }
 
     #[test]

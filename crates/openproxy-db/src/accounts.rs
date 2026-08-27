@@ -58,6 +58,18 @@ crate::def_table_select!(
 
 crate::def_table_select!(account_current_proxy_select, "accounts", "current_proxy_id");
 
+/// Generate a short prefix-suffix summary for an API key (e.g. `sk-pro...7654`).
+pub fn summarize_api_key(key: &str) -> String {
+    let trimmed = key.trim();
+    let char_count = trimmed.chars().count();
+    if char_count <= 10 {
+        return trimmed.to_string();
+    }
+    let prefix: String = trimmed.chars().take(6).collect();
+    let suffix: String = trimmed.chars().skip(char_count.saturating_sub(4)).collect();
+    format!("{prefix}...{suffix}")
+}
+
 pub fn create(
     conn: &Connection,
     provider_id: &ProviderId,
@@ -713,4 +725,27 @@ pub fn clear_current_proxy_id(conn: &Connection, account_id: AccountId) -> Resul
     )
     .map_err(crate::error::map_db_error_ctx("clear current_proxy_id"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_summarize_api_key_short() {
+        assert_eq!(summarize_api_key("sk-12345"), "sk-12345");
+        assert_eq!(summarize_api_key("1234567890"), "1234567890");
+    }
+
+    #[test]
+    fn test_summarize_api_key_long() {
+        assert_eq!(
+            summarize_api_key("sk-proj-1234567890abcdef"),
+            "sk-pro...cdef"
+        );
+        assert_eq!(
+            summarize_api_key("AIzaSyD1234567890abcdefgh"),
+            "AIzaSy...efgh"
+        );
+    }
 }
