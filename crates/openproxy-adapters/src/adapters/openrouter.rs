@@ -291,3 +291,40 @@ fn derive_family_from_id(id: &str) -> Option<String> {
     let name = id.rsplit_once('/').map_or(id, |(_, tail)| tail);
     openproxy_types::capabilities::infer_family(name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_model_type_openrouter() {
+        assert_eq!(infer_model_type_openrouter("openai/gpt-4", None), "chat");
+
+        let img_arch = OpenRouterArchitecture {
+            input_modalities: vec![],
+            output_modalities: vec!["image".to_string()],
+        };
+        assert_eq!(
+            infer_model_type_openrouter("some-model", Some(&img_arch)),
+            "image"
+        );
+
+        let audio_arch = OpenRouterArchitecture {
+            input_modalities: vec![],
+            output_modalities: vec!["audio".to_string()],
+        };
+        assert_eq!(
+            infer_model_type_openrouter("some-model", Some(&audio_arch)),
+            "audio"
+        );
+
+        let mixed_arch = OpenRouterArchitecture {
+            input_modalities: vec![],
+            output_modalities: vec!["text".to_string(), "image".to_string()],
+        };
+        assert_eq!(
+            infer_model_type_openrouter("some-model", Some(&mixed_arch)),
+            "chat"
+        );
+    }
+}
