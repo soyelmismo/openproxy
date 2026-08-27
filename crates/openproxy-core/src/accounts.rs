@@ -967,7 +967,7 @@ mod tests {
         // The account should now have a non-NULL expires_at ~1 hour in the future.
         let acc = get(&conn, id, &mk).expect("get").expect("present");
         let expires = acc.expires_at.expect("expires_at should be populated");
-        let parsed = chrono::DateTime::parse_from_rfc3339(&expires)
+        let parsed = openproxy_types::timestamp::parse_timestamp(&expires)
             .expect("valid ISO-8601")
             .with_timezone(&chrono::Utc);
         let now = chrono::Utc::now();

@@ -2024,6 +2024,7 @@ name = "openproxy-types"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror",
