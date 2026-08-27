@@ -178,25 +178,51 @@ impl ProviderAdapter for CustomAdapter {
                 CoreError::UpstreamConnection(format!("{} /models: {e}", self.config.id))
             })?;
 
+        if let Some(err_obj) = body.get("error") {
+            let msg = err_obj
+                .get("message")
+                .and_then(|v| v.as_str())
+                .or_else(|| err_obj.as_str())
+                .unwrap_or("upstream returned error payload");
+            return Err(CoreError::UpstreamConnection(format!(
+                "{} /models: {msg}",
+                self.config.id
+            )));
+        }
+
+        if let Some(false) = body.get("success").and_then(|v| v.as_bool()) {
+            return Err(CoreError::UpstreamConnection(format!(
+                "{} /models: upstream returned success=false",
+                self.config.id
+            )));
+        }
+
         if let Some(models) =
             parse_custom_openai_models(&body, self.config.format.default_target_format())
         {
+            if models.is_empty() {
+                return Err(CoreError::UpstreamConnection(format!(
+                    "{} /models: empty model array returned from upstream",
+                    self.config.id
+                )));
+            }
             return Ok(models);
         }
 
         if let Some(models) = parse_custom_gemini_models(&body) {
+            if models.is_empty() {
+                return Err(CoreError::UpstreamConnection(format!(
+                    "{} /models: empty model array returned from upstream",
+                    self.config.id
+                )));
+            }
             return Ok(models);
         }
 
-        // Unrecognised response shape — return empty rather than
-        // erroring so the provider can still be used with manually
-        // added models.
-        tracing::warn!(
-            provider = %self.config.id,
-            url = %url,
-            "custom adapter: /models response has no recognised shape (expected 'data' or 'models' array); returning empty list"
-        );
-        Ok(vec![])
+        Err(CoreError::UpstreamConnection(format!(
+            "custom adapter: /models response from {} has no recognised shape (expected 'data' or 'models' array)",
+            self.config.id
+        )))
     }
 }
 
@@ -254,5 +280,35 @@ mod tests {
         let meta = adapter.metadata();
         assert!(!meta.built_in, "custom adapter must not be built-in");
         assert!(meta.deletable, "custom adapter must be deletable");
+    }
+
+    #[test]
+    fn test_parse_custom_openai_models_valid() {
+        let json = serde_json::json!({
+            "data": [
+                { "id": "gpt-4o" },
+                { "id": "claude-3-5-sonnet" }
+            ]
+        });
+        let models = parse_custom_openai_models(&json, TargetFormat::Openai).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].model_id.as_str(), "gpt-4o");
+        assert_eq!(models[1].model_id.as_str(), "claude-3-5-sonnet");
+    }
+
+    #[test]
+    fn test_parse_custom_openai_models_error_or_empty() {
+        let error_json = serde_json::json!({
+            "success": false,
+            "error": {
+                "message": "Internal error",
+                "code": "INTERNAL_ERROR"
+            }
+        });
+        assert!(parse_custom_openai_models(&error_json, TargetFormat::Openai).is_none());
+
+        let empty_json = serde_json::json!({ "data": [] });
+        let models = parse_custom_openai_models(&empty_json, TargetFormat::Openai).unwrap();
+        assert!(models.is_empty());
     }
 }

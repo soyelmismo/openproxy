@@ -284,7 +284,9 @@ impl ProviderAdapter for AntigravityAdapter {
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         if api_key.is_empty() {
-            return Ok(vec![]);
+            return Err(CoreError::Validation(
+                "antigravity: api key or access token is required to fetch models".into(),
+            ));
         }
 
         let endpoints = [
@@ -295,12 +297,15 @@ impl ProviderAdapter for AntigravityAdapter {
         for endpoint in endpoints {
             if let Some(models) =
                 fetch_antigravity_models_from_endpoint(upstream_client, api_key, endpoint).await
+                && !models.is_empty()
             {
                 return Ok(models);
             }
         }
 
-        Ok(vec![])
+        Err(CoreError::UpstreamConnection(
+            "antigravity: failed to fetch available models from all endpoints".into(),
+        ))
     }
 
     async fn fetch_quota(

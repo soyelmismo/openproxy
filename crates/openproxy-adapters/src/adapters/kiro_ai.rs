@@ -246,7 +246,9 @@ impl ProviderAdapter for KiroAdapter {
         account_label: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         if api_key.is_empty() {
-            return Ok(vec![]);
+            return Err(CoreError::Validation(
+                "kiro_ai: api key is required to fetch models".into(),
+            ));
         }
 
         let region = extract_kiro_region(account_label);
@@ -255,12 +257,15 @@ impl ProviderAdapter for KiroAdapter {
         for endpoint in &endpoints {
             if let Some(models) =
                 try_fetch_models_from_endpoint(upstream_client, api_key, endpoint).await
+                && !models.is_empty()
             {
                 return Ok(models);
             }
         }
 
-        Ok(vec![])
+        Err(CoreError::UpstreamConnection(
+            "kiro_ai: failed to fetch models from all endpoints".into(),
+        ))
     }
 
     async fn fetch_quota(

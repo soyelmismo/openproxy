@@ -959,6 +959,11 @@ pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
     let discovered = adapter
         .fetch_models_for_account(upstream_client, api_key, account_label)
         .await?;
+    if discovered.is_empty() {
+        return Err(CoreError::UpstreamConnection(format!(
+            "provider {provider} returned 0 models on /models; skipping update to preserve existing catalog"
+        )));
+    }
     let ttl = Duration::from_secs(ttl_seconds.max(0) as u64);
     models::upsert_many(&conn, provider, &discovered, ttl)
 }
@@ -1401,6 +1406,80 @@ mod tests {
             Err(CoreError::ProviderNotFound(id)) => assert_eq!(id, "does-not-exist"),
             other => panic!("expected ProviderNotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn refresh_models_with_empty_catalog_fails_and_preserves_models() {
+        let (pool, _path) = fresh_pool();
+        let provider_id = ProviderId::new("prov-preserve");
+        {
+            let conn = pool.writer();
+            create_provider(
+                &conn,
+                CreateProviderInput {
+                    rate_limit_scope: None,
+                    id: provider_id.to_string(),
+                    name: "Preserve Provider".into(),
+                    base_url: "https://api.preserve.com/v1".into(),
+                    auth_type: "bearer".into(),
+                    format: "openai".into(),
+                    extra_headers_json: None,
+                },
+            )
+            .expect("create provider");
+
+            // Seed an existing discovered model
+            models::upsert_many(
+                &conn,
+                &provider_id,
+                &[models::DiscoveredModel {
+                    model_id: openproxy_types::ModelId::new("model-original"),
+                    display_name: Some("Original Model".into()),
+                    target_format: openproxy_types::TargetFormat::Openai,
+                    context_length: Some(4096),
+                    max_output_tokens: Some(2048),
+                    input_modalities: None,
+                    output_modalities: None,
+                    model_type: None,
+                    family: None,
+                    capabilities: None,
+                }],
+                Duration::from_secs(3600),
+            )
+            .expect("seed model");
+        }
+
+        let conn = pool.open_connection().expect("open conn");
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
+            openproxy_adapters::adapters::MockAdapter::new(
+                "prov-preserve",
+                "",
+                openproxy_adapters::adapters::AdapterFormat::Openai,
+            ),
+        );
+        let upstream = openproxy_adapters::upstream::UpstreamClient::new();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let res = rt.block_on(refresh_models(
+            conn,
+            &provider_id,
+            "sk-test",
+            &adapter,
+            &upstream,
+            3600,
+            "",
+        ));
+
+        assert!(matches!(res, Err(CoreError::UpstreamConnection(_))));
+
+        // Verify the original model is still intact in DB
+        let r = pool.reader();
+        let models_left = models::list_all(&r).expect("list models");
+        assert_eq!(models_left.len(), 1);
+        assert_eq!(models_left[0].model_id.as_str(), "model-original");
     }
 
     // NOTE: integration tests that actually hit the network via
