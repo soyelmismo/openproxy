@@ -22,7 +22,7 @@ export function quotaBar(props: QuotaBarProps): TemplateResult {
   const { label, used, total, warn = 0.8, error = 0.95 } = props;
   if (!total || total <= 0) return html``;
   const pct: number = Math.max(0, Math.min(1, used / total));
-  const cls: string = pct >= error ? "error" : pct >= warn ? "warn" : "";
+  const cls: string = pct >= error ? "error" : pct >= warn ? "warn" : "ok";
   return html`
     <div class="quota-bar" title="${label || ""}">
       <div class="quota-bar-track">

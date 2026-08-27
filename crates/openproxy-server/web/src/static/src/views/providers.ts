@@ -968,8 +968,8 @@ function renderOAuthSection(provider: Provider): TemplateResult {
 function renderConnectionsSection(provider: Provider, accounts: Account[]): TemplateResult {
   const hasQuota = provider.metadata?.supports_quota ?? false;
   const body: TemplateResult = accounts.length === 0
-    ? html`<table><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table>`
-    : html`<table>
+    ? html`<div class="table-wrap"><table><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table></div>`
+    : html`<div class="table-wrap"><table>
         <thead><tr><th>Label</th><th>Priority</th><th>Health</th><th>Quota</th><th>Created</th><th>Actions</th></tr></thead>
         <tbody>${accounts.map((a) => {
           const quotaCell: TemplateResult = hasQuota
@@ -1001,7 +1001,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             </td>
           </tr>`;
         })}</tbody>
-      </table>`;
+      </table></div>`;
   const toolbar: TemplateResult = html`<div>
     ${hasQuota ? html`<button @click=${() => onRefreshAllQuotas(provider.id)}>↻ Refresh all quotas</button>` : html``}
     <button class="primary" @click=${() => onShowCreateAccount(provider.id)}>+ Add account</button>
@@ -1146,18 +1146,20 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
 
       ${bulkBar}
 
-      <table>
-        <thead><tr>
-          <th><input type="checkbox" .checked=${allSelected} .indeterminate=${indeterminate} @change=${(e: Event) => onToggleSelectAllModels(e)}></th>
-          ${SORTABLE_COLUMNS.map((c: SortableColumn) => renderSortableTh(c, ui.sort, provider.id))}
-          <th>Capabilities</th><th>Status</th><th>Last test</th><th>Actions</th>
-        </tr></thead>
-        <tbody id="models-tbody">
-          ${paginatedModels.length === 0
-            ? html`<tr><td colspan="10" class="empty-row">No models match the filter.</td></tr>`
-            : html`${paginatedModels.map((m: Model) => renderModelRow(m))}`}
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th><input type="checkbox" .checked=${allSelected} .indeterminate=${indeterminate} @change=${(e: Event) => onToggleSelectAllModels(e)}></th>
+            ${SORTABLE_COLUMNS.map((c: SortableColumn) => renderSortableTh(c, ui.sort, provider.id))}
+            <th>Capabilities</th><th>Status</th><th>Last test</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="models-tbody">
+            ${paginatedModels.length === 0
+              ? html`<tr><td colspan="10" class="empty-row">No models match the filter.</td></tr>`
+              : html`${paginatedModels.map((m: Model) => renderModelRow(m))}`}
+          </tbody>
+        </table>
+      </div>
       ${paginationBar}
     </section>
   `;

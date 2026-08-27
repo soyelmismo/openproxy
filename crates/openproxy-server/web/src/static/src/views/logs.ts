@@ -62,7 +62,44 @@ function saveVisibleColumns(): void {
   } catch (_e) {}
 }
 
+import { exportLogsCSV } from "../handlers/log-handlers.js";
+
+let filterSearch: string = "";
+let filterStatus: string = "all";
+let isPaused: boolean = false;
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onSearchInput(e: Event): void {
+  const target = e.target as HTMLInputElement;
+  const val = target.value.trim().toLowerCase();
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    filterSearch = val;
+    state.logs.page = 1;
+    requestUpdate();
+  }, 120);
+}
+
+function onClearSearch(): void {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  filterSearch = "";
+  state.logs.page = 1;
+  requestUpdate();
+}
+
+function onSetStatusFilter(status: string): void {
+  filterStatus = status;
+  state.logs.page = 1;
+  requestUpdate();
+}
+
+function onTogglePause(): void {
+  isPaused = !isPaused;
+  requestUpdate();
+}
+
 function handleLogsMessage(event: MessageEvent): void {
+  if (isPaused) return;
   try {
     const env = JSON.parse(event.data) as WsEnvelope;
     // Pass directly to the store and request reactive render update
@@ -71,6 +108,31 @@ function handleLogsMessage(event: MessageEvent): void {
   } catch (e) {
     // Ignore invalid JSON
   }
+}
+
+function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; requestId?: string; traceId?: string; error?: string | null; statusCode?: number | null; terminalKind?: string | null }): boolean {
+  if (filterSearch) {
+    const model = (r.upstreamModelId || "").toLowerCase();
+    const prov = (r.providerId || "").toLowerCase();
+    const req = (r.requestId || "").toLowerCase();
+    const trace = (r.traceId || "").toLowerCase();
+    const err = (r.error || "").toLowerCase();
+    if (!model.includes(filterSearch) && !prov.includes(filterSearch) && !req.includes(filterSearch) && !trace.includes(filterSearch) && !err.includes(filterSearch)) {
+      return false;
+    }
+  }
+  if (filterStatus === "inflight") {
+    return r.statusCode == null && !r.terminalKind;
+  } else if (filterStatus === "2xx") {
+    return r.statusCode != null && r.statusCode >= 200 && r.statusCode < 300;
+  } else if (filterStatus === "4xx") {
+    return r.statusCode != null && r.statusCode >= 400 && r.statusCode < 500;
+  } else if (filterStatus === "5xx") {
+    return r.statusCode != null && r.statusCode >= 500;
+  } else if (filterStatus === "error") {
+    return (r.statusCode != null && r.statusCode >= 400) || Boolean(r.error) || r.terminalKind === "failed";
+  }
+  return true;
 }
 
 function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
@@ -103,8 +165,12 @@ function renderColumnsMenu(): TemplateResult {
 }
 
 function renderLogsView(): TemplateResult {
-  const inflightRows = liveLogsStore.selectInflightRows();
-  const finishedRows = liveLogsStore.selectFinishedRows();
+  const allInflight = liveLogsStore.selectInflightRows();
+  const allFinished = liveLogsStore.selectFinishedRows();
+
+  const inflightRows = allInflight.filter(matchesLogFilter);
+  const finishedRows = allFinished.filter(matchesLogFilter);
+
   const totalFinished = finishedRows.length;
   const rpp = state.logs.rowsPerPage;
   const totalP = Math.max(1, Math.ceil(totalFinished / rpp));
@@ -128,6 +194,12 @@ function renderLogsView(): TemplateResult {
     <div class="logs-header">
       <h2>Live Logs</h2>
       <div class="logs-header-actions">
+        <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" @click=${onTogglePause} title=${isPaused ? "Resume live streaming" : "Pause live stream to inspect"}>
+          ${isPaused ? "▶ Resume" : "⏸ Pause"}
+        </button>
+        <button type="button" class="btn btn-sm" @click=${exportLogsCSV} title="Export logs as CSV file">
+          📥 Export CSV
+        </button>
         <div class="columns-menu-wrapper">
           <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} @click=${onToggleColumnsMenu}>
             <span>Columns</span>
@@ -142,6 +214,30 @@ function renderLogsView(): TemplateResult {
         </button>
       </div>
     </div>
+
+    <!-- Live Logs Filter Toolbar -->
+    <div class="logs-filter-toolbar">
+      <div class="logs-search-box">
+        <span class="logs-search-icon" aria-hidden="true">🔍</span>
+        <input
+          type="search"
+          class="logs-search-input"
+          placeholder="Filter by model, provider, request id, trace..."
+          .value=${filterSearch}
+          @input=${onSearchInput}
+        />
+        ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${onClearSearch} aria-label="Clear filter">✕</button>` : null}
+      </div>
+      <div class="logs-status-filters" role="group" aria-label="Status filter">
+        <button type="button" class="logs-filter-btn ${filterStatus === "all" ? "active" : ""}" @click=${() => onSetStatusFilter("all")}>All</button>
+        <button type="button" class="logs-filter-btn ${filterStatus === "inflight" ? "active" : ""}" @click=${() => onSetStatusFilter("inflight")}>⚡ In-flight</button>
+        <button type="button" class="logs-filter-btn ${filterStatus === "2xx" ? "active" : ""}" @click=${() => onSetStatusFilter("2xx")}>2xx OK</button>
+        <button type="button" class="logs-filter-btn ${filterStatus === "4xx" ? "active" : ""}" @click=${() => onSetStatusFilter("4xx")}>4xx Client</button>
+        <button type="button" class="logs-filter-btn ${filterStatus === "5xx" ? "active" : ""}" @click=${() => onSetStatusFilter("5xx")}>5xx Server</button>
+        <button type="button" class="logs-filter-btn ${filterStatus === "error" ? "active" : ""}" @click=${() => onSetStatusFilter("error")}>All Errors</button>
+      </div>
+    </div>
+
     <div class="logs" id="logs" @click=${onLogsClick}>
       <!-- Section 1: In Progress -->
       <div class="logs-section logs-section-inflight" id="logs-section-inflight">
@@ -154,7 +250,7 @@ function renderLogsView(): TemplateResult {
         <div class="logs-scroll-area logs-scroll-area-inflight" id="logs-scroll-area-inflight">
           ${renderHeaderRow(visibleColKeys)}
           ${inflightRows.length === 0
-            ? html`<div class="empty empty-inflight" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">No requests in progress.</div>`
+            ? html`<div class="empty empty-inflight" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No in-progress requests matching filter." : "No requests in progress."}</div>`
             : repeat(
                 inflightRows,
                 (r) => r.attemptKey,
@@ -174,7 +270,7 @@ function renderLogsView(): TemplateResult {
         <div class="logs-scroll-area logs-scroll-area-finished" id="logs-scroll-area-finished">
           ${renderHeaderRow(visibleColKeys)}
           ${pageFinishedRows.length === 0
-            ? html`<div class="empty empty-finished" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">No recent requests yet.</div>`
+            ? html`<div class="empty empty-finished" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No requests matching current filter." : "No recent requests yet."}</div>`
             : repeat(
                 pageFinishedRows,
                 (r) => r.attemptKey,

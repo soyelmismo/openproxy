@@ -653,6 +653,8 @@ export interface CreateComboInput {
   lkgp_exploration_rate?: number;
   /** Selection window (seconds) for `least_used` / `p2c`. Omit = 3600. */
   selection_window_secs?: number;
+  /** Rate Limit Preventivo: Predice 429s y salta targets proactivamente. */
+  preventive_rate_limit?: boolean;
 }
 
 /** POST `/admin/combos/:id/targets`. XOR entre `model_row_id` y

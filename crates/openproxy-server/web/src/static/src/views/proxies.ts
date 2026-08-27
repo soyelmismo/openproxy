@@ -196,7 +196,7 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
               }
             }}
             placeholder="Proxy test URL..."
-            style="width: 300px; padding: 0.25rem; font-size: 0.9rem;"
+            style="width: 100%; max-width: 320px; min-width: 0; padding: 0.35rem 0.5rem; border-radius: var(--radius-sm); border: var(--border-w) var(--border-style) var(--color-border);"
           />
           ${isSavingTestUrl ? html`<span class="spinner" style="width: 14px; height: 14px;"></span>` : ""}
         </div>
@@ -278,24 +278,26 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
       : proxies.length === 0
         ? html`<p class="empty">${t("common.empty")}</p>`
         : html`
-          <table>
-            <thead>
-              <tr>
-                <th>${t("proxies.table.col_host")}</th>
-                <th>${t("proxies.table.col_port")}</th>
-                <th>${t("proxies.table.col_type")}</th>
-                <th>${t("proxies.table.col_source")}</th>
-                <th>${t("proxies.table.col_status")}</th>
-                <th>${t("proxies.table.col_country")}</th>
-                <th>${t("proxies.table.col_latency")}</th>
-                <th>${t("proxies.table.col_last_val")}</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${proxies.map(renderProxyRow)}
-            </tbody>
-          </table>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>${t("proxies.table.col_host")}</th>
+                  <th>${t("proxies.table.col_port")}</th>
+                  <th>${t("proxies.table.col_type")}</th>
+                  <th>${t("proxies.table.col_source")}</th>
+                  <th>${t("proxies.table.col_status")}</th>
+                  <th>${t("proxies.table.col_country")}</th>
+                  <th>${t("proxies.table.col_latency")}</th>
+                  <th>${t("proxies.table.col_last_val")}</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${proxies.map(renderProxyRow)}
+              </tbody>
+            </table>
+          </div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
             <span>Page ${page}</span>
             <div style="display: flex; gap: 0.5rem;">

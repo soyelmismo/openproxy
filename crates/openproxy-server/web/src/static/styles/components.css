@@ -222,11 +222,32 @@ tr.selected { background: var(--color-primary-soft); }
     padding: var(--space-2) var(--space-3);
     flex-shrink: 0;
   }
+  .modal-header h2,
+  .modal-header h3 {
+    max-width: calc(100vw - 6rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin: 0;
+  }
   .modal-footer {
     flex-wrap: wrap;
     gap: var(--space-2);
   }
   .modal-picker { max-width: calc(100vw - 1rem); }
+
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  button.small {
+    min-height: 36px;
+    padding: 0.35rem 0.65rem;
+    font-size: var(--fs-xs);
+    touch-action: manipulation;
+  }
 }
 
 /* ----- Toast Notifications Container & Items ----- */
@@ -362,20 +383,17 @@ tr.selected { background: var(--color-primary-soft); }
   position: relative;
   overflow: hidden;
 }
-.quota-bar.mini .quota-bar-track {
-  height: 4px;
-}
 .quota-bar-fill {
   height: 100%;
-  background: var(--color-primary);
+  background: var(--color-success, #22c55e);
   transition: width var(--t-base);
 }
-.quota-bar.ok .quota-bar-fill { background: var(--color-success); }
-.quota-bar.warn .quota-bar-fill { background: var(--color-warn); }
-.quota-bar.danger .quota-bar-fill { background: var(--color-error); }
-/* Retain original variants for standalone quotaBar component usage */
-.quota-bar-fill.warn { background: var(--color-warn); }
-.quota-bar-fill.error { background: var(--color-error); }
+.quota-bar.ok .quota-bar-fill,
+.quota-bar-fill.ok { background: var(--color-success, #22c55e); }
+.quota-bar.warn .quota-bar-fill,
+.quota-bar-fill.warn { background: var(--color-warn, #f59e0b); }
+.quota-bar.danger .quota-bar-fill,
+.quota-bar-fill.error { background: var(--color-error, #ef4444); }
 .quota-bar-label { font-size: var(--fs-xs); color: var(--color-text-muted); }
 
 /* ----- Bulk actions bar ----- */

@@ -155,10 +155,10 @@ function renderKeys(): TemplateResult {
   const keys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
   const body: TemplateResult = keys.length === 0
     ? html`<p class="empty">No API keys yet. Create one to authenticate clients.</p>`
-    : html`<table>
+    : html`<div class="table-wrap"><table>
         <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Allowed models</th><th>Status</th><th>Last used</th><th>Created</th><th>Actions</th></tr></thead>
         <tbody>${keys.map(renderKeyRow)}</tbody>
-      </table>`;
+      </table></div>`;
   return html`
     <div class="page-header"><h2>API Keys</h2>
       <div class="actions"><button class="primary" @click=${onShowCreateKey}>+ Create key</button></div>

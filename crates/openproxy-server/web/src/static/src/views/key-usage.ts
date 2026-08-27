@@ -148,23 +148,25 @@ function renderKeyUsage(): TemplateResult {
     ${renderChartBlock()}
     <section class="detail-section">
       <div class="section-header"><h3>Headline metrics</h3></div>
-      <table>
-        <tbody>
-          <tr><th>Total rows</th><td>${total}</td></tr>
-          <tr><th>Unique requests</th><td>${unique}</td></tr>
-          <tr><th>Winners</th><td>${winners}</td></tr>
-          <tr><th>Losers</th><td>${losers}</td></tr>
-          <tr><th>Errors (4xx/5xx)</th><td>${errors} (${fmtPct(errors, total)})</td></tr>
-          <tr><th>Total cost (USD)</th><td>${fmtCost(cost)}</td></tr>
-          <tr><th>Prompt tokens</th><td>${promptTok}</td></tr>
-          <tr><th>Completion tokens</th><td>${completionTok}</td></tr>
-          <tr><th>Avg TTFT</th><td>${fmtMs(avgTtft)}</td></tr>
-          <tr><th>Avg total latency</th><td>${fmtMs(avgLatency)}</td></tr>
-          <tr><th>Last used</th><td>${last}</td></tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>Total rows</th><td>${total}</td></tr>
+            <tr><th>Unique requests</th><td>${unique}</td></tr>
+            <tr><th>Winners</th><td>${winners}</td></tr>
+            <tr><th>Losers</th><td>${losers}</td></tr>
+            <tr><th>Errors (4xx/5xx)</th><td>${errors} (${fmtPct(errors, total)})</td></tr>
+            <tr><th>Total cost (USD)</th><td>${fmtCost(cost)}</td></tr>
+            <tr><th>Prompt tokens</th><td>${promptTok}</td></tr>
+            <tr><th>Completion tokens</th><td>${completionTok}</td></tr>
+            <tr><th>Avg TTFT</th><td>${fmtMs(avgTtft)}</td></tr>
+            <tr><th>Avg total latency</th><td>${fmtMs(avgLatency)}</td></tr>
+            <tr><th>Last used</th><td>${last}</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
-    <p class="empty"><small>Filter the global Analytics page with <code>?api_key_id=${keyId}</code> for per-(provider, model) breakdown.</small></p>
+    <p style="margin-top:1.5rem;text-align:center;"><a href="#/analytics?api_key_id=${keyId}" class="btn secondary">📊 View detailed breakdowns in Analytics →</a></p>
   `;
 }
 

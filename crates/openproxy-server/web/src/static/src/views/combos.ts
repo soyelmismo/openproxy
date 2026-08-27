@@ -132,7 +132,12 @@ async function onToggleTargetActive(targetId: number, currentActive: boolean): P
     requestUpdate();
   } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
 }
+async function onUpdateStrategy(e: Event): Promise<void> {
+  const val = (e.target as HTMLSelectElement).value;
+  await patchCombo(detailComboId!, { strategy: val });
+}
 async function onDeleteTarget(targetId: number): Promise<void> {
+  if (!confirm("Are you sure you want to remove this target from the combo?")) return;
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "DELETE" });
     detailTargets = detailTargets.filter((t) => t.id !== targetId);
@@ -274,8 +279,8 @@ function priorityModeOptions(selected: PriorityMode): TemplateResult {
   return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${PRIORITY_MODE_LABELS[m]}</option>`)}`;
 }
 function cooldownModeOptions(selected: CooldownMode): TemplateResult {
-  const modes: CooldownMode[] = ["flat", "exponential"];
-  return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${m === "flat" ? "Flat" : "Exponential"}</option>`)}`;
+  const modes: CooldownMode[] = ["flat", "exponential", "none"];
+  return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${m === "flat" ? "Flat" : m === "exponential" ? "Exponential" : "Disabled (None)"}</option>`)}`;
 }
 
 function renderPriorityModeBar(combo: Combo): TemplateResult {
@@ -432,7 +437,16 @@ function renderComboDetail(): TemplateResult {
   const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>Weight</abbr></th>` : html``;
   return html`
     <div class="page-header"><a href="#/combos" class="back-link">← All combos</a><h2>${combo.name}</h2>
-      <div class="actions"><span class="chip">${combo.strategy}</span><span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
+      <div class="actions">
+        <label style="display:inline-flex;align-items:center;gap:5px;font-size:0.85rem;">
+          Strategy:
+          <select style="padding:3px 6px;font-size:0.8rem;border-radius:var(--radius-sm);" .value=${combo.strategy} @change=${onUpdateStrategy}>
+            <option value="priority" ?selected=${combo.strategy === "priority"}>priority</option>
+            <option value="round_robin" ?selected=${combo.strategy === "round_robin"}>round_robin</option>
+            <option value="shuffle" ?selected=${combo.strategy === "shuffle"}>shuffle</option>
+          </select>
+        </label>
+        <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
         <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title="Rate Limit Preventivo: Predice 429s por target y salta proactivamente al siguiente target del combo sin consumir intentos.">
           <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${onTogglePreventiveRateLimit}>
           ⚡ Predictive RL
@@ -446,9 +460,9 @@ function renderComboDetail(): TemplateResult {
     ${cds.length > 0 ? html`<div class="cooldown-banner">⏸ ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
       <div class="actions"><button @click=${onTestAllTargets}>🧪 Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div></div>
-      ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<table>
+      ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<div class="table-wrap"><table>
         <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Cooldown</th><th>Last test</th><th>Actions</th></tr></thead>
-        <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table>`}
+        <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;
 }
 

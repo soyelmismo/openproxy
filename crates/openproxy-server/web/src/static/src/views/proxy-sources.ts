@@ -3,21 +3,21 @@
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
 import { createView } from "../lib/view-utils.js";
-import { reloadProxySources } from "../handlers/proxy-source-handlers.js";
+import { reloadProxySources, moveProxySource } from "../handlers/proxy-source-handlers.js";
 import type { ProxySource } from "../lib/types/api.js";
 
 let loadError: string | null = null;
 
 function renderPageHeader(): TemplateResult {
   return html`
-    <div class="view-header">
+    <div class="page-header">
       <div>
-        <h1 class="view-title">Proxy Sources</h1>
-        <p class="view-subtitle">
+        <h2>Proxy Sources</h2>
+        <p class="subtitle">
           Manage dynamic URLs and endpoints to automatically scrape proxies from.
         </p>
       </div>
-      <div class="view-header-actions">
+      <div class="actions">
         <button
           type="button"
           class="primary"
@@ -53,7 +53,8 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
 
   return html`
     <div class="card table-card">
-      <table class="data-table">
+      <div class="table-wrap">
+        <table class="data-table">
         <thead>
           <tr>
             <th></th>
@@ -78,7 +79,11 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                 @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
                 @drop=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.remove("drag-over"); const draggedId = e.dataTransfer?.getData("text/plain"); if (draggedId) { import("../handlers/proxy-source-handlers.js").then(m => m.reorderProxySources(draggedId, s.id)); } }}
               >
-                <td class="drag-handle" title="Drag to reorder">⠿</td>
+                <td class="drag-handle" style="white-space:nowrap;">
+                  <span title="Drag to reorder" style="cursor:grab;">⠿</span>
+                  <button type="button" class="small" style="padding:1px 4px;margin-left:2px;" title="Move up" @click=${() => void moveProxySource(s.id, -1)}>▲</button>
+                  <button type="button" class="small" style="padding:1px 4px;" title="Move down" @click=${() => void moveProxySource(s.id, 1)}>▼</button>
+                </td>
                 <td><strong>${s.name}</strong></td>
                 <td>
                   <a
@@ -145,6 +150,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
           )}
         </tbody>
       </table>
+      </div>
     </div>
   `;
 }

@@ -473,7 +473,7 @@ function renderField(
 ): TemplateResult {
   return html`<label class="config-field">
     <span class="config-label">${label}</span>
-    <input type="number" name=${name} .value=${String(value)} min="0" step=${opts.step ?? 100}
+    <input type="number" inputmode="numeric" name=${name} .value=${String(value)} min="0" step=${opts.step ?? 100}
       ?disabled=${!opts.editable}
       aria-label=${label + (opts.editable ? "" : " (read-only)")}
       @change=${onChange} @input=${onChange}>
@@ -632,15 +632,15 @@ function renderConfig(): TemplateResult {
     </div>
     <div class="config-field">
       <label>VACUUM interval (hours)</label>
-      <input type="number" min="1" max="168" .value=${String(liveVacuumIntervalHours)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 1) { liveVacuumIntervalHours = v; void patchMaintenance(); } }}>
+      <input type="number" inputmode="numeric" min="1" max="168" .value=${String(liveVacuumIntervalHours)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 1) { liveVacuumIntervalHours = v; void patchMaintenance(); } }}>
     </div>
     <div class="config-field">
       <label>Usage retention (days)</label>
-      <input type="number" min="0" max="365" .value=${String(liveUsageRetentionDays)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 0) { liveUsageRetentionDays = v; void patchMaintenance(); } }}>
+      <input type="number" inputmode="numeric" min="0" max="365" .value=${String(liveUsageRetentionDays)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 0) { liveUsageRetentionDays = v; void patchMaintenance(); } }}>
       <p class="muted">Rows older than this are deleted hourly. 0 = keep forever (not recommended).</p>
     </div>
     <div class="config-field">
-      <button class="btn ${vacuumStatus.in_progress ? "btn-disabled" : "btn-primary"}"
+      <button class="primary"
               ?disabled=${vacuumStatus.in_progress}
               @click=${() => void triggerVacuum()}>
         ${vacuumBtnLabel}

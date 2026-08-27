@@ -36,8 +36,52 @@ export async function toggleRecording(): Promise<void> {
   }
 }
 
+import { liveLogsStore } from "../state/live-logs-store.js";
+
 export function exportLogsCSV(): void {
-  // Reserved for a future feature. Right now we just toast.
-  showToast("CSV export is not implemented yet.", "info");
+  const rows = liveLogsStore.selectFinishedRows();
+  if (rows.length === 0) {
+    showToast("No log rows available to export", "warn");
+    return;
+  }
+  const headers = ["Timestamp", "Request ID", "Trace ID", "Provider", "Model", "Status", "Elapsed (ms)", "Prompt Tokens", "Completion Tokens", "Cost USD", "Error"];
+  const csvLines = [headers.join(",")];
+  for (const r of rows) {
+    const time = new Date(r.startedAtMs).toISOString();
+    const reqId = (r.requestId || "").replace(/"/g, '""');
+    const traceId = (r.traceId || "").replace(/"/g, '""');
+    const prov = (r.providerId || "").replace(/"/g, '""');
+    const model = (r.upstreamModelId || "").replace(/"/g, '""');
+    const status = r.statusCode != null ? String(r.statusCode) : (r.terminalKind || "");
+    const elapsed = r.elapsedMsAtEvent != null ? String(r.elapsedMsAtEvent) : "";
+    const pTokens = r.row?.prompt_tokens != null ? String(r.row.prompt_tokens) : "";
+    const cTokens = r.row?.completion_tokens != null ? String(r.row.completion_tokens) : "";
+    const cost = r.row?.cost_usd != null ? String(r.row.cost_usd) : "";
+    const err = (r.error || "").replace(/"/g, '""');
+    csvLines.push([
+      `"${time}"`,
+      `"${reqId}"`,
+      `"${traceId}"`,
+      `"${prov}"`,
+      `"${model}"`,
+      `"${status}"`,
+      elapsed,
+      pTokens,
+      cTokens,
+      cost,
+      `"${err}"`
+    ].join(","));
+  }
+  const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `openproxy-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${rows.length} rows to CSV`, "success");
 }
+
 

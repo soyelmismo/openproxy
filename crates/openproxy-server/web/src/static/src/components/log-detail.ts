@@ -1149,8 +1149,10 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
       <div class="modal">
         <div class="modal-header">
-          <h2>Log #${String(requestId)}</h2>
-          <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">📋 Copy debug bundle</button>
+          <div style="display:flex;align-items:center;gap:var(--space-2);min-width:0;flex:1 1 auto;overflow:hidden;">
+            <h2 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
+            <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">📋 Copy debug bundle</button>
+          </div>
           <button type="button" class="close-btn" @click=${(e: Event) => closeLogDetailModal(e)} aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">

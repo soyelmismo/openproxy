@@ -70,6 +70,12 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
             </div>
             <div class="field"><label for="combo-race-size">Race size</label><input id="combo-race-size" name="race_size" type="number" min="1" max="8" value="1"></div>
             <div class="field">
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                <input id="combo-predictive-rl" name="preventive_rate_limit" type="checkbox">
+                <span>⚡ Preventive Rate Limit (Predict 429s)</span>
+              </label>
+            </div>
+            <div class="field">
               <label for="combo-priority-mode"><abbr title=${PRIORITY_MODE_TOOLTIPS.strict}>Priority mode</abbr></label>
               <select id="combo-priority-mode" name="priority_mode" @change=${() => onCreatePriorityModeChange()}>
                 ${priorityModeOptions("strict")}
@@ -168,6 +174,7 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
     name: String(f.get("name") || ""),
     strategy: String(f.get("strategy") || "priority"),
     race_size: parseInt(String(f.get("race_size") || "1"), 10),
+    preventive_rate_limit: f.get("preventive_rate_limit") === "on",
     priority_mode: priorityMode,
     cooldown_mode: cooldownMode,
   };

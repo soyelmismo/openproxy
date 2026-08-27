@@ -270,6 +270,33 @@ export async function toggleProxySourceActive(id: string, e: Event): Promise<voi
   }
 }
 
+export async function moveProxySource(id: string, delta: number): Promise<void> {
+  const sources = [...state.proxySources];
+  const idx = sources.findIndex((s) => s.id === id);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= sources.length) return;
+
+  const [moved] = sources.splice(idx, 1);
+  if (!moved) return;
+  sources.splice(newIdx, 0, moved);
+
+  state.proxySources = sources;
+  requestUpdate();
+
+  const ids = sources.map((s) => s.id);
+  try {
+    await api("/proxy-sources/reorder", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+    await reloadProxySources();
+  } catch (err: unknown) {
+    showApiError(err, "Failed to reorder proxy sources");
+    await reloadProxySources();
+  }
+}
+
 export async function reorderProxySources(draggedId: string, targetId: string): Promise<void> {
   if (draggedId === targetId) return;
   const sources = [...state.proxySources];

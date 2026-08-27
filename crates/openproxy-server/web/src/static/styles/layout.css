@@ -249,7 +249,7 @@ section.card {
     display: flex !important;
     align-items: center;
     justify-content: space-between;
-    padding: 0.55rem 1rem;
+    padding: max(0.6rem, env(safe-area-inset-top)) 1rem 0.6rem;
     min-height: 52px;
     background: var(--color-surface);
     border-bottom: var(--border-w) var(--border-style) var(--color-border);
@@ -280,16 +280,19 @@ section.card {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 0;
     border-radius: var(--radius-md);
     background: var(--color-surface-2);
     border: var(--border-w) var(--border-style) var(--color-border);
     color: var(--color-text);
-    font-size: 1.2rem;
+    font-size: 1.25rem;
     cursor: pointer;
     line-height: 1;
+    touch-action: manipulation;
     transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
   }
   .mobile-nav-toggle:hover,
@@ -306,10 +309,13 @@ section.card {
     backdrop-filter: blur(2px);
     -webkit-backdrop-filter: blur(2px);
     z-index: 998;
-    transition: opacity var(--t-fast);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease-in-out;
   }
-  .sidebar-backdrop[hidden] {
-    display: none !important;
+  body.mobile-nav-open .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .sidebar-drawer {
@@ -325,7 +331,7 @@ section.card {
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     display: flex;
     flex-direction: column;
-    padding: var(--space-4);
+    padding: max(var(--space-4), env(safe-area-inset-top)) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
     gap: var(--space-3);
     overflow-y: auto;
     box-shadow: 0 10px 25px -5px rgba(0,0,0,0.35);
@@ -355,14 +361,17 @@ section.card {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
     border-radius: var(--radius-sm);
     background: transparent;
     border: var(--border-w) var(--border-style) var(--color-border);
     color: var(--color-text-muted);
-    font-size: 1.1rem;
+    font-size: 1.2rem;
     cursor: pointer;
+    touch-action: manipulation;
   }
   .mobile-nav-close:hover {
     color: var(--color-text);
@@ -416,7 +425,7 @@ section.card {
   }
 
   .sidebar-drawer .sidebar-logout {
-    min-height: 40px;
+    min-height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
