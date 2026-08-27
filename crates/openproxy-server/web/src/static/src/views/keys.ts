@@ -120,24 +120,30 @@ function renderKeyRow(k: ApiKeyRow): TemplateResult {
   const statusClass: string = isActive ? "on" : "off";
   const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
   const label: string = k.label || "—";
-  const createdBy: TemplateResult = k.created_by ? html` <small>(${k.created_by})</small>` : html``;
+  const createdBy: TemplateResult = k.created_by ? html` <small class="key-created-by">(${k.created_by})</small>` : html``;
   return html`
-    <tr>
-      <td>${label}${createdBy}</td>
-      <td><code>${k.key_prefix || "—"}</code></td>
-      <td>${scopes}</td>
-      <td>${restrictions}</td>
-      <td><span class="status-pill ${statusClass}">${statusText}</span></td>
-      <td>${k.last_used_at || "never"}</td>
-      <td>${k.created_at || "—"}</td>
-      <td>
-        <button class="small" @click=${() => onShowEditKey(k.id)}>Edit</button>
-        <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>Regenerate</button>
-        <button class="small" @click=${() => onViewKeyUsage(k.id)}>Usage</button>
-        ${k.is_active && !k.revoked_at
-          ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
-          : html``}
-        <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>Delete</button>
+    <tr class="api-key-card-row">
+      <td class="col-key-label" data-label="Label">
+        <div class="key-label-wrapper">
+          <strong class="key-name">${label}</strong>${createdBy}
+        </div>
+      </td>
+      <td class="col-key-prefix" data-label="Prefix"><code class="key-prefix-code">${k.key_prefix || "—"}</code></td>
+      <td class="col-key-scopes" data-label="Scopes"><span class="key-scopes-text">${scopes}</span></td>
+      <td class="col-key-restrictions" data-label="Allowed models"><span class="chip key-restriction-chip">${restrictions}</span></td>
+      <td class="col-key-status" data-label="Status"><span class="status-pill ${statusClass}">${statusText}</span></td>
+      <td class="col-key-last-used" data-label="Last used"><span class="key-meta-time">${k.last_used_at || "never"}</span></td>
+      <td class="col-key-created" data-label="Created"><span class="key-meta-time">${k.created_at || "—"}</span></td>
+      <td class="col-key-actions" data-label="Actions">
+        <div class="key-actions-wrap">
+          <button class="small" @click=${() => onShowEditKey(k.id)}>Edit</button>
+          <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>Regenerate</button>
+          <button class="small" @click=${() => onViewKeyUsage(k.id)}>Usage</button>
+          ${k.is_active && !k.revoked_at
+            ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
+            : html``}
+          <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>Delete</button>
+        </div>
       </td>
     </tr>
   `;
@@ -155,7 +161,7 @@ function renderKeys(): TemplateResult {
   const keys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
   const body: TemplateResult = keys.length === 0
     ? html`<p class="empty">No API keys yet. Create one to authenticate clients.</p>`
-    : html`<div class="table-wrap"><table>
+    : html`<div class="table-wrap"><table class="keys-table responsive-card-table">
         <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Allowed models</th><th>Status</th><th>Last used</th><th>Created</th><th>Actions</th></tr></thead>
         <tbody>${keys.map(renderKeyRow)}</tbody>
       </table></div>`;

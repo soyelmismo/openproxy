@@ -371,7 +371,7 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
     const err = tr.error_msg ? html` <small title=${tr.error_msg}>${tr.error_msg}</small>` : html``;
     lastTestCell = html`<span class=${"status-pill " + cls}>${String(tr.status)}</span>${ms}${err}`;
   }
-  return html`<tr draggable="true" data-drag-id=${String(t.id)}
+  return html`<tr draggable="true" data-drag-id=${String(t.id)} class="combo-target-card-row"
     @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(t.id)); (e.target as HTMLElement).classList.add("dragging"); }}
     @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
     @dragover=${(e: DragEvent) => { e.preventDefault(); const tr = (e.currentTarget as HTMLElement); tr.classList.add("drag-over"); }}
@@ -409,14 +409,24 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
       } catch (err: unknown) { showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
     }}
   >
-    <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}${cooldownCell}<td class="last-test-cell">${lastTestCell}</td>
-    <td>
-      ${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}
-      <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸" : "▶"}</button>
-      <button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button>
-      <button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>
-      ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}
-      <button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button>
+    <td class="drag-handle col-target-drag" title="Drag to reorder">⠿</td>
+    <td class="col-target-order" data-label="#">${t.priority_order}</td>
+    <td class="col-target-provider" data-label="Provider">${providerCell}</td>
+    <td class="col-target-account" data-label="Account">${accountCell}</td>
+    <td class="col-target-model" data-label="Model">${modelCell}</td>
+    <td class="col-target-context" data-label="Context">${contextCell}</td>
+    ${weightCell}
+    ${cooldownCell}
+    <td class="last-test-cell col-target-test-status" data-label="Last test">${lastTestCell}</td>
+    <td class="col-target-actions" data-label="Actions">
+      <div class="target-actions-wrap">
+        ${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}
+        <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? "⏸" : "▶"}</button>
+        <button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button>
+        <button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>
+        ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}
+        <button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button>
+      </div>
     </td>
   </tr>`;
 }
@@ -460,7 +470,7 @@ function renderComboDetail(): TemplateResult {
     ${cds.length > 0 ? html`<div class="cooldown-banner">⏸ ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
       <div class="actions"><button @click=${onTestAllTargets}>🧪 Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div></div>
-      ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<div class="table-wrap"><table>
+      ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
         <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Cooldown</th><th>Last test</th><th>Actions</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;

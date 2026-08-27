@@ -900,34 +900,38 @@ function renderDetailHeader(provider: Provider): TemplateResult {
   const isDeletable = provider.metadata?.deletable ?? true;
   return html`
     <div class="provider-detail-header${provider.active ? "" : " inactive"}">
-      <div class="provider-icon icon-large" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
-      <div style="flex:1; min-width:0;">
-        <h2>
-          <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>
-          <small>✎</small>
-        </h2>
-        <code>${provider.id}</code>
-        <div class="meta">
-          <span class="chip" data-format=${provider.format}>${provider.format}</span>
-          <span class="chip">${provider.auth_type}</span>
-          <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
-          <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎</small>
-          ${provider.extra_headers_json
-            ? html`<span class="chip" title=${provider.extra_headers_json} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>headers (${Object.keys(JSON.parse(provider.extra_headers_json || "{}")).length})</span>`
-            : html``}
-          ${provider.active ? html`` : html`<span class="chip inactive-chip">inactive</span>`}
+      <div class="provider-detail-main">
+        <div class="provider-icon icon-large" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
+        <div class="provider-detail-info">
+          <div class="provider-detail-title-row">
+            <h2>
+              <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>
+              <small class="editable-pencil">✎</small>
+            </h2>
+            <code class="provider-detail-id">${provider.id}</code>
+            ${provider.active ? html`` : html`<span class="chip inactive-chip">inactive</span>`}
+          </div>
+          <div class="meta provider-detail-meta">
+            <span class="chip format-chip" data-format=${provider.format}>${provider.format}</span>
+            <span class="chip auth-chip">${provider.auth_type}</span>
+            <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
+            <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎</small>
+            ${provider.extra_headers_json
+              ? html`<span class="chip headers-chip" title=${provider.extra_headers_json} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>headers (${Object.keys(JSON.parse(provider.extra_headers_json || "{}")).length})</span>`
+              : html``}
+          </div>
         </div>
       </div>
-      <div class="actions">
-        <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎ Edit endpoint</button>
-        <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>✎ Edit headers</button>
-        <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>↻ Refresh models</button>
+      <div class="actions provider-detail-actions">
+        <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>✎ Endpoint</button>
+        <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>✎ Headers</button>
+        <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>↻ Sync Models</button>
         <button class="primary" @click=${() => onToggleProviderActive(provider.id, !provider.active)}>
           ${provider.active ? "Deactivate" : "Activate"}
         </button>
-          ${!isDeletable
-            ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete (built-in)</button>`
-            : html`<button class="danger small" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
+        ${!isDeletable
+          ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete</button>`
+          : html`<button class="danger" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
       </div>
     </div>
   `;
