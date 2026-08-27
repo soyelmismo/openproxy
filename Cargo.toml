@@ -48,7 +48,7 @@ sha2 = "0.11"
 zeroize = "1"
 urlencoding = "2.1"
 miniz_oxide = "0.9"
-tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "compression-br"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "compression-br", "set-header"] }
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }

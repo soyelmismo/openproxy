@@ -79,6 +79,18 @@ pub fn build_router(state: AppState) -> Router {
         // limit applies to the request body, not the response.
         .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state)
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::X_CONTENT_TYPE_OPTIONS,
+            axum::http::HeaderValue::from_static("nosniff"),
+        ))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::HeaderName::from_static("x-frame-options"),
+            axum::http::HeaderValue::from_static("DENY"),
+        ))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::HeaderName::from_static("content-security-policy"),
+            axum::http::HeaderValue::from_static("default-src 'self'"),
+        ))
 }
 
 fn build_admin_router(state: &AppState) -> Router<AppState> {
@@ -244,6 +256,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
+        assert_eq!(response.headers().get(axum::http::header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
+        assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(response.headers().get("content-security-policy").unwrap(), "default-src 'self'");
+
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["status"], "ok");
@@ -293,6 +309,10 @@ mod tests {
             response.headers().get("content-type").unwrap(),
             "application/json"
         );
+
+        assert_eq!(response.headers().get(axum::http::header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
+        assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(response.headers().get("content-security-policy").unwrap(), "default-src 'self'");
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
