@@ -451,18 +451,28 @@ fn update_predictive_limiter_on_result(
                 .predictive_limiter
                 .report_rate_limited(combo_id, target_id, retry_after_secs, now);
         }
-        Some(_) => {
-            if result.status_code == 429 {
-                pipeline
-                    .predictive_limiter
-                    .report_rate_limited(combo_id, target_id, None, now);
-            } else {
-                // 5xx, timeout, connection error → penalty suave con escalado
-                pipeline
-                    .predictive_limiter
-                    .report_upstream_error(combo_id, target_id, now);
-            }
-        }
+        Some(_) => record_predictive_limiter_upstream_error(
+            &pipeline.predictive_limiter,
+            combo_id,
+            target_id,
+            result.status_code,
+            now,
+        ),
+    }
+}
+
+fn record_predictive_limiter_upstream_error(
+    limiter: &crate::predictive_rate_limit::PredictiveRateLimiter,
+    combo_id: openproxy_types::ComboId,
+    target_id: openproxy_types::ComboTargetId,
+    status_code: u16,
+    now: u64,
+) {
+    if status_code == 429 {
+        limiter.report_rate_limited(combo_id, target_id, None, now);
+    } else {
+        // 5xx, timeout, connection error → penalty suave con escalado
+        limiter.report_upstream_error(combo_id, target_id, now);
     }
 }
 

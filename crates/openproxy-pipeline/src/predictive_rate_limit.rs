@@ -48,6 +48,126 @@ impl Default for TargetPredictiveState {
     }
 }
 
+impl TargetPredictiveState {
+    pub fn refresh(&mut self, now_ms: u64) {
+        self.advance_window_if_expired(now_ms);
+        self.try_transition_half_open(now_ms);
+        self.apply_memory_decay_if_idle(now_ms);
+    }
+
+    fn advance_window_if_expired(&mut self, now_ms: u64) {
+        if self.window_start_ms == 0 {
+            self.window_start_ms = now_ms;
+        }
+        if now_ms >= self.window_start_ms + self.window_duration_ms {
+            self.window_start_ms = now_ms;
+            self.window_count = 0;
+        }
+    }
+
+    fn try_transition_half_open(&mut self, now_ms: u64) {
+        if self.state == TargetRateState::Open && now_ms >= self.reset_at_ms {
+            self.state = TargetRateState::HalfOpen;
+            self.window_count = 0;
+        }
+    }
+
+    fn apply_memory_decay_if_idle(&mut self, now_ms: u64) {
+        let is_eligible = self.last_429_at_ms > 0
+            && self.state == TargetRateState::Closed
+            && self.learned_burst < DEFAULT_BURST_CAPACITY
+            && now_ms.saturating_sub(self.last_429_at_ms) > MEMORY_DECAY_IDLE_MS;
+
+        if is_eligible {
+            self.learned_burst = self.learned_burst.saturating_add(5).min(DEFAULT_BURST_CAPACITY);
+            self.last_429_at_ms = now_ms;
+        }
+    }
+
+    pub fn evaluate(&self, now_ms: u64) -> TargetReadiness {
+        match self.state {
+            TargetRateState::Open => self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms)),
+            TargetRateState::HalfOpen if self.in_flight == 0 => TargetReadiness::Probe,
+            TargetRateState::HalfOpen => self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms)),
+            TargetRateState::Closed if self.window_count >= self.learned_burst => {
+                let window_end = self.window_start_ms + self.window_duration_ms;
+                self.saturated_readiness(window_end.saturating_sub(now_ms))
+            }
+            TargetRateState::Closed => TargetReadiness::Ready,
+        }
+    }
+
+    fn saturated_readiness(&self, reset_in_ms: u64) -> TargetReadiness {
+        TargetReadiness::Saturated {
+            learned_burst: self.learned_burst,
+            window_count: self.window_count,
+            reset_in_ms,
+        }
+    }
+
+    pub fn try_acquire(&mut self) -> bool {
+        match self.state {
+            TargetRateState::Open => false,
+            TargetRateState::HalfOpen if self.in_flight == 0 => {
+                self.in_flight += 1;
+                self.window_count += 1;
+                true
+            }
+            TargetRateState::HalfOpen => false,
+            TargetRateState::Closed if self.window_count < self.learned_burst => {
+                self.window_count += 1;
+                self.in_flight += 1;
+                true
+            }
+            TargetRateState::Closed => false,
+        }
+    }
+
+    pub fn apply_success(
+        &mut self,
+        remaining_header: Option<u32>,
+        reset_window_secs: Option<u64>,
+        now_ms: u64,
+    ) {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.last_success_at_ms = now_ms;
+
+        self.recover_from_half_open();
+        self.update_window_duration(reset_window_secs);
+        self.calibrate_from_remaining_header(remaining_header);
+        self.advance_elastic_streak();
+    }
+
+    fn recover_from_half_open(&mut self) {
+        if self.state == TargetRateState::HalfOpen {
+            self.state = TargetRateState::Closed;
+            self.learned_burst = self.learned_burst.max(self.window_count);
+        }
+    }
+
+    fn update_window_duration(&mut self, reset_window_secs: Option<u64>) {
+        if let Some(reset_s) = reset_window_secs {
+            self.window_duration_ms = (reset_s * 1000).max(1000);
+        }
+    }
+
+    fn calibrate_from_remaining_header(&mut self, remaining_header: Option<u32>) {
+        match remaining_header {
+            Some(0) => self.learned_burst = self.window_count,
+            Some(rem) => self.learned_burst = self.learned_burst.max(self.window_count + rem),
+            None => {}
+        }
+    }
+
+    fn advance_elastic_streak(&mut self) {
+        self.success_streak += 1;
+        if self.success_streak >= PROBE_SUCCESS_THRESHOLD {
+            self.learned_burst = self.learned_burst.saturating_add(1);
+            self.success_streak = 0;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetReadiness {
     Ready,
@@ -113,38 +233,8 @@ impl PredictiveRateLimiter {
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
 
-        Self::refresh_state(state, now_ms);
-
-        match state.state {
-            TargetRateState::Open => TargetReadiness::Saturated {
-                learned_burst: state.learned_burst,
-                window_count: state.window_count,
-                reset_in_ms: state.reset_at_ms.saturating_sub(now_ms),
-            },
-            TargetRateState::HalfOpen => {
-                if state.in_flight == 0 {
-                    TargetReadiness::Probe
-                } else {
-                    TargetReadiness::Saturated {
-                        learned_burst: state.learned_burst,
-                        window_count: state.window_count,
-                        reset_in_ms: state.reset_at_ms.saturating_sub(now_ms),
-                    }
-                }
-            }
-            TargetRateState::Closed => {
-                if state.window_count >= state.learned_burst {
-                    let window_end = state.window_start_ms + state.window_duration_ms;
-                    TargetReadiness::Saturated {
-                        learned_burst: state.learned_burst,
-                        window_count: state.window_count,
-                        reset_in_ms: window_end.saturating_sub(now_ms),
-                    }
-                } else {
-                    TargetReadiness::Ready
-                }
-            }
-        }
+        state.refresh(now_ms);
+        state.evaluate(now_ms)
     }
 
     /// Intenta adquirir el permiso para el target. Retorna true si es admitido
@@ -160,29 +250,8 @@ impl PredictiveRateLimiter {
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
 
-        Self::refresh_state(state, now_ms);
-
-        match state.state {
-            TargetRateState::Open => false,
-            TargetRateState::HalfOpen => {
-                if state.in_flight == 0 {
-                    state.in_flight += 1;
-                    state.window_count += 1;
-                    true
-                } else {
-                    false
-                }
-            }
-            TargetRateState::Closed => {
-                if state.window_count >= state.learned_burst {
-                    false
-                } else {
-                    state.window_count += 1;
-                    state.in_flight += 1;
-                    true
-                }
-            }
-        }
+        state.refresh(now_ms);
+        state.try_acquire()
     }
 
     /// Decrementa peticiones en vuelo (en caso de cancelación o fallo temprano).
@@ -209,33 +278,7 @@ impl PredictiveRateLimiter {
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
 
-        state.in_flight = state.in_flight.saturating_sub(1);
-        state.last_success_at_ms = now_ms;
-
-        if state.state == TargetRateState::HalfOpen {
-            state.state = TargetRateState::Closed;
-            state.learned_burst = state.learned_burst.max(state.window_count);
-        }
-
-        if let Some(reset_s) = reset_window_secs {
-            state.window_duration_ms = (reset_s * 1000).max(1000);
-        }
-
-        // Si el upstream reporta remaining explícito, calibramos directamente
-        if let Some(rem) = remaining_header {
-            if rem == 0 {
-                state.learned_burst = state.window_count;
-            } else {
-                state.learned_burst = state.learned_burst.max(state.window_count + rem);
-            }
-        }
-
-        // Expansión elástica: N éxitos seguidos incrementan la capacidad aprendida
-        state.success_streak += 1;
-        if state.success_streak >= PROBE_SUCCESS_THRESHOLD {
-            state.learned_burst = state.learned_burst.saturating_add(1);
-            state.success_streak = 0;
-        }
+        state.apply_success(remaining_header, reset_window_secs, now_ms);
     }
 
     /// Reporta HTTP 429 Too Many Requests (Multiplicative Decrease / Burst Cap).
@@ -291,39 +334,6 @@ impl PredictiveRateLimiter {
         let base_ms: u64 = 15_000;
         let penalty_ms = base_ms.saturating_mul(1u64 << consecutive.min(3)).min(120_000);
         state.reset_at_ms = now_ms + penalty_ms;
-    }
-
-    /// Mantenimiento temporal y decaimiento de penalización
-    fn refresh_state(state: &mut TargetPredictiveState, now_ms: u64) {
-        // 1. Inicialización de ventana
-        if state.window_start_ms == 0 {
-            state.window_start_ms = now_ms;
-        }
-
-        // 2. Expiración de ventana deslizante
-        if now_ms >= state.window_start_ms + state.window_duration_ms {
-            state.window_start_ms = now_ms;
-            state.window_count = 0;
-            if state.state == TargetRateState::Closed {
-                // Ventana renovada
-            }
-        }
-
-        // 3. Expiración de cooldown (Open -> HalfOpen)
-        if state.state == TargetRateState::Open && now_ms >= state.reset_at_ms {
-            state.state = TargetRateState::HalfOpen;
-            state.window_count = 0;
-        }
-
-        // 4. Decaimiento de memoria por inactividad prolongada sin 429s
-        if state.last_429_at_ms > 0
-            && now_ms.saturating_sub(state.last_429_at_ms) > MEMORY_DECAY_IDLE_MS
-            && state.state == TargetRateState::Closed
-            && state.learned_burst < DEFAULT_BURST_CAPACITY
-        {
-            state.learned_burst = state.learned_burst.saturating_add(5).min(DEFAULT_BURST_CAPACITY);
-            state.last_429_at_ms = now_ms; // Escalón de decaimiento
-        }
     }
 }
 
