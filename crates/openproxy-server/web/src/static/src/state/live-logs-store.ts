@@ -453,6 +453,10 @@ class LiveLogsStore {
     }
 
     let a = this.attemptsByKey.get(attemptKey);
+    const isSkipped = row.status_code === 0 || (typeof row.error_message === "string" && row.error_message.includes("predict_skipped"));
+    const rowStage: StageName = isSkipped ? "predict_skipped" : (row.status_code >= 400 ? "failed" : "completed");
+    const rowTerminalKind = isSkipped ? "predict_skipped" : (row.status_code >= 400 ? "failed" : "completed");
+
     if (!a) {
       const startedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
       a = {
@@ -463,7 +467,7 @@ class LiveLogsStore {
         upstreamModelId: row.upstream_model_id,
         startedAtMs: startedAt,
         updatedAtMs: startedAt + row.total_ms,
-        stage: (row.status_code >= 400 ? "failed" : "completed") as StageName,
+        stage: rowStage,
         stageSeq: 9999,
         stageRank: 4,
         elapsedMsAtEvent: row.total_ms,
@@ -471,7 +475,7 @@ class LiveLogsStore {
         ttftMs: row.ttft_ms,
         statusCode: row.status_code,
         terminal: true,
-        terminalKind: row.status_code >= 400 ? "failed" : "completed",
+        terminalKind: rowTerminalKind,
         error: row.error_message,
         rowId: row.id,
         row,
@@ -482,8 +486,8 @@ class LiveLogsStore {
       a.rowId = row.id;
       a.row = row;
       a.terminal = true;
-      a.terminalKind = row.status_code >= 400 ? "failed" : "completed";
-      a.stage = (row.status_code >= 400 ? "failed" : "completed") as StageName;
+      a.terminalKind = rowTerminalKind;
+      a.stage = rowStage;
       a.stageSeq = 9999;
       a.stageRank = 4;
       a.updatedAtMs = a.startedAtMs + row.total_ms;

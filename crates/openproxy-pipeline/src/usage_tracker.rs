@@ -132,6 +132,61 @@ impl UsageTracker {
         }));
     }
 
+    pub(crate) fn record_predictive_skipped_row(
+        &self,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &crate::context::ResolvedTarget,
+        attempt: u8,
+    ) {
+        let trace_id = format!("{}:{}", req.trace_id, attempt);
+        let input = UsageInput {
+            proxy_url: None,
+            proxy_status: None,
+            is_proxy_rotated: false,
+            request_id: req.request_id,
+            trace_id,
+            attempt,
+            provider_id: target.target.provider_id.clone(),
+            account_id: target.target.account_id,
+            combo_id: Some(combo.id),
+            combo_target_id: Some(target.target.id),
+            model_row_id: target.target.model_row_id,
+            upstream_model_id: target.model.model_id.0.clone(),
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            connect_ms: None,
+            ttft_ms: None,
+            total_ms: 0,
+            status_code: 0,
+            error_msg: Some("predict_skipped".to_string()),
+            race_total: 1,
+            race_lost: false,
+            api_key_id: req.api_key_id,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            error_message: Some("predictive rate limit: skipped to avoid 429".to_string()),
+            race_attempts: 1,
+            is_streaming: false,
+            stream_complete: false,
+            stop_reason: None,
+            client_response: false,
+            prompt_tokens_estimated: false,
+            completion_tokens_estimated: false,
+            endpoint_kind: req.endpoint_kind,
+        };
+        let conn = Arc::clone(&self.conn);
+        drop(tokio::task::spawn_blocking(move || {
+            let lock = conn.lock();
+            let _ = openproxy_db::cost::record(&lock, &input);
+        }));
+    }
+
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         params: crate::PartialFailureParams<'_>,

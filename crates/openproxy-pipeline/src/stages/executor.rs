@@ -108,6 +108,12 @@ async fn execute_single_target_step(
     let remaining = &to_run[idx + 1..];
     if should_skip_preventive_target(&ctx.pipeline, combo, target, remaining, now_ms) {
         let skip_trace_id = format!("{}:{}", ctx.req.trace_id, *overall_attempt);
+        ctx.pipeline.tracker.record_predictive_skipped_row(
+            &ctx.req,
+            combo,
+            target,
+            *overall_attempt,
+        );
         *overall_attempt = overall_attempt.saturating_add(1);
         openproxy_types::emit_stage_event!(
             request_id: ctx.req.request_id,
