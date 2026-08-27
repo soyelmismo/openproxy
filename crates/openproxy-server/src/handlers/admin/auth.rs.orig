@@ -60,7 +60,8 @@ pub(crate) fn authenticate_admin_ws(
     let is_ws_upgrade = headers
         .get(axum::http::header::UPGRADE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|s| s.eq_ignore_ascii_case("websocket"));
+        .map(|s| s.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
 
     let safe_query_token = if is_ws_upgrade { query_token } else { None };
 
