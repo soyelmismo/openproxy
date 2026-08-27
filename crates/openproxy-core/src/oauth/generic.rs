@@ -47,32 +47,39 @@ pub struct OAuthSpec {
 
 impl OAuthSpec {
     fn client_id(&self) -> Result<String> {
-        if let Some(env) = self.client_id_env
-            && let Ok(value) = std::env::var(env)
-            && !value.is_empty()
-        {
-            return Ok(value);
-        }
-        if !self.client_id_default.is_empty() {
-            return Ok(self.client_id_default.to_string());
-        }
-        Err(CoreError::Validation(format!(
-            "provider '{}' has no OAuth client_id; set {}",
-            self.id,
-            self.client_id_env.unwrap_or("<provider client_id env>")
-        )))
+        let env_value = self
+            .client_id_env
+            .and_then(|env| std::env::var(env).ok())
+            .filter(|v| !v.is_empty());
+
+        let Some(value) = env_value else {
+            if !self.client_id_default.is_empty() {
+                return Ok(self.client_id_default.to_string());
+            }
+            return Err(CoreError::Validation(format!(
+                "provider '{}' has no OAuth client_id; set {}",
+                self.id,
+                self.client_id_env.unwrap_or("<provider client_id env>")
+            )));
+        };
+
+        Ok(value)
     }
 
     fn client_secret(&self) -> Option<String> {
-        if let Some(env) = self.client_secret_env
-            && let Ok(value) = std::env::var(env)
-            && !value.is_empty()
-        {
-            return Some(value);
-        }
-        self.client_secret_default
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
+        let env_value = self
+            .client_secret_env
+            .and_then(|env| std::env::var(env).ok())
+            .filter(|v| !v.is_empty());
+
+        let Some(value) = env_value else {
+            return self
+                .client_secret_default
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+        };
+
+        Some(value)
     }
 }
 
@@ -117,10 +124,10 @@ impl GenericOAuthProvider {
                 );
             }
         }
-        if let Some(user_agent) = self.spec.user_agent
-            && let Ok(value) = http::HeaderValue::from_str(&user_agent())
-        {
-            req.headers.insert(http::header::USER_AGENT, value);
+        if let Some(user_agent) = self.spec.user_agent {
+            if let Ok(value) = http::HeaderValue::from_str(&user_agent()) {
+                req.headers.insert(http::header::USER_AGENT, value);
+            }
         }
 
         let response = call_oauth_endpoint(upstream_client, &self.spec, req, purpose).await?;

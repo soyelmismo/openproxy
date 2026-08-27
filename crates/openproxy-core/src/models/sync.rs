@@ -305,15 +305,15 @@ pub fn generate_events(
         })
         .collect();
 
-    if !new_models_rows.is_empty()
-        && let Ok(results) = crate::notifications::insert_many(
+    if !new_models_rows.is_empty() {
+        if let Ok(results) = crate::notifications::insert_many(
             tx,
             crate::notifications::KIND_MODEL_NEW,
             &new_models_rows,
-        )
-    {
-        for (id, payload) in results {
-            events.push((id, crate::notifications::KIND_MODEL_NEW, payload));
+        ) {
+            for (id, payload) in results {
+                events.push((id, crate::notifications::KIND_MODEL_NEW, payload));
+            }
         }
     }
 
