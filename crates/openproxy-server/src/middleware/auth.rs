@@ -141,7 +141,18 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
+    let active = match core_api_keys::count_active(&state.db_pool().reader()) {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!(
+                target: "openproxy::auth",
+                "failed to count active api keys: {e}"
+            );
+            return Err(ApiError(CoreError::Internal(
+                "Database error counting API keys".into(),
+            )));
+        }
+    };
     if active == 0 && state.config().server.allow_anonymous {
         tracing::debug!(
             target: "openproxy::auth",
