@@ -1728,9 +1728,10 @@ abbr {
 
 /* Notifications view */
 .notification-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
 }
 .notification-card {
   display: grid;
@@ -1748,6 +1749,7 @@ abbr {
     transparent 40%
   );
   transition: background var(--t-fast), border-color var(--t-fast);
+  box-sizing: border-box;
 }
 .notification-card.unread {
   border-color: var(--card-accent, var(--color-primary));
@@ -1781,10 +1783,12 @@ abbr {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  height: 100%;
 }
 .notification-card-text {
   font-size: var(--fs-sm);
   word-break: break-word;
+  flex: 1;
 }
 .notification-card-meta {
   display: flex;
@@ -1816,7 +1820,8 @@ abbr {
   gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
-  margin-top: var(--space-1);
+  margin-top: auto;
+  padding-top: var(--space-1);
 }
 .notification-empty {
   padding: var(--space-6) var(--space-4);
