@@ -442,7 +442,7 @@ fn update_predictive_limiter_on_result(
         None => {
             pipeline.predictive_limiter.report_success(combo_id, target_id, None, None, now);
         }
-        Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)) => {
+        Some(CoreError::Cancelled(_) | CoreError::RaceLost) => {
             pipeline.predictive_limiter.release_in_flight(combo_id, target_id);
         }
         Some(CoreError::RateLimited { retry_after_ms, .. }) => {
@@ -457,7 +457,10 @@ fn update_predictive_limiter_on_result(
                     .predictive_limiter
                     .report_rate_limited(combo_id, target_id, None, now);
             } else {
-                pipeline.predictive_limiter.release_in_flight(combo_id, target_id);
+                // 5xx, timeout, connection error → penalty suave con escalado
+                pipeline
+                    .predictive_limiter
+                    .report_upstream_error(combo_id, target_id, now);
             }
         }
     }

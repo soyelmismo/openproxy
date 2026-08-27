@@ -264,6 +264,35 @@ impl PredictiveRateLimiter {
         state.reset_at_ms = now_ms + penalty_ms;
     }
 
+    /// Reporta error upstream genérico (5xx, timeout, connection error).
+    /// Penalty más suave que 429: no reduce `learned_burst`, solo bloquea
+    /// brevemente para que el chain-skip salte al siguiente target.
+    /// El penalty crece con fallos consecutivos (15s base, duplica cada fallo,
+    /// cap 120s) para adaptarse a targets persistentemente rotos.
+    pub fn report_upstream_error(
+        &self,
+        combo_id: ComboId,
+        target_id: ComboTargetId,
+        now_ms: u64,
+    ) {
+        let key = Self::compute_key(combo_id, target_id);
+        let shard = self.shard_for(key);
+        let mut map = shard.inner.lock();
+        let state = map.entry(key).or_default();
+
+        state.in_flight = state.in_flight.saturating_sub(1);
+        state.success_streak = 0;
+        state.state = TargetRateState::Open;
+
+        // Penalty escalado: 15s * 2^(consecutive_errors - 1), cap 120s.
+        // No tocamos learned_burst (no es rate limit, es inestabilidad).
+        let consecutive = state.window_count.saturating_add(1).min(8);
+        state.window_count = consecutive;
+        let base_ms: u64 = 15_000;
+        let penalty_ms = base_ms.saturating_mul(1u64 << consecutive.min(3)).min(120_000);
+        state.reset_at_ms = now_ms + penalty_ms;
+    }
+
     /// Mantenimiento temporal y decaimiento de penalización
     fn refresh_state(state: &mut TargetPredictiveState, now_ms: u64) {
         // 1. Inicialización de ventana
@@ -441,5 +470,78 @@ mod tests {
 
         // Target 3 sigue listo
         assert_eq!(limiter.evaluate_target(combo, target_3, now), TargetReadiness::Ready);
+    }
+
+    #[test]
+    fn test_upstream_error_blocks_and_recovers() {
+        let limiter = PredictiveRateLimiter::new();
+        let combo = ComboId(1);
+        let target = ComboTargetId(300);
+        let now = 100_000;
+
+        // Un error upstream marca Open con penalty escalado
+        assert!(limiter.acquire_target(combo, target, now));
+        limiter.report_upstream_error(combo, target, now);
+
+        // Target debe estar Saturated
+        let r = limiter.evaluate_target(combo, target, now);
+        assert!(matches!(r, TargetReadiness::Saturated { .. }), "upstream error debe saturar");
+
+        // learned_burst NO fue reducido (sigue en default 1000)
+        let key = PredictiveRateLimiter::compute_key(combo, target);
+        let shard = limiter.shard_for(key);
+        let reset_at = {
+            let map = shard.inner.lock();
+            let state = map.get(&key).unwrap();
+            assert_eq!(state.learned_burst, DEFAULT_BURST_CAPACITY, "upstream error no reduce burst");
+            state.reset_at_ms
+        };
+
+        // Tras expirar penalty, debe pasar a HalfOpen/Probe
+        let after = reset_at + 1;
+        let r2 = limiter.evaluate_target(combo, target, after);
+        assert_eq!(r2, TargetReadiness::Probe, "debe pasar a Probe tras penalty");
+
+        // Probe exitoso recupera
+        assert!(limiter.acquire_target(combo, target, after));
+        limiter.report_success(combo, target, None, None, after);
+        assert_eq!(limiter.evaluate_target(combo, target, after), TargetReadiness::Ready);
+    }
+
+    #[test]
+    fn test_upstream_error_escalating_penalty() {
+        let limiter = PredictiveRateLimiter::new();
+        let combo = ComboId(1);
+        let target = ComboTargetId(400);
+        let mut now = 100_000;
+
+        // Primer error
+        assert!(limiter.acquire_target(combo, target, now));
+        limiter.report_upstream_error(combo, target, now);
+
+        let key = PredictiveRateLimiter::compute_key(combo, target);
+        let shard = limiter.shard_for(key);
+        let reset_1 = {
+            let map = shard.inner.lock();
+            map.get(&key).unwrap().reset_at_ms
+        };
+        let penalty_1 = reset_1 - now;
+
+        // Avanzar justo después del primer penalty y dar segundo error
+        now = reset_1 + 1;
+        assert!(limiter.acquire_target(combo, target, now));
+        limiter.report_upstream_error(combo, target, now);
+
+        let reset_2 = {
+            let map = shard.inner.lock();
+            map.get(&key).unwrap().reset_at_ms
+        };
+        let penalty_2 = reset_2 - now;
+
+        // El segundo penalty debe ser >= que el primero (escalado exponencial)
+        assert!(penalty_2 >= penalty_1, "penalty debe escalar: {penalty_2} >= {penalty_1}");
+
+        // Y debe estar capeado a <= 120s
+        assert!(penalty_2 <= 120_000, "penalty debe estar capeado: {penalty_2} <= 120000");
     }
 }
