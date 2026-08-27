@@ -8,7 +8,13 @@ import type { Account, ModelQuotaDetail } from "../lib/types/api.js";
 const resetHint = (ts: string | null | undefined): string => {
   if (!ts) return "";
   try {
-    const d = new Date(ts);
+    let d: Date;
+    const num = Number(ts);
+    if (!isNaN(num) && num > 0) {
+      d = new Date(num > 1e11 ? num : num * 1000);
+    } else {
+      d = new Date(ts);
+    }
     if (isNaN(d.getTime())) return "";
     const now = Date.now();
     const diffMs = d.getTime() - now;

@@ -968,22 +968,26 @@ function renderOAuthSection(provider: Provider): TemplateResult {
 function renderConnectionsSection(provider: Provider, accounts: Account[]): TemplateResult {
   const hasQuota = provider.metadata?.supports_quota ?? false;
   const body: TemplateResult = accounts.length === 0
-    ? html`<div class="table-wrap"><table><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table></div>`
-    : html`<div class="table-wrap"><table>
+    ? html`<div class="table-wrap"><table class="accounts-table responsive-card-table"><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table></div>`
+    : html`<div class="table-wrap"><table class="accounts-table responsive-card-table">
         <thead><tr><th>Label</th><th>Priority</th><th>Health</th><th>Quota</th><th>Created</th><th>Actions</th></tr></thead>
         <tbody>${accounts.map((a) => {
           const quotaCell: TemplateResult = hasQuota
-            ? html`<td>${renderQuotaCell(a)}</td>`
-            : html`<td><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
-          return html`<tr>
-            <td>
-              <span class="editable" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || "")}>
-                ${a.label || a.email || "—"}
-              </span>
-              <small>✎</small>
+            ? html`<td class="col-account-quota" data-label="Quota">${renderQuotaCell(a)}</td>`
+            : html`<td class="col-account-quota" data-label="Quota"><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
+          return html`<tr class="account-card-row">
+            <td class="col-account-label" data-label="Account">
+              <div class="account-title-row">
+                <span class="editable account-name" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || "")}>
+                  ${a.label || a.email || "—"}
+                </span>
+                <small class="account-edit-icon" title="Rename label">✎</small>
+              </div>
             </td>
-            <td>${a.priority}</td>
-            <td>
+            <td class="col-account-priority" data-label="Priority">
+              <span class="account-priority-badge">Priority ${a.priority}</span>
+            </td>
+            <td class="col-account-health" data-label="Health">
               <select class=${"health-select " + (a.health_status || "unknown")} @change=${(e: Event) => onSetHealth(a.id, e)}>
                 <option value="healthy" ?selected=${a.health_status === "healthy"}>healthy</option>
                 <option value="degraded" ?selected=${a.health_status === "degraded"}>degraded</option>
@@ -991,13 +995,17 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
               </select>
             </td>
             ${quotaCell}
-            <td>${a.created_at || "—"}</td>
-            <td>
-              ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>↻ Quota</button>` : html``}
-              ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>🖥️ Apply Local</button>` : html``}
-              <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>📋 Copy</button>
-              <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>🔑 Key</button>
-              <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
+            <td class="col-account-created" data-label="Created">
+              <span class="account-created-text">${a.created_at || "—"}</span>
+            </td>
+            <td class="col-account-actions" data-label="Actions">
+              <div class="account-actions-wrap">
+                ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>↻ Quota</button>` : html``}
+                ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>🖥️ Apply Local</button>` : html``}
+                <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>📋 Copy</button>
+                <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>🔑 Key</button>
+                <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
+              </div>
             </td>
           </tr>`;
         })}</tbody>
@@ -1147,7 +1155,7 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
       ${bulkBar}
 
       <div class="table-wrap">
-        <table>
+        <table class="models-table responsive-card-table">
           <thead><tr>
             <th><input type="checkbox" .checked=${allSelected} .indeterminate=${indeterminate} @change=${(e: Event) => onToggleSelectAllModels(e)}></th>
             ${SORTABLE_COLUMNS.map((c: SortableColumn) => renderSortableTh(c, ui.sort, provider.id))}
@@ -1195,7 +1203,7 @@ async function onCopyUsageModel(text: string, e: Event): Promise<void> {
 function renderModelRow(m: Model): TemplateResult {
   const isSelected: boolean = (state.selectedModels as Set<number>).has(m.row_id);
   const lastTest: TemplateResult = m.last_test_status != null
-    ? html`<span class=${"status-pill " + statusPillClass(m.last_test_status)}>${String(m.last_test_status)}</span> <small>${m.last_test_at || ""}</small>`
+    ? html`<span class=${"status-pill " + statusPillClass(m.last_test_status)}>${String(m.last_test_status)}</span> <small class="last-test-time">${m.last_test_at || ""}</small>`
     : html`<span class="muted">never</span>`;
 
   const providerAccounts = (state.accounts || []).filter((a) => a.provider_id === m.provider_id);
@@ -1203,17 +1211,22 @@ function renderModelRow(m: Model): TemplateResult {
 
   const usageModel = `${m.provider_id}/${m.model_id}`;
 
-  return html`<tr id=${`model-row-${m.row_id}`} class=${(m.active ? "" : "inactive") + (isSelected ? " selected" : "")}>
-    <td><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}></td>
-    <td><code style="cursor: pointer; padding: 2px 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.1);" title="Click to copy usage model" @click=${(e: Event) => onCopyUsageModel(usageModel, e)}>${usageModel}</code>${m.custom ? html`<span class="badge custom">custom</span>` : html``}</td>
-    <td>${m.target_format || "—"}</td>
-    <td>${formatContext(m.context_length)}</td>
-    <td>${formatContext(m.max_output_tokens)}</td>
-    <td>
-      <div style="display: flex; flex-direction: column; gap: 4px;">
-        <div style="display: flex; align-items: center; gap: 4px;">
+  return html`<tr id=${`model-row-${m.row_id}`} class=${"model-card-row " + (m.active ? "" : "inactive") + (isSelected ? " selected" : "")}>
+    <td class="col-model-select"><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}></td>
+    <td class="col-model-name" data-label="Model">
+      <div class="model-name-wrapper">
+        <code class="model-usage-code" title="Click to copy usage model" @click=${(e: Event) => onCopyUsageModel(usageModel, e)}>${usageModel}</code>
+        ${m.custom ? html`<span class="badge custom">custom</span>` : html``}
+      </div>
+    </td>
+    <td class="col-model-format" data-label="Format"><span class="chip format-chip">${m.target_format || "—"}</span></td>
+    <td class="col-model-context" data-label="Context"><span class="model-spec-val">${formatContext(m.context_length)}</span></td>
+    <td class="col-model-max-output" data-label="Max Output"><span class="model-spec-val">${formatContext(m.max_output_tokens)}</span></td>
+    <td class="col-model-modality" data-label="Modality & Capabilities">
+      <div class="model-modality-block">
+        <div class="model-type-row">
           <select
-            style="padding: 1px 4px; font-size: 11px; font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer;"
+            class="model-type-select"
             title="Model modality / type (Chat, Image, Embedding, Audio, Rerank)"
             .value=${m.model_type || "chat"}
             @change=${(e: Event) => onChangeModelType(m.row_id, e)}
@@ -1225,29 +1238,31 @@ function renderModelRow(m: Model): TemplateResult {
             <option value="rerank" ?selected=${m.model_type === "rerank"}>🔄 Rerank</option>
           </select>
         </div>
-        <div>
+        <div class="model-caps-row">
           ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
-          ${m.family ? html` <small class="muted">${m.family}</small>` : html``}
+          ${m.family ? html` <small class="muted model-family-tag">${m.family}</small>` : html``}
         </div>
       </div>
     </td>
-    <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
-    <td class="last-test-cell">${lastTest}</td>
-    <td>
-      <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px;">
-        <select id=${`test-account-${m.row_id}`} style="padding: 2px 4px; font-size: 11px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px;">
-          <option value="">(Default Account)</option>
-          ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
-        </select>
-        <select id=${`test-proxy-${m.row_id}`} style="padding: 2px 4px; font-size: 11px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px;">
-          <option value="">(No Proxy)</option>
-          ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
-        </select>
-      </div>
-      <div style="display: flex; gap: 4px; align-items: center;">
-        <button class="small" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>Test</button>
-        <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? "Disable" : "Enable"}</button>
-        <button class="small danger" @click=${() => onDeleteModel(m.row_id)}>×</button>
+    <td class="col-model-status" data-label="Status"><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
+    <td class="col-model-test-status last-test-cell" data-label="Last test">${lastTest}</td>
+    <td class="col-model-actions" data-label="Actions">
+      <div class="model-actions-block">
+        <div class="model-test-selectors">
+          <select id=${`test-account-${m.row_id}`} class="model-account-select">
+            <option value="">(Default Account)</option>
+            ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
+          </select>
+          <select id=${`test-proxy-${m.row_id}`} class="model-proxy-select">
+            <option value="">(No Proxy)</option>
+            ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
+          </select>
+        </div>
+        <div class="model-btn-group">
+          <button class="small primary" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>🧪 Test</button>
+          <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? "Disable" : "Enable"}</button>
+          <button class="small danger" @click=${() => onDeleteModel(m.row_id)} title="Delete model">×</button>
+        </div>
       </div>
     </td>
   </tr>`;

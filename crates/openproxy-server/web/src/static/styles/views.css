@@ -295,6 +295,19 @@
 #models-tbody tr.selected { background: var(--color-primary-soft); }
 #models-tbody code { font-size: var(--fs-xs); }
 
+/* Account & Model Table Structural Helpers */
+.account-title-row { display: inline-flex; align-items: center; gap: var(--space-1); }
+.account-edit-icon { color: var(--color-text-muted); cursor: pointer; }
+.account-actions-wrap { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.model-name-wrapper { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.model-usage-code { cursor: pointer; padding: 2px 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); font-family: var(--font-mono); }
+.model-modality-block { display: flex; flex-direction: column; gap: 4px; }
+.model-type-select { padding: 2px 4px; font-size: 11px; font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.model-actions-block { display: flex; flex-direction: column; gap: 4px; }
+.model-test-selectors { display: flex; flex-direction: column; gap: 4px; margin-bottom: 2px; }
+.model-account-select, .model-proxy-select { padding: 2px 4px; font-size: 11px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px; }
+.model-btn-group { display: flex; gap: 4px; align-items: center; }
+
 .cooldown-banner {
   padding: var(--space-2) var(--space-3);
   margin: var(--space-2) 0;
@@ -4165,6 +4178,275 @@ abbr {
     max-width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* ==========================================================================
+     Responsive Card Tables (Accounts & Models Mobile Card Mode)
+     ========================================================================== */
+
+  .responsive-card-table {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-3) !important;
+    background: transparent !important;
+    border: none !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+  .responsive-card-table thead {
+    display: none !important;
+  }
+  .responsive-card-table tbody {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-3) !important;
+    width: 100% !important;
+  }
+  .responsive-card-table tbody tr.empty-row,
+  .responsive-card-table tbody td.empty-row {
+    display: block !important;
+    text-align: center;
+    padding: var(--space-4);
+  }
+
+  /* ----- Account Cards on Mobile ----- */
+  .account-card-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-2) !important;
+    padding: var(--space-3) !important;
+    background: var(--color-surface) !important;
+    border: var(--border-w) var(--border-style) var(--color-border) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box !important;
+    width: 100% !important;
+  }
+  .account-card-row td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+  }
+  .account-card-row .col-account-label {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+  }
+  .account-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-md);
+    font-weight: 600;
+  }
+  .account-name {
+    color: var(--color-text);
+  }
+  .account-edit-icon {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .account-card-row .col-account-priority {
+    display: inline-flex !important;
+    align-items: center;
+  }
+  .account-priority-badge {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    padding: 2px 8px;
+    background: var(--color-surface-2);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+  }
+  .account-card-row .col-account-health select {
+    width: 100% !important;
+    min-height: 38px;
+    font-size: var(--fs-sm);
+  }
+  .account-card-row .col-account-quota {
+    padding-top: var(--space-1) !important;
+  }
+  .account-card-row .col-account-created {
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .account-actions-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .account-actions-wrap button {
+    flex: 1 1 auto;
+    min-height: 38px !important;
+    justify-content: center;
+    font-size: var(--fs-xs);
+  }
+
+  /* ----- Model Cards on Mobile ----- */
+  .model-card-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--space-2) !important;
+    padding: var(--space-3) !important;
+    background: var(--color-surface) !important;
+    border: var(--border-w) var(--border-style) var(--color-border) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box !important;
+    width: 100% !important;
+    position: relative;
+  }
+  .model-card-row.inactive {
+    opacity: 0.75;
+    background: var(--color-surface-soft) !important;
+  }
+  .model-card-row.selected {
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 0 0 2px var(--color-primary-soft);
+  }
+  .model-card-row td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+  }
+  
+  /* Model Card Top Header: Select checkbox + Name + Status */
+  .model-card-row .col-model-select {
+    position: absolute;
+    top: var(--space-3);
+    left: var(--space-3);
+    width: auto !important;
+    z-index: 2;
+  }
+  .model-card-row .col-model-select input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+  }
+  .model-card-row .col-model-name {
+    padding-left: 2rem !important;
+    padding-right: 5rem !important;
+    min-height: 24px;
+  }
+  .model-name-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .model-usage-code {
+    font-size: var(--fs-xs) !important;
+    font-weight: 600;
+    word-break: break-all;
+    cursor: pointer;
+    background: var(--color-surface-2) !important;
+    border: 1px solid var(--color-border-soft);
+    padding: 2px 6px !important;
+    border-radius: var(--radius-sm);
+  }
+  .model-card-row .col-model-status {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    width: auto !important;
+  }
+
+  /* Specs & Format Row */
+  .model-card-row .col-model-format,
+  .model-card-row .col-model-context,
+  .model-card-row .col-model-max-output {
+    display: inline-flex !important;
+    width: auto !important;
+    margin-right: var(--space-2);
+  }
+  .format-chip {
+    font-size: 0.7rem;
+    padding: 1px 6px;
+  }
+  .model-spec-val {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    background: var(--color-surface-2);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Modality & Capabilities */
+  .model-modality-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+  }
+  .model-type-select {
+    width: 100% !important;
+    min-height: 36px;
+    font-size: var(--fs-xs) !important;
+    font-weight: 600;
+    padding: 0.35rem 0.5rem;
+    border-radius: var(--radius-sm);
+  }
+  .model-caps-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .model-family-tag {
+    font-size: 0.7rem;
+  }
+
+  /* Test Status */
+  .model-card-row .col-model-test-status {
+    display: flex !important;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    padding: var(--space-1) 0 !important;
+  }
+
+  /* Actions Block */
+  .model-actions-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .model-test-selectors {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+  .model-account-select,
+  .model-proxy-select {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 36px;
+    font-size: 12px !important;
+  }
+  .model-btn-group {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .model-btn-group button {
+    flex: 1 1 auto;
+    min-height: 38px !important;
+    justify-content: center;
+  }
+  .model-btn-group button.danger {
+    flex: 0 0 44px;
   }
 }
 
