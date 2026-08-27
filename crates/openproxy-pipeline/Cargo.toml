@@ -20,6 +20,11 @@ harness = false
 name = "think_extractor"
 harness = false
 
+
+[[bench]]
+name = "sse_accumulator"
+harness = false
+
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
