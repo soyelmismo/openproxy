@@ -473,14 +473,14 @@ mod tests {
 
     #[test]
     fn test_openai_formatter_strips_disabled() {
-        use openproxy_adapters::adapters::nvidia_nim::NvidiaNimAdapter;
         use openproxy_adapters::adapters::ProviderAdapterEnum;
-        use openproxy_types::models::Model;
+        use openproxy_adapters::adapters::nvidia_nim::NvidiaNimAdapter;
         use openproxy_types::ModelId;
         use openproxy_types::ModelRowId;
         use openproxy_types::OpenAIRequest;
         use openproxy_types::ProviderId;
         use openproxy_types::TargetFormat;
+        use openproxy_types::models::Model;
         use std::sync::Arc;
 
         let adapter = ProviderAdapterEnum::NvidiaNim(NvidiaNimAdapter::new());
