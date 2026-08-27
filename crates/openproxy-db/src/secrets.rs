@@ -8,7 +8,6 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use rand::Rng;
 use zeroize::Zeroize;
 
 use openproxy_types::{CoreError, Result};
@@ -67,7 +66,7 @@ impl MasterKey {
     /// Generate a fresh random key. For tests and bootstrapping.
     pub fn generate() -> Self {
         let mut bytes = [0u8; KEY_LEN];
-        rand::rng().fill_bytes(&mut bytes);
+        getrandom::fill(&mut bytes).expect("getrandom failed");
         Self {
             current: bytes,
             previous: None,
@@ -80,7 +79,7 @@ impl MasterKey {
     pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new_from_slice(&self.current).expect("key should be valid len");
         let mut nonce_bytes = [0u8; 12];
-        rand::rng().fill_bytes(&mut nonce_bytes);
+        getrandom::fill(&mut nonce_bytes).expect("getrandom failed");
         let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("nonce len is always 12");
         let mut blob = nonce.to_vec();
         let ct = cipher
