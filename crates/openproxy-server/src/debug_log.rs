@@ -252,7 +252,8 @@ where
         // `into_message()` (which consumes the visitor).
         let request_id = visitor.request_id.take();
         let trace_id = visitor.trace_id.take();
-        let message = visitor.into_message();
+        let raw_message = visitor.into_message();
+        let (message, _) = openproxy_core::cost::redact_error_msg(&raw_message);
 
         // Walk the span hierarchy (from the current span up to the
         // root) to build the span path. `ctx.event_scope(event)`
@@ -554,5 +555,49 @@ mod tests {
         assert!(snap[1].message.contains("simulated hard failure"));
         assert!(snap[1].message.contains("key=error-event"));
         assert_eq!(snap[0].target, "test::bug3");
+    }
+
+    #[tokio::test]
+    async fn debug_log_layer_redacts_secrets() {
+        let _test_lock = TEST_MUTEX.lock().unwrap();
+        init();
+
+        {
+            let mut guard = DEBUG_LOG_BUFFER.lock();
+            guard.entries.clear();
+            guard.next_seq = 1;
+        }
+        let before = latest_seq();
+
+        let _guard = tracing_subscriber::registry()
+            .with(DebugLogLayer.with_filter(LevelFilter::WARN))
+            .set_default();
+
+        let secret = "sk-abcdefghij1234567890";
+        tracing::error!(
+            target: "test::redaction",
+            "Error with secret: {}",
+            secret
+        );
+        tracing::warn!(
+            target: "test::redaction",
+            header = format!("Authorization: Bearer {}", secret),
+            "Failed to fetch",
+        );
+
+        let snap = snapshot_since(before)
+            .into_iter()
+            .filter(|s| s.target == "test::redaction")
+            .collect::<Vec<_>>();
+
+        assert_eq!(snap.len(), 2);
+
+        // Ensure that the secret itself is NOT in the logs
+        assert!(!snap[0].message.contains(secret));
+        assert!(!snap[1].message.contains(secret));
+
+        // Ensure that the message was redacted
+        assert!(snap[0].message.contains("sk-[REDACTED]"));
+        assert!(snap[1].message.contains("Bearer [REDACTED]"));
     }
 }
