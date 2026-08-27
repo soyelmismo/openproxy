@@ -44,7 +44,18 @@ fn extract_admin_token<'a>(
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(str::trim);
 
-    let t = header_token.or(query_token).ok_or_else(|| {
+    // SEC-01: Query parameter tokens are only permitted for WebSocket endpoints
+    // where setting the Authorization header is impossible from the browser API.
+    // For all other HTTP requests (REST APIs, etc.), we ignore the query token
+    // to prevent credential leakage in server logs or browser history.
+    let is_ws_upgrade = headers
+        .get(axum::http::header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|s| s.eq_ignore_ascii_case("websocket"));
+
+    let safe_query_token = if is_ws_upgrade { query_token } else { None };
+
+    let t = header_token.or(safe_query_token).ok_or_else(|| {
         ApiError(CoreError::Auth(
             "missing authorization header or token query parameter".into(),
         ))
