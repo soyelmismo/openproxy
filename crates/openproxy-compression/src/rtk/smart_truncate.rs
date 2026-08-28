@@ -103,14 +103,8 @@ pub fn smart_truncate(text: &str, config: &CompiledTruncateConfig) -> (String, b
     if !text.is_char_boundary(est) {
         est = text.floor_char_boundary(est);
     }
-    let out = assemble_truncated_output(
-        head,
-        middle,
-        tail,
-        dropped,
-        &config.priority_patterns,
-        est,
-    );
+    let out =
+        assemble_truncated_output(head, middle, tail, dropped, &config.priority_patterns, est);
 
     (out, true, dropped)
 }
