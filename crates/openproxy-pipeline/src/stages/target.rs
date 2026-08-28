@@ -462,24 +462,17 @@ fn update_predictive_limiter_on_result(
                 .report_success_key(key, None, None, now);
         }
         Some(CoreError::Cancelled(_) | CoreError::RaceLost) => {
-            pipeline
-                .predictive_limiter
-                .release_in_flight_key(key);
+            pipeline.predictive_limiter.release_in_flight_key(key);
         }
         Some(CoreError::RateLimited { retry_after_ms, .. }) => {
             let retry_after_secs = Some(*retry_after_ms / 1000);
-            pipeline.predictive_limiter.report_rate_limited_key(
-                key,
-                retry_after_secs,
-                now,
-            );
+            pipeline
+                .predictive_limiter
+                .report_rate_limited_key(key, retry_after_secs, now);
         }
-        Some(_) => record_predictive_limiter_upstream_error(
-            &pipeline.predictive_limiter,
-            key,
-            result,
-            now,
-        ),
+        Some(_) => {
+            record_predictive_limiter_upstream_error(&pipeline.predictive_limiter, key, result, now)
+        }
     }
 }
 

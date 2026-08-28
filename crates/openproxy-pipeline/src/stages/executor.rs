@@ -519,9 +519,8 @@ async fn perform_retry_iteration(
     }
 
     if combo.preventive_rate_limit {
-        let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(
-            &target.target,
-        );
+        let key =
+            crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target.target);
         let fingerprint = crate::predictive_rate_limit::compute_error_fingerprint(err);
         let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
         if !ctx.pipeline.predictive_limiter.should_retry_key(
@@ -743,9 +742,7 @@ fn should_skip_preventive_target(
     if !combo.preventive_rate_limit {
         return false;
     }
-    let readiness = pipeline
-        .predictive_limiter
-        .evaluate_key(target_key, now_ms);
+    let readiness = pipeline.predictive_limiter.evaluate_key(target_key, now_ms);
     let crate::predictive_rate_limit::TargetReadiness::Saturated {
         learned_burst,
         window_count,

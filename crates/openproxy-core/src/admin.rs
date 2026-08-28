@@ -1187,7 +1187,11 @@ mod tests {
             .find(|a| a.id == id2)
             .expect("present");
         assert_eq!(a.priority, 100, "default priority is 100");
-        assert_eq!(a.label.as_deref(), Some("sk-another"), "auto-generated summarized label");
+        assert_eq!(
+            a.label.as_deref(),
+            Some("sk-another"),
+            "auto-generated summarized label"
+        );
     }
 
     #[test]

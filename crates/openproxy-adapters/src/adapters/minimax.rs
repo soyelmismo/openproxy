@@ -239,8 +239,7 @@ fn parse_minimax_quota(
     );
 
     let session_reset_at = extract_reset_timestamp(target, "end_time", "remains_time");
-    let weekly_reset_at =
-        extract_reset_timestamp(target, "weekly_end_time", "weekly_remains_time");
+    let weekly_reset_at = extract_reset_timestamp(target, "weekly_end_time", "weekly_remains_time");
 
     Ok(openproxy_types::AccountQuota {
         session_used,

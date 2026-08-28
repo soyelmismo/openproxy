@@ -438,12 +438,7 @@ impl PredictiveRateLimiter {
     }
 
     /// Reporta HTTP 429 Too Many Requests por clave (Multiplicative Decrease / Burst Cap).
-    pub fn report_rate_limited_key(
-        &self,
-        key: u64,
-        retry_after_secs: Option<u64>,
-        now_ms: u64,
-    ) {
+    pub fn report_rate_limited_key(&self, key: u64, retry_after_secs: Option<u64>, now_ms: u64) {
         let shard = self.shard_for(key);
         let mut map = shard.inner.lock();
         let state = map.entry(key).or_default();
@@ -832,33 +827,23 @@ mod tests {
         let model1 = Some(ModelRowId(100));
         let model2 = Some(ModelRowId(200));
 
-        let k_acc1 = PredictiveRateLimiter::compute_key_parts(
-            &prov,
-            acc1,
-            model1,
-            RateLimitScope::Account,
+        let k_acc1 =
+            PredictiveRateLimiter::compute_key_parts(&prov, acc1, model1, RateLimitScope::Account);
+        let k_acc2 =
+            PredictiveRateLimiter::compute_key_parts(&prov, acc2, model1, RateLimitScope::Account);
+        assert_ne!(
+            k_acc1, k_acc2,
+            "Diferentes cuentas deben tener claves distintas"
         );
-        let k_acc2 = PredictiveRateLimiter::compute_key_parts(
-            &prov,
-            acc2,
-            model1,
-            RateLimitScope::Account,
-        );
-        assert_ne!(k_acc1, k_acc2, "Diferentes cuentas deben tener claves distintas");
 
-        let k_model1 = PredictiveRateLimiter::compute_key_parts(
-            &prov,
-            acc1,
-            model1,
-            RateLimitScope::Model,
+        let k_model1 =
+            PredictiveRateLimiter::compute_key_parts(&prov, acc1, model1, RateLimitScope::Model);
+        let k_model2 =
+            PredictiveRateLimiter::compute_key_parts(&prov, acc1, model2, RateLimitScope::Model);
+        assert_ne!(
+            k_model1, k_model2,
+            "Diferentes modelos en scope Model deben tener claves distintas"
         );
-        let k_model2 = PredictiveRateLimiter::compute_key_parts(
-            &prov,
-            acc1,
-            model2,
-            RateLimitScope::Model,
-        );
-        assert_ne!(k_model1, k_model2, "Diferentes modelos en scope Model deben tener claves distintas");
 
         let now = 100_000;
         assert!(limiter.acquire_key(k_acc1, now));
