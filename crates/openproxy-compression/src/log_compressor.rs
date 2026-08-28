@@ -175,7 +175,11 @@ fn is_make_target_header(l: &str) -> bool {
     if let Some(end) = l.find("]:")
         && let Some(n) = l.strip_prefix("make[")
     {
-        let target = &n[..end - "make[".len()];
+        let end_idx = end.saturating_sub("make[".len());
+        if !n.is_char_boundary(end_idx) {
+            return false;
+        }
+        let target = &n[..end_idx];
         !target.is_empty() && target.chars().all(|c| c.is_ascii_digit())
     } else {
         false

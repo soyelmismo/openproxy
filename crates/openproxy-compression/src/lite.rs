@@ -162,7 +162,10 @@ fn truncate_tool_text(text: &str) -> Option<String> {
         total_chars += 1;
     }
     if total_chars > MAX_TOOL_CHARS {
-        let cut = cut_byte.unwrap_or(text.len());
+        let mut cut = cut_byte.unwrap_or(text.len());
+        if !text.is_char_boundary(cut) {
+            cut = text.len();
+        }
         Some(format!(
             "{}…[truncated {} chars]",
             &text[..cut],
