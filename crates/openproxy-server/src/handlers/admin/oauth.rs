@@ -1,11 +1,12 @@
 use super::{AccountId, ApiError, AppState, CoreError, ProviderId, core_oauth};
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
 };
 
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::oauth::{OAuthProvider, OAuthProviderEnum, TokenResponse};
+use openproxy_core::rate_limit::RateLimitKey;
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
@@ -142,9 +143,21 @@ async fn save_oauth_token_and_notify(
 
 pub async fn oauth_exchange(
     State(s): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Rate limit OAuth exchange to prevent authorization code brute-forcing
+    // and upstream resource exhaustion. We use the client's IP since they
+    // don't have an account/API key yet in this flow.
+    if !s.rate_limiter().check(RateLimitKey::Ip(addr.ip())) {
+        return Err(ApiError(CoreError::RateLimited {
+            provider: "oauth_exchange".into(),
+            retry_after_ms: 60_000,
+            is_proxy_rotated: false,
+        }));
+    }
+
     let code = input
         .get("code")
         .and_then(|v| v.as_str())
