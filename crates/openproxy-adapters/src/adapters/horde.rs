@@ -937,27 +937,20 @@ pub fn normalize_dimension_64(val: u32) -> u32 {
     rounded.clamp(MIN_HORDE_DIMENSION, MAX_HORDE_DIMENSION)
 }
 
-const ASPECT_RATIO_DIMENSIONS: &[(&str, (u32, u32))] = &[
-    ("16:9", (1024, 576)),
-    ("9:16", (576, 1024)),
-    ("3:2", (960, 640)),
-    ("2:3", (640, 960)),
-    ("4:3", (1024, 768)),
-    ("3:4", (768, 1024)),
-    ("21:9", (1344, 576)),
-    ("9:21", (576, 1344)),
-    ("1:1", (1024, 1024)),
-];
-
 /// Aspect ratio to pixel dimensions lookup.
 pub fn aspect_ratio_to_dimensions(ar: &str) -> (u32, u32) {
-    ASPECT_RATIO_DIMENSIONS
-        .iter()
-        .find(|(ratio, _)| *ratio == ar)
-        .map_or(
-            (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
-            |(_, dim)| *dim,
-        )
+    match ar {
+        "16:9" => (1024, 576),
+        "9:16" => (576, 1024),
+        "3:2" => (960, 640),
+        "2:3" => (640, 960),
+        "4:3" => (1024, 768),
+        "3:4" => (768, 1024),
+        "21:9" => (1344, 576),
+        "9:21" => (576, 1344),
+        "1:1" => (1024, 1024),
+        _ => (DEFAULT_HORDE_DIMENSION, DEFAULT_HORDE_DIMENSION),
+    }
 }
 
 /// Parse dimensions from size string (e.g. "1024x1024") or aspect ratio (e.g. "16:9"),
