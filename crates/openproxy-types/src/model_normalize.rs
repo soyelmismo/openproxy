@@ -82,8 +82,8 @@ where
     if !s.is_char_boundary(idx) {
         return None;
     }
-    if predicate(&s[idx..]) {
-        Some(&s[..idx])
+    if predicate(s.get(idx..).unwrap_or("")) {
+        Some(s.get(..idx).unwrap_or(s))
     } else {
         None
     }
@@ -133,7 +133,7 @@ fn strip_compact_yyyymmdd(s: &str) -> Option<&str> {
         if digits.len() != 8 || !digits.as_bytes().iter().all(u8::is_ascii_digit) {
             return false;
         }
-        let year = &digits[..4];
+        let year = digits.get(..4).unwrap_or(digits);
         year.starts_with("19") || year.starts_with("20")
     })
 }

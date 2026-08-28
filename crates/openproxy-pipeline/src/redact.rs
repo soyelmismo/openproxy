@@ -123,7 +123,7 @@ fn truncate_header_value(v: &str) -> std::borrow::Cow<'_, str> {
             .last()
             .map_or(0, |(i, c)| i + c.len_utf8());
         let mut s = String::with_capacity(cut + "...[truncated]".len());
-        s.push_str(&v[..cut]);
+        s.push_str(v.get(..cut).unwrap_or(v));
         s.push_str("...[truncated]");
         std::borrow::Cow::Owned(s)
     }
