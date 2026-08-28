@@ -98,15 +98,17 @@ pub struct TestSourceInput {
     pub url: Option<String>,
 }
 
+fn fetch_source_url_by_id(r: &rusqlite::Connection, id: &str) -> Result<String, ApiError> {
+    let src = get_proxy_source(r, id)?
+        .ok_or_else(|| CoreError::Validation(format!("proxy source '{id}' not found")))?;
+    Ok(src.url)
+}
+
 pub async fn test_source_by_id(
     DbReader(r): DbReader,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let url = {
-        let src = get_proxy_source(&r, &id)?
-            .ok_or_else(|| CoreError::Validation(format!("proxy source '{id}' not found")))?;
-        src.url
-    };
+    let url = fetch_source_url_by_id(&r, &id)?;
     let count = test_proxy_source_url(&url).await?;
     Ok(Json(serde_json::json!({
         "id": id,
