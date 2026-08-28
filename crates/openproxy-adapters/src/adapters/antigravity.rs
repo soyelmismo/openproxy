@@ -346,7 +346,10 @@ async fn fetch_antigravity_models_from_endpoint(
     endpoint: &str,
 ) -> Option<Vec<DiscoveredModel>> {
     let mut req = UpstreamRequest::post_json(endpoint, Bytes::from_static(b"{}"));
-    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+    let mut __auth_val = bytes::BytesMut::with_capacity(7 + api_key.len());
+    __auth_val.extend_from_slice(b"Bearer ");
+    __auth_val.extend_from_slice(api_key.as_bytes());
+    if let Ok(v) = HeaderValue::from_maybe_shared(__auth_val.freeze()) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(
@@ -418,7 +421,10 @@ async fn try_fetch_models_quota_endpoint(
     endpoint: &str,
 ) -> Option<openproxy_types::AccountQuota> {
     let mut req = UpstreamRequest::post_json(endpoint, bytes::Bytes::from_static(b"{}"));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+    __auth_val.extend_from_slice(b"Bearer ");
+    __auth_val.extend_from_slice(access_token.as_bytes());
+    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(
@@ -505,7 +511,10 @@ async fn try_fetch_code_assist_plan(
 ) -> Option<String> {
     let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
     let mut req = UpstreamRequest::post_json(endpoint, payload);
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+    __auth_val.extend_from_slice(b"Bearer ");
+    __auth_val.extend_from_slice(access_token.as_bytes());
+    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(
@@ -573,7 +582,10 @@ impl AntigravityAdapter {
         let mut last_err: Option<CoreError> = None;
         for url in &endpoints {
             let mut req = UpstreamRequest::post_json(*url, bytes::Bytes::from_static(b"{}"));
-            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+            __auth_val.extend_from_slice(b"Bearer ");
+            __auth_val.extend_from_slice(access_token.as_bytes());
+            if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
                 req.headers.insert(http::header::AUTHORIZATION, v);
             }
             req.headers.insert(
@@ -982,7 +994,10 @@ pub async fn load_code_assist(
         LOAD_CODE_ASSIST_URL,
         bytes::Bytes::from(body_bytes),
     );
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+    __auth_val.extend_from_slice(b"Bearer ");
+    __auth_val.extend_from_slice(access_token.as_bytes());
+    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
@@ -1046,7 +1061,10 @@ pub async fn onboard_user(
         ONBOARD_USER_URL,
         bytes::Bytes::from(body_bytes),
     );
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+    __auth_val.extend_from_slice(b"Bearer ");
+    __auth_val.extend_from_slice(access_token.as_bytes());
+    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
