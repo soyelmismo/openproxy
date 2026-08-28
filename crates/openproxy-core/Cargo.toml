@@ -87,6 +87,7 @@ rustls-pki-types = { version = "1", optional = true }
 webpki-roots = { version = "1", optional = true }
 ahash = "0.8.12"
 governor = "0.10.4"
+getrandom = "0.3"
 
 [dev-dependencies]
 # Re-enable `tokio`'s `test-util` feature ONLY for the test
