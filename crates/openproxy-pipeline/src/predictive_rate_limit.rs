@@ -9,7 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SHARD_COUNT: usize = 256;
 const DEFAULT_BURST_CAPACITY: u32 = 1000;
 const DEFAULT_WINDOW_DURATION_MS: u64 = 60_000;
-const PROBE_SUCCESS_THRESHOLD: u32 = 5;
+const PROBE_SUCCESS_THRESHOLD: u32 = 2;
+const MIN_RECOVERED_BURST: u32 = 2;
 const MEMORY_DECAY_IDLE_MS: u64 = 15 * 60 * 1000; // 15 min sin 429s -> decay
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +92,15 @@ impl TargetPredictiveState {
             self.window_start_ms = now_ms;
         }
         if now_ms >= self.window_start_ms + self.window_duration_ms {
+            if self.state == TargetRateState::Closed
+                && self.window_count > 0
+                && self.learned_burst < DEFAULT_BURST_CAPACITY
+            {
+                self.learned_burst = self
+                    .learned_burst
+                    .saturating_add(2)
+                    .min(DEFAULT_BURST_CAPACITY);
+            }
             self.window_start_ms = now_ms;
             self.window_count = 0;
         }
@@ -216,7 +226,10 @@ impl TargetPredictiveState {
     fn recover_from_half_open(&mut self) {
         if self.state == TargetRateState::HalfOpen {
             self.state = TargetRateState::Closed;
-            self.learned_burst = self.learned_burst.max(self.window_count);
+            self.learned_burst = self
+                .learned_burst
+                .max(self.window_count)
+                .max(MIN_RECOVERED_BURST);
         }
     }
 
@@ -307,9 +320,7 @@ impl PredictiveRateLimiter {
             }
         } else {
             provider_id.0.hash(&mut hasher);
-            if scope == RateLimitScope::Model {
-                model_row_id.unwrap_or(ModelRowId(0)).0.hash(&mut hasher);
-            }
+            model_row_id.unwrap_or(ModelRowId(0)).0.hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -586,25 +597,25 @@ mod tests {
             _ => panic!("debe estar saturado con burst 1"),
         }
 
-        // Recuperar a HalfOpen -> Probe exitoso -> Closed
+        // Recuperar a HalfOpen -> Probe exitoso -> Closed (aplica MIN_RECOVERED_BURST = 2)
         let after_cd = now + 15_000;
         assert!(limiter.acquire_target(combo, target, after_cd));
         limiter.report_success(combo, target, None, None, after_cd);
 
-        // 5 éxitos consecutivos deben disparar Additive Increase
-        for i in 0..5 {
+        // 2 éxitos adicionales disparan Additive Increase (+1 por PROBE_SUCCESS_THRESHOLD = 2)
+        for i in 0..2 {
             let t = after_cd + 1000 * (i + 1);
             limiter.report_success(combo, target, None, None, t);
         }
 
-        // learned_burst debe haber aumentado a 2
+        // learned_burst debe haber aumentado de 2 a 3
         let key = PredictiveRateLimiter::compute_key(combo, target);
         let shard = limiter.shard_for(key);
         let map = shard.inner.lock();
         let state = map.get(&key).unwrap();
         assert_eq!(
-            state.learned_burst, 2,
-            "burst debe haber crecido elásticamente a 2"
+            state.learned_burst, 3,
+            "burst debe haber crecido elásticamente a 3"
         );
     }
 
@@ -858,5 +869,77 @@ mod tests {
             }
         );
         assert_eq!(limiter.evaluate_key(k_acc2, now), TargetReadiness::Ready);
+    }
+
+    #[test]
+    fn test_unbound_account_model_isolation() {
+        let prov = ProviderId("anthropic".to_string());
+        let model1 = Some(ModelRowId(10));
+        let model2 = Some(ModelRowId(20));
+
+        let k1 = PredictiveRateLimiter::compute_key_parts(&prov, None, model1, RateLimitScope::Account);
+        let k2 = PredictiveRateLimiter::compute_key_parts(&prov, None, model2, RateLimitScope::Account);
+        assert_ne!(
+            k1, k2,
+            "Modelos distintos sin account_id deben generar claves aisladas"
+        );
+
+        let k1_model_scope =
+            PredictiveRateLimiter::compute_key_parts(&prov, None, model1, RateLimitScope::Model);
+        let k2_model_scope =
+            PredictiveRateLimiter::compute_key_parts(&prov, None, model2, RateLimitScope::Model);
+        assert_ne!(
+            k1_model_scope, k2_model_scope,
+            "Modelos distintos en scope Model deben generar claves aisladas"
+        );
+        assert_eq!(
+            k1, k1_model_scope,
+            "Sin account_id, la clave es idéntica independientemente del scope"
+        );
+    }
+
+    #[test]
+    fn test_window_advance_additive_increase() {
+        let mut state = TargetPredictiveState {
+            state: TargetRateState::Closed,
+            learned_burst: 10,
+            window_count: 5,
+            window_start_ms: 100_000,
+            window_duration_ms: 60_000,
+            ..Default::default()
+        };
+
+        // Ventana no expirada: no debe incrementar
+        state.refresh(120_000);
+        assert_eq!(state.learned_burst, 10);
+        assert_eq!(state.window_count, 5);
+
+        // Ventana expirada con window_count > 0: debe incrementar +2
+        state.refresh(160_000);
+        assert_eq!(state.learned_burst, 12);
+        assert_eq!(state.window_count, 0);
+        assert_eq!(state.window_start_ms, 160_000);
+
+        // Otra ventana expirada con window_count == 0: no debe incrementar
+        state.refresh(230_000);
+        assert_eq!(state.learned_burst, 12);
+        assert_eq!(state.window_count, 0);
+    }
+
+    #[test]
+    fn test_recover_from_half_open_min_recovered_burst() {
+        let mut state = TargetPredictiveState {
+            state: TargetRateState::HalfOpen,
+            learned_burst: 1,
+            window_count: 1,
+            ..Default::default()
+        };
+
+        state.apply_success(None, None, 100_000);
+        assert_eq!(state.state, TargetRateState::Closed);
+        assert_eq!(
+            state.learned_burst, MIN_RECOVERED_BURST,
+            "Recuperarse de HalfOpen debe garantizar al menos MIN_RECOVERED_BURST"
+        );
     }
 }
