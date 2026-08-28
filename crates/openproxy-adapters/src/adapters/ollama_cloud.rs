@@ -87,3 +87,35 @@ fn map_ollama_tag_entry(m: OllamaTagEntry) -> DiscoveredModel {
         capabilities: Some(caps),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_map_ollama_tag_entry() {
+        let entry1 = OllamaTagEntry {
+            name: Some("gemma4:31b".to_string()),
+            display_name: None,
+        };
+        let m1 = map_ollama_tag_entry(entry1);
+        assert_eq!(m1.model_id.as_str(), "gemma4:31b");
+        assert_eq!(m1.display_name.as_deref(), Some("gemma4:31b"));
+
+        let entry2 = OllamaTagEntry {
+            name: Some("qwen3.5:397b".to_string()),
+            display_name: Some("Qwen 3.5".to_string()),
+        };
+        let m2 = map_ollama_tag_entry(entry2);
+        assert_eq!(m2.model_id.as_str(), "qwen3.5:397b");
+        assert_eq!(m2.display_name.as_deref(), Some("Qwen 3.5"));
+
+        let entry3 = OllamaTagEntry {
+            name: None,
+            display_name: None,
+        };
+        let m3 = map_ollama_tag_entry(entry3);
+        assert_eq!(m3.model_id.as_str(), "");
+        assert_eq!(m3.display_name.as_deref(), Some(""));
+    }
+}
