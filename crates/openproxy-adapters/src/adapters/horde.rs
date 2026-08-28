@@ -14,6 +14,7 @@ use bytes::Bytes;
 use openproxy_types::ImageGenerationRequest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HordeAdapter {
@@ -36,6 +37,10 @@ impl HordeAdapter {
         }
     }
 }
+
+static HORDE_CLIENT_AGENT: LazyLock<http::HeaderValue> = LazyLock::new(|| {
+    http::HeaderValue::from_static(concat!("openproxy:", env!("CARGO_PKG_VERSION")))
+});
 
 crate::adapters::derive_default_from_new!(HordeAdapter);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -341,10 +346,10 @@ async fn query_horde_user(
         req.headers
             .insert(http::header::HeaderName::from_static("apikey"), v);
     }
-    if let Ok(v) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
-        req.headers
-            .insert(http::header::HeaderName::from_static("client-agent"), v);
-    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("client-agent"),
+        HORDE_CLIENT_AGENT.clone(),
+    );
     req.headers.insert(
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json"),
@@ -818,10 +823,10 @@ fn apply_horde_auth_headers(req: &mut UpstreamRequest, api_key: &str, include_be
         req.headers
             .insert(http::header::HeaderName::from_static("apikey"), val);
     }
-    if let Ok(val) = http::HeaderValue::from_str(concat!("openproxy:", env!("CARGO_PKG_VERSION"))) {
-        req.headers
-            .insert(http::header::HeaderName::from_static("client-agent"), val);
-    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("client-agent"),
+        HORDE_CLIENT_AGENT.clone(),
+    );
     if include_bearer && let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {key}")) {
         req.headers.insert(http::header::AUTHORIZATION, val);
     }
