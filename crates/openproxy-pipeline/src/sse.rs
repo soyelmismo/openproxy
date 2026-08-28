@@ -2345,9 +2345,14 @@ pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
 }
 
 fn check_finish_reason_non_null(payload: &str) -> bool {
-    payload
-        .find("\"finish_reason")
-        .is_some_and(|idx| !payload[idx + 14..].starts_with("\":null"))
+    payload.find("\"finish_reason").is_some_and(|idx| {
+        let start = idx + 14;
+        if payload.is_char_boundary(start) {
+            !payload[start..].starts_with("\":null")
+        } else {
+            false
+        }
+    })
 }
 
 pub fn sse_payload_needs_parse(payload: &str) -> bool {

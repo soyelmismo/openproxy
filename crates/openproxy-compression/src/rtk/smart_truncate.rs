@@ -99,14 +99,12 @@ pub fn smart_truncate(text: &str, config: &CompiledTruncateConfig) -> (String, b
     let middle = &lines[middle_start..tail_start];
     let dropped = lines.len().saturating_sub(head.len() + tail.len());
 
-    let out = assemble_truncated_output(
-        head,
-        middle,
-        tail,
-        dropped,
-        &config.priority_patterns,
-        text.len() / 2,
-    );
+    let mut est = text.len() / 2;
+    if !text.is_char_boundary(est) {
+        est = text.floor_char_boundary(est);
+    }
+    let out =
+        assemble_truncated_output(head, middle, tail, dropped, &config.priority_patterns, est);
 
     (out, true, dropped)
 }
