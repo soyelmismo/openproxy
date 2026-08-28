@@ -396,14 +396,44 @@ function renderRaceOutcomesCard(snapshot: Snapshot | null): TemplateResult {
 
 function renderActivityRow(r: RecentUsageRow): TemplateResult {
   const cls: string = statusPillClass(r.status_code);
+  const timeStr: string = formatTime(r.created_at);
+  const tokensStr: string = formatTokensInOut(r.prompt_tokens, r.completion_tokens);
+  const latencyStr: string = formatLatency(r.total_ms);
+  const cost = r.cost_usd ?? 0;
+  const provider = r.provider_id || "—";
+  const model = r.upstream_model_id || "—";
+  const provModel = `${provider} / ${model}`;
+
   return html`<a class="home-activity-row" href=${`#/logs?request_id=${encodeURIComponent(r.request_id || "")}`} data-id=${r.id}>
-    <span class="home-activity-time">${formatTime(r.created_at)}</span>
-    <span class="home-activity-model" title="${r.upstream_model_id || ""}">${r.upstream_model_id || "—"}</span>
-    <span class="home-activity-provider" title="${r.provider_id || ""}">${r.provider_id || "—"}</span>
-    <span class="home-activity-status"><span class="status-pill ${cls}">${r.status_code ?? "—"}</span></span>
-    <span class="home-activity-latency">${formatLatency(r.total_ms)}</span>
-    <span class="home-activity-tokens">${formatTokensInOut(r.prompt_tokens, r.completion_tokens)}</span>
-    <span class="home-activity-cost">${formatCost(r.cost_usd)}</span>
+    <div class="home-desktop-cells">
+      <span class="home-activity-time">${timeStr}</span>
+      <span class="home-activity-model" title="${model}">${model}</span>
+      <span class="home-activity-provider" title="${provider}">${provider}</span>
+      <span class="home-activity-status"><span class="status-pill ${cls}">${r.status_code ?? "—"}</span></span>
+      <span class="home-activity-latency">${latencyStr}</span>
+      <span class="home-activity-tokens">${tokensStr}</span>
+      <span class="home-activity-cost">${formatCost(r.cost_usd)}</span>
+    </div>
+    <div class="home-mobile-card">
+      <div class="home-m-line-1">
+        <div class="home-m-left">
+          <span class="home-activity-status"><span class="status-pill ${cls}">${r.status_code ?? "—"}</span></span>
+          <span class="home-activity-time">${timeStr}</span>
+        </div>
+        <div class="home-m-right">
+          <span class="home-activity-tokens">${tokensStr}</span>
+          <span class="home-activity-latency">${latencyStr}</span>
+          ${cost > 0 ? html`<span class="home-activity-cost">${formatCost(cost)}</span>` : ""}
+        </div>
+      </div>
+      <div class="home-m-line-2">
+        <div class="home-m-left">
+          <span class="home-activity-model-prov" title="${provModel}">
+            <span class="prov-label">${provider}</span> / ${model}
+          </span>
+        </div>
+      </div>
+    </div>
   </a>`;
 }
 

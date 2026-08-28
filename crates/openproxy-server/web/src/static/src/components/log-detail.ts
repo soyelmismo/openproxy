@@ -1108,9 +1108,6 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const comboRaw: unknown = log.combo_id ?? meta["combo_id"];
   const combo: string | number | null = comboRaw != null && (typeof comboRaw === "string" || typeof comboRaw === "number") ? comboRaw : null;
   const model: string = log.model_id || log.upstream_model || log.upstream_model_id || (readString(meta, "model_id") ?? "—");
-  const latency: string = log.latency_ms != null ? `${log.latency_ms} ms`
-    : (log.total_ms != null ? `${log.total_ms} ms`
-      : (log.elapsed_ms != null ? `${log.elapsed_ms} ms` : "—"));
   const costRaw: number | null = log.cost != null ? log.cost
     : (log.usage && log.usage.cost != null ? log.usage.cost
       : (log.cost_usd != null ? log.cost_usd : null));
@@ -1124,16 +1121,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const createdAt: string = log.created_at || log.timestamp || "—";
   const apiKeyIdRaw: unknown = log.api_key_id ?? meta["api_key_id"];
   const apiKeyId: string | number | null = apiKeyIdRaw != null && (typeof apiKeyIdRaw === "string" || typeof apiKeyIdRaw === "number") ? apiKeyIdRaw : null;
-  const userAgent: string | null = log.user_agent || readString(meta, "user_agent");
-
-  const apiKeyIdBlock: TemplateResult | null = apiKeyId != null
-    ? html`<div><strong>API key:</strong> #${String(apiKeyId)}</div>`
-    : null;
-  const userAgentBlock: TemplateResult | null = userAgent
-    ? html`<div><strong>User-Agent:</strong> ${String(userAgent)}</div>`
-    : null;
   const comboText: string = combo != null ? String(combo) : "—";
-  const costText: string = costRaw != null ? String(costRaw) : "—";
   const endpointKind: string = (log.endpoint_kind || (detail["endpoint_kind"] as string) || (meta["endpoint_kind"] as string) || "chat").toLowerCase();
   const endpointPath: string = endpointKind === "audio"
     ? "/v1/audio/transcriptions"
@@ -1144,6 +1132,45 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     : endpointKind === "video"
     ? "/v1/video/generations"
     : "/v1/chat/completions";
+
+  // TTFT & Latency calculation: "3,277 ms (ttft 8ms)"
+  const ttftMs = (log as Record<string, unknown>)["time_to_first_token_ms"]
+    ?? (log as Record<string, unknown>)["ttft_ms"]
+    ?? (attempt as Record<string, unknown> | undefined)?.["ttft_ms"]
+    ?? (meta as Record<string, unknown>)["ttft_ms"];
+  const latVal = log.latency_ms ?? log.total_ms ?? log.elapsed_ms;
+  const latencyDisplay = latVal != null
+    ? `${latVal} ms${ttftMs != null ? ` (ttft ${ttftMs}ms)` : ""}`
+    : "—";
+
+  // Tokens calculation: "6,897↓ 150↑ (7,047 tot)"
+  const promptTokens = log.prompt_tokens;
+  const compTokens = log.completion_tokens;
+  const totalTokens = (log as Record<string, unknown>)["total_tokens"] as number | undefined
+    ?? ((promptTokens != null || compTokens != null) ? ((promptTokens ?? 0) + (compTokens ?? 0)) : null);
+  const promptEstimated = log.prompt_tokens_estimated ? "≈" : "";
+  const compEstimated = log.completion_tokens_estimated ? "≈" : "";
+  const tokensDisplay = (promptTokens != null || compTokens != null || totalTokens != null)
+    ? `${promptEstimated}${promptTokens != null ? promptTokens.toLocaleString() : "0"}↓ ${compEstimated}${compTokens != null ? compTokens.toLocaleString() : "0"}↑ (${totalTokens != null ? totalTokens.toLocaleString() : "0"} tot)`
+    : "—";
+
+  // Speed calculation: "45.9 tok/s"
+  const speedDisplay = log.tokens_per_sec != null ? `${log.tokens_per_sec.toFixed(1)} tok/s` : "—";
+
+  // Cost calculation: "$0.0000"
+  const costDisplay = costRaw != null
+    ? (typeof costRaw === "number" ? `$${costRaw.toFixed(4)}` : `$${Number(costRaw).toFixed(4)}`)
+    : "$0.0000";
+
+  const apiKeyDisplay = apiKeyId != null ? `#${String(apiKeyId)}` : "—";
+
+  // Compression savings info
+  const pct = log.compression_savings_pct ?? null;
+  const tech = log.compression_techniques ?? "";
+  const pctTextVal = pct != null ? (pct < 1 ? pct.toFixed(2) : Math.round(pct).toString()) : "";
+  const compressionTooltip = pct != null && pct > 0
+    ? `Savings: -${pctTextVal}% tok (BPE cl100k_base)${tech.length > 0 ? " — " + tech : ""}`
+    : "";
 
   return html`
     <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
@@ -1156,29 +1183,47 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
           <button type="button" class="close-btn" @click=${(e: Event) => closeLogDetailModal(e)} aria-label="Close">${icons.close()}</button>
         </div>
         <div class="modal-body">
-          <div class="log-detail-summary">
+          <!-- Resumen: Desktop 4 columnas -->
+          <div class="log-detail-summary desktop-summary">
             <div><strong>Status:</strong> <span class="status-pill ${statusClass}">${String(status)}</span></div>
-            <div><strong>Endpoint:</strong> <span title="HTTP Entry: POST ${endpointPath} (${endpointKind})"><code style="font-size:0.85em;padding:1px 4px;background:var(--color-surface-2);border-radius:3px;">POST ${endpointPath}</code> <span class="log-type-tag log-type-tag--${endpointKind}" style="font-size:0.75em;padding:1px 5px;margin-left:4px;">${endpointIcon(endpointKind)} ${endpointKind}</span></span></div>
+            <div><strong>Endpoint:</strong> <span title="HTTP Entry: POST ${endpointPath} (${endpointKind})"><code style="font-size:0.85em;padding:1px 4px;background:var(--color-surface-2);border-radius:0;">POST ${endpointPath}</code> <span class="log-type-tag log-type-tag--${endpointKind}" style="font-size:0.75em;padding:1px 5px;margin-left:4px;">${endpointIcon(endpointKind)} ${endpointKind}</span></span></div>
             <div><strong>Provider:</strong> ${String(provider)}</div>
+            <div><strong>Model:</strong> ${String(model)}</div>
+            <div><strong>Latency:</strong> <span class="mono-val">${latencyDisplay}</span></div>
+            <div><strong>Tokens:</strong> <span class="mono-val"${compressionTooltip ? html` title=${compressionTooltip}` : ""}>${tokensDisplay}</span></div>
+            <div><strong>Speed:</strong> <span class="mono-val">${speedDisplay}</span></div>
+            <div><strong>Cost:</strong> <span class="mono-val">${costDisplay}</span></div>
             <div><strong>Account:</strong> ${String(account)}</div>
             <div><strong>Combo:</strong> ${comboText}</div>
-            <div><strong>Model:</strong> ${String(model)}</div>
-            <div><strong>Latency:</strong> ${latency}</div>
-            <div><strong>Prompt tokens:</strong> ${log.prompt_tokens_estimated ? "≈" : ""}${log.prompt_tokens ?? "—"}</div>
-            <div><strong>Completion tokens:</strong> ${log.completion_tokens_estimated ? "≈" : ""}${log.completion_tokens ?? "—"}</div>
-            <div><strong>Tokens/sec:</strong> ${log.tokens_per_sec != null ? log.tokens_per_sec.toFixed(1) : "—"}</div>
-            <div><strong>Cost:</strong> ${costText}</div>
-            ${renderCompressionSummary(log)}
+            <div><strong>API Key:</strong> ${apiKeyDisplay}</div>
             <div><strong>Created:</strong> ${String(createdAt)}</div>
-            ${apiKeyIdBlock}
-            ${userAgentBlock}
           </div>
-          <div class="log-detail-tabs">
-            <button class="detail-tab ${currentActiveTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
-            <button class="detail-tab ${currentActiveTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
-            <button class="detail-tab ${currentActiveTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
-            <button class="detail-tab ${currentActiveTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
+
+          <!-- Resumen: Mobile 2x2 Mini-Cards -->
+          <div class="mobile-modal-kpi-grid">
+            <div class="m-kpi-card">
+              <span class="kpi-label">Petición & Estado</span>
+              <span class="kpi-val status-${statusClass}">${status} · ${endpointKind}</span>
+              <span class="kpi-sub">POST ${endpointPath}</span>
+            </div>
+            <div class="m-kpi-card">
+              <span class="kpi-label">Enrutamiento</span>
+              <span class="kpi-val">${String(provider)}</span>
+              <span class="kpi-sub mono">${String(model)}</span>
+            </div>
+            <div class="m-kpi-card">
+              <span class="kpi-label">Rendimiento</span>
+              <span class="kpi-val">${latencyDisplay}</span>
+              <span class="kpi-sub">TTFT: ${ttftMs != null ? `${Number(ttftMs)}ms` : "0ms"} · ${speedDisplay}</span>
+            </div>
+            <div class="m-kpi-card">
+              <span class="kpi-label">Uso & Metadata</span>
+              <span class="kpi-val">${tokensDisplay}</span>
+              <span class="kpi-sub">Key ${apiKeyDisplay} · ${costDisplay}</span>
+            </div>
           </div>
+
+          ${renderLogDetailTabs(currentActiveTab, log)}
           <div class="log-detail-content" id="log-detail-content">
             ${renderRequestTab(requestBody, createdAt)}
             ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
@@ -1196,6 +1241,55 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   `;
 }
 
+function renderLogDetailTabs(currentTab: string, rawJson: unknown): TemplateResult {
+  return html`
+    <div class="tabs-toolbar tabs-and-actions-bar">
+      <div class="tabs-group log-detail-tabs-group log-detail-tabs">
+        <button class="detail-tab ${currentTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
+        <button class="detail-tab ${currentTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
+        <button class="detail-tab ${currentTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
+        <button class="detail-tab ${currentTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
+      </div>
+      <div class="tab-actions-right">
+        <button class="btn-copy-tab btn-copy-action" type="button" @click=${(e: Event) => { void copyRawJson(rawJson, e); }} title="Copiar log JSON">
+          ${icons.copy()} Copiar
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+export async function copyRawJson(rawJson: unknown, _e?: Event): Promise<void> {
+  const text = typeof rawJson === "string" ? rawJson : JSON.stringify(rawJson, null, 2);
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      showToast("Log JSON copiado al portapapeles.", "success");
+      return;
+    }
+  } catch (err) {
+    console.warn("[openproxy] navigator.clipboard.writeText failed:", err);
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.setAttribute("readonly", "");
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) {
+      showToast("Log JSON copiado al portapapeles.", "success");
+      return;
+    }
+  } catch (fallbackErr) {
+    console.warn("[openproxy] execCommand fallback failed:", fallbackErr);
+  }
+  showToast("No se pudo copiar el JSON al portapapeles.", "warning");
+}
+
 let currentActiveTab: string = "request";
 
 /** Click handler for the `.detail-tab` buttons. Toggles which
@@ -1209,7 +1303,7 @@ export function logDetailTabClick(which: string, _e?: Event): void {
     el.style.display = (sec.getAttribute("data-log-tab") === which) ? "" : "none";
   });
   // Update active tab buttons
-  document.querySelectorAll(".log-detail-tabs .detail-tab").forEach((btn) => {
+  document.querySelectorAll(".tabs-toolbar .detail-tab, .tabs-and-actions-bar .detail-tab, .log-detail-tabs .detail-tab").forEach((btn) => {
     const b = btn as HTMLElement;
     b.classList.toggle("active", b.getAttribute("data-arg1") === which);
   });
@@ -1438,25 +1532,6 @@ export function closeLogDetailModal(e: Event | null): void {
   // Case 3: click was inside .modal on something else (tabs, content,
   // summary, etc.) with a different click handler — do nothing; the
   // other handler (e.g. logDetailTabClick) already handled the click.
-}
-
-/// Render the compression savings line for the log detail summary.
-///
-/// Header-only: shows the percentage prominently. Long technique
-/// lists can overflow narrow modals, so the techniques string is
-/// moved into the `title` attribute (hover tooltip) instead of
-/// being rendered as visible text. The Raw tab keeps the
-/// techniques visible because they're useful there.
-/// Returns null when compression is off (so the summary line is
-/// omitted entirely).
-function renderCompressionSummary(log: LogDetailLog): TemplateResult | null {
-  const pct = log.compression_savings_pct ?? null;
-  if (pct == null || pct <= 0) return null;
-  const tech = log.compression_techniques ?? "";
-  const pctTextVal = pct < 1 ? pct.toFixed(2) : Math.round(pct).toString();
-  const pctText = `-${pctTextVal}% tok`;
-  const tooltip = `Token savings: ${pctTextVal}% (BPE cl100k_base)${tech.length > 0 ? " — " + tech : ""}`;
-  return html`<div><strong>Compression:</strong> <span title=${tooltip}>${pctText}</span></div>`;
 }
 
 export function updateOpenLogDetail(_row: LogDetailLog | null | undefined): void {

@@ -77,7 +77,7 @@ test.describe('Combo Re-arrange functionality', () => {
     expect(await rows[1]!.getAttribute('data-drag-id')).toBe('102');
 
     // Click the "Down" button on the first row (target 101)
-    const downBtn = row1.locator('button:text-is("↓")');
+    const downBtn = row1.locator('button[title="Move Down"], button:text-is("↓"), button:text-is("▼")');
     const requestPromise = page.waitForRequest(r => r.url().includes('reorder') && r.method() === 'POST');
     await downBtn.click();
     const request = await requestPromise;

@@ -775,8 +775,8 @@ async function onTestModel(rowId: number, e: Event | null): Promise<void> {
   btn.disabled = true;
   btn.textContent = "Testing...";
 
-  const accountSelect = document.getElementById(`test-account-${rowId}`) as HTMLSelectElement | null;
-  const proxySelect = document.getElementById(`test-proxy-${rowId}`) as HTMLSelectElement | null;
+  const accountSelect = (document.getElementById(`test-account-${rowId}`) || document.getElementById(`test-account-m-${rowId}`)) as HTMLSelectElement | null;
+  const proxySelect = (document.getElementById(`test-proxy-${rowId}`) || document.getElementById(`test-proxy-m-${rowId}`)) as HTMLSelectElement | null;
   const accountId = accountSelect && accountSelect.value ? parseInt(accountSelect.value, 10) : null;
   const proxyId = proxySelect && proxySelect.value ? proxySelect.value : null;
 
@@ -1268,6 +1268,83 @@ function renderModelRow(m: Model): TemplateResult {
           <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? "Disable" : "Enable"}</button>
           <button class="small danger" @click=${() => onDeleteModel(m.row_id)} title="Delete model">${icons.close()}</button>
         </div>
+      </div>
+    </td>
+
+    <!-- Mobile Card Structure -->
+    <td class="mobile-model-card-cell">
+      <div class="card-top-header">
+        <div class="card-title-area">
+          <input 
+            type="checkbox" 
+            .checked=${isSelected} 
+            @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}
+          />
+          <span 
+            class="card-model-title" 
+            title="Click to copy usage model name"
+            @click=${(e: Event) => onCopyUsageModel(usageModel, e)}
+          >
+            ${usageModel}
+          </span>
+          ${m.custom ? html`<span class="badge custom" style="font-size:0.62rem;padding:0 3px;">custom</span>` : html``}
+        </div>
+        <span class="card-status-pill ${m.active ? 'active' : 'inactive'}">
+          ${m.active ? 'active' : 'inactive'}
+        </span>
+      </div>
+
+      <div class="card-meta-row">
+        <span class="meta-chip accent">${m.target_format || "openai"}</span>
+        <span class="meta-chip">${formatContext(m.context_length)} ctx</span>
+        <span class="meta-chip">${formatContext(m.max_output_tokens)} out</span>
+        ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
+        ${m.family ? html`<span class="meta-chip">${m.family}</span>` : html``}
+      </div>
+
+      <div class="card-config-box">
+        <div class="config-item">
+          <span class="config-val-upstream" title="${m.model_id}">
+            ${m.model_id}
+          </span>
+        </div>
+        <div class="config-item">
+          <span class="config-label">Test</span>
+          <span class="config-val">${lastTest}</span>
+        </div>
+      </div>
+
+      <div class="card-routes-grid">
+        <select class="custom-mobile-select" id=${`test-account-m-${m.row_id}`} @change=${(e: Event) => {
+          const el = document.getElementById(`test-account-${m.row_id}`) as HTMLSelectElement;
+          if (el) el.value = (e.target as HTMLSelectElement).value;
+        }}>
+          <option value="">(Default Account)</option>
+          ${providerAccounts.map((acc) => html`<option value="${acc.id}">${acc.label || `Account #${acc.id}`}</option>`)}
+        </select>
+        <select class="custom-mobile-select" id=${`test-proxy-m-${m.row_id}`} @change=${(e: Event) => {
+          const el = document.getElementById(`test-proxy-${m.row_id}`) as HTMLSelectElement;
+          if (el) el.value = (e.target as HTMLSelectElement).value;
+        }}>
+          <option value="">(No Proxy)</option>
+          ${aliveProxies.map((prx) => html`<option value="${prx.id}">${prx.host}:${prx.port} (${prx.latency_ms || '?'}ms)</option>`)}
+        </select>
+      </div>
+
+      <div class="card-actions-bar">
+        <button class="btn-card primary" @click=${(e: Event) => {
+          const accM = document.getElementById(`test-account-m-${m.row_id}`) as HTMLSelectElement;
+          const prxM = document.getElementById(`test-proxy-m-${m.row_id}`) as HTMLSelectElement;
+          const accD = document.getElementById(`test-account-${m.row_id}`) as HTMLSelectElement;
+          const prxD = document.getElementById(`test-proxy-${m.row_id}`) as HTMLSelectElement;
+          if (accM && accD) accD.value = accM.value;
+          if (prxM && prxD) prxD.value = prxM.value;
+          onTestModel(m.row_id, e);
+        }}>⚡ Test</button>
+        <button class="btn-card" @click=${() => onToggleModel(m.row_id, !m.active)}>
+          ${m.active ? 'Disable' : 'Enable'}
+        </button>
+        <button class="btn-card danger" @click=${() => onDeleteModel(m.row_id)} title="Delete">✕</button>
       </div>
     </td>
   </tr>`;

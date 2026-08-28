@@ -15,6 +15,7 @@ import {
   showAddCustomProxy,
   reloadProxies,
 } from "../handlers/proxy-handlers.js";
+import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
 
 interface FreeProxyRow {
@@ -124,19 +125,35 @@ function formatTimeAgo(isoString: string | null): string {
   return `${diffDays}d ago`;
 }
 
-function renderProxyRow(p: FreeProxyRow): TemplateResult {
-  let statusClass = "unknown";
-  let statusLabel = t("proxies.status.unknown");
-
-  if (p.status === "alive") {
-    statusClass = "on";
-    statusLabel = t("proxies.status.alive");
-  } else if (p.status === "dead") {
-    statusClass = "off";
-    statusLabel = t("proxies.status.dead");
+async function onCopyProxy(text: string, e: Event): Promise<void> {
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast("Proxy copied!", "success");
+      return;
+    }
+    const el = document.createElement("textarea");
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+    showToast("Proxy copied!", "success");
+  } catch (_err: unknown) {
+    showToast("Failed to copy", "error");
   }
+}
+
+function renderProxyRow(p: FreeProxyRow): TemplateResult {
+  const isAlive = p.status === "alive";
+  const fullHost = p.port ? `${p.host}:${p.port}` : p.host;
+  const statusLabel = isAlive ? "ALIVE" : (p.status === "dead" ? "DEAD" : p.status.toUpperCase());
+  const statusClass = isAlive ? "alive on" : (p.status === "dead" ? "dead off" : "unknown");
 
   let latencyText = html`—`;
+  const latencyNum = p.latency_ms ?? 0;
   let latencyClass = "";
   if (p.latency_ms !== null && p.latency_ms !== undefined) {
     latencyText = html`${p.latency_ms} ms`;
@@ -149,11 +166,12 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
     }
   }
 
-  const country = p.country_code || "—";
+  const country = p.country_code || "XX";
   const lastVal = formatTimeAgo(p.last_validated);
 
   return html`
-    <tr class="proxy-card-row">
+    <tr class="proxy-card-row ${isAlive ? 'alive' : 'dead'}">
+      <!-- Desktop Table Cells -->
       <td class="col-proxy-host" data-label="Host"><strong>${p.host}</strong></td>
       <td class="col-proxy-port" data-label="Port"><code class="proxy-port-code">${p.port}</code></td>
       <td class="col-proxy-protocol" data-label="Type"><span class="chip chip-protocol">${p.type.toUpperCase()}</span></td>
@@ -171,6 +189,42 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
         <div class="proxy-actions-wrap">
           <button class="small" @click=${() => void testProxy(p.id)}>${icons.flask()} ${t("common.retry")}</button>
           <button class="small danger" @click=${() => void deleteProxy(p.id)}>${icons.trash()} ${t("common.delete")}</button>
+        </div>
+      </td>
+
+      <!-- Mobile Card Structure -->
+      <td class="mobile-proxy-card-cell">
+        <!-- Línea 1: Host:Port + Protocolo + País + Status -->
+        <div class="p-card-line-1">
+          <div class="p-card-host-group">
+            <span 
+              class="p-card-host" 
+              title="Click to copy host:port"
+              @click=${(e: Event) => onCopyProxy(fullHost, e)}
+            >
+              ${fullHost}
+            </span>
+            <span class="p-card-chip">${p.type.toUpperCase()}</span>
+            <span class="p-card-country">${country}</span>
+          </div>
+          <span class="p-card-status ${isAlive ? 'alive' : 'dead'}">
+            ${statusLabel}
+          </span>
+        </div>
+
+        <!-- Línea 2: Latencia + Fuente + Antigüedad + Botones -->
+        <div class="p-card-line-2">
+          <div class="p-card-metrics">
+            <span class="p-card-latency ${latencyNum > 1000 ? 'high' : ''}">${p.latency_ms !== null && p.latency_ms !== undefined ? `${p.latency_ms} ms` : '—'}</span>
+            <span>·</span>
+            <span class="p-card-source" title="${p.source}">${p.source}</span>
+            <span>·</span>
+            <span class="p-card-time">${lastVal}</span>
+          </div>
+          <div class="p-card-actions">
+            <button @click=${() => void testProxy(p.id)}>🔄 Retry</button>
+            <button class="danger" @click=${() => void deleteProxy(p.id)} title="Delete">✕</button>
+          </div>
         </div>
       </td>
     </tr>
@@ -301,7 +355,7 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
               </tbody>
             </table>
           </div>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
+          <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
             <span>Page ${page}</span>
             <div style="display: flex; gap: 0.5rem;">
               <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>

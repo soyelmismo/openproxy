@@ -133,6 +133,83 @@ function buildLogRowCells(
   return cells;
 }
 
+function buildMobileCardView(
+  attempt: AttemptState,
+  isPredictSkipped: boolean,
+  statusErr: boolean
+): TemplateResult {
+  const row = attempt.row;
+  const statusText = isPredictSkipped
+    ? "skip"
+    : (attempt.statusCode != null && attempt.statusCode > 0 ? String(attempt.statusCode) : "—");
+  const statusClass = isPredictSkipped ? "skip" : (statusErr ? "err" : "ok");
+
+  const rawKind = (attempt.endpointKind || row?.endpoint_kind || "chat").toLowerCase();
+  
+  // Format short time HH:MM:SS
+  const fullTime = row?.created_at || (attempt.startedAtMs ? new Date(attempt.startedAtMs).toISOString() : "");
+  let timeShort = "";
+  if (fullTime) {
+    const tIdx = fullTime.indexOf("T");
+    if (tIdx >= 0) {
+      timeShort = fullTime.slice(tIdx + 1, tIdx + 9);
+    } else {
+      timeShort = fullTime.slice(0, 8);
+    }
+  }
+
+  // Tokens short formatted
+  let tokensText = "—";
+  if (row) {
+    const ptEst = row.prompt_tokens_estimated ? "≈" : "";
+    const ctEst = row.completion_tokens_estimated ? "≈" : "";
+    const pt = row.prompt_tokens != null ? `${ptEst}${formatContext(row.prompt_tokens)}↓` : "—↓";
+    const ct = row.completion_tokens != null ? `${ctEst}${formatContext(row.completion_tokens)}↑` : "—↑";
+    tokensText = `${pt} ${ct}`;
+  }
+
+  // Latency text
+  const latencyText = `${attempt.elapsedMsAtEvent}ms`;
+
+  // Model & Provider
+  const modelProv = `${attempt.providerId ? `${attempt.providerId} / ` : ""}${attempt.upstreamModelId || "—"}`;
+
+  // Optional badge: cache or compression or cost
+  let extraBadge: TemplateResult | null = null;
+  if (row && row.cached_tokens != null && row.cached_tokens > 0) {
+    extraBadge = html`<span class="log-cache" style="color: var(--color-success); font-size: 0.72rem;">${icons.target()} ${formatContext(row.cached_tokens)}</span>`;
+  } else if (row && row.compression_savings_pct != null && row.compression_savings_pct > 0) {
+    const pct = row.compression_savings_pct < 1 ? row.compression_savings_pct.toFixed(2) : Math.round(row.compression_savings_pct).toString();
+    extraBadge = html`<span class="log-compression" style="color: var(--color-success); font-size: 0.72rem;">${icons.lightning()} ${pct}%</span>`;
+  } else if (row && row.cost_usd != null && row.cost_usd > 0) {
+    extraBadge = html`<span class="log-cost" style="color: var(--color-primary); font-size: 0.72rem;">$${row.cost_usd.toFixed(4)}</span>`;
+  }
+
+  return html`
+    <div class="m-card-view">
+      <div class="m-line-1">
+        <div class="m-line-left">
+          <span class="log-status-badge status-pill ${statusClass}">${statusText}</span>
+          <span class="log-type-tag log-type-tag--${rawKind}">${endpointIcon(rawKind)} ${rawKind}</span>
+          <span class="log-time-short">${timeShort}</span>
+        </div>
+        <div class="m-line-right">
+          <span class="log-tokens-tag">${tokensText}</span>
+          <span class="log-latency-tag">${latencyText}</span>
+        </div>
+      </div>
+      <div class="m-line-2">
+        <div class="m-line-left">
+          <span class="log-model-prov" title="${modelProv}">${modelProv}</span>
+        </div>
+        <div class="m-line-right">
+          ${extraBadge}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderLogRowHtml(
   attempt: AttemptState,
   visibleColumns: Set<string> | null,
@@ -157,9 +234,10 @@ export function renderLogRowHtml(
   ].filter(Boolean).join(" ");
   
   const cells = buildLogRowCells(attempt, visibleColumns);
+  const mobileCard = buildMobileCardView(attempt, isPredictSkipped, statusErr);
   
   const dataId = attempt.rowId || "";
   const dataAttemptKey = attempt.attemptKey || "";
   
-  return html`<button class="${cls}" data-id=${dataId} data-attempt-key=${dataAttemptKey} data-request-id=${attempt.requestId || ""} data-trace-id=${attempt.traceId || ""} aria-label="Open usage detail">${cells}</button>`;
+  return html`<button class="${cls}" data-id=${dataId} data-attempt-key=${dataAttemptKey} data-request-id=${attempt.requestId || ""} data-trace-id=${attempt.traceId || ""} aria-label="Open usage detail"><div class="desktop-cells">${cells}</div>${mobileCard}</button>`;
 }

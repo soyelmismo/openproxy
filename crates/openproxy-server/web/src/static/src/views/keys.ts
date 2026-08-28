@@ -99,10 +99,32 @@ async function onDeleteKey(id: number, label: string | null): Promise<void> {
   }
 }
 
+async function onCopyPrefix(text: string, e: Event): Promise<void> {
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast("Key prefix copied!", "success");
+      return;
+    }
+    const el = document.createElement("textarea");
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+    showToast("Key prefix copied!", "success");
+  } catch (_err: unknown) {
+    showToast("Failed to copy", "error");
+  }
+}
+
 // ---- Templates ----
 
 function renderKeyRow(k: ApiKeyRow): TemplateResult {
-  const scopes: string = (k.scopes || []).join(", ") || "—";
+  const scopesList: string[] = k.scopes || [];
+  const scopes: string = scopesList.join(", ") || "—";
   let allowedModels: string = "all";
   if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
   else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
@@ -118,18 +140,21 @@ function renderKeyRow(k: ApiKeyRow): TemplateResult {
     ? `${allowedModels} (${blBadges.join("; ")})`
     : allowedModels;
   const isActive: boolean = k.is_active && !k.revoked_at;
-  const statusClass: string = isActive ? "on" : "off";
+  const statusClass: string = isActive ? "on active" : "off inactive";
   const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
   const label: string = k.label || "—";
   const createdBy: TemplateResult = k.created_by ? html` <small class="key-created-by">(${k.created_by})</small>` : html``;
+  const prefix: string = k.key_prefix || "—";
+
   return html`
-    <tr class="api-key-card-row">
+    <tr class="api-key-card-row ${isActive ? 'active' : 'inactive revoked'}">
+      <!-- Desktop Table Cells -->
       <td class="col-key-label" data-label="Label">
         <div class="key-label-wrapper">
           <strong class="key-name">${label}</strong>${createdBy}
         </div>
       </td>
-      <td class="col-key-prefix" data-label="Prefix"><code class="key-prefix-code">${k.key_prefix || "—"}</code></td>
+      <td class="col-key-prefix" data-label="Prefix"><code class="key-prefix-code">${prefix}</code></td>
       <td class="col-key-scopes" data-label="Scopes"><span class="key-scopes-text">${scopes}</span></td>
       <td class="col-key-restrictions" data-label="Allowed models"><span class="chip key-restriction-chip">${restrictions}</span></td>
       <td class="col-key-status" data-label="Status"><span class="status-pill ${statusClass}">${statusText}</span></td>
@@ -144,6 +169,48 @@ function renderKeyRow(k: ApiKeyRow): TemplateResult {
             ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
             : html``}
           <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>${icons.trash()} Delete</button>
+        </div>
+      </td>
+
+      <!-- Mobile Card Structure -->
+      <td class="mobile-key-card-cell">
+        <div class="k-card-header">
+          <div class="k-card-title-group">
+            <span class="k-card-name">${label}</span>
+            <span class="k-card-role">(${k.created_by ?? 'admin'})</span>
+            <code 
+              class="k-card-prefix" 
+              title="Click to copy prefix"
+              @click=${(e: Event) => onCopyPrefix(prefix, e)}
+            >
+              ${prefix}
+            </code>
+          </div>
+          <span class="k-card-status ${isActive ? 'active' : 'inactive'}">
+            ${statusText}
+          </span>
+        </div>
+
+        <div class="k-card-meta">
+          <span class="k-card-scopes">${scopes}</span>
+          <span class="k-card-chip" title="${restrictions}">${restrictions}</span>
+        </div>
+
+        <div class="k-card-dates">
+          <span>Used: ${k.last_used_at ?? 'never'}</span>
+          <span>Created: ${k.created_at || '—'}</span>
+        </div>
+
+        <div class="k-card-actions">
+          <button @click=${() => onShowEditKey(k.id)}>✎ Edit</button>
+          <button @click=${() => onViewKeyUsage(k.id)}>⚡ Usage</button>
+          <button @click=${() => onRegenerateKey(k.id, k.label)}>🔄 Regenerate</button>
+          <button @click=${() => onRevokeKey(k.id, k.label)} ?disabled=${!k.is_active || !!k.revoked_at}>Revoke</button>
+          <button class="danger btn-delete-icon" @click=${() => onDeleteKey(k.id, k.label)} title="Delete key">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="icon">
+              <path d="M2.5 4.5h11M6 2h4M4 4.5v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-9M6.5 7v4.5M9.5 7v4.5"></path>
+            </svg>
+          </button>
         </div>
       </td>
     </tr>
@@ -162,7 +229,7 @@ function renderKeys(): TemplateResult {
   const keys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
   const body: TemplateResult = keys.length === 0
     ? html`<p class="empty">No API keys yet. Create one to authenticate clients.</p>`
-    : html`<div class="table-wrap"><table class="keys-table responsive-card-table">
+    : html`<div class="table-wrap"><table class="keys-table api-keys-table responsive-card-table">
         <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Allowed models</th><th>Status</th><th>Last used</th><th>Created</th><th>Actions</th></tr></thead>
         <tbody>${keys.map(renderKeyRow)}</tbody>
       </table></div>`;

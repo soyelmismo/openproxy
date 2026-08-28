@@ -83,7 +83,7 @@ test.describe('Responsive — mobile (375x667)', () => {
     await gotoHome(page);
     await page.goto('http://localhost:8790/#/logs');
     // Wait for logs view to render its header row.
-    await page.waitForSelector('#logs .log-row [data-col="time"]', { timeout: 10000 });
+    await page.waitForSelector('#logs .log-row [data-col="time"]', { state: 'attached', timeout: 10000 });
 
     // Body must not horizontally scroll (the logs table is wide,
     // but it's inside <main> which has overflow-x: auto).

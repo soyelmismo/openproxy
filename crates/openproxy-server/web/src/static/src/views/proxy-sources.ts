@@ -129,10 +129,11 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
           </tr>
         </thead>
         <tbody>
-          ${sources.map(
-            (s) => html`
+          ${sources.map((s) => {
+            const formattedDate = (s.updated_at || s.created_at || "").replace("T", " ").slice(0, 16);
+            return html`
               <tr
-                class="proxy-source-card-row"
+                class="proxy-source-card-row ${s.active ? 'active' : 'inactive'}"
                 draggable="true"
                 data-drag-id=${s.id}
                 @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", s.id); (e.target as HTMLElement).classList.add("dragging"); }}
@@ -141,6 +142,7 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                 @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
                 @drop=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.remove("drag-over"); const draggedId = e.dataTransfer?.getData("text/plain"); if (draggedId) { void reorderProxySources(draggedId, s.id); } }}
               >
+                <!-- Desktop Table Cells -->
                 <td class="drag-handle col-source-drag" style="white-space:nowrap;"
                     title="Drag to reorder"
                     @touchstart=${(e: TouchEvent) => onSourceTouchStart(s.id, e)}
@@ -214,9 +216,74 @@ function renderProxySourcesList(sources: ProxySource[]): TemplateResult {
                       : html``}
                   </div>
                 </td>
+
+                <!-- Mobile Card Structure -->
+                <td class="mobile-proxy-source-card-cell">
+                  <!-- Línea 1: Drag + Nombre + Prioridad + Botones Reordenación + Switch -->
+                  <div class="s-card-line-1">
+                    <div class="s-card-title-group">
+                      <span class="s-card-drag-icon" title="Drag to reorder"
+                            @touchstart=${(e: TouchEvent) => onSourceTouchStart(s.id, e)}
+                            @touchmove=${(e: TouchEvent) => onSourceTouchMove(e)}
+                            @touchend=${() => void onSourceTouchEnd()}
+                            @touchcancel=${() => void onSourceTouchEnd()}>⋮⋮</span>
+                      <span class="s-card-name" title="${s.name}">${s.name}</span>
+                      <span class="s-card-priority" title="Priority: ${s.priority}">P:${s.priority}</span>
+                    </div>
+                    <div class="s-card-controls">
+                      <button type="button" class="s-card-reorder-btn" title="Move up" @click=${() => void moveProxySource(s.id, -1)}>▲</button>
+                      <button type="button" class="s-card-reorder-btn" title="Move down" @click=${() => void moveProxySource(s.id, 1)}>▼</button>
+                      <label class="switch" title="Toggle source active state">
+                        <input 
+                          type="checkbox" 
+                          .checked=${s.active} 
+                          data-action="toggleProxySourceActive"
+                          data-arg1=${s.id}
+                        />
+                        <span class="slider round"></span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <!-- Línea 2: URL de Descarga en 1 Sola Línea -->
+                  <div class="s-card-line-2">
+                    <a 
+                      class="s-card-url" 
+                      href="${s.url}" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      title="Click to open or copy URL"
+                    >
+                      ${s.url}
+                    </a>
+                  </div>
+
+                  <!-- Línea 3: Stats Badges y Fecha de Actualización -->
+                  <div class="s-card-line-3">
+                    <div class="s-card-stats-badges">
+                      <span class="s-card-stat-pill">Total: ${s.proxies_total ?? 0}</span>
+                      <span class="s-card-stat-pill success">🟢 ${s.proxies_alive ?? 0}</span>
+                      <span class="s-card-stat-pill danger">🔴 ${s.proxies_dead ?? 0}</span>
+                    </div>
+                    <span class="s-card-updated">${formattedDate}</span>
+                  </div>
+
+                  <!-- Línea 4: Acciones -->
+                  <div class="s-card-line-4">
+                    <button type="button" class="secondary btn-sm" data-action="testProxySource" data-arg1=${s.id}>
+                      🧪 Test
+                    </button>
+                    <button type="button" class="secondary btn-sm" data-action="showEditProxySource" data-arg1=${s.id}>
+                      ✎ Edit
+                    </button>
+                    <button type="button" class="danger btn-sm" data-action="deleteProxySource" data-arg1=${s.id} title="Delete source">
+                      ✕
+                    </button>
+                  </div>
+                </td>
               </tr>
-            `,
-          )}
+            `;
+          })}
         </tbody>
       </table>
       </div>

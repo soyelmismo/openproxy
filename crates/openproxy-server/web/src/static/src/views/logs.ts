@@ -13,7 +13,7 @@ import {
 import { fetchRecordingState, toggleRecording } from "../handlers/log-handlers.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { openLogDetail } from "../components/log-detail.js";
-import { liveLogsStore } from "../state/live-logs-store.js";
+import { liveLogsStore, type AttemptState } from "../state/live-logs-store.js";
 import { clockStore } from "../state/clock-store.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 import type { NotificationEvent } from "../lib/types/notifications.js";
@@ -69,6 +69,7 @@ let filterSearch: string = "";
 let filterStatus: string = "all";
 let isPaused: boolean = false;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let frozenLogsSnapshot: AttemptState[] | null = null;
 
 function onSearchInput(e: Event): void {
   const target = e.target as HTMLInputElement;
@@ -76,7 +77,9 @@ function onSearchInput(e: Event): void {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(() => {
     filterSearch = val;
+    frozenLogsSnapshot = null;
     state.logs.page = 1;
+    state.logs.followTail = true;
     requestUpdate();
   }, 120);
 }
@@ -84,13 +87,17 @@ function onSearchInput(e: Event): void {
 function onClearSearch(): void {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   filterSearch = "";
+  frozenLogsSnapshot = null;
   state.logs.page = 1;
+  state.logs.followTail = true;
   requestUpdate();
 }
 
 function onSetStatusFilter(status: string): void {
   filterStatus = status;
+  frozenLogsSnapshot = null;
   state.logs.page = 1;
+  state.logs.followTail = true;
   requestUpdate();
 }
 
@@ -137,7 +144,7 @@ function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; re
 }
 
 function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
-  return html`<div class="log-row" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-log-header-fg);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
+  return html`<div class="log-row desktop-table-header" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-log-header-fg);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
     .filter((c) => visibleColKeys.has(c.key))
     .map((c) => html`<span class="log-${c.key}" data-col=${c.key}>${c.label}</span>`)}</div>`;
 }
@@ -147,16 +154,20 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
   const isFirst = state.logs.page <= 1;
   const isLast = state.logs.page >= totalP;
   return html`<div class="logs-pagination">
-    <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>
-    <button ?disabled=${isFirst} @click=${() => logsGoPage(1)} title="First page">${icons.chevronsLeft()}</button>
-    <button ?disabled=${isFirst} @click=${logsPrevPage} title="Previous page">${icons.chevronLeft()} Prev</button>
-    <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
-    <button ?disabled=${isLast} @click=${logsNextPage} title="Next page">Next ${icons.chevronRight()}</button>
-    <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)} title="Last page">${icons.chevronsRight()}</button>
-    <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page.">
-      <input type="checkbox" id="logs-follow-input" ?checked=${state.logs.followTail} @change=${logsSetFollow}>
-      <span>Follow</span>
-    </label>
+    <div class="mobile-pag-row-controls">
+      <button ?disabled=${isFirst} @click=${() => logsGoPage(1)} title="First page">${icons.chevronsLeft()}</button>
+      <button ?disabled=${isFirst} @click=${logsPrevPage} title="Previous page">${icons.chevronLeft()} Prev</button>
+      <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
+      <button ?disabled=${isLast} @click=${logsNextPage} title="Next page">Next ${icons.chevronRight()}</button>
+      <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)} title="Last page">${icons.chevronsRight()}</button>
+    </div>
+    <div class="mobile-pag-row-meta">
+      <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>
+      <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page.">
+        <input type="checkbox" id="logs-follow-input" ?checked=${state.logs.followTail} @change=${logsSetFollow}>
+        <span>Follow</span>
+      </label>
+    </div>
   </div>`;
 }
 
@@ -167,10 +178,14 @@ function renderColumnsMenu(): TemplateResult {
 
 function renderLogsView(): TemplateResult {
   const allInflight = liveLogsStore.selectInflightRows();
-  const allFinished = liveLogsStore.selectFinishedRows();
+  
+  // Si estamos en página > 1 y tenemos snapshot congelado, usamos el snapshot inmóvil
+  const sourceFinished = (state.logs.page > 1 && frozenLogsSnapshot)
+    ? frozenLogsSnapshot
+    : liveLogsStore.selectFinishedRows();
 
   const inflightRows = allInflight.filter(matchesLogFilter);
-  const finishedRows = allFinished.filter(matchesLogFilter);
+  const finishedRows = sourceFinished.filter(matchesLogFilter);
 
   const totalFinished = finishedRows.length;
   const rpp = state.logs.rowsPerPage;
@@ -193,8 +208,17 @@ function renderLogsView(): TemplateResult {
 
   return html`
     <div class="logs-header">
-      <h2>Live Logs</h2>
-      <div class="logs-header-actions">
+      <div class="m-header-top-row">
+        <h2>Live Logs</h2>
+        <div class="m-header-status-badges">
+          <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
+          <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${onRecordingToggleClick}>
+            <span class="logs-recording-dot" aria-hidden="true">${icons.record()}</span>
+            <span class="logs-recording-label">Record: <strong>OFF</strong></span>
+          </button>
+        </div>
+      </div>
+      <div class="logs-header-actions m-header-actions-row">
         <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" @click=${onTogglePause} title=${isPaused ? "Resume live streaming" : "Pause live stream to inspect"}>
           ${isPaused ? html`${icons.play()} Resume` : html`${icons.pause()} Pause`}
         </button>
@@ -208,17 +232,12 @@ function renderLogsView(): TemplateResult {
           </button>
           ${renderColumnsMenu()}
         </div>
-        <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
-        <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${onRecordingToggleClick}>
-          <span class="logs-recording-dot" aria-hidden="true">${icons.record()}</span>
-          <span class="logs-recording-label">Record: <strong>OFF</strong></span>
-        </button>
       </div>
     </div>
 
     <!-- Live Logs Filter Toolbar -->
     <div class="logs-filter-toolbar">
-      <div class="logs-search-box">
+      <div class="logs-search-box logs-search-wrapper">
         <span class="logs-search-icon" aria-hidden="true">${icons.search()}</span>
         <input
           type="search"
@@ -229,7 +248,7 @@ function renderLogsView(): TemplateResult {
         />
         ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${onClearSearch} aria-label="Clear filter">${icons.close()}</button>` : null}
       </div>
-      <div class="logs-status-filters" role="group" aria-label="Status filter">
+      <div class="logs-status-filters filter-bar" role="group" aria-label="Status filter">
         <button type="button" class="logs-filter-btn ${filterStatus === "all" ? "active" : ""}" @click=${() => onSetStatusFilter("all")}>All</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "inflight" ? "active" : ""}" @click=${() => onSetStatusFilter("inflight")}>${icons.lightning()} In-flight</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "2xx" ? "active" : ""}" @click=${() => onSetStatusFilter("2xx")}>2xx OK</button>
@@ -241,7 +260,7 @@ function renderLogsView(): TemplateResult {
 
     <div class="logs" id="logs" @click=${onLogsClick}>
       <!-- Section 1: In Progress -->
-      <div class="logs-section logs-section-inflight" id="logs-section-inflight">
+      <div class="logs-section logs-section-inflight ${inflightRows.length === 0 ? "empty" : ""}" id="logs-section-inflight">
         <div class="logs-section-header">
           <span class="logs-section-title">
             <span class="logs-inflight-dot" aria-hidden="true"></span> Requests in progress
@@ -251,7 +270,7 @@ function renderLogsView(): TemplateResult {
         <div class="logs-scroll-area logs-scroll-area-inflight" id="logs-scroll-area-inflight">
           ${renderHeaderRow(visibleColKeys)}
           ${inflightRows.length === 0
-            ? html`<div class="empty empty-inflight" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No in-progress requests matching filter." : "No requests in progress."}</div>`
+            ? html`<div class="empty empty-inflight logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No in-progress requests matching filter." : "No requests in progress."}</div>`
             : repeat(
                 inflightRows,
                 (r) => r.attemptKey,
@@ -271,7 +290,7 @@ function renderLogsView(): TemplateResult {
         <div class="logs-scroll-area logs-scroll-area-finished" id="logs-scroll-area-finished">
           ${renderHeaderRow(visibleColKeys)}
           ${pageFinishedRows.length === 0
-            ? html`<div class="empty empty-finished" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No requests matching current filter." : "No recent requests yet."}</div>`
+            ? html`<div class="empty empty-finished logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No requests matching current filter." : "No recent requests yet."}</div>`
             : repeat(
                 pageFinishedRows,
                 (r) => r.attemptKey,
@@ -324,7 +343,12 @@ function onRecordingToggleClick(): void {
 export function logsPrevPage(): void {
   if (state.logs.page > 1) {
     state.logs.page--;
-    if (state.logs.page === 1) state.logs.followTail = true;
+    if (state.logs.page === 1) {
+      frozenLogsSnapshot = null;
+      state.logs.followTail = true;
+    } else {
+      state.logs.followTail = false;
+    }
     requestUpdate();
   }
 }
@@ -332,16 +356,30 @@ export function logsNextPage(): void {
   const finishedRows = liveLogsStore.selectFinishedRows();
   const totalP = Math.max(1, Math.ceil(finishedRows.length / state.logs.rowsPerPage));
   if (state.logs.page < totalP) {
+    if (state.logs.page === 1) {
+      frozenLogsSnapshot = [...finishedRows];
+    }
     state.logs.page++;
-    if (state.logs.page >= totalP) state.logs.followTail = false;
+    state.logs.followTail = false;
     requestUpdate();
   }
 }
 export function logsGoPage(p: number): void {
   const finishedRows = liveLogsStore.selectFinishedRows();
   const totalP = Math.max(1, Math.ceil(finishedRows.length / state.logs.rowsPerPage));
-  state.logs.page = Math.max(1, Math.min(p, totalP));
-  state.logs.followTail = (state.logs.page === 1);
+  const targetPage = Math.max(1, Math.min(p, totalP));
+
+  if (targetPage === 1) {
+    frozenLogsSnapshot = null;
+    state.logs.followTail = true;
+  } else {
+    if (!frozenLogsSnapshot) {
+      frozenLogsSnapshot = [...finishedRows];
+    }
+    state.logs.followTail = false;
+  }
+
+  state.logs.page = targetPage;
   requestUpdate();
 }
 export function logsSetFollow(e: Event): void {
@@ -351,7 +389,11 @@ export function logsSetFollow(e: Event): void {
     enabled = !!target.checked;
   }
   state.logs.followTail = enabled;
-  if (enabled) { state.logs.page = 1; requestUpdate(); }
+  if (enabled) {
+    frozenLogsSnapshot = null;
+    state.logs.page = 1;
+    requestUpdate();
+  }
 }
 
 export function toggleColumnsMenu(): void {
@@ -389,6 +431,7 @@ export async function mountLogs(): Promise<(() => void) | void> {
   
   state.logs.page = 1;
   state.logs.followTail = true;
+  frozenLogsSnapshot = null;
 
   const cleanupReactive = mountView(main, renderLogsView);
 

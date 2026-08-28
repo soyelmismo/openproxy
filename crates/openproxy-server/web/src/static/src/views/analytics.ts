@@ -737,13 +737,50 @@ function renderRecentErrors(): TemplateResult {
     <thead><tr><th>${t("analytics.errors.col_time")}</th><th>${t("analytics.errors.col_provider")}</th><th>${t("analytics.errors.col_model")}</th><th>${t("analytics.errors.col_status")}</th><th>${t("analytics.errors.col_message")}</th><th><span class="sr-only">${t("analytics.errors.view")}</span></th></tr></thead>
     <tbody>${slice.map((e) => {
       const href = `#/logs?request_id=${e.request_id || ""}`;
+      const msg = e.error_msg_redacted || t("analytics.errors.no_message");
+      const traceId = e.trace_id || "";
+      const timeText = fmtDateTime(e.created_at || "");
+
       return html`<tr class="analytics-error-card-row">
-        <td class="col-err-time" data-label="Time"><time datetime=${e.created_at || ""}>${fmtDateTime(e.created_at || "")}</time></td>
+        <!-- Desktop Table Cells -->
+        <td class="col-err-time" data-label="Time"><time datetime=${e.created_at || ""}>${timeText}</time></td>
         <td class="col-err-provider" data-label="Provider"><strong>${e.provider_id || ""}</strong></td>
         <td class="analytics-model-cell col-err-model" data-label="Model" title=${e.upstream_model_id || ""}><code>${e.upstream_model_id || ""}</code></td>
         <td class="col-err-status" data-label="Status"><span class="status-pill err">${e.status_code || "—"}</span></td>
-        <td class="col-err-msg" data-label="Message">${e.error_msg_redacted || t("analytics.errors.no_message")}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
+        <td class="col-err-msg" data-label="Message">${msg}<br><small class="muted"><code>${traceId}</code></small></td>
         <td class="col-err-action"><a class="analytics-error-link" href=${href} aria-label=${t("analytics.errors.view")}>→ Inspect</a></td>
+
+        <!-- Mobile Card Structure -->
+        <td class="mobile-analytics-error-card-cell">
+          <!-- Línea 1: Status + Provider/Model + Icono Ojo de Inspección -->
+          <div class="e-card-line-1">
+            <div class="e-card-target">
+              <span class="e-card-status-pill">${e.status_code || "—"}</span>
+              <span class="e-card-provider">${e.provider_id || ""}</span>
+              <span class="e-card-model" title="${e.upstream_model_id || ""}">/ ${e.upstream_model_id || ""}</span>
+            </div>
+            <a 
+              class="analytics-error-link" 
+              href=${href} 
+              title="Inspect request in live logs"
+              aria-label="Inspect request in live logs"
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1.5 8s2.5-5 6.5-5 6.5 5 6.5 5-2.5 5-6.5 5-6.5-5z"></path>
+                <circle cx="8" cy="8" r="2.5"></circle>
+              </svg>
+            </a>
+          </div>
+
+          <!-- Línea 2: Mensaje de Error + Trace ID & Fecha -->
+          <div class="e-card-line-2">
+            <div class="e-card-msg-text" title="${msg}">${msg}</div>
+            <div class="e-card-subline">
+              <code class="e-card-trace-id" title="${traceId}">${traceId}</code>
+              <span>${timeText}</span>
+            </div>
+          </div>
+        </td>
       </tr>`;
     })}</tbody>
   </table></div>`;
