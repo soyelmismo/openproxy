@@ -73,20 +73,38 @@ pub async fn sync_proxies(
     Ok(Json(summary))
 }
 
-fn validate_custom_proxy_input(body: &CreateCustomProxyInput) -> Result<(), ApiError> {
+async fn validate_custom_proxy_input(body: &CreateCustomProxyInput) -> Result<(), ApiError> {
     let host_str = body.host.trim();
     if host_str.is_empty() || body.port == 0 {
         return Err(ApiError(CoreError::Validation(
             "host and port are required".into(),
         )));
     }
-    if let Ok(ip) = host_str.parse::<std::net::IpAddr>()
-        && is_private_or_reserved(&ip)
-    {
-        return Err(ApiError(CoreError::Validation(format!(
-            "host '{host_str}' resolves to a private/reserved IP and is not allowed"
-        ))));
+    #[allow(clippy::collapsible_if)]
+    if let Ok(ip) = host_str.parse::<std::net::IpAddr>() {
+        if is_private_or_reserved(&ip) {
+            return Err(ApiError(CoreError::Validation(format!(
+                "host '{host_str}' resolves to a private/reserved IP and is not allowed"
+            ))));
+        }
     }
+
+    let addrs = tokio::net::lookup_host((host_str, body.port))
+        .await
+        .map_err(|e| {
+            ApiError(CoreError::Validation(format!(
+                "failed to resolve host '{host_str}': {e}"
+            )))
+        })?;
+
+    for addr in addrs {
+        if is_private_or_reserved(&addr.ip()) {
+            return Err(ApiError(CoreError::Validation(format!(
+                "host '{host_str}' resolves to a private/reserved IP and is not allowed"
+            ))));
+        }
+    }
+
     Ok(())
 }
 
@@ -94,7 +112,7 @@ pub async fn create_custom_proxy(
     DbWriter(w): DbWriter,
     Json(body): Json<CreateCustomProxyInput>,
 ) -> Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> {
-    validate_custom_proxy_input(&body)?;
+    validate_custom_proxy_input(&body).await?;
     let p = openproxy_core::free_proxies::add_custom_proxy(
         &w,
         body.host.trim(),
