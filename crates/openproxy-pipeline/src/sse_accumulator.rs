@@ -204,11 +204,11 @@ pub struct ResponseAccumulator {
     /// Concatenated `delta.content` extracted incrementally from each
     /// chunk during `append_openai_raw`. No JSON parsing is done at
     /// `finish()` — the content is already assembled.
-    content: String,
+    content: Vec<u8>,
     /// Concatenated reasoning content (o1, deepseek-r1, kimi-k2-thinking
     /// for OpenAI; extended thinking for Anthropic; thought parts for
     /// Gemini). `None` if no reasoning was ever emitted.
-    reasoning: Option<String>,
+    reasoning: Option<Vec<u8>>,
     /// Accumulated tool calls. For OpenAI, populated from
     /// `delta.tool_calls[]` on each chunk. For Anthropic, populated via
     /// `update_anthropic_tool_use` (the existing `AnthropicToolUseAccumulator`
@@ -233,20 +233,20 @@ pub struct ResponseAccumulator {
     partial: bool,
     /// Raw response stream lines (including non-JSON content or error responses)
     /// captured incrementally up to a max size (e.g. 32 KiB) for debugging.
-    raw_response_body: String,
+    raw_response_body: Vec<u8>,
 }
 
 impl ResponseAccumulator {
     /// Public accessor for the accumulated content text. Used by the
     /// token estimator to estimate completion tokens when the upstream
     /// didn't report usage.
-    pub fn content_text(&self) -> &str {
-        &self.content
+    pub fn content_text(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
     }
 
     pub fn new() -> Self {
         Self {
-            content: String::new(),
+            content: Vec::new(),
             reasoning: None,
             tool_calls: Vec::new(),
             usage: None,
@@ -254,7 +254,7 @@ impl ResponseAccumulator {
             total_bytes: 0,
             truncated: false,
             partial: false,
-            raw_response_body: String::new(),
+            raw_response_body: Vec::new(),
         }
     }
 
@@ -263,16 +263,13 @@ impl ResponseAccumulator {
     pub fn append_raw_line(&mut self, line: &str) {
         if self.raw_response_body.len() < 32768 {
             let limit = 32768 - self.raw_response_body.len();
-            let mut cut = line.len().min(limit);
-            while cut > 0 && !line.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            let to_add = &line[..cut];
-            self.raw_response_body.push_str(to_add);
+            let to_add = line.as_bytes();
+            let to_add = &to_add[..to_add.len().min(limit)];
+            self.raw_response_body.extend_from_slice(to_add);
             if to_add.len() < line.len() {
-                self.raw_response_body.push_str("... [truncated]");
+                self.raw_response_body.extend_from_slice(b"... [truncated]");
             } else {
-                self.raw_response_body.push('\n');
+                self.raw_response_body.push(b'\n');
             }
         }
     }
@@ -308,8 +305,8 @@ impl ResponseAccumulator {
     /// sent an inline error (e.g. OpenRouter's 502/provider_unavailable
     /// inside an SSE data chunk) so the error message can reflect the
     /// actual upstream error instead of a generic "client disconnected".
-    pub fn raw_response_body(&self) -> &str {
-        &self.raw_response_body
+    pub fn raw_response_body(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.raw_response_body)
     }
 }
 
@@ -396,10 +393,14 @@ fn extract_error_from_line(line: &str) -> Option<(u16, String)> {
 
 impl ResponseAccumulator {
     pub fn extract_upstream_error_from_raw(&self) -> Option<(u16, String)> {
-        if !self.raw_response_body.contains("\"error\":") {
+        if !self
+            .raw_response_body
+            .windows(8)
+            .any(|w| w == b"\"error\":")
+        {
             return None;
         }
-        self.raw_response_body
+        String::from_utf8_lossy(&self.raw_response_body)
             .lines()
             .find_map(extract_error_from_line)
     }
@@ -413,7 +414,7 @@ impl ResponseAccumulator {
             self.truncated = true;
             return;
         }
-        self.content.push_str(content);
+        self.content.extend_from_slice(content.as_bytes());
         self.total_bytes += additional;
     }
 
@@ -457,8 +458,8 @@ impl ResponseAccumulator {
             return;
         }
         self.reasoning
-            .get_or_insert_with(String::new)
-            .push_str(text);
+            .get_or_insert_with(Vec::new)
+            .extend_from_slice(text.as_bytes());
         self.total_bytes += additional;
     }
 
@@ -557,7 +558,7 @@ impl ResponseAccumulator {
         if let Some(reasoning) = &self.reasoning {
             extra.insert(
                 "reasoning_content".to_string(),
-                Value::String(reasoning.to_owned()),
+                Value::String(String::from_utf8_lossy(reasoning).into_owned()),
             );
         }
         if !self.tool_calls.is_empty() {
@@ -586,7 +587,7 @@ impl ResponseAccumulator {
         if !self.raw_response_body.is_empty() {
             extra.insert(
                 "raw_response_body".to_string(),
-                Value::String(self.raw_response_body.clone()),
+                Value::String(String::from_utf8_lossy(&self.raw_response_body).into_owned()),
             );
         }
         extra
@@ -598,7 +599,7 @@ impl ResponseAccumulator {
         let content_val = if self.content.is_empty() {
             Value::Null
         } else {
-            Value::String(self.content.to_owned())
+            Value::String(String::from_utf8_lossy(&self.content).into_owned())
         };
         message.insert("content".to_string(), content_val);
         for (k, v) in self.build_finish_extra() {
