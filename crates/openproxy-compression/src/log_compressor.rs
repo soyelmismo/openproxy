@@ -111,11 +111,7 @@ fn validate_and_score(lines: &[&str]) -> Option<Vec<LineKind>> {
         }
         kinds.push(kind);
     }
-    if has_scoreable {
-        Some(kinds)
-    } else {
-        None
-    }
+    if has_scoreable { Some(kinds) } else { None }
 }
 
 fn format_selected_lines(lines: &[&str], selected: &[usize]) -> String {
