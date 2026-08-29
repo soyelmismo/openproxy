@@ -1957,6 +1957,7 @@ dependencies = [
  "bytes",
  "chrono",
  "criterion 0.5.1",
+ "dashmap",
  "futures-util",
  "http",
  "http-body",
