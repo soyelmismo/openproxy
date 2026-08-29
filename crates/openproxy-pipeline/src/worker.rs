@@ -100,7 +100,7 @@ fn handle_record_attempt(
     params: CooldownParams,
 ) {
     {
-        let lock = conn_clone.lock();
+        let lock = parking_lot::Mutex::lock(conn_clone);
         if let Err(e) = openproxy_db::cost::record(&lock, &usage_input) {
             tracing::warn!("failed to record usage in background: {}", e);
         }
