@@ -145,7 +145,6 @@ mod tests {
         assert_eq!(ProviderFormat::Gemini.as_str(), "gemini");
         assert_eq!(ProviderFormat::Responses.as_str(), "responses");
         assert_eq!(ProviderFormat::Atomesus.as_str(), "atomesus");
-        assert_eq!(ProviderFormat::Fx.as_str(), "fx");
     }
 
     #[test]
@@ -174,7 +173,6 @@ mod tests {
             ProviderFormat::parse("atomesus").unwrap(),
             ProviderFormat::Atomesus
         );
-        assert_eq!(ProviderFormat::parse("fx").unwrap(), ProviderFormat::Fx);
 
         assert!(ProviderFormat::parse("invalid").is_err());
         assert_eq!(
@@ -205,7 +203,6 @@ mod tests {
             ProviderFormat::Atomesus.default_target_format(),
             TargetFormat::Atomesus
         );
-        assert_eq!(ProviderFormat::Fx.default_target_format(), TargetFormat::Fx);
         assert_eq!(
             ProviderFormat::Mixed.default_target_format(),
             TargetFormat::Openai
