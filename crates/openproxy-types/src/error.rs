@@ -288,6 +288,13 @@ impl CoreError {
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
+impl From<tokio::task::JoinError> for CoreError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        CoreError::Internal(err.to_string())
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,11 +466,5 @@ mod tests {
         );
 
         assert!(!CoreError::Auth("x".into()).is_proxy_rotated());
-    }
-}
-
-impl From<tokio::task::JoinError> for CoreError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        CoreError::Internal(err.to_string())
     }
 }
