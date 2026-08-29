@@ -131,6 +131,7 @@ fn merge_reasoning_details(obj: &mut serde_json::Map<String, Value>, details: se
 
 fn apply_reasoning_normalizations(obj: &mut serde_json::Map<String, Value>) {
     let reasoning_was_present = convert_reasoning_field(obj);
+    #[allow(clippy::collapsible_if)]
     if let Some(details) = obj.remove("reasoning_details") {
         if !reasoning_was_present {
             merge_reasoning_details(obj, details);
