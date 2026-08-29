@@ -251,4 +251,20 @@ mod tests {
         inject_antigravity_headers(&mut headers, None);
         assert!(headers.get("x-goog-user-project").is_none());
     }
+
+    #[test]
+    fn inject_skips_placeholder_project_id() {
+        let mut headers = http::HeaderMap::new();
+        inject_antigravity_headers(&mut headers, Some("project-id"));
+        assert!(headers.get("x-goog-user-project").is_none());
+    }
+
+    #[test]
+    fn test_oauth_user_agent_and_current_version() {
+        let ua = oauth_user_agent();
+        let version = current_version();
+        assert!(ua.starts_with("vscode/1.X.X (Antigravity/"));
+        assert!(ua.ends_with(')'));
+        assert_eq!(version, VERSION.as_str());
+    }
 }
