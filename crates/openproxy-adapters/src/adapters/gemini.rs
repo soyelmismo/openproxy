@@ -350,18 +350,11 @@ fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<G
         Some(serde_json::Value::Array(parts)) => {
             parts.iter().map(map_single_content_part).collect()
         }
-        Some(serde_json::Value::String(s)) => vec![GeminiPart {
-            text: Some(s.clone()),
-            ..Default::default()
-        }],
         Some(serde_json::Value::Null) | None => vec![GeminiPart {
             text: Some(String::new()),
             ..Default::default()
         }],
-        Some(value) => vec![GeminiPart {
-            text: Some(value.to_string()),
-            ..Default::default()
-        }],
+        Some(value) => vec![map_single_content_part(value)],
     }
 }
 
