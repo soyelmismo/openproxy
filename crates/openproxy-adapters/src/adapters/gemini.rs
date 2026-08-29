@@ -59,11 +59,18 @@ impl ProviderAdapter for GeminiAdapter {
         // segments.  Dot characters are *kept* because real model names
         // like "gemini-2.5-flash" contain them.
         let model_str = model.as_str();
-        let safe_model: String = model_str.replace('/', "");
-        format!(
-            "{}/models/{}:streamGenerateContent?alt=sse",
-            self.config.base_url, safe_model
-        )
+        if model_str.contains('/') {
+            let safe_model = model_str.replace('/', "");
+            format!(
+                "{}/models/{}:streamGenerateContent?alt=sse",
+                self.config.base_url, safe_model
+            )
+        } else {
+            format!(
+                "{}/models/{}:streamGenerateContent?alt=sse",
+                self.config.base_url, model_str
+            )
+        }
     }
 
     fn models_url(&self) -> Option<String> {
@@ -245,15 +252,22 @@ fn map_audio_extension(ext: &str) -> Option<&'static str> {
 }
 
 pub fn normalize_audio_mime(format: &str) -> String {
-    let lower = format.to_lowercase();
-    let ext = lower.trim_start_matches('.');
+    let ext = format.trim_start_matches('.');
     if let Some(mime) = map_audio_extension(ext) {
-        mime.to_string()
-    } else if ext.starts_with("audio/") {
-        ext.to_string()
-    } else {
-        "audio/mp3".to_string()
+        return mime.to_string();
     }
+    if ext.bytes().any(|b| b.is_ascii_uppercase()) {
+        let lower = ext.to_ascii_lowercase();
+        if let Some(mime) = map_audio_extension(&lower) {
+            return mime.to_string();
+        }
+        if lower.starts_with("audio/") {
+            return lower;
+        }
+    } else if ext.starts_with("audio/") {
+        return ext.to_string();
+    }
+    "audio/mp3".to_string()
 }
 
 fn parse_data_uri(url: &str) -> Option<GeminiInlineData> {
@@ -393,12 +407,12 @@ fn build_default_gemini_safety_settings() -> Vec<GeminiSafetySetting> {
 fn partition_messages_for_gemini(
     messages: &[openproxy_types::OpenAIMessage],
 ) -> (Option<GeminiContent>, Vec<GeminiContent>) {
-    let mut system_parts: Vec<String> = Vec::new();
+    let mut system_parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
     let mut contents: Vec<GeminiContent> = Vec::with_capacity(messages.len());
 
     for m in messages {
         match m.role.as_str() {
-            "system" => system_parts.push(m.extract_text()),
+            "system" => system_parts.push(m.extract_text_cow()),
             "user" => contents.push(GeminiContent {
                 role: "user".to_string(),
                 parts: message_content_to_gemini_parts(m.content.as_ref()),
@@ -411,16 +425,22 @@ fn partition_messages_for_gemini(
         }
     }
 
-    let system_instruction = if system_parts.is_empty() {
-        None
-    } else {
-        Some(GeminiContent {
+    let system_instruction = match system_parts.as_slice() {
+        [] => None,
+        [single] => Some(GeminiContent {
             role: "system".to_string(),
             parts: vec![GeminiPart {
-                text: Some(system_parts.join("\n\n")),
+                text: Some(single.clone().into_owned()),
                 ..Default::default()
             }],
-        })
+        }),
+        parts => Some(GeminiContent {
+            role: "system".to_string(),
+            parts: vec![GeminiPart {
+                text: Some(parts.join("\n\n")),
+                ..Default::default()
+            }],
+        }),
     };
 
     (system_instruction, contents)
@@ -470,11 +490,23 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
 
     let content = candidate
         .and_then(|c| c.content.as_ref())
-        .map(|c| {
-            c.parts
-                .iter()
-                .filter_map(|p| p.text.as_deref())
-                .collect::<String>()
+        .map(|c| match c.parts.as_slice() {
+            [] => String::new(),
+            [part] => part.text.clone().unwrap_or_default(),
+            parts => {
+                let total_len: usize = parts
+                    .iter()
+                    .filter_map(|p| p.text.as_ref())
+                    .map(|s| s.len())
+                    .sum();
+                let mut out = String::with_capacity(total_len);
+                for p in parts {
+                    if let Some(t) = &p.text {
+                        out.push_str(t);
+                    }
+                }
+                out
+            }
         })
         .filter(|t| !t.is_empty())
         .unwrap_or_default();
@@ -674,5 +706,76 @@ mod tests {
         assert_eq!(map_gemini_finish_reason("BLOCKLIST"), "content_filter");
         assert_eq!(map_gemini_finish_reason("STOP"), "stop");
         assert_eq!(map_gemini_finish_reason("OTHER"), "stop");
+    }
+
+    #[test]
+    fn test_gemini_to_openai_multipart() {
+        let resp = GeminiResponse {
+            candidates: vec![GeminiCandidate {
+                content: Some(GeminiContent {
+                    role: "model".to_string(),
+                    parts: vec![
+                        GeminiPart {
+                            text: Some("Hello ".to_string()),
+                            inline_data: None,
+                        },
+                        GeminiPart {
+                            text: Some("world!".to_string()),
+                            inline_data: None,
+                        },
+                    ],
+                }),
+                finish_reason: Some("STOP".to_string()),
+            }],
+            usage_metadata: None,
+            response: None,
+        };
+
+        let openai_resp = gemini_to_openai(&resp);
+        assert_eq!(
+            openai_resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Hello world!"
+        );
+    }
+
+    #[test]
+    fn test_openai_to_gemini_multiple_system_messages() {
+        let req = openproxy_types::OpenAIRequest {
+            model: "gemini-2.5-pro".to_string(),
+            messages: vec![],
+            ..Default::default()
+        };
+        let messages = vec![
+            openproxy_types::OpenAIMessage {
+                role: "system".to_string(),
+                content: Some(json!("System prompt 1")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::default(),
+            },
+            openproxy_types::OpenAIMessage {
+                role: "system".to_string(),
+                content: Some(json!("System prompt 2")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::default(),
+            },
+        ];
+
+        let gemini_req = openai_to_gemini(&req, &messages);
+        assert_eq!(
+            gemini_req.system_instruction.unwrap().parts[0]
+                .text
+                .as_deref(),
+            Some("System prompt 1\n\nSystem prompt 2")
+        );
     }
 }

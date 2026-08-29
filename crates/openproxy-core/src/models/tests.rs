@@ -233,8 +233,8 @@ fn upsert_persists_openrouter_metadata() {
         target_format: TargetFormat::Openai,
         context_length: Some(1_048_576),
         max_output_tokens: Some(262_000),
-        input_modalities: Some(vec!["text".into()]),
-        output_modalities: Some(vec!["text".into()]),
+        input_modalities: Some(vec!["text".into()].into()),
+        output_modalities: Some(vec!["text".into()].into()),
         model_type: Some("chat".into()),
         family: Some("Qwen3".into()),
         capabilities: Some(openproxy_types::ModelCapabilities {
@@ -251,7 +251,7 @@ fn upsert_persists_openrouter_metadata() {
     assert_eq!(row.context_length, Some(1_048_576));
     assert_eq!(row.max_output_tokens, Some(262_000));
     assert_eq!(row.family.as_deref(), Some("Qwen3"));
-    assert_eq!(row.model_type, "chat");
+    assert_eq!(&*row.model_type, "chat");
     // input/output modalities land as JSON arrays; parsing round-trips.
     let input_mods: Vec<String> =
         serde_json::from_str(row.input_modalities_json.as_deref().unwrap()).unwrap();
@@ -488,7 +488,7 @@ fn apply_auto_activation_does_not_affect_old_re_upserted_model() {
     let m_after_backdate = list_all(&conn).unwrap().pop().unwrap();
     let pre_upsert_discovered = m_after_backdate.discovered_at;
     assert!(
-        pre_upsert_discovered
+        &*pre_upsert_discovered
             != conn
                 .query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0))
                 .unwrap(),
@@ -2374,7 +2374,7 @@ fn sync_and_upsert_preserves_manually_configured_model_type() {
     update_model_type(&conn, initial_row.row_id, "image").unwrap();
 
     let updated_row = get_by_row_id(&conn, initial_row.row_id).unwrap().unwrap();
-    assert_eq!(updated_row.model_type, "image");
+    assert_eq!(&*updated_row.model_type, "image");
 
     // 3. Provider refresh / rediscovery runs (with model_type = None or default)
     let diff = sync::compute_diff(&conn, &provider, &d).unwrap();
@@ -2382,7 +2382,7 @@ fn sync_and_upsert_preserves_manually_configured_model_type() {
 
     let after_sync = get_by_row_id(&conn, initial_row.row_id).unwrap().unwrap();
     assert_eq!(
-        after_sync.model_type, "image",
+        &*after_sync.model_type, "image",
         "manual model_type override must be preserved across syncs"
     );
 
@@ -2390,7 +2390,7 @@ fn sync_and_upsert_preserves_manually_configured_model_type() {
     upsert_many(&conn, &provider, &d, Duration::from_hours(1)).unwrap();
     let after_upsert = get_by_row_id(&conn, initial_row.row_id).unwrap().unwrap();
     assert_eq!(
-        after_upsert.model_type, "image",
+        &*after_upsert.model_type, "image",
         "manual model_type override must be preserved across upsert_many"
     );
 }

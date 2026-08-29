@@ -134,6 +134,39 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    #[inline]
+    pub fn upstream_error(
+        status: u16,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        body: impl Into<String>,
+        is_proxy_rotated: bool,
+    ) -> Self {
+        CoreError::UpstreamError {
+            status,
+            provider: provider.into(),
+            model: model.into(),
+            body: body.into(),
+            is_proxy_rotated,
+        }
+    }
+
+    #[inline]
+    pub fn model_not_found(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        CoreError::ModelNotFound {
+            provider: provider.into(),
+            model: model.into(),
+        }
+    }
+
+    #[inline]
+    pub fn not_found(what: impl Into<String>, id: impl Into<String>) -> Self {
+        CoreError::NotFound {
+            what: what.into(),
+            id: id.into(),
+        }
+    }
+
     pub fn is_proxy_rotated(&self) -> bool {
         match self {
             CoreError::UpstreamError {

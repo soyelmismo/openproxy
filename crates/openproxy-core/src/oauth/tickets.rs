@@ -177,10 +177,7 @@ pub fn mark_consumed(conn: &Connection, device_code: &str) -> Result<i64> {
         )
         .map_err(openproxy_db::error::map_db_error)?;
     if rows == 0 {
-        return Err(CoreError::NotFound {
-            what: "oauth_device_ticket".into(),
-            id: device_code.into(),
-        });
+        return Err(CoreError::not_found("oauth_device_ticket", device_code));
     }
     let id: i64 = conn
         .query_row(

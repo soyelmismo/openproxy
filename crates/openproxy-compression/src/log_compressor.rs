@@ -16,7 +16,6 @@
 
 use openproxy_types::OpenAIMessage;
 use serde_json::Value;
-use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write;
 
 type Messages = Vec<OpenAIMessage>;
@@ -103,8 +102,16 @@ fn validate_and_score(lines: &[&str]) -> Option<Vec<LineKind>> {
         return None;
     }
     let _format = detect_format(lines)?;
-    let kinds: Vec<LineKind> = lines.iter().map(|l| classify_line(l)).collect();
-    if kinds.iter().any(|k| k.score() > 0.0) {
+    let mut kinds = Vec::with_capacity(lines.len());
+    let mut has_scoreable = false;
+    for &l in lines {
+        let kind = classify_line(l);
+        if kind.score() > 0.0 {
+            has_scoreable = true;
+        }
+        kinds.push(kind);
+    }
+    if has_scoreable {
         Some(kinds)
     } else {
         None
@@ -114,7 +121,13 @@ fn validate_and_score(lines: &[&str]) -> Option<Vec<LineKind>> {
 fn format_selected_lines(lines: &[&str], selected: &[usize]) -> String {
     let total = lines.len();
     let kept = selected.len();
-    let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum::<usize>() / 2);
+    let estimated_cap = selected
+        .iter()
+        .filter_map(|&idx| lines.get(idx))
+        .map(|l| l.len() + 1)
+        .sum::<usize>()
+        + 64;
+    let mut out = String::with_capacity(estimated_cap);
     if kept < total {
         let _ = writeln!(out, "[#log_compressed: kept {kept} of {total} lines]");
     }
@@ -292,7 +305,7 @@ fn contains_error_token(line: &str) -> bool {
         .any(|t| contains_case_insensitive_ascii(line, t))
 }
 
-fn collect_error_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
+fn collect_error_indices(kinds: &[LineKind], selected: &mut Vec<usize>) {
     let n = kinds.len();
     let mut error_count = 0;
     for (i, kind) in kinds.iter().enumerate() {
@@ -301,17 +314,17 @@ fn collect_error_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
                 continue;
             }
             error_count += 1;
-            selected.insert(i);
+            selected.push(i);
             for j in 1..=ERROR_CONTEXT_LINES {
                 if i + j < n {
-                    selected.insert(i + j);
+                    selected.push(i + j);
                 }
             }
         }
     }
 }
 
-fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
+fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut Vec<usize>) {
     let n = kinds.len();
     let mut traces_collected = 0;
     let mut i = 0;
@@ -324,7 +337,7 @@ fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize
             if traces_collected < MAX_STACK_TRACES {
                 let take = (end - i).min(STACK_TRACE_MAX_LINES);
                 for j in i..i + take {
-                    selected.insert(j);
+                    selected.push(j);
                 }
                 traces_collected += 1;
             }
@@ -335,24 +348,29 @@ fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize
     }
 }
 
-fn collect_warning_indices(lines: &[&str], kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
-    let mut warning_seen: HashSet<String> = HashSet::new();
-    let mut warnings_kept = 0;
+fn collect_warning_indices(lines: &[&str], kinds: &[LineKind], selected: &mut Vec<usize>) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut warning_seen: Vec<u64> = Vec::with_capacity(MAX_WARNINGS);
     for (i, (kind, line)) in kinds.iter().zip(lines.iter()).enumerate() {
-        if *kind == LineKind::Warning && warnings_kept < MAX_WARNINGS {
-            let key = dedup_key(line);
-            if warning_seen.insert(key) {
-                selected.insert(i);
-                warnings_kept += 1;
+        if *kind == LineKind::Warning && warning_seen.len() < MAX_WARNINGS {
+            let key_str = dedup_key(line);
+            let mut hasher = DefaultHasher::new();
+            key_str.hash(&mut hasher);
+            let key = hasher.finish();
+            if !warning_seen.contains(&key) {
+                selected.push(i);
+                warning_seen.push(key);
             }
         }
     }
 }
 
-fn collect_summary_and_header_indices(kinds: &[LineKind], selected: &mut BTreeSet<usize>) {
+fn collect_summary_and_header_indices(kinds: &[LineKind], selected: &mut Vec<usize>) {
     for (i, kind) in kinds.iter().enumerate() {
         if *kind == LineKind::Summary || *kind == LineKind::Header {
-            selected.insert(i);
+            selected.push(i);
         }
     }
 }
@@ -365,15 +383,16 @@ fn collect_summary_and_header_indices(kinds: &[LineKind], selected: &mut BTreeSe
 /// 4. All Summary + Header lines.
 /// 5. Sort, dedup, truncate to MAX_TOTAL_LINES.
 fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
-    let mut selected: BTreeSet<usize> = BTreeSet::new();
+    let mut selected: Vec<usize> = Vec::with_capacity(MAX_TOTAL_LINES);
     collect_error_indices(kinds, &mut selected);
     collect_stack_trace_indices(kinds, &mut selected);
     collect_warning_indices(lines, kinds, &mut selected);
     collect_summary_and_header_indices(kinds, &mut selected);
 
-    let mut result: Vec<usize> = selected.into_iter().collect();
-    result.truncate(MAX_TOTAL_LINES);
-    result
+    selected.sort_unstable();
+    selected.dedup();
+    selected.truncate(MAX_TOTAL_LINES);
+    selected
 }
 
 /// Compute the dedup key for a warning line.
@@ -400,10 +419,10 @@ fn dedup_key(line: &str) -> String {
     }
 }
 
-fn scan_hex_run(chars: &[char], i: usize) -> Option<usize> {
-    if chars.get(i) == Some(&'0') && chars.get(i + 1) == Some(&'x') {
+fn scan_hex_run(bytes: &[u8], i: usize) -> Option<usize> {
+    if bytes.get(i) == Some(&b'0') && bytes.get(i + 1) == Some(&b'x') {
         let mut j = i + 2;
-        while j < chars.len() && chars[j].is_ascii_hexdigit() {
+        while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
             j += 1;
         }
         if j > i + 2 {
@@ -413,10 +432,10 @@ fn scan_hex_run(chars: &[char], i: usize) -> Option<usize> {
     None
 }
 
-fn scan_digit_run(chars: &[char], i: usize) -> Option<usize> {
-    if chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
+fn scan_digit_run(bytes: &[u8], i: usize) -> Option<usize> {
+    if bytes.get(i).is_some_and(|b| b.is_ascii_digit()) {
         let mut j = i;
-        while j < chars.len() && chars[j].is_ascii_digit() {
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
             j += 1;
         }
         return Some(j);
@@ -424,12 +443,12 @@ fn scan_digit_run(chars: &[char], i: usize) -> Option<usize> {
     None
 }
 
-fn scan_path_run(chars: &[char], i: usize) -> Option<usize> {
-    if chars.get(i) == Some(&'/') {
+fn scan_path_run(bytes: &[u8], i: usize) -> Option<usize> {
+    if bytes.get(i) == Some(&b'/') {
         let mut j = i;
-        while j < chars.len() {
-            let cc = chars[j];
-            if cc.is_ascii_alphanumeric() || cc == '/' || cc == '.' || cc == '_' || cc == '-' {
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b.is_ascii_alphanumeric() || b == b'/' || b == b'.' || b == b'_' || b == b'-' {
                 j += 1;
             } else {
                 break;
@@ -443,22 +462,30 @@ fn scan_path_run(chars: &[char], i: usize) -> Option<usize> {
 }
 
 /// Normalize the trailing region of a dedup key: replace digit runs, hex
-/// literals, and filesystem paths with `*`. Operates on `char`s so it's
-/// UTF-8 safe.
+/// literals, and filesystem paths with `*`. Operates on bytes/char boundaries
+/// so it's UTF-8 safe and zero-alloc.
 fn normalize_trailing(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
+    let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
-    while i < chars.len() {
-        if let Some(next_i) = scan_hex_run(&chars, i)
-            .or_else(|| scan_digit_run(&chars, i))
-            .or_else(|| scan_path_run(&chars, i))
+    while i < bytes.len() {
+        if let Some(next_i) = scan_hex_run(bytes, i)
+            .or_else(|| scan_digit_run(bytes, i))
+            .or_else(|| scan_path_run(bytes, i))
         {
             out.push('*');
             i = next_i;
         } else {
-            out.push(chars[i]);
-            i += 1;
+            let b = bytes[i];
+            if b.is_ascii() {
+                out.push(b as char);
+                i += 1;
+            } else if let Some(ch) = s[i..].chars().next() {
+                out.push(ch);
+                i += ch.len_utf8();
+            } else {
+                break;
+            }
         }
     }
     out

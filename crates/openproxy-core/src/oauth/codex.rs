@@ -127,13 +127,13 @@ impl OAuthProvider for CodexOAuthProvider {
         }
 
         if !status.is_success() {
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "codex".into(),
-                model: "<oauth>".into(),
-                body: String::from_utf8_lossy(&body).into(),
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                status.as_u16(),
+                "codex",
+                "<oauth>",
+                String::from_utf8_lossy(&body).to_string(),
+                false,
+            ));
         }
 
         let resp: UserCodeResp = serde_json::from_slice(&body)
@@ -213,13 +213,13 @@ impl OAuthProvider for CodexOAuthProvider {
         }
 
         if !status.is_success() {
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "codex".into(),
-                model: "<oauth>".into(),
-                body: String::from_utf8_lossy(&body).into(),
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                status.as_u16(),
+                "codex",
+                "<oauth>",
+                String::from_utf8_lossy(&body).to_string(),
+                false,
+            ));
         }
 
         let poll_resp: PollResp = serde_json::from_slice(&body)
@@ -252,13 +252,13 @@ impl OAuthProvider for CodexOAuthProvider {
             .map_err(|e| map_upstream_err(e, "codex exchange body"))?;
 
         if !token_status.is_success() {
-            return Err(CoreError::UpstreamError {
-                status: token_status.as_u16(),
-                provider: "codex".into(),
-                model: "<oauth>".into(),
-                body: String::from_utf8_lossy(&token_body_bytes).into(),
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                token_status.as_u16(),
+                "codex",
+                "<oauth>",
+                String::from_utf8_lossy(&token_body_bytes).to_string(),
+                false,
+            ));
         }
 
         let token: TokenResponse = serde_json::from_slice(&token_body_bytes)

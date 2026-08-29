@@ -245,7 +245,7 @@ pub fn execute_sync_transaction(
     Ok((
         UpsertResult {
             touched: total,
-            new_model_ids,
+            new_model_ids: new_model_ids.into(),
         },
         events,
     ))

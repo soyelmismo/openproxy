@@ -136,14 +136,6 @@ pub struct OpenAIRequest {
     pub model: String,
     #[serde(default)]
     pub messages: Vec<OpenAIMessage>,
-    #[serde(default)]
-    pub stream: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,11 +143,19 @@ pub struct OpenAIRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(default)]
+    pub stream: bool,
 }
 
 #[derive(Serialize)]

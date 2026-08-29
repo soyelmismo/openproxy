@@ -205,9 +205,9 @@ pub fn start(
                     let adapter = if let Some(a) = adapters.iter().find(|a| a.id() == &p.id) {
                         ProviderAdapterEnum::clone(a)
                     } else {
-                        ProviderAdapterEnum::Custom(
+                        ProviderAdapterEnum::Custom(Box::new(
                             openproxy_adapters::adapters::CustomAdapter::from_provider_row(&p),
-                        )
+                        ))
                     };
                     seen_providers.insert(p.id.clone());
                     resolved_providers.push((p.id, adapter));
@@ -287,9 +287,9 @@ pub fn start(
                 } else if seed::is_builtin(p.id.as_str()) {
                     continue;
                 } else {
-                    ProviderAdapterEnum::Custom(
+                    ProviderAdapterEnum::Custom(Box::new(
                         openproxy_adapters::adapters::CustomAdapter::from_provider_row(&p),
-                    )
+                    ))
                 };
 
                 run_one_tick(
@@ -467,9 +467,9 @@ async fn run_one_tick(
     };
 
     let adapter = match (&adapter, &provider_row) {
-        (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(
+        (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(Box::new(
             openproxy_adapters::adapters::CustomAdapter::from_provider_row(row),
-        ),
+        )),
         _ => adapter,
     };
 
@@ -561,7 +561,7 @@ async fn resolve_account_credentials(
     };
 
     let label = acc.label.as_deref().unwrap_or_default().to_string();
-    if acc.auth_type == "oauth" {
+    if acc.auth_type.as_ref() == "oauth" {
         let decrypt_result = {
             let w = db_pool.reader();
             accounts::decrypt_access_token(&w, acc.id, master_key.as_ref())
@@ -826,7 +826,7 @@ mod tests {
         let (adapter, counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", three_models());
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(adapter)),
         ]);
 
         // Run with paused time + 1s ticks. We expect the first
@@ -929,7 +929,7 @@ mod tests {
         let (adapter, counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", three_models());
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(adapter)),
         ]);
 
         let sched = start(
@@ -1021,7 +1021,7 @@ mod tests {
                 let (a, c) =
                     openproxy_adapters::adapters::MockAdapter::with_discovery(pid, three_models());
                 (
-                    openproxy_adapters::adapters::ProviderAdapterEnum::Mock(a),
+                    openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(a)),
                     c,
                 )
             })
@@ -1359,7 +1359,7 @@ mod tests {
         let (adapter, _counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", models);
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(adapter)),
         ]);
 
         let sched = start(
@@ -1492,7 +1492,7 @@ mod tests {
         // reuse `MockAdapter` because its `fetch_models` returns
         // `Ok`. Build a thin shim.
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            openproxy_adapters::adapters::MockAdapter::failing_discovery("openrouter"),
+            Box::new(openproxy_adapters::adapters::MockAdapter::failing_discovery("openrouter")),
         );
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
             Arc::new(vec![adapter]);

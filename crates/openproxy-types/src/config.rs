@@ -252,7 +252,7 @@ pub struct SmartWarmupConfig {
     #[serde(default = "default_smart_warmup_interval")]
     pub interval_secs: u64,
     #[serde(default = "default_smart_warmup_models")]
-    pub models: Vec<String>,
+    pub models: Box<[String]>,
 }
 
 fn default_smart_warmup_enabled() -> bool {
@@ -262,11 +262,12 @@ fn default_smart_warmup_interval() -> u64 {
     3600
 }
 
-fn default_smart_warmup_models() -> Vec<String> {
+fn default_smart_warmup_models() -> Box<[String]> {
     vec![
         "gemini-3.5-flash-extra-low".to_string(),
         "claude-sonnet-4-6".to_string(),
     ]
+    .into_boxed_slice()
 }
 
 impl Default for SmartWarmupConfig {

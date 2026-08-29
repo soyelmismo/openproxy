@@ -262,28 +262,36 @@ fn is_build_output(content: &str) -> bool {
         if GENERIC_ERROR_RE.is_match(l) {
             generic_count += 1;
         }
+
+        let specific_matches = usize::from(has_pytest)
+            + usize::from(has_cargo)
+            + usize::from(has_jest)
+            + usize::from(has_make);
+        if specific_matches >= 2 || (specific_matches >= 1 && generic_count >= 5) {
+            return true;
+        }
     }
 
-    let mut matches = usize::from(has_pytest)
+    let specific_matches = usize::from(has_pytest)
         + usize::from(has_cargo)
         + usize::from(has_jest)
         + usize::from(has_make);
-    if generic_count >= 5 {
-        matches += 1;
-    }
-
-    matches >= 2
+    specific_matches >= 2 || (specific_matches >= 1 && generic_count >= 5)
 }
 
 /// `SearchResults`: ≥3 lines match `^[\w/.\-]+:\d+:` (the grep/ripgrep
 /// `path:line:content` shape). Scans the (already first-100-lines) head.
 fn is_search_results(content: &str) -> bool {
-    let count = content
-        .lines()
-        .take(DETECT_SCAN_LINES)
-        .filter(|l| SEARCH_RESULT_RE.is_match(l))
-        .count();
-    count >= 3
+    let mut count = 0;
+    for l in content.lines().take(DETECT_SCAN_LINES) {
+        if SEARCH_RESULT_RE.is_match(l) {
+            count += 1;
+            if count >= 3 {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `Tabular`: first line looks like a CSV header (≥2 commas, no prose) OR a
@@ -329,12 +337,16 @@ fn is_source_code(content: &str) -> bool {
         return true;
     }
     // Structural keyword density check.
-    let keyword_matches = content
-        .lines()
-        .take(DETECT_SCAN_LINES)
-        .filter(|l| SOURCE_KEYWORD_RE.is_match(l))
-        .count();
-    keyword_matches >= 3
+    let mut keyword_matches = 0;
+    for l in content.lines().take(DETECT_SCAN_LINES) {
+        if SOURCE_KEYWORD_RE.is_match(l) {
+            keyword_matches += 1;
+            if keyword_matches >= 3 {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

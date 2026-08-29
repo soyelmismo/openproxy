@@ -35,6 +35,8 @@ pub struct Combo {
     pub name: String,
     pub strategy: Strategy,
     pub race_size: u8,
+    #[serde(default)]
+    pub preventive_rate_limit: bool,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
@@ -52,8 +54,6 @@ pub struct Combo {
     pub lkgp_exploration_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_window_secs: Option<u64>,
-    #[serde(default)]
-    pub preventive_rate_limit: bool,
 }
 
 fn default_target_weight() -> i32 {
@@ -97,18 +97,18 @@ pub struct ComboTargetWithModel {
     pub account_id: Option<AccountId>,
     pub model_row_id: Option<ModelRowId>,
     pub sub_combo_id: Option<ComboId>,
-    pub sub_combo_name: Option<String>,
-    pub model_id: String,
-    pub model_display_name: Option<String>,
+    pub sub_combo_name: Option<Box<str>>,
+    pub model_id: Box<str>,
+    pub model_display_name: Option<Box<str>>,
     pub priority_order: i32,
     #[serde(default = "default_target_weight")]
     pub weight: i32,
     #[serde(default)]
     pub in_cooldown: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cooldown_until: Option<String>,
+    pub cooldown_until: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cooldown_reason: Option<String>,
+    pub cooldown_reason: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_length: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -302,7 +302,7 @@ async fn decrypt_test_account_key(
     start: std::time::Instant,
 ) -> Result<String, TestResult> {
     if let Some(acc) = account_opt
-        && acc.auth_type == "oauth"
+        && acc.auth_type.as_ref() == "oauth"
     {
         return core_oauth::resolve_oauth_token(
             s.db_pool().as_ref(),
@@ -391,8 +391,9 @@ async fn resolve_test_credentials(
 
     let account_label = raw_account
         .as_ref()
-        .and_then(|a| a.label.clone())
-        .unwrap_or_default();
+        .and_then(|a| a.label.as_deref())
+        .unwrap_or_default()
+        .to_string();
 
     Ok((resolved_aid, account_label, api_key, raw_account))
 }
@@ -704,13 +705,13 @@ pub(crate) async fn run_test_for_model(
     let effective_target_format =
         resolve_effective_target_format(adapter.format(), model.target_format);
     let inferred_type = openproxy_types::capabilities::infer_model_type(model.model_id.as_str());
-    let is_audio = model.model_type == "audio" || inferred_type == "audio";
+    let is_audio = model.model_type.as_ref() == "audio" || inferred_type == "audio";
     let is_stt = is_audio
         && (openproxy_types::capabilities::is_stt_model(model.model_id.as_str())
-            || model.model_type == "audio");
+            || model.model_type.as_ref() == "audio");
     let is_tts = is_audio && !is_stt;
-    let is_embedding = model.model_type == "embedding" || inferred_type == "embedding";
-    let is_image = model.model_type == "image" || inferred_type == "image";
+    let is_embedding = model.model_type.as_ref() == "embedding" || inferred_type == "embedding";
+    let is_image = model.model_type.as_ref() == "image" || inferred_type == "image";
 
     let (url, body_value, multipart_opt): (
         String,
@@ -912,10 +913,10 @@ pub(crate) async fn run_refresh(
         match found {
             Some(m) => m.provider_id,
             None => {
-                return Err(ApiError(CoreError::ModelNotFound {
-                    provider: "<unknown>".into(),
-                    model: format!("row_id={}", row_id.0),
-                }));
+                return Err(ApiError(CoreError::model_not_found(
+                    "<unknown>",
+                    format!("row_id={}", row_id.0),
+                )));
             }
         }
     };
@@ -944,9 +945,9 @@ pub(crate) fn resolve_adapter(
         .map_err(|e| CoreError::ProviderNotFound(format!("{provider_id}: {e}")))?;
     drop(r);
     match provider_row {
-        Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(
+        Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(Box::new(
             adapters::CustomAdapter::from_provider_row(&row),
-        )),
+        ))),
         None => Err(CoreError::ProviderNotFound(provider_id.to_string())),
     }
 }

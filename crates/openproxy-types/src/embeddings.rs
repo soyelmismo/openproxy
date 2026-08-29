@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 #[serde(untagged)]
 pub enum EmbeddingInput {
     Single(String),
-    Array(Vec<String>),
-    Tokens(Vec<u32>),
-    TokenArrays(Vec<Vec<u32>>),
+    Array(Box<[String]>),
+    Tokens(Box<[u32]>),
+    TokenArrays(Box<[Box<[u32]>]>),
 }
 
 impl EmbeddingInput {
@@ -25,9 +25,12 @@ impl_enum_from! {
     EmbeddingInput {
         Single(String),
         Single(&str => ToString::to_string),
-        Array(Vec<String>),
-        Tokens(Vec<u32>),
-        TokenArrays(Vec<Vec<u32>>),
+        Array(Box<[String]>),
+        Array(Vec<String> => Vec::into_boxed_slice),
+        Tokens(Box<[u32]>),
+        Tokens(Vec<u32> => Vec::into_boxed_slice),
+        TokenArrays(Box<[Box<[u32]>]>),
+        TokenArrays(Vec<Vec<u32>> => |v: Vec<Vec<u32>>| v.into_iter().map(Vec::into_boxed_slice).collect::<Box<[_]>>()),
     }
 }
 
@@ -48,13 +51,14 @@ pub struct EmbeddingRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EmbeddingVector {
-    Floats(Vec<f32>),
+    Floats(Box<[f32]>),
     Base64(String),
 }
 
 impl_enum_from! {
     EmbeddingVector {
-        Floats(Vec<f32>),
+        Floats(Box<[f32]>),
+        Floats(Vec<f32> => Vec::into_boxed_slice),
         Base64(String),
         Base64(&str => ToString::to_string),
     }
@@ -85,7 +89,7 @@ pub struct EmbeddingUsage {
 pub struct EmbeddingResponse {
     #[serde(default = "default_embedding_response_object")]
     pub object: String,
-    pub data: Vec<EmbeddingObject>,
+    pub data: Box<[EmbeddingObject]>,
     pub model: String,
     pub usage: EmbeddingUsage,
 }
@@ -126,7 +130,7 @@ mod tests {
         assert_eq!(req.model, "text-embedding-3-large");
         assert_eq!(
             req.input,
-            EmbeddingInput::Array(vec!["hello".to_string(), "world".to_string()])
+            EmbeddingInput::Array(vec!["hello".to_string(), "world".to_string()].into_boxed_slice())
         );
         assert!(!req.input.is_empty());
         assert_eq!(req.dimensions, Some(1536));
@@ -141,7 +145,7 @@ mod tests {
         assert_eq!(req.model, "text-embedding-3-small");
         assert_eq!(
             req.input,
-            EmbeddingInput::Tokens(vec![101, 2054, 2003, 102])
+            EmbeddingInput::Tokens(vec![101, 2054, 2003, 102].into_boxed_slice())
         );
         assert!(!req.input.is_empty());
 
@@ -156,7 +160,13 @@ mod tests {
         assert_eq!(req.model, "text-embedding-3-small");
         assert_eq!(
             req.input,
-            EmbeddingInput::TokenArrays(vec![vec![101, 2054], vec![2003, 102]])
+            EmbeddingInput::TokenArrays(
+                vec![
+                    vec![101, 2054].into_boxed_slice(),
+                    vec![2003, 102].into_boxed_slice()
+                ]
+                .into_boxed_slice()
+            )
         );
         assert!(!req.input.is_empty());
     }
@@ -166,28 +176,34 @@ mod tests {
         let empty_single = EmbeddingInput::Single(String::new());
         assert!(empty_single.is_empty());
 
-        let empty_arr = EmbeddingInput::Array(vec![]);
+        let empty_arr = EmbeddingInput::Array(vec![].into_boxed_slice());
         assert!(empty_arr.is_empty());
 
-        let empty_arr_strings = EmbeddingInput::Array(vec![String::new(), String::new()]);
+        let empty_arr_strings =
+            EmbeddingInput::Array(vec![String::new(), String::new()].into_boxed_slice());
         assert!(empty_arr_strings.is_empty());
 
-        let non_empty = EmbeddingInput::Array(vec![String::new(), "foo".to_string()]);
+        let non_empty =
+            EmbeddingInput::Array(vec![String::new(), "foo".to_string()].into_boxed_slice());
         assert!(!non_empty.is_empty());
 
-        let empty_tokens = EmbeddingInput::Tokens(vec![]);
+        let empty_tokens = EmbeddingInput::Tokens(vec![].into_boxed_slice());
         assert!(empty_tokens.is_empty());
 
-        let non_empty_tokens = EmbeddingInput::Tokens(vec![1, 2, 3]);
+        let non_empty_tokens = EmbeddingInput::Tokens(vec![1, 2, 3].into_boxed_slice());
         assert!(!non_empty_tokens.is_empty());
 
-        let empty_token_arrays = EmbeddingInput::TokenArrays(vec![]);
+        let empty_token_arrays = EmbeddingInput::TokenArrays(vec![].into_boxed_slice());
         assert!(empty_token_arrays.is_empty());
 
-        let empty_token_arrays_inner = EmbeddingInput::TokenArrays(vec![vec![], vec![]]);
+        let empty_token_arrays_inner = EmbeddingInput::TokenArrays(
+            vec![vec![].into_boxed_slice(), vec![].into_boxed_slice()].into_boxed_slice(),
+        );
         assert!(empty_token_arrays_inner.is_empty());
 
-        let non_empty_token_arrays = EmbeddingInput::TokenArrays(vec![vec![1], vec![]]);
+        let non_empty_token_arrays = EmbeddingInput::TokenArrays(
+            vec![vec![1].into_boxed_slice(), vec![].into_boxed_slice()].into_boxed_slice(),
+        );
         assert!(!non_empty_token_arrays.is_empty());
     }
 
@@ -215,7 +231,7 @@ mod tests {
         assert_eq!(res.data[0].object, "embedding");
         assert_eq!(
             res.data[0].embedding,
-            EmbeddingVector::Floats(vec![0.1, 0.2, 0.3])
+            EmbeddingVector::Floats(vec![0.1, 0.2, 0.3].into_boxed_slice())
         );
         assert_eq!(res.data[0].index, 0);
         assert_eq!(res.usage.prompt_tokens, 5);
@@ -276,7 +292,7 @@ mod tests {
         assert_eq!(res.data[0].object, "embedding");
         assert_eq!(
             res.data[0].embedding,
-            EmbeddingVector::Floats(vec![0.5, 0.6])
+            EmbeddingVector::Floats(vec![0.5, 0.6].into_boxed_slice())
         );
     }
 
@@ -291,16 +307,25 @@ mod tests {
         let from_vec_str: EmbeddingInput = vec!["a".to_string(), "b".to_string()].into();
         assert_eq!(
             from_vec_str,
-            EmbeddingInput::Array(vec!["a".to_string(), "b".to_string()])
+            EmbeddingInput::Array(vec!["a".to_string(), "b".to_string()].into_boxed_slice())
         );
 
         let from_tokens: EmbeddingInput = vec![1u32, 2, 3].into();
-        assert_eq!(from_tokens, EmbeddingInput::Tokens(vec![1, 2, 3]));
+        assert_eq!(
+            from_tokens,
+            EmbeddingInput::Tokens(vec![1, 2, 3].into_boxed_slice())
+        );
 
         let from_token_arrays: EmbeddingInput = vec![vec![1u32, 2], vec![3u32, 4]].into();
         assert_eq!(
             from_token_arrays,
-            EmbeddingInput::TokenArrays(vec![vec![1, 2], vec![3, 4]])
+            EmbeddingInput::TokenArrays(
+                vec![
+                    vec![1u32, 2].into_boxed_slice(),
+                    vec![3u32, 4].into_boxed_slice()
+                ]
+                .into_boxed_slice()
+            )
         );
     }
 }

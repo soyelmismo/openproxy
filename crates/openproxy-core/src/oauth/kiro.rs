@@ -176,13 +176,13 @@ async fn register_oidc_client(
 
     if !register_status.is_success() {
         let body_str = String::from_utf8_lossy(&register_body).to_string();
-        return Err(CoreError::UpstreamError {
-            status: register_status.as_u16(),
-            provider: "kiro".into(),
-            model: "<oauth_register>".into(),
-            body: body_str,
-            is_proxy_rotated: false,
-        });
+        return Err(CoreError::upstream_error(
+            register_status.as_u16(),
+            "kiro",
+            "<oauth_register>",
+            body_str,
+            false,
+        ));
     }
 
     let client: RegisterClientResponse = serde_json::from_slice(&register_body)
@@ -270,13 +270,13 @@ impl OAuthProvider for KiroOAuthProvider {
             .map_err(|e| map_upstream_err(e, "kiro register body read"))?;
         if !register_status.is_success() {
             let body_str = String::from_utf8_lossy(&register_body).to_string();
-            return Err(CoreError::UpstreamError {
-                status: register_status.as_u16(),
-                provider: "kiro".into(),
-                model: "<oauth>".into(),
-                body: body_str,
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                register_status.as_u16(),
+                "kiro",
+                "<oauth>",
+                body_str,
+                false,
+            ));
         }
 
         let client: RegisterClientResponse = serde_json::from_slice(&register_body)
@@ -310,13 +310,13 @@ impl OAuthProvider for KiroOAuthProvider {
             .map_err(|e| map_upstream_err(e, "kiro device auth body read"))?;
         if !device_auth_status.is_success() {
             let body_str = String::from_utf8_lossy(&device_auth_body).to_string();
-            return Err(CoreError::UpstreamError {
-                status: device_auth_status.as_u16(),
-                provider: "kiro".into(),
-                model: "<oauth>".into(),
-                body: body_str,
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                device_auth_status.as_u16(),
+                "kiro",
+                "<oauth>",
+                body_str,
+                false,
+            ));
         }
 
         let dar: DeviceAuthorizationResponse = serde_json::from_slice(&device_auth_body)
@@ -380,13 +380,13 @@ impl OAuthProvider for KiroOAuthProvider {
 
         if !status.is_success() {
             let body_str = String::from_utf8_lossy(&body).to_string();
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "kiro".into(),
-                model: "<oauth>".into(),
-                body: body_str,
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                status.as_u16(),
+                "kiro",
+                "<oauth>",
+                body_str,
+                false,
+            ));
         }
 
         serde_json::from_slice::<TokenResponse>(&body)
@@ -439,13 +439,13 @@ impl OAuthProvider for KiroOAuthProvider {
 
             if !status.is_success() {
                 let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-                return Err(CoreError::UpstreamError {
-                    status: status.as_u16(),
-                    provider: "kiro".into(),
-                    model: "<oauth_social>".into(),
-                    body: body_str,
-                    is_proxy_rotated: false,
-                });
+                return Err(CoreError::upstream_error(
+                    status.as_u16(),
+                    "kiro",
+                    "<oauth_social>",
+                    body_str,
+                    false,
+                ));
             }
 
             let mut data: serde_json::Value = serde_json::from_slice(&body_bytes)
@@ -559,13 +559,13 @@ impl OAuthProvider for KiroOAuthProvider {
 
         let Some(final_body) = success_body else {
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "kiro".into(),
-                model: "<oauth>".into(),
-                body: body_str,
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                status.as_u16(),
+                "kiro",
+                "<oauth>",
+                body_str,
+                false,
+            ));
         };
 
         let mut data: serde_json::Value = serde_json::from_slice(&final_body)
@@ -766,13 +766,13 @@ async fn list_available_profiles(
             );
             return Ok(None);
         }
-        return Err(CoreError::UpstreamError {
+        return Err(CoreError::upstream_error(
             status,
-            provider: "kiro".into(),
-            model: "<post_exchange>".into(),
-            body: body_str,
-            is_proxy_rotated: false,
-        });
+            "kiro",
+            "<post_exchange>",
+            body_str,
+            false,
+        ));
     }
 
     let body_bytes = resp.collect().await.map_err(|e| {

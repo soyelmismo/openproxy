@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(acc.health_status, HealthStatus::Healthy);
         assert!(acc.rate_limited_until.is_none());
         assert!(!acc.created_at.is_empty(), "DB stamps created_at");
-        assert_eq!(acc.auth_type, "api_key", "default auth_type");
+        assert_eq!(acc.auth_type.as_ref(), "api_key", "default auth_type");
 
         // Missing id → None, not error.
         assert!(

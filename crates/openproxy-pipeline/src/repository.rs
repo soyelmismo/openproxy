@@ -217,7 +217,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<Option<String>> {
         let conn = self.conn.lock();
         openproxy_db::accounts::get(&conn, account_id, master_key)
-            .map(|opt| opt.and_then(|a| a.label))
+            .map(|opt| opt.and_then(|a| a.label.map(|l| l.to_string())))
     }
 
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>> {

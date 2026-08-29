@@ -63,6 +63,7 @@
 //! real per-step deadlines.
 
 use std::future::Future;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
@@ -705,13 +706,13 @@ async fn run_phased_connect(
     })?;
 
     let proxy_config_opt = resolve_call_proxy_config()?;
-    let (dial_host, dial_port) = resolve_dial_target(proxy_config_opt.as_ref(), &host, port);
+    let (dial_host, dial_port) = resolve_dial_target(proxy_config_opt.as_ref(), host, port);
 
     let stream = establish_raw_tcp_stream(dial_host, dial_port, connect_deadline, timeouts).await?;
     let stream = proxy_tunnel_phase(
         stream,
         proxy_config_opt.as_ref(),
-        &host,
+        host,
         port,
         connect_deadline,
     )
@@ -719,7 +720,7 @@ async fn run_phased_connect(
     configure_tcp_stream(&stream);
 
     if is_https {
-        tls_phase(stream, &host, connect_deadline, timeouts.tls)
+        tls_phase(stream, host, connect_deadline, timeouts.tls)
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     } else {
@@ -730,13 +731,12 @@ async fn run_phased_connect(
 /// `host:port` -> (host, port) with sensible defaults. Returns an
 /// error string (not a `PhasedConnectorError`) so the caller can wrap
 /// it with the right phase.
-fn parse_authority(uri: &Uri) -> Result<(String, u16), String> {
+fn parse_authority(uri: &Uri) -> Result<(&str, u16), String> {
     let host = uri
         .host()
         .ok_or_else(|| "missing host".to_string())?
         .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_string();
+        .trim_end_matches(']');
     let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
         Some("https") => 443,
         _ => 80,
@@ -756,14 +756,21 @@ fn parse_literal_ip(host: &str, port: u16) -> Option<SocketAddr> {
     }
 }
 
+fn cache_key(host: &str, port: u16) -> u64 {
+    let mut h = DefaultHasher::new();
+    host.hash(&mut h);
+    port.hash(&mut h);
+    h.finish()
+}
+
 static DNS_CACHE: std::sync::LazyLock<
-    dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
+    dashmap::DashMap<u64, (Vec<SocketAddr>, std::time::Instant)>,
 > = std::sync::LazyLock::new(dashmap::DashMap::new);
 static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 const DNS_TTL: std::time::Duration = std::time::Duration::from_mins(5);
 
-fn get_cached_dns(cache_key: &str) -> Option<Vec<SocketAddr>> {
-    let entry = DNS_CACHE.get(cache_key)?;
+fn get_cached_dns(cache_key: u64) -> Option<Vec<SocketAddr>> {
+    let entry = DNS_CACHE.get(&cache_key)?;
     if std::time::Instant::now() < entry.1 {
         Some(entry.0.clone())
     } else {
@@ -794,15 +801,14 @@ fn ensure_dns_sweep_started() {
 /// async DNS, with a simple in-memory cache (5m TTL) to avoid
 /// hitting getaddrinfo on every fresh dial.
 async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-    let cache_key = format!("{host}:{port}");
-    if let Some(cached) = get_cached_dns(&cache_key) {
+    let key = cache_key(host, port);
+    if let Some(cached) = get_cached_dns(key) {
         return Ok(cached);
     }
 
-    let lookup = format!("{host}:{port}");
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(lookup).await?.collect();
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
     let now = std::time::Instant::now();
-    DNS_CACHE.insert(cache_key, (addrs.clone(), now + DNS_TTL));
+    DNS_CACHE.insert(key, (addrs.clone(), now + DNS_TTL));
     ensure_dns_sweep_started();
 
     Ok(addrs)
@@ -1106,5 +1112,33 @@ mod tests {
         assert!(!is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
             0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
         ))));
+    }
+
+    #[test]
+    fn test_parse_authority() {
+        let uri: Uri = "https://api.openai.com/v1/chat/completions"
+            .parse()
+            .unwrap();
+        assert_eq!(parse_authority(&uri).unwrap(), ("api.openai.com", 443));
+
+        let uri_http: Uri = "http://example.com/foo".parse().unwrap();
+        assert_eq!(parse_authority(&uri_http).unwrap(), ("example.com", 80));
+
+        let uri_port: Uri = "http://example.com:8080/foo".parse().unwrap();
+        assert_eq!(parse_authority(&uri_port).unwrap(), ("example.com", 8080));
+
+        let uri_ipv6: Uri = "http://[::1]:9000/foo".parse().unwrap();
+        assert_eq!(parse_authority(&uri_ipv6).unwrap(), ("::1", 9000));
+    }
+
+    #[test]
+    fn test_cache_key() {
+        let k1 = cache_key("api.openai.com", 443);
+        let k2 = cache_key("api.openai.com", 443);
+        let k3 = cache_key("api.openai.com", 80);
+        let k4 = cache_key("api.anthropic.com", 443);
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+        assert_ne!(k1, k4);
     }
 }

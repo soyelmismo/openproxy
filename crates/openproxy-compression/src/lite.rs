@@ -283,11 +283,21 @@ fn clean_text_unicode(text: &str) -> Option<String> {
     if !has_invisible_or_crlf(text) {
         return None;
     }
-    let cleaned = text
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0'], "");
-    if cleaned != text { Some(cleaned) } else { None }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\n');
+            }
+            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\0' => {}
+            other => out.push(other),
+        }
+    }
+    if out != text { Some(out) } else { None }
 }
 
 pub fn clean_invisible_unicode(msgs: &mut Messages) -> Vec<&'static str> {
@@ -333,53 +343,56 @@ fn skip_ansi_csi(bytes: &[u8], mut i: usize) -> usize {
 
 fn strip_ansi_string(text: &str) -> String {
     let bytes = text.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut out = String::with_capacity(bytes.len());
+    let mut last_end = 0;
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == 0x1B {
+            if last_end < i {
+                out.push_str(&text[last_end..i]);
+            }
             if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
                 i = skip_ansi_csi(bytes, i);
             } else {
                 i += 1;
             }
+            last_end = i;
         } else {
-            out.push(bytes[i]);
             i += 1;
         }
     }
-    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+    if last_end < bytes.len() {
+        out.push_str(&text[last_end..]);
+    }
+    out
 }
 
 // ─── Technique 8: Compact formatted multiline JSON ────────────────────────
 
-fn process_json_byte(b: u8, out: &mut Vec<u8>, in_string: &mut bool, escaped: &mut bool) {
-    if *in_string {
-        out.push(b);
-        if *escaped {
-            *escaped = false;
-        } else if b == b'\\' {
-            *escaped = true;
-        } else if b == b'"' {
-            *in_string = false;
-        }
-    } else if b == b'"' {
-        *in_string = true;
-        out.push(b);
-    } else if !b.is_ascii_whitespace() {
-        out.push(b);
-    }
-}
-
 fn minify_json(json: &str) -> String {
-    let mut out = Vec::with_capacity(json.len());
+    let mut out = String::with_capacity(json.len());
     let mut in_string = false;
     let mut escaped = false;
 
-    for &b in json.as_bytes() {
-        process_json_byte(b, &mut out, &mut in_string, &mut escaped);
+    for ch in json.chars() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+        } else if ch == '"' {
+            in_string = true;
+            out.push(ch);
+        } else if !ch.is_ascii_whitespace() {
+            out.push(ch);
+        }
     }
 
-    String::from_utf8(out).unwrap_or_else(|_| json.to_string())
+    out
 }
 
 fn is_json_candidate(trimmed: &str) -> bool {

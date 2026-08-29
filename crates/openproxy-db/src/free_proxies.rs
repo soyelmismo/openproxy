@@ -79,7 +79,7 @@ fn resolve_current_proxy_id(
             conn.query_row(
                 "SELECT current_proxy_id FROM accounts WHERE id = ?1",
                 params![acc_id.0],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
             .optional()
             .map_err(crate::error::map_db_error)?
@@ -88,7 +88,7 @@ fn resolve_current_proxy_id(
             None
         }
     } else {
-        provider.current_proxy_id.clone()
+        provider.current_proxy_id.as_deref().map(ToString::to_string)
     }
     .pipe(Ok)
 }
@@ -272,7 +272,7 @@ pub fn get_or_assign_provider_proxy(
         return Ok(None);
     };
 
-    let is_per_account = provider.proxy_rotation_mode == "account";
+    let is_per_account = provider.proxy_rotation_mode.as_ref() == "account";
     if let Some(url) =
         check_current_proxy(conn, provider_id, &provider, account_id, is_per_account)?
     {

@@ -147,6 +147,8 @@ macro_rules! db_query_all {
 /// - `@bool(idx)`: extracts a boolean
 /// - `@opt_bool(idx)`: extracts an `Option<bool>`
 /// - `@u8(idx)`: extracts a `u8`
+/// - `@box_str(idx)`: extracts a `String` and converts to `Box<str>`
+/// - `@opt_box_str(idx)`: extracts an `Option<String>` and converts to `Option<Box<str>>`
 /// - `@u16(idx)`: extracts a `u16`
 /// - `@opt_u16(idx)`: extracts an `Option<u16>`
 /// - `@u32(idx)`: extracts a `u32`
@@ -167,6 +169,17 @@ macro_rules! db_query_all {
 /// - `idx`: extracts value `row.get(idx)?`
 #[macro_export]
 macro_rules! map_row_fields {
+    (@get $row:expr, @box_str($idx:expr)) => {
+        $row.get::<_, String>($idx)?.into_boxed_str()
+    };
+    (@get $row:expr, @box_str_default($idx:expr, $default:expr)) => {
+        $row.get::<_, Option<String>>($idx)?
+            .map(String::into_boxed_str)
+            .unwrap_or_else(|| $default.into())
+    };
+    (@get $row:expr, @opt_box_str($idx:expr)) => {
+        $row.get::<_, Option<String>>($idx)?.map(String::into_boxed_str)
+    };
     (@get $row:expr, @bool($idx:expr)) => {
         $row.get::<_, bool>($idx)?
     };
@@ -265,7 +278,7 @@ macro_rules! map_row_fields {
         $row.get::<_, Option<$ty>>($idx)?.unwrap_or($default)
     };
     (@get $row:expr, @opt_default($idx:expr, $default:expr)) => {
-        $row.get::<_, Option<_>>($idx)?.unwrap_or_else(|| $default)
+        $row.get::<_, Option<_>>($idx)?.unwrap_or_else(|| $default).into()
     };
     (@get $row:expr, ($idx:expr, $ty:ty)) => {
         $row.get::<_, $ty>($idx)?

@@ -1443,6 +1443,41 @@ html, body {
     overflow-wrap: anywhere;
     word-break: normal;
   }
+
+  /* ===== Desktop log-detail modal: single-Y-scroll layout =====
+     AC1: .modal-body absorbe todo el scroll vertical del contenido.
+     AC5: header/summary/tabs nunca se comprimen (flex-shrink: 0).
+     B1:  .json-viewer conserva overflow-x: auto como red de seguridad
+          contra tokens sin breakpoint (base64, URLs, hashes hex).
+          overflow-y: hidden cede el scroll vertical al .modal-body. */
+
+  .log-detail-modal .modal-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .log-detail-modal .modal-header,
+  .log-detail-modal .log-detail-summary,
+  .log-detail-modal .tabs-toolbar {
+    flex-shrink: 0 !important;
+  }
+
+  .log-detail-modal .log-detail-content {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    /* overflow intencionalmente NO definido (default: visible)
+       para que los <details> expandidos fluyan sin recorte. */
+  }
+
+  .log-detail-modal .json-viewer {
+    max-height: none !important;
+    overflow-y: hidden !important;
+    overflow-x: auto !important;
+  }
 }
 
 /* ==========================================================================

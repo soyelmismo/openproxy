@@ -67,9 +67,9 @@ impl CodexAdapter {
         (id, name, ctx, _max_ctx, vision): (&str, &str, i64, i64, bool),
     ) -> DiscoveredModel {
         let input_modalities = if vision {
-            Some(vec!["text".to_string(), "image".to_string()])
+            Some(vec!["text".to_string(), "image".to_string()].into())
         } else {
-            Some(vec!["text".to_string()])
+            Some(vec!["text".to_string()].into())
         };
         let caps = openproxy_types::ModelCapabilities {
             vision: Some(vision),
@@ -87,7 +87,7 @@ impl CodexAdapter {
             context_length: Some(ctx),
             max_output_tokens: Some(32_768),
             input_modalities,
-            output_modalities: Some(vec!["text".to_string()]),
+            output_modalities: Some(vec!["text".to_string()].into()),
             model_type: Some("chat".to_string()),
             family: Some("gpt".to_string()),
             capabilities: Some(caps),

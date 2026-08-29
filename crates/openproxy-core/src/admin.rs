@@ -1394,11 +1394,11 @@ mod tests {
         // We need a minimal adapter impl to satisfy the trait. We don't
         // call `fetch_models` on it.
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            openproxy_adapters::adapters::MockAdapter::new(
+            Box::new(openproxy_adapters::adapters::MockAdapter::new(
                 "stub",
                 "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
-            ),
+            )),
         );
         let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
@@ -1464,11 +1464,11 @@ mod tests {
 
         let conn = pool.open_connection().expect("open conn");
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            openproxy_adapters::adapters::MockAdapter::new(
+            Box::new(openproxy_adapters::adapters::MockAdapter::new(
                 "prov-preserve",
                 "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
-            ),
+            )),
         );
         let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
@@ -1537,7 +1537,7 @@ mod tests {
         )
         .expect("update");
         let p = list_providers(&conn).expect("list").pop().expect("present");
-        assert_eq!(p.name, "Renamed");
+        assert_eq!(&*p.name, "Renamed");
         assert_eq!(p.auto_activate_keyword.as_deref(), Some("claude"));
 
         // Clear keyword with Some(None).
@@ -1643,7 +1643,7 @@ mod tests {
             .expect("present");
         assert!(m.custom);
         assert!(m.active);
-        assert_eq!(m.model_type, "image");
+        assert_eq!(&*m.model_type, "image");
 
         // Update model test.
         update_model(
@@ -1660,7 +1660,7 @@ mod tests {
             .unwrap()
             .expect("present");
         assert_eq!(updated_m.display_name.as_deref(), Some("Updated Display"));
-        assert_eq!(updated_m.model_type, "embedding");
+        assert_eq!(&*updated_m.model_type, "embedding");
     }
 
     #[test]
@@ -1942,10 +1942,10 @@ mod tests {
         let enriched = list_combo_targets_with_model(&conn, fx.combo_id).expect("list with model");
         assert_eq!(enriched.len(), 2);
         // Order matches `priority_order ASC` (t1=10, t2=20).
-        assert_eq!(enriched[0].model_id, "m1");
+        assert_eq!(&*enriched[0].model_id, "m1");
         assert_eq!(enriched[0].model_display_name.as_deref(), Some("Model One"));
         assert_eq!(enriched[0].model_row_id, Some(fx.m1));
-        assert_eq!(enriched[1].model_id, "m2");
+        assert_eq!(&*enriched[1].model_id, "m2");
         assert_eq!(enriched[1].model_display_name.as_deref(), Some("Model Two"));
     }
 }

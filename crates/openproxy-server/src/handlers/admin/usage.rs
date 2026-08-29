@@ -31,7 +31,7 @@ pub struct ClientWsMessage {
 }
 
 pub enum NotifRxEvent {
-    Event(openproxy_core::notifications::NotificationEvent),
+    Event(Box<openproxy_core::notifications::NotificationEvent>),
     Lagged(u64),
     Closed,
 }
@@ -311,19 +311,19 @@ pub async fn usage_detail(
     Ok(Json(UsageDetailResponse { row: r }))
 }
 
-async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, val: serde_json::Value) {
+async fn outbox_send(tx: &tokio::sync::mpsc::Sender<Box<str>>, val: serde_json::Value) {
     if let Ok(text) = json_text(&val) {
-        let _ = tx.send(text).await;
+        let _ = tx.send(text.into_boxed_str()).await;
     }
 }
 
-fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, val: &serde_json::Value) {
+fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<Box<str>>, val: &serde_json::Value) {
     if let Ok(text) = json_text(val) {
-        let _ = tx.try_send(text);
+        let _ = tx.try_send(text.into_boxed_str());
     }
 }
 
-async fn send_inflight_sync(outbox_tx: &tokio::sync::mpsc::Sender<String>) {
+async fn send_inflight_sync(outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>) {
     let active = openproxy_core::usage::get_active_inflight_attempts();
     let snap_now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -342,7 +342,7 @@ async fn send_inflight_sync(outbox_tx: &tokio::sync::mpsc::Sender<String>) {
 
 async fn handle_stage_event(
     stage: Result<openproxy_types::usage::StageEvent, tokio::sync::broadcast::error::RecvError>,
-    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+    outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) -> bool {
     match stage {
         Ok(event) => {
@@ -364,7 +364,7 @@ async fn handle_stage_event(
 async fn handle_usage_event(
     usage: Result<openproxy_types::usage::RecentUsageRow, tokio::sync::broadcast::error::RecvError>,
     last_known_id: &mut i64,
-    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+    outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) -> bool {
     match usage {
         Ok(row) => {
@@ -393,7 +393,7 @@ async fn recv_next_notification(
 ) -> NotifRxEvent {
     match notification_rx.as_mut() {
         Some(rx) => match rx.recv().await {
-            Ok(n) => NotifRxEvent::Event(n),
+            Ok(n) => NotifRxEvent::Event(Box::new(n)),
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => NotifRxEvent::Lagged(n),
             Err(tokio::sync::broadcast::error::RecvError::Closed) => NotifRxEvent::Closed,
         },
@@ -406,7 +406,7 @@ async fn handle_notification_event(
     notification_rx: &mut Option<
         tokio::sync::broadcast::Receiver<openproxy_core::notifications::NotificationEvent>,
     >,
-    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+    outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) {
     match evt {
         NotifRxEvent::Event(n) => {
@@ -436,7 +436,7 @@ async fn handle_client_subscribe(
     since_id: Option<i64>,
     state: &AppState,
     last_known_id: &mut i64,
-    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+    outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) {
     let since_id = since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
     let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::block_in_place(|| {
@@ -463,7 +463,7 @@ async fn handle_client_text_message(
     text: &str,
     state: &AppState,
     last_known_id: &mut i64,
-    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+    outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) {
     let msg: ClientWsMessage = match serde_json::from_str(text) {
         Ok(msg) => msg,
@@ -506,7 +506,7 @@ async fn handle_incoming_ws_message(
     incoming: Option<Result<Message, axum::Error>>,
     state: &AppState,
     last_known_id: &mut i64,
-    outbox_tx: &tokio::sync::mpsc::Sender<String>,
+    outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) -> bool {
     match incoming {
         Some(Ok(Message::Text(text))) => {
@@ -555,12 +555,12 @@ fn fetch_initial_history_snapshot(state: &AppState) -> (i64, serde_json::Value) 
 
 fn spawn_ws_sender_task(
     mut ws_sender: futures::stream::SplitSink<WebSocket, Message>,
-    mut outbox_rx: tokio::sync::mpsc::Receiver<String>,
+    mut outbox_rx: tokio::sync::mpsc::Receiver<Box<str>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         use futures::SinkExt;
         while let Some(text) = outbox_rx.recv().await {
-            if let Err(e) = ws_sender.send(Message::Text(text.into())).await {
+            if let Err(e) = ws_sender.send(Message::Text(text.into_string().into())).await {
                 tracing::debug!(error = %e, "stream_usage_rows: ws_sender.send failed, exiting sender task");
                 return;
             }
@@ -573,7 +573,7 @@ fn spawn_ws_sender_task(
 async fn run_ws_usage_event_loop(
     state: &AppState,
     mut ws_receiver: futures::stream::SplitStream<WebSocket>,
-    outbox_tx: tokio::sync::mpsc::Sender<String>,
+    outbox_tx: tokio::sync::mpsc::Sender<Box<str>>,
     mut last_known_id: i64,
 ) {
     let mut usage_rx = state.usage_tx().subscribe();
@@ -608,7 +608,7 @@ async fn run_ws_usage_event_loop(
 
 pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
     let (ws_sender, ws_receiver) = socket.split();
-    let (outbox_tx, outbox_rx) = tokio::sync::mpsc::channel::<String>(WS_OUTBOX_CAPACITY);
+    let (outbox_tx, outbox_rx) = tokio::sync::mpsc::channel::<Box<str>>(WS_OUTBOX_CAPACITY);
     let sender_task = spawn_ws_sender_task(ws_sender, outbox_rx);
 
     let (last_known_id, snapshot) = fetch_initial_history_snapshot(&state);

@@ -56,8 +56,8 @@ impl CustomAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: provider.id.clone(),
-                name: provider.name.clone(),
-                base_url: provider.base_url.clone(),
+                name: provider.name.to_string(),
+                base_url: provider.base_url.to_string(),
                 auth_type,
                 format,
                 extra_headers,

@@ -26,9 +26,9 @@ impl AdapterFactory {
     /// Instantiate an adapter dynamically based on static configuration.
     pub fn create_from_config(&self, config: ProviderAdapterConfig) -> ProviderAdapterEnum {
         self.create_builtin(&config.id).unwrap_or_else(|| {
-            ProviderAdapterEnum::Custom(
+            ProviderAdapterEnum::Custom(Box::new(
                 crate::adapters::custom_adapter::CustomAdapter::from_config(config),
-            )
+            ))
         })
     }
 }

@@ -55,14 +55,14 @@ pub const LOSSY_TECHNIQUE: &str = "lite::smart_crusher_lossy";
 /// falling back to the lossy crush path. The output is only returned when
 /// it is strictly smaller than the input (per the lossless/lossy size
 /// guards), so the function is safe to call unconditionally on any string.
-fn parse_object_array(text: &str) -> Option<Vec<Value>> {
+fn parse_object_array(text: &str) -> Option<Box<[Value]>> {
     let Value::Array(arr) = serde_json::from_str::<Value>(text).ok()? else {
         return None;
     };
     if arr.len() < MIN_ITEMS || !arr.iter().all(Value::is_object) {
         return None;
     }
-    Some(arr)
+    Some(arr.into_boxed_slice())
 }
 
 fn try_lossless_route(arr: &[Value], original_len: usize) -> Option<(String, &'static str)> {
@@ -139,7 +139,7 @@ fn ceil_div_times(total: usize, num: usize, den: usize) -> usize {
 }
 
 /// Sorted union of all field names across all items.
-fn all_fields<'a>(arr: &'a [Value]) -> Vec<&'a str> {
+fn all_fields<'a>(arr: &'a [Value]) -> Box<[&'a str]> {
     let mut fields: BTreeSet<&'a str> = BTreeSet::new();
     for item in arr {
         if let Some(obj) = item.as_object() {
@@ -169,36 +169,47 @@ fn check_field_coverage(arr: &[Value], fields: &[&str]) -> bool {
     at_least(items_passing, arr.len(), COVERAGE_NUM, COVERAGE_DEN)
 }
 
-/// CSV-escape a single cell. Quote if it contains comma, quote, newline, or
-/// CR (standard RFC 4180 quoting). Embedded quotes are doubled.
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        let escaped = s.replace('"', "\"\"");
-        format!("\"{escaped}\"")
+/// CSV-escape and write a string to destination buffer.
+fn write_csv_cell_escaped(out: &mut String, s: &str) {
+    if s.contains([',', '"', '\n', '\r']) {
+        out.push('"');
+        for c in s.chars() {
+            if c == '"' {
+                out.push('"');
+            }
+            out.push(c);
+        }
+        out.push('"');
     } else {
-        s.to_string()
+        out.push_str(s);
     }
 }
 
-/// Render a JSON value as a CSV cell.
-fn json_value_to_csv_cell(val: &Value) -> String {
+/// Render a JSON value directly into destination buffer as a CSV cell.
+fn write_json_value_to_csv_cell(out: &mut String, val: &Value) {
     match val {
-        Value::Null => String::new(),
-        Value::String(s) => csv_escape(s),
-        Value::Array(_) | Value::Object(_) => csv_escape(&val.to_string()),
-        scalar => scalar.to_string(),
+        Value::Null => {}
+        Value::String(s) => write_csv_cell_escaped(out, s),
+        Value::Array(_) | Value::Object(_) => {
+            let serialized = val.to_string();
+            write_csv_cell_escaped(out, &serialized);
+        }
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => {
+            let _ = write!(out, "{n}");
+        }
     }
 }
 
-fn format_csv_row(obj: &serde_json::Map<String, Value>, fields: &[&str]) -> String {
-    fields
-        .iter()
-        .map(|field| {
-            obj.get(*field)
-                .map_or_else(String::new, json_value_to_csv_cell)
-        })
-        .collect::<Vec<_>>()
-        .join(",")
+fn write_csv_row(out: &mut String, obj: &serde_json::Map<String, Value>, fields: &[&str]) {
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        if let Some(val) = obj.get(*field) {
+            write_json_value_to_csv_cell(out, val);
+        }
+    }
 }
 
 /// Try the lossless CSV-schema path. Returns `None` if coverage fails or
@@ -210,11 +221,16 @@ fn try_lossless_csv(arr: &[Value]) -> Option<String> {
     }
     let mut out = String::with_capacity(arr.len() * 32);
     out.push_str("#schema:");
-    out.push_str(&fields.join(","));
+    for (i, f) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f);
+    }
     for item in arr {
         let obj = item.as_object()?;
         out.push('\n');
-        out.push_str(&format_csv_row(obj, &fields));
+        write_csv_row(&mut out, obj, &fields);
     }
     Some(out)
 }
@@ -274,9 +290,9 @@ fn collect_lossy_indices(arr: &[Value]) -> BTreeSet<usize> {
     indices
 }
 
-fn deduplicate_lossy_items(arr: &[Value], indices: &BTreeSet<usize>) -> Vec<Value> {
+fn deduplicate_lossy_items(arr: &[Value], indices: &BTreeSet<usize>) -> Box<[Value]> {
     let mut seen: HashSet<String> = HashSet::new();
-    let mut kept_items: Vec<Value> = Vec::new();
+    let mut kept_items: Vec<Value> = Vec::with_capacity(indices.len().min(LOSSY_MAX_ITEMS));
     for &i in indices {
         if let Some(item) = arr.get(i) {
             let serialized = item.to_string();
@@ -288,7 +304,7 @@ fn deduplicate_lossy_items(arr: &[Value], indices: &BTreeSet<usize>) -> Vec<Valu
     if kept_items.len() > LOSSY_MAX_ITEMS {
         kept_items.truncate(LOSSY_MAX_ITEMS);
     }
-    kept_items
+    kept_items.into_boxed_slice()
 }
 
 /// Try the lossy crush path. Returns `None` if nothing would be dropped
@@ -306,7 +322,7 @@ fn try_lossy(arr: &[Value]) -> Option<String> {
 
     let mut out = String::with_capacity(64 + kept * 64);
     let _ = writeln!(out, "[#crushed: kept {kept} of {n} items]");
-    out.push_str(&Value::Array(kept_items).to_string());
+    out.push_str(&Value::Array(kept_items.into_vec()).to_string());
     let _ = write!(out, "\n{{\"_dropped\":{dropped}}}");
     Some(out)
 }

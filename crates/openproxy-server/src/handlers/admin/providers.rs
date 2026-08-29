@@ -201,7 +201,7 @@ async fn resolve_refresh_key_and_label(
         let a = core_accounts::get(&r, account_id, s.master_key().as_ref())
             .map_err(ApiError)?
             .ok_or_else(|| ApiError(CoreError::AccountNotFound(account_id.0)))?;
-        let key_res = if a.auth_type != "oauth" {
+        let key_res = if a.auth_type.as_ref() != "oauth" {
             core_accounts::decrypt_api_key(&r, account_id, s.master_key().as_ref())
                 .map_err(ApiError)
         } else {
@@ -210,8 +210,8 @@ async fn resolve_refresh_key_and_label(
         (a, key_res)
     };
 
-    let label = account.label.clone().unwrap_or_default();
-    let api_key = if account.auth_type == "oauth" {
+    let label = account.label.as_deref().unwrap_or_default().to_string();
+    let api_key = if account.auth_type.as_ref() == "oauth" {
         refresh_oauth_if_needed(s, account, provider).await
     } else {
         api_key_res?

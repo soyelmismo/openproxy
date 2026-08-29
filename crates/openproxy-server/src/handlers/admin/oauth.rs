@@ -233,10 +233,10 @@ fn validate_active_ticket(s: &AppState, device_code: &str) -> Result<(), ApiErro
             )),
             openproxy_core::oauth::tickets::TicketStatus::Consumed
             | openproxy_core::oauth::tickets::TicketStatus::Unknown => {
-                Err(ApiError(CoreError::NotFound {
-                    what: "oauth_device_ticket".into(),
-                    id: device_code.to_string(),
-                }))
+                Err(ApiError(CoreError::not_found(
+                    "oauth_device_ticket",
+                    device_code,
+                )))
             }
         }
     })
@@ -342,7 +342,7 @@ pub(crate) async fn refresh_oauth_if_needed(
     account: core_accounts::Account,
     provider_id: &ProviderId,
 ) -> String {
-    if account.auth_type != "oauth" {
+    if account.auth_type.as_ref() != "oauth" {
         return String::new();
     }
 

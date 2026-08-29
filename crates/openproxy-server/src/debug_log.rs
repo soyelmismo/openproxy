@@ -45,7 +45,7 @@
 use arraydeque::{ArrayDeque, Wrapping};
 use std::sync::{LazyLock, OnceLock};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -68,10 +68,10 @@ pub struct DebugLogEntry {
     /// Monotonically increasing sequence number. The frontend polls
     /// with `?since=N` to fetch only entries with `seq > N`.
     pub seq: u64,
-    /// ISO-8601 timestamp with millisecond precision.
-    pub timestamp: String,
+    /// UTC timestamp. Formatted as ISO-8601 when serialized.
+    pub timestamp: DateTime<Utc>,
     /// `WARN`, `ERROR`, `INFO`, etc.
-    pub level: String,
+    pub level: &'static str,
     /// The tracing target (usually the module path, e.g.
     /// `openproxy_core::pipeline`).
     pub target: String,
@@ -235,9 +235,9 @@ where
 {
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         // Capture the level, target, and timestamp.
-        let level = event.metadata().level().to_string();
+        let level = event.metadata().level().as_str();
         let target = event.metadata().target().to_string();
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let timestamp = Utc::now();
 
         // Visit the event's fields to build the formatted message.
         // The visitor also opportunistically extracts `request_id`
@@ -422,8 +422,8 @@ mod tests {
             for i in 0..(BUFFER_CAPACITY + 10) {
                 guard.push(DebugLogEntry {
                     seq: 0,
-                    timestamp: format!("2026-01-01T00:00:{:02}Z", i % 60),
-                    level: "WARN".into(),
+                    timestamp: DateTime::from_timestamp_millis(1_767_225_600_000 + (i as i64 * 1000)).unwrap(),
+                    level: "WARN",
                     target: "test".into(),
                     message: format!("entry {i}"),
                     request_id: None,
@@ -455,8 +455,8 @@ mod tests {
             for i in 0..5 {
                 guard.push(DebugLogEntry {
                     seq: 0,
-                    timestamp: format!("2026-01-01T00:00:0{i}Z"),
-                    level: "INFO".into(),
+                    timestamp: DateTime::from_timestamp_millis(1_767_225_600_000 + (i as i64 * 1000)).unwrap(),
+                    level: "INFO",
                     target: "test".into(),
                     message: format!("entry {i}"),
                     request_id: None,
@@ -476,6 +476,24 @@ mod tests {
         assert_eq!(snap.len(), 3);
         assert_eq!(snap[0].seq, 3);
         assert_eq!(snap[2].seq, 5);
+    }
+
+    #[test]
+    fn test_debug_log_entry_serialization() {
+        let entry = DebugLogEntry {
+            seq: 42,
+            timestamp: chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+            level: "WARN",
+            target: "openproxy_pipeline::racing".to_string(),
+            message: "race failed".to_string(),
+            request_id: None,
+            trace_id: None,
+            span_path: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"timestamp\":\"2023-11-14T22:13:20Z\""));
+        assert!(json.contains("\"level\":\"WARN\""));
+        assert!(json.contains("\"seq\":42"));
     }
 
     // B1 (Bug 3): verify the DebugLogLayer captures WARN events

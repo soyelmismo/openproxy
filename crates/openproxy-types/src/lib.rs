@@ -23,7 +23,12 @@ pub use models::{Model, UpsertResult};
 pub mod notifications;
 pub use notifications::{NotificationEvent, publish_notification};
 pub mod usage;
-pub use usage::{RecentUsageRow, StageEvent, UsageInput, publish_stage_event, publish_usage_row};
+pub use usage::{
+    RecentUsageRow, StageEvent, USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED,
+    USAGE_FLAG_IS_STREAMING, USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED,
+    USAGE_FLAG_RACE_LOST, USAGE_FLAG_STREAM_COMPLETE, UsageInput, publish_stage_event,
+    publish_usage_row,
+};
 pub mod endpoint;
 pub use endpoint::EndpointKind;
 pub mod images;

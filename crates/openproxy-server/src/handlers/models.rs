@@ -300,12 +300,12 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
 
     let inferred_type = capabilities::infer_model_type(model_id);
     let effective_type =
-        resolve_effective_model_type(m.model_type.as_str(), m.custom, inferred_type);
+        resolve_effective_model_type(&m.model_type, m.custom, inferred_type);
 
     let family = m
         .family
         .clone()
-        .or_else(|| capabilities::infer_family(model_id));
+        .or_else(|| capabilities::infer_family(model_id).map(Into::into));
 
     serde_json::json!({
         "id": full_id,
@@ -370,7 +370,7 @@ mod tests {
             model_id: ModelId::new("openai/gpt-4o"),
             display_name: None,
             target_format: TargetFormat::Openai,
-            discovered_at: "2024-01-01 00:00:00".to_string(),
+            discovered_at: "2024-01-01 00:00:00".into(),
             expires_at: None,
             timeout_overrides_json: None,
             active: true,
@@ -383,7 +383,7 @@ mod tests {
             max_output_tokens: None,
             capabilities_json: None,
             family: None,
-            model_type: "chat".to_string(),
+            model_type: "chat".into(),
             input_modalities_json: None,
             output_modalities_json: None,
         }
@@ -404,7 +404,7 @@ mod tests {
     fn db_values_override_heuristic() {
         let mut m = empty_model();
         m.context_length = Some(999_999);
-        m.capabilities_json = Some(r#"{"vision": false}"#.to_string());
+        m.capabilities_json = Some(r#"{"vision": false}"#.into());
         let v = build_model_entry(&m);
         // The DB value wins: vision is explicitly `false` (and the
         // field is still present, not omitted, because we got a
@@ -532,7 +532,7 @@ mod tests {
         let mut m = empty_model();
         m.provider_id = ProviderId::new("gemini");
         m.model_id = ModelId::new("gemini-2.0-flash-lite");
-        m.model_type = "audio".to_string(); // Simulate stale/corrupt DB entry
+        m.model_type = "audio".into(); // Simulate stale/corrupt DB entry
         m.custom = false;
 
         let v = build_model_entry(&m);

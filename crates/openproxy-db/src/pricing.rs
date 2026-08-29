@@ -4,26 +4,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PriceKind {
+    #[default]
+    Chat,
+    Audio,
+    Image,
+    Video,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Price {
     pub input_per_1m: f64,
     pub output_per_1m: f64,
-    #[serde(default = "default_pricing_kind")]
-    pub kind: String,
-}
-
-fn default_pricing_kind() -> String {
-    "chat".to_string()
-}
-
-impl Default for Price {
-    fn default() -> Self {
-        Self {
-            input_per_1m: 0.0,
-            output_per_1m: 0.0,
-            kind: "chat".to_string(),
-        }
-    }
+    #[serde(default)]
+    pub kind: PriceKind,
 }
 
 macro_rules! pricing_catalog {
@@ -36,7 +34,7 @@ macro_rules! pricing_catalog {
                 Price {
                     input_per_1m: $inp,
                     output_per_1m: $out,
-                    $(kind: $kind.to_string(),)?
+                    $(kind: $kind,)?
                     ..Default::default()
                 },
             );
@@ -97,17 +95,17 @@ static PRICING_TABLE: LazyLock<HashMap<(&'static str, &'static str), Price>> =
 
 pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     if let Some(price) = PRICING_TABLE.get(&(provider, model)) {
-        return Some(price.clone());
+        return Some(*price);
     }
     if let Some((_, price)) = PRICING_TABLE.iter().find(|((_, m), _)| *m == model) {
-        return Some(price.clone());
+        return Some(*price);
     }
     let normalized = normalize_model_id(model);
     if let Some((_, price)) = PRICING_TABLE
         .iter()
         .find(|((_, m), _)| normalize_model_id(m) == normalized)
     {
-        return Some(price.clone());
+        return Some(*price);
     }
     None
 }
@@ -213,12 +211,12 @@ pub fn compute_cost_opt_with_cache(
     cached_tokens: Option<u32>,
 ) -> Option<f64> {
     let price = price?;
-    match price.kind.as_str() {
-        "audio" => {
+    match price.kind {
+        PriceKind::Audio => {
             let seconds = f64::from(prompt_tokens) / 1000.0;
             Some(price.input_per_1m * seconds / 1_000_000.0)
         }
-        "image" => Some(price.input_per_1m * f64::from(prompt_tokens) / 1_000_000.0),
+        PriceKind::Image => Some(price.input_per_1m * f64::from(prompt_tokens) / 1_000_000.0),
         _ => {
             let cached = cached_tokens.unwrap_or(0).min(prompt_tokens);
             let non_cached = prompt_tokens.saturating_sub(cached);
@@ -341,14 +339,14 @@ mod tests {
             output_per_1m: 2.0,
             ..Default::default()
         };
-        assert_eq!(price.kind, "chat");
+        assert_eq!(price.kind, PriceKind::Chat);
     }
 
     #[test]
     fn serde_default_pricing_kind_is_chat() {
         let json = r#"{"input_per_1m": 1.0, "output_per_1m": 2.0}"#;
         let price: Price = serde_json::from_str(json).unwrap();
-        assert_eq!(price.kind, "chat");
+        assert_eq!(price.kind, PriceKind::Chat);
     }
 
     #[test]
@@ -356,7 +354,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 1.0,
             output_per_1m: 0.0,
-            kind: "audio".to_string(),
+            kind: PriceKind::Audio,
         });
         let cost = compute_cost(price, 60_000, 0);
         assert!((cost - 60.0 / 1_000_000.0).abs() < 1e-15);
@@ -367,7 +365,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 10.0,
             output_per_1m: 0.0,
-            kind: "image".to_string(),
+            kind: PriceKind::Image,
         });
         let cost = compute_cost(price, 4, 0);
         assert!((cost - 40.0 / 1_000_000.0).abs() < 1e-15);
@@ -378,7 +376,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 3.0,
             output_per_1m: 15.0,
-            kind: "chat".to_string(),
+            kind: PriceKind::Chat,
         });
         // 1000 prompt tokens total, 800 cached, 200 uncached, 100 completion tokens
         // non_cached cost = 200 * 3.0 / 1M = 0.0006
@@ -395,7 +393,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 1.0,
             output_per_1m: 999_999.0,
-            kind: "audio".to_string(),
+            kind: PriceKind::Audio,
         });
         let cost = compute_cost(price, 10_000, 1_000_000);
         assert!((cost - 10.0 / 1_000_000.0).abs() < 1e-12);
@@ -406,7 +404,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 1.0,
             output_per_1m: 2.0,
-            kind: "video".to_string(),
+            kind: PriceKind::Other,
         });
         let cost = compute_cost(price, 1000, 500);
         assert!((cost - 0.002).abs() < 1e-12);

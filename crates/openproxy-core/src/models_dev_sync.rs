@@ -80,18 +80,25 @@ fn ingest_static_provider_map(map: &mut HashMap<String, Vec<String>>) {
     }
 }
 
+pub type ProviderTargetMap = HashMap<Box<str>, Box<[Box<str>]>>;
+
 /// Builds the mapping of canonical models.dev provider ID -> OpenProxy internal provider IDs.
 /// Leverages `models_dev_canonical_ids` metadata from registered built-in adapters,
 /// with static `PROVIDER_MAP` fallback and alias augmentation.
-pub fn build_provider_mapping() -> HashMap<String, Vec<String>> {
+pub fn build_provider_mapping() -> ProviderTargetMap {
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     ingest_adapter_mappings(&mut map);
     ingest_static_provider_map(&mut map);
-    map
+    map.into_iter()
+        .map(|(k, v)| {
+            let boxed_v: Box<[Box<str>]> = v.into_iter().map(String::into_boxed_str).collect();
+            (k.into_boxed_str(), boxed_v)
+        })
+        .collect()
 }
 
 /// Pre-indexed provider map built from adapter metadata + static fallback table.
-pub static RESOLVED_PROVIDER_MAP: LazyLock<HashMap<String, Vec<String>>> =
+pub static RESOLVED_PROVIDER_MAP: LazyLock<ProviderTargetMap> =
     LazyLock::new(build_provider_mapping);
 
 // ── API Response shapes ─────────────────────────────────────────────
@@ -139,12 +146,12 @@ struct ModelsDevModalities {
 fn resolve_provider_target_ids(ext_id: &str) -> Vec<&str> {
     let mapped_ids = RESOLVED_PROVIDER_MAP
         .get(ext_id)
-        .map_or(&[][..], |v| v.as_slice());
+        .map_or(&[][..], |v| v.as_ref());
 
     let mut all_ids: Vec<&str> = Vec::with_capacity(1 + mapped_ids.len());
     all_ids.push(ext_id);
     for id in mapped_ids {
-        let id_str = id.as_str();
+        let id_str: &str = id.as_ref();
         if !all_ids.contains(&id_str) {
             all_ids.push(id_str);
         }
@@ -1563,33 +1570,33 @@ mod tests {
 
         // Gemini adapter provides canonical id "google"
         let google_mapped = map.get("google").expect("google must be mapped");
-        assert!(google_mapped.contains(&"gemini".to_string()));
+        assert!(google_mapped.iter().any(|s| &**s == "gemini"));
 
         // MiniMax adapter provides canonical id "minimax"
         let minimax_mapped = map.get("minimax").expect("minimax must be mapped");
-        assert!(minimax_mapped.contains(&"minimax".to_string()));
-        assert!(minimax_mapped.contains(&"minimax-cn".to_string()));
+        assert!(minimax_mapped.iter().any(|s| &**s == "minimax"));
+        assert!(minimax_mapped.iter().any(|s| &**s == "minimax-cn"));
 
         // OpenRouter adapter provides canonical ids "openai", "anthropic", "meta"
         let openai_mapped = map.get("openai").expect("openai must be mapped");
-        assert!(openai_mapped.contains(&"openrouter".to_string()));
+        assert!(openai_mapped.iter().any(|s| &**s == "openrouter"));
 
         let anthropic_mapped = map.get("anthropic").expect("anthropic must be mapped");
-        assert!(anthropic_mapped.contains(&"openrouter".to_string()));
+        assert!(anthropic_mapped.iter().any(|s| &**s == "openrouter"));
 
         let meta_mapped = map.get("meta").expect("meta must be mapped");
-        assert!(meta_mapped.contains(&"openrouter".to_string()));
+        assert!(meta_mapped.iter().any(|s| &**s == "openrouter"));
 
         // NVIDIA NIM adapter provides canonical id "nvidia"
         let nvidia_mapped = map.get("nvidia").expect("nvidia must be mapped");
-        assert!(nvidia_mapped.contains(&"nvidia-nim".to_string()));
+        assert!(nvidia_mapped.iter().any(|s| &**s == "nvidia-nim"));
 
         // OpenCode Zen adapter provides canonical id "opencode"
         let opencode_mapped = map.get("opencode").expect("opencode must be mapped");
-        assert!(opencode_mapped.contains(&"opencode-zen".to_string()));
+        assert!(opencode_mapped.iter().any(|s| &**s == "opencode-zen"));
 
         // OpenCode Go adapter provides canonical id "opencode-go"
         let opencode_go_mapped = map.get("opencode-go").expect("opencode-go must be mapped");
-        assert!(opencode_go_mapped.contains(&"opencode-go".to_string()));
+        assert!(opencode_go_mapped.iter().any(|s| &**s == "opencode-go"));
     }
 }

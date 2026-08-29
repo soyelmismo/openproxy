@@ -21,7 +21,7 @@ pub struct AccountQuota {
     pub last_fetched_at: String,
     pub fetch_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_details: Option<Vec<ModelQuotaDetail>>,
+    pub model_details: Option<Box<[ModelQuotaDetail]>>,
 }
 
 impl AccountQuota {

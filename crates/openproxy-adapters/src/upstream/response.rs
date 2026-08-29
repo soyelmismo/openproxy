@@ -8,7 +8,7 @@
 use super::cancel::CancellationToken;
 use super::error::{UpstreamError, UpstreamResult};
 use super::phases::UpstreamPhase;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use http::{HeaderMap, StatusCode};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -168,13 +168,17 @@ impl UpstreamBodyStream {
         let Some(second_chunk) = self.next_chunk().await? else {
             return Ok(first_chunk);
         };
-        let mut buf = Vec::with_capacity(first_chunk.len() + second_chunk.len());
-        buf.extend_from_slice(&first_chunk);
-        buf.extend_from_slice(&second_chunk);
+        let mut chunks = vec![first_chunk, second_chunk];
+        let mut total_len = chunks[0].len() + chunks[1].len();
         while let Some(chunk) = self.next_chunk().await? {
+            total_len += chunk.len();
+            chunks.push(chunk);
+        }
+        let mut buf = BytesMut::with_capacity(total_len);
+        for chunk in chunks {
             buf.extend_from_slice(&chunk);
         }
-        Ok(Bytes::from(buf))
+        Ok(buf.freeze())
     }
 
     /// Yield the next chunk. Returns `Ok(None)` at end of stream.

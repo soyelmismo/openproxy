@@ -493,59 +493,60 @@ pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
 fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::Result<Account> {
     let oauth_provider_specific_encrypted: Option<String> = row.get(20)?;
     let oauth_provider_specific =
-        decrypt_oauth_provider_specific(oauth_provider_specific_encrypted.as_deref(), master_key);
+        decrypt_oauth_provider_specific(oauth_provider_specific_encrypted.as_deref(), master_key)
+            .map(String::into_boxed_str);
 
     crate::map_row_struct!(row, Account {
         id: @id(0, AccountId),
         provider_id: @id_str(1, ProviderId),
-        label: 2,
+        label: @opt_box_str(2),
         priority: 3,
-        extra_config_json: 4,
+        extra_config_json: @opt_box_str(4),
         health_status: @enum_parse(5, HealthStatus),
-        rate_limited_until: 6,
+        rate_limited_until: @opt_box_str(6),
         quota_session_used: 7,
         quota_session_limit: 8,
-        quota_session_reset_at: 9,
+        quota_session_reset_at: @opt_box_str(9),
         quota_weekly_used: 10,
         quota_weekly_limit: 11,
-        quota_weekly_reset_at: 12,
-        quota_plan_name: 13,
-        quota_last_fetched_at: 14,
-        quota_fetch_error: 15,
+        quota_weekly_reset_at: @opt_box_str(12),
+        quota_plan_name: @opt_box_str(13),
+        quota_last_fetched_at: @opt_box_str(14),
+        quota_fetch_error: @opt_box_str(15),
         quota_model_details: @json(16),
-        auth_type: 17,
-        email: 18,
-        oauth_scope: 19,
+        auth_type: @box_str(17),
+        email: @opt_box_str(18),
+        oauth_scope: @opt_box_str(19),
         oauth_provider_specific: @expr(oauth_provider_specific),
-        expires_at: 21,
-        created_at: 22,
-        current_proxy_id: 23,
+        expires_at: @opt_box_str(21),
+        created_at: @box_str(22),
+        current_proxy_id: @opt_box_str(23),
     })
 }
 
 pub struct RawAccount {
-    pub api_key_encrypted: Option<Vec<u8>>,
-    pub label: Option<String>,
-    pub access_token_encrypted: Option<Vec<u8>>,
-    pub refresh_token_encrypted: Option<Vec<u8>>,
-    pub expires_at: Option<String>,
-    pub oauth_provider_specific: Option<String>,
-    pub quota_session_reset_at: Option<String>,
-    pub quota_model_details: Option<String>,
+    pub api_key_encrypted: Option<Box<[u8]>>,
+    pub label: Option<Box<str>>,
+    pub access_token_encrypted: Option<Box<[u8]>>,
+    pub refresh_token_encrypted: Option<Box<[u8]>>,
+    pub expires_at: Option<Box<str>>,
+    pub oauth_provider_specific: Option<Box<str>>,
+    pub quota_session_reset_at: Option<Box<str>>,
+    pub quota_model_details: Option<Box<str>>,
 }
 
 pub struct KiroMeta {
-    pub region: Option<String>,
-    pub profile_arn: Option<String>,
+    pub region: Option<Box<str>>,
+    pub profile_arn: Option<Box<str>>,
 }
 
 pub type AccountsMetaMaps = (
     std::collections::HashMap<i64, RawAccount>,
     std::collections::HashMap<i64, KiroMeta>,
-    std::collections::HashMap<i64, String>,
+    std::collections::HashMap<i64, Box<str>>,
 );
 
-fn extract_ag_meta(oauth_prov: Option<&str>) -> Option<String> {
+fn extract_ag_meta(oauth_prov: Option<&str>) -> Option<Box<str>> {
     let oauth_json = oauth_prov?;
     let meta: serde_json::Value = serde_json::from_str(oauth_json).ok()?;
     let pid = meta
@@ -554,14 +555,14 @@ fn extract_ag_meta(oauth_prov: Option<&str>) -> Option<String> {
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|v| !v.is_empty())?;
-    Some(pid.to_string())
+    Some(pid.into())
 }
 
-fn extract_json_field(val: &serde_json::Value, primary: &str, secondary: &str) -> Option<String> {
+fn extract_json_field(val: &serde_json::Value, primary: &str, secondary: &str) -> Option<Box<str>> {
     val.get(primary)
         .or_else(|| val.get(secondary))
         .and_then(|v| v.as_str())
-        .map(std::string::ToString::to_string)
+        .map(Into::into)
 }
 
 fn extract_kiro_meta(extra_json: Option<&str>) -> Option<KiroMeta> {
@@ -582,23 +583,17 @@ fn extract_kiro_meta(extra_json: Option<&str>) -> Option<KiroMeta> {
 
 type AccountRowTuple = (
     i64,
-    Option<Vec<u8>>,
-    Option<String>,
-    Option<Vec<u8>>,
-    Option<Vec<u8>>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
+    Option<Box<[u8]>>,
+    Option<Box<str>>,
+    Option<Box<[u8]>>,
+    Option<Box<[u8]>>,
+    Option<Box<str>>,
+    Option<Box<str>>,
+    Option<Box<str>>,
+    Option<Box<str>>,
 );
 
-fn populate_account_meta_maps(
-    rows: Vec<AccountRowTuple>,
-) -> (
-    std::collections::HashMap<i64, RawAccount>,
-    std::collections::HashMap<i64, KiroMeta>,
-    std::collections::HashMap<i64, String>,
-) {
+fn populate_account_meta_maps(rows: Vec<AccountRowTuple>) -> AccountsMetaMaps {
     let mut raw_map = std::collections::HashMap::with_capacity(rows.len());
     let mut kiro_map = std::collections::HashMap::new();
     let mut ag_map = std::collections::HashMap::new();
@@ -657,7 +652,19 @@ pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result
         account_ids,
         crate::batch::DEFAULT_CHUNK_SIZE,
         |id| id.0,
-        |r| crate::map_row_tuple!(r => (0, 1, 2, 3, 4, 5, 6, 7, 8)),
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get::<_, Option<Vec<u8>>>(1)?.map(Vec::into_boxed_slice),
+                r.get::<_, Option<String>>(2)?.map(String::into_boxed_str),
+                r.get::<_, Option<Vec<u8>>>(3)?.map(Vec::into_boxed_slice),
+                r.get::<_, Option<Vec<u8>>>(4)?.map(Vec::into_boxed_slice),
+                r.get::<_, Option<String>>(5)?.map(String::into_boxed_str),
+                r.get::<_, Option<String>>(6)?.map(String::into_boxed_str),
+                r.get::<_, Option<String>>(7)?.map(String::into_boxed_str),
+                r.get::<_, Option<String>>(8)?.map(String::into_boxed_str),
+            ))
+        },
     )
     .map_err(crate::error::map_db_error_ctx("batch query accounts"))?;
 

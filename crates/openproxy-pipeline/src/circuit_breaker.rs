@@ -35,10 +35,10 @@ pub enum Health {
 
 #[derive(Debug)]
 struct AccountBreaker {
-    consecutive_failures: u8,
-    state: Health,
     unhealthy_until: Option<Instant>,
     last_activity_ms: u64,
+    consecutive_failures: u8,
+    state: Health,
 }
 
 fn now_ms() -> u64 {
@@ -74,10 +74,10 @@ impl CircuitBreakerRegistry {
     pub fn is_healthy(&self, account: CircuitBreakerKey) -> Health {
         let mut g = self.inner.lock();
         let entry = g.entry(account).or_insert_with(|| AccountBreaker {
-            consecutive_failures: 0,
-            state: Health::Healthy,
             unhealthy_until: None,
             last_activity_ms: now_ms(),
+            consecutive_failures: 0,
+            state: Health::Healthy,
         });
         if entry.state == Health::Unhealthy
             && let Some(until) = entry.unhealthy_until

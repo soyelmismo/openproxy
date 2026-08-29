@@ -7,7 +7,11 @@ use crate::pricing;
 use rusqlite::{Connection, params};
 use std::sync::LazyLock;
 
-pub use openproxy_types::usage::UsageInput;
+pub use openproxy_types::usage::{
+    USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED, USAGE_FLAG_IS_STREAMING,
+    USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED, USAGE_FLAG_RACE_LOST,
+    USAGE_FLAG_STREAM_COMPLETE, UsageInput,
+};
 
 fn has_valid_tps_timing(completion: u32, total_ms: u64, ttft_ms: u64, status_code: u16) -> bool {
     completion > 0 && total_ms > ttft_ms && status_code < 400
@@ -128,7 +132,6 @@ fn build_recent_usage_row(
         completion_tokens: input.completion_tokens,
         cached_tokens: None,
         cost_usd: Some(cost_usd),
-        race_lost: input.race_lost,
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         connect_ms: input.connect_ms,
         ttft_ms: input.ttft_ms,
@@ -143,18 +146,13 @@ fn build_recent_usage_row(
         error_message: error_msg,
         race_total: Some(input.race_total),
         race_attempts: Some(input.race_attempts),
-        is_streaming: input.is_streaming,
-        stream_complete: input.stream_complete,
         stop_reason: input.stop_reason.clone(),
         compression_savings_pct: input.compression_savings_pct,
         compression_techniques: input.compression_techniques.clone(),
-        client_response: input.client_response,
-        prompt_tokens_estimated: input.prompt_tokens_estimated,
-        completion_tokens_estimated: input.completion_tokens_estimated,
         proxy_url: input.proxy_url.clone(),
         proxy_status: input.proxy_status.clone(),
-        is_proxy_rotated: input.is_proxy_rotated,
         endpoint_kind: input.endpoint_kind,
+        flags: input.flags,
     }
 }
 
@@ -218,25 +216,25 @@ fn execute_usage_insert(
             err_redacted,
             i64::from(input.race_total),
             i64::from(input.race_attempts),
-            i64::from(input.race_lost),
+            i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
             input.api_key_id.map(|k| k.0),
             req_body,
             resp_body,
             req_headers,
             resp_headers,
             err_redacted.as_deref(),
-            i64::from(input.is_streaming),
-            i64::from(input.stream_complete),
+            i64::from(input.has_flag(USAGE_FLAG_IS_STREAMING)),
+            i64::from(input.has_flag(USAGE_FLAG_STREAM_COMPLETE)),
             input.stop_reason,
             input.compression_savings_pct,
             input.compression_techniques,
-            i64::from(input.client_response),
-            i64::from(input.prompt_tokens_estimated),
-            i64::from(input.completion_tokens_estimated),
+            i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
+            i64::from(input.has_flag(USAGE_FLAG_PROMPT_ESTIMATED)),
+            i64::from(input.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED)),
             input.endpoint_kind.as_str(),
             input.proxy_url,
             input.proxy_status,
-            i64::from(input.is_proxy_rotated),
+            i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -275,7 +273,6 @@ mod tests {
         UsageInput {
             proxy_url: None,
             proxy_status: None,
-            is_proxy_rotated: false,
             request_id: RequestId::new(),
             trace_id: TraceId::new().to_string(),
             attempt: 1,
@@ -294,7 +291,6 @@ mod tests {
             status_code: 200,
             error_msg: None,
             race_total: 1,
-            race_lost: false,
             api_key_id: None,
             request_body_json: None,
             response_body_json: None,
@@ -302,15 +298,11 @@ mod tests {
             response_headers: None,
             error_message: None,
             race_attempts: 1,
-            is_streaming: false,
-            stream_complete: false,
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
-            client_response: false,
-            prompt_tokens_estimated: false,
-            completion_tokens_estimated: false,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            flags: 0,
         }
     }
 

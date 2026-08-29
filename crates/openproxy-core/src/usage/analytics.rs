@@ -1,5 +1,10 @@
 use crate::error::Result;
 use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId};
+use openproxy_types::usage::{
+    USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED, USAGE_FLAG_IS_STREAMING,
+    USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED, USAGE_FLAG_RACE_LOST,
+    USAGE_FLAG_STREAM_COMPLETE,
+};
 use rusqlite::{Connection, OptionalExtension, Row, ToSql, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -751,8 +756,57 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
 // ---------------------------------------------------------------------------
 
 /// Full `usage` row projection for live-log detail views.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct UsageDetailRow {
+    pub id: UsageId,
+    pub request_id: String,
+    pub trace_id: String,
+    pub attempt: i64,
+    pub provider_id: ProviderId,
+    pub account_id: Option<AccountId>,
+    pub combo_id: Option<ComboId>,
+    pub combo_target_id: Option<ComboTargetId>,
+    pub model_row_id: Option<ModelRowId>,
+    pub upstream_model_id: String,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub connect_ms: Option<i64>,
+    pub ttft_ms: Option<i64>,
+    pub total_ms: i64,
+    pub tokens_per_sec: Option<f64>,
+    pub status_code: u16,
+    pub error_msg: Option<String>,
+    pub error_msg_redacted: Option<String>,
+    pub request_body_json: Option<Value>,
+    pub response_body_json: Option<Value>,
+    pub request_headers: Option<BTreeMap<String, String>>,
+    pub response_headers: Option<BTreeMap<String, String>>,
+    pub error_message: Option<String>,
+    pub race_total: i64,
+    pub race_attempts: i64,
+    pub api_key_id: Option<ApiKeyId>,
+    pub proxy_url: Option<String>,
+    pub proxy_status: Option<String>,
+    /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
+    pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
+    pub created_at: String,
+    pub flags: u8,
+}
+
+impl UsageDetailRow {
+    #[inline]
+    pub fn has_flag(&self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
+
+    #[inline]
+    pub fn set_flag(&mut self, flag: u8) {
+        self.flags |= flag;
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct UsageDetailRowSerde {
     pub id: UsageId,
     pub request_id: String,
     pub trace_id: String,
@@ -783,19 +837,128 @@ pub struct UsageDetailRow {
     pub is_streaming: bool,
     pub stream_complete: bool,
     pub api_key_id: Option<ApiKeyId>,
-    /// True iff this row's response was actually delivered to the HTTP
-    /// client (winning attempt). False for intermediate retries.
     pub client_response: bool,
-    /// True if prompt_tokens were estimated (upstream didn't report usage).
     pub prompt_tokens_estimated: bool,
-    /// True if completion_tokens were estimated (upstream didn't report usage).
     pub completion_tokens_estimated: bool,
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
-    /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
     pub created_at: String,
+}
+
+impl Serialize for UsageDetailRow {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let shadow = UsageDetailRowSerde {
+            id: self.id,
+            request_id: self.request_id.clone(),
+            trace_id: self.trace_id.clone(),
+            attempt: self.attempt,
+            provider_id: self.provider_id.clone(),
+            account_id: self.account_id,
+            combo_id: self.combo_id,
+            combo_target_id: self.combo_target_id,
+            model_row_id: self.model_row_id,
+            upstream_model_id: self.upstream_model_id.clone(),
+            prompt_tokens: self.prompt_tokens,
+            completion_tokens: self.completion_tokens,
+            connect_ms: self.connect_ms,
+            ttft_ms: self.ttft_ms,
+            total_ms: self.total_ms,
+            tokens_per_sec: self.tokens_per_sec,
+            status_code: self.status_code,
+            error_msg: self.error_msg.clone(),
+            error_msg_redacted: self.error_msg_redacted.clone(),
+            request_body_json: self.request_body_json.clone(),
+            response_body_json: self.response_body_json.clone(),
+            request_headers: self.request_headers.clone(),
+            response_headers: self.response_headers.clone(),
+            error_message: self.error_message.clone(),
+            race_total: self.race_total,
+            race_attempts: self.race_attempts,
+            race_lost: self.has_flag(USAGE_FLAG_RACE_LOST),
+            is_streaming: self.has_flag(USAGE_FLAG_IS_STREAMING),
+            stream_complete: self.has_flag(USAGE_FLAG_STREAM_COMPLETE),
+            api_key_id: self.api_key_id,
+            client_response: self.has_flag(USAGE_FLAG_CLIENT_RESPONSE),
+            prompt_tokens_estimated: self.has_flag(USAGE_FLAG_PROMPT_ESTIMATED),
+            completion_tokens_estimated: self.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED),
+            proxy_url: self.proxy_url.clone(),
+            proxy_status: self.proxy_status.clone(),
+            is_proxy_rotated: self.has_flag(USAGE_FLAG_PROXY_ROTATED),
+            endpoint_kind: self.endpoint_kind,
+            created_at: self.created_at.clone(),
+        };
+        shadow.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for UsageDetailRow {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let shadow = UsageDetailRowSerde::deserialize(deserializer)?;
+        let mut flags = 0u8;
+        if shadow.race_lost {
+            flags |= USAGE_FLAG_RACE_LOST;
+        }
+        if shadow.is_streaming {
+            flags |= USAGE_FLAG_IS_STREAMING;
+        }
+        if shadow.stream_complete {
+            flags |= USAGE_FLAG_STREAM_COMPLETE;
+        }
+        if shadow.client_response {
+            flags |= USAGE_FLAG_CLIENT_RESPONSE;
+        }
+        if shadow.prompt_tokens_estimated {
+            flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+        }
+        if shadow.completion_tokens_estimated {
+            flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+        }
+        if shadow.is_proxy_rotated {
+            flags |= USAGE_FLAG_PROXY_ROTATED;
+        }
+        Ok(UsageDetailRow {
+            id: shadow.id,
+            request_id: shadow.request_id,
+            trace_id: shadow.trace_id,
+            attempt: shadow.attempt,
+            provider_id: shadow.provider_id,
+            account_id: shadow.account_id,
+            combo_id: shadow.combo_id,
+            combo_target_id: shadow.combo_target_id,
+            model_row_id: shadow.model_row_id,
+            upstream_model_id: shadow.upstream_model_id,
+            prompt_tokens: shadow.prompt_tokens,
+            completion_tokens: shadow.completion_tokens,
+            connect_ms: shadow.connect_ms,
+            ttft_ms: shadow.ttft_ms,
+            total_ms: shadow.total_ms,
+            tokens_per_sec: shadow.tokens_per_sec,
+            status_code: shadow.status_code,
+            error_msg: shadow.error_msg,
+            error_msg_redacted: shadow.error_msg_redacted,
+            request_body_json: shadow.request_body_json,
+            response_body_json: shadow.response_body_json,
+            request_headers: shadow.request_headers,
+            response_headers: shadow.response_headers,
+            error_message: shadow.error_message,
+            race_total: shadow.race_total,
+            race_attempts: shadow.race_attempts,
+            api_key_id: shadow.api_key_id,
+            proxy_url: shadow.proxy_url,
+            proxy_status: shadow.proxy_status,
+            endpoint_kind: shadow.endpoint_kind,
+            created_at: shadow.created_at,
+            flags,
+        })
+    }
 }
 
 /// Return up to `limit` usage rows whose `id` is strictly greater than
@@ -958,8 +1121,28 @@ pub fn recent(
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
             let race_total_u8 = u8::try_from(race_total).ok();
             let race_attempts_u8 = u8::try_from(race_attempts).ok();
-            let is_streaming_bool = is_streaming != 0;
-            let stream_complete_bool = stream_complete != 0;
+            let mut flags = 0u8;
+            if race_lost != 0 {
+                flags |= USAGE_FLAG_RACE_LOST;
+            }
+            if is_streaming != 0 {
+                flags |= USAGE_FLAG_IS_STREAMING;
+            }
+            if stream_complete != 0 {
+                flags |= USAGE_FLAG_STREAM_COMPLETE;
+            }
+            if client_response != 0 {
+                flags |= USAGE_FLAG_CLIENT_RESPONSE;
+            }
+            if prompt_tokens_estimated != 0 {
+                flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+            }
+            if completion_tokens_estimated != 0 {
+                flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+            }
+            if is_proxy_rotated != 0 {
+                flags |= USAGE_FLAG_PROXY_ROTATED;
+            }
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
             Ok(openproxy_types::usage::RecentUsageRow {
@@ -983,20 +1166,14 @@ pub fn recent(
                 error_message,
                 race_total: race_total_u8,
                 race_attempts: race_attempts_u8,
-                is_streaming: is_streaming_bool,
-                stream_complete: stream_complete_bool,
-                race_lost: race_lost != 0,
                 stop_reason,
                 compression_savings_pct,
                 compression_techniques,
-                client_response: client_response != 0,
-                prompt_tokens_estimated: prompt_tokens_estimated != 0,
-                completion_tokens_estimated: completion_tokens_estimated != 0,
                 proxy_url,
                 proxy_status,
-                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
                 created_at,
+                flags,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -1143,8 +1320,28 @@ pub fn recent_desc(
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
             let race_total_u8 = u8::try_from(race_total).ok();
             let race_attempts_u8 = u8::try_from(race_attempts).ok();
-            let is_streaming_bool = is_streaming != 0;
-            let stream_complete_bool = stream_complete != 0;
+            let mut flags = 0u8;
+            if race_lost != 0 {
+                flags |= USAGE_FLAG_RACE_LOST;
+            }
+            if is_streaming != 0 {
+                flags |= USAGE_FLAG_IS_STREAMING;
+            }
+            if stream_complete != 0 {
+                flags |= USAGE_FLAG_STREAM_COMPLETE;
+            }
+            if client_response != 0 {
+                flags |= USAGE_FLAG_CLIENT_RESPONSE;
+            }
+            if prompt_tokens_estimated != 0 {
+                flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+            }
+            if completion_tokens_estimated != 0 {
+                flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+            }
+            if is_proxy_rotated != 0 {
+                flags |= USAGE_FLAG_PROXY_ROTATED;
+            }
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
 
@@ -1169,20 +1366,14 @@ pub fn recent_desc(
                 error_message,
                 race_total: race_total_u8,
                 race_attempts: race_attempts_u8,
-                is_streaming: is_streaming_bool,
-                stream_complete: stream_complete_bool,
-                race_lost: race_lost != 0,
                 stop_reason,
                 compression_savings_pct,
                 compression_techniques,
-                client_response: client_response != 0,
-                prompt_tokens_estimated: prompt_tokens_estimated != 0,
-                completion_tokens_estimated: completion_tokens_estimated != 0,
                 proxy_url,
                 proxy_status,
-                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
                 created_at,
+                flags,
             })
         })
         .map_err(openproxy_db::error::map_db_error)?;
@@ -1314,8 +1505,28 @@ pub fn row_for_broadcast_by_id(
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
             let race_total_u8 = u8::try_from(race_total).ok();
             let race_attempts_u8 = u8::try_from(race_attempts).ok();
-            let is_streaming_bool = is_streaming != 0;
-            let stream_complete_bool = stream_complete != 0;
+            let mut flags = 0u8;
+            if race_lost != 0 {
+                flags |= USAGE_FLAG_RACE_LOST;
+            }
+            if is_streaming != 0 {
+                flags |= USAGE_FLAG_IS_STREAMING;
+            }
+            if stream_complete != 0 {
+                flags |= USAGE_FLAG_STREAM_COMPLETE;
+            }
+            if client_response != 0 {
+                flags |= USAGE_FLAG_CLIENT_RESPONSE;
+            }
+            if prompt_tokens_estimated != 0 {
+                flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+            }
+            if completion_tokens_estimated != 0 {
+                flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+            }
+            if is_proxy_rotated != 0 {
+                flags |= USAGE_FLAG_PROXY_ROTATED;
+            }
             let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
             Ok(openproxy_types::usage::RecentUsageRow {
@@ -1339,20 +1550,14 @@ pub fn row_for_broadcast_by_id(
                 error_message,
                 race_total: race_total_u8,
                 race_attempts: race_attempts_u8,
-                is_streaming: is_streaming_bool,
-                stream_complete: stream_complete_bool,
-                race_lost: race_lost != 0,
                 stop_reason,
                 compression_savings_pct,
                 compression_techniques,
-                client_response: client_response != 0,
-                prompt_tokens_estimated: prompt_tokens_estimated != 0,
-                completion_tokens_estimated: completion_tokens_estimated != 0,
                 proxy_url,
                 proxy_status,
-                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
                 created_at,
+                flags,
             })
         })
         .map(Some);
@@ -1442,6 +1647,29 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
     }
     let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
 
+    let mut flags = 0u8;
+    if race_lost != 0 {
+        flags |= USAGE_FLAG_RACE_LOST;
+    }
+    if is_streaming != 0 {
+        flags |= USAGE_FLAG_IS_STREAMING;
+    }
+    if stream_complete != 0 {
+        flags |= USAGE_FLAG_STREAM_COMPLETE;
+    }
+    if client_response != 0 {
+        flags |= USAGE_FLAG_CLIENT_RESPONSE;
+    }
+    if prompt_tokens_estimated != 0 {
+        flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+    }
+    if completion_tokens_estimated != 0 {
+        flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+    }
+    if is_proxy_rotated != 0 {
+        flags |= USAGE_FLAG_PROXY_ROTATED;
+    }
+
     Ok(UsageDetailRow {
         id: UsageId(id),
         request_id,
@@ -1468,19 +1696,13 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
         response_headers,
         race_total,
         race_attempts,
-        race_lost: race_lost != 0,
-        is_streaming: is_streaming != 0,
-        stream_complete: stream_complete != 0,
         created_at,
         api_key_id: api_key_id.map(ApiKeyId),
         error_message,
-        client_response: client_response != 0,
-        prompt_tokens_estimated: prompt_tokens_estimated != 0,
-        completion_tokens_estimated: completion_tokens_estimated != 0,
         proxy_url,
         proxy_status,
-        is_proxy_rotated: is_proxy_rotated != 0,
         endpoint_kind,
+        flags,
     })
 }
 

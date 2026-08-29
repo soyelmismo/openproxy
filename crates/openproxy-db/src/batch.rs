@@ -215,25 +215,30 @@ where
     )
 }
 
+struct InsertTarget<'a> {
+    prefix: &'a str,
+    table: &'a str,
+    columns: &'a [&'a str],
+    suffix: Option<&'a str>,
+}
+
 fn execute_batch_insert_chunk<T, F>(
     conn: &Connection,
-    prefix: &str,
-    table: &str,
-    columns: &[&str],
+    target: &InsertTarget<'_>,
     chunk: &[T],
-    suffix: Option<&str>,
+    params: &mut Vec<rusqlite::types::Value>,
     row_fn: &mut F,
 ) -> rusqlite::Result<usize>
 where
     F: FnMut(&T, &mut Vec<rusqlite::types::Value>),
 {
-    let sql = build_insert_sql(prefix, table, columns, chunk.len(), suffix);
-    let mut params = Vec::with_capacity(chunk.len() * columns.len());
+    params.clear();
     for item in chunk {
-        row_fn(item, &mut params);
+        row_fn(item, params);
     }
+    let sql = build_insert_sql(target.prefix, target.table, target.columns, chunk.len(), target.suffix);
     let mut stmt = conn.prepare_cached(&sql)?;
-    stmt.execute(rusqlite::params_from_iter(params))
+    stmt.execute(rusqlite::params_from_iter(params.iter()))
 }
 
 /// Performs chunked batch inserts, splitting `items` so that `chunk.len() * columns.len() <= SQLITE_MAX_VARIABLE_NUMBER`.
@@ -255,13 +260,25 @@ where
         return Ok(0);
     }
 
+    let target = InsertTarget {
+        prefix,
+        table,
+        columns,
+        suffix,
+    };
     let num_cols = columns.len();
     let max_rows_per_chunk = (SQLITE_MAX_VARIABLE_NUMBER / num_cols).clamp(1, DEFAULT_CHUNK_SIZE);
     let mut total_affected = 0;
+    let mut params = Vec::with_capacity(max_rows_per_chunk * num_cols);
 
     for chunk in items.chunks(max_rows_per_chunk) {
-        total_affected +=
-            execute_batch_insert_chunk(conn, prefix, table, columns, chunk, suffix, &mut row_fn)?;
+        total_affected += execute_batch_insert_chunk(
+            conn,
+            &target,
+            chunk,
+            &mut params,
+            &mut row_fn,
+        )?;
     }
 
     Ok(total_affected)
@@ -466,5 +483,40 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM records", [], |r| r.get(0))
             .unwrap();
         assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn test_batch_insert_multiple_chunks() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE big_items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, val INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        let data: Vec<(String, i64)> = (0..1200)
+            .map(|i| (format!("item_{i}"), i as i64))
+            .collect();
+
+        let count = batch_insert(
+            &conn,
+            "INSERT INTO",
+            "big_items",
+            &["name", "val"],
+            &data,
+            None,
+            |item, params| {
+                params.push(item.0.clone().into());
+                params.push(item.1.into());
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 1200);
+
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM big_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 1200);
     }
 }

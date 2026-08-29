@@ -23,11 +23,11 @@ pub struct CompiledFilter {
     pub filter_stderr: bool,
     /// `(compiled_regex, replacement)` pairs. Replacement is a static
     /// literal for every builtin/generic filter.
-    pub replace: Vec<(regex::Regex, &'static str)>,
-    pub match_output: Vec<CompiledMatchOutputRule>,
-    pub strip_patterns: Vec<regex::Regex>,
-    pub keep_patterns: Vec<regex::Regex>,
-    pub collapse_patterns: Vec<regex::Regex>,
+    pub replace: Box<[(regex::Regex, &'static str)]>,
+    pub match_output: Box<[CompiledMatchOutputRule]>,
+    pub strip_patterns: Box<[regex::Regex]>,
+    pub keep_patterns: Box<[regex::Regex]>,
+    pub collapse_patterns: Box<[regex::Regex]>,
     pub truncate_line_at: usize,
     pub on_empty: &'static str,
     pub truncate: Option<CompiledTruncateConfig>,
@@ -78,30 +78,30 @@ macro_rules! compiled_filter {
     (@set $b:ident, strip_ansi, $v:expr) => { $b.strip_ansi = $v; };
     (@set $b:ident, filter_stderr, $v:expr) => { $b.filter_stderr = $v; };
     (@set $b:ident, replace, [$(($re:literal, $rep:literal)),* $(,)?]) => {
-        $b.replace = vec![$((compile_re($re), $rep)),*];
+        $b.replace = vec![$((compile_re($re), $rep)),*].into_boxed_slice();
     };
     (@set $b:ident, match_output, [$({ re: $re:literal, msg: $msg:literal, unless: $unless:literal $(,)? }),* $(,)?]) => {
         $b.match_output = vec![$(CompiledMatchOutputRule {
             re: compile_re($re),
             message: $msg,
             unless: Some(compile_re($unless)),
-        }),*];
+        }),*].into_boxed_slice();
     };
     (@set $b:ident, match_output, [$({ re: $re:literal, msg: $msg:literal $(,)? }),* $(,)?]) => {
         $b.match_output = vec![$(CompiledMatchOutputRule {
             re: compile_re($re),
             message: $msg,
             unless: None,
-        }),*];
+        }),*].into_boxed_slice();
     };
     (@set $b:ident, strip, [$($p:literal),* $(,)?]) => {
-        $b.strip_patterns = vec![$(compile_re($p)),*];
+        $b.strip_patterns = vec![$(compile_re($p)),*].into_boxed_slice();
     };
     (@set $b:ident, keep, [$($p:literal),* $(,)?]) => {
-        $b.keep_patterns = vec![$(compile_re($p)),*];
+        $b.keep_patterns = vec![$(compile_re($p)),*].into_boxed_slice();
     };
     (@set $b:ident, collapse, [$($p:literal),* $(,)?]) => {
-        $b.collapse_patterns = vec![$(compile_re($p)),*];
+        $b.collapse_patterns = vec![$(compile_re($p)),*].into_boxed_slice();
     };
     (@set $b:ident, truncate_line_at, $v:literal) => { $b.truncate_line_at = $v; };
     (@set $b:ident, on_empty, $v:literal) => { $b.on_empty = $v; };
@@ -110,7 +110,7 @@ macro_rules! compiled_filter {
             max_lines: $max,
             head_lines: $head,
             tail_lines: $tail,
-            priority_patterns: vec![$(compile_re($pri)),*],
+            priority_patterns: vec![$(compile_re($pri)),*].into_boxed_slice(),
         });
     };
     (@set $b:ident, truncate, { max: $max:literal, head: $head:literal, tail: $tail:literal $(,)? }) => {
@@ -118,7 +118,7 @@ macro_rules! compiled_filter {
             max_lines: $max,
             head_lines: $head,
             tail_lines: $tail,
-            priority_patterns: Vec::new(),
+            priority_patterns: Box::new([]),
         });
     };
 
@@ -127,11 +127,11 @@ macro_rules! compiled_filter {
             id: &'static str,
             strip_ansi: bool,
             filter_stderr: bool,
-            replace: Vec<(regex::Regex, &'static str)>,
-            match_output: Vec<CompiledMatchOutputRule>,
-            strip_patterns: Vec<regex::Regex>,
-            keep_patterns: Vec<regex::Regex>,
-            collapse_patterns: Vec<regex::Regex>,
+            replace: Box<[(regex::Regex, &'static str)]>,
+            match_output: Box<[CompiledMatchOutputRule]>,
+            strip_patterns: Box<[regex::Regex]>,
+            keep_patterns: Box<[regex::Regex]>,
+            collapse_patterns: Box<[regex::Regex]>,
             truncate_line_at: usize,
             on_empty: &'static str,
             truncate: Option<CompiledTruncateConfig>,
@@ -140,11 +140,11 @@ macro_rules! compiled_filter {
             id: "",
             strip_ansi: true,
             filter_stderr: false,
-            replace: Vec::new(),
-            match_output: Vec::new(),
-            strip_patterns: Vec::new(),
-            keep_patterns: Vec::new(),
-            collapse_patterns: Vec::new(),
+            replace: Box::new([]),
+            match_output: Box::new([]),
+            strip_patterns: Box::new([]),
+            keep_patterns: Box::new([]),
+            collapse_patterns: Box::new([]),
             truncate_line_at: 0,
             on_empty: "",
             truncate: None,
@@ -503,67 +503,126 @@ fn check_match_output_stage(
     None
 }
 
-fn apply_line_dropping_and_keeping(
+thread_local! {
+    static ANSI_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static LINE_SPANS_BUF: std::cell::RefCell<Vec<(usize, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static SEEN_COLLAPSE_SET: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(std::collections::HashSet::new());
+    static OUTPUT_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+fn apply_line_filtering_pipeline(
     result: &mut String,
     filter: &CompiledFilter,
     applied: &mut Vec<&'static str>,
 ) {
-    if !filter.strip_patterns.is_empty() {
-        let original_line_count = result.lines().count();
-        let stripped: Vec<&str> = result
-            .lines()
-            .filter(|l| !filter.strip_patterns.iter().any(|r| r.is_match(l)))
-            .collect();
-        if stripped.len() != original_line_count {
-            applied.push(filter.rule_strip);
-            *result = stripped.join("\n");
-        }
-    }
-    if !filter.keep_patterns.is_empty() {
-        let kept: Vec<&str> = result
-            .lines()
-            .filter(|l| filter.keep_patterns.iter().any(|r| r.is_match(l)))
-            .collect();
-        if !kept.is_empty() {
-            applied.push(filter.rule_keep);
-            *result = kept.join("\n");
-        }
-    }
-}
+    let has_strip = !filter.strip_patterns.is_empty();
+    let has_keep = !filter.keep_patterns.is_empty();
+    let has_collapse = !filter.collapse_patterns.is_empty();
+    let has_line_trunc = filter.truncate_line_at > 0;
 
-fn should_keep_collapsed_line<'a>(
-    line: &'a str,
-    filter: &CompiledFilter,
-    seen: &mut std::collections::HashSet<&'a str>,
-) -> bool {
-    if filter.collapse_patterns.iter().any(|r| r.is_match(line)) {
-        let key = line.trim();
-        if seen.contains(key) {
-            return false;
-        }
-        seen.insert(key);
-    }
-    true
-}
-
-fn apply_collapse_stage(
-    result: &mut String,
-    filter: &CompiledFilter,
-    applied: &mut Vec<&'static str>,
-) {
-    if filter.collapse_patterns.is_empty() {
+    if !has_strip && !has_keep && !has_collapse && !has_line_trunc {
         return;
     }
-    let original_line_count = result.lines().count();
-    let mut seen = std::collections::HashSet::new();
-    let collapsed: Vec<&str> = result
-        .lines()
-        .filter(|l| should_keep_collapsed_line(l, filter, &mut seen))
-        .collect();
-    if collapsed.len() != original_line_count {
-        applied.push(filter.rule_collapse);
-        *result = collapsed.join("\n");
-    }
+
+    LINE_SPANS_BUF.with_borrow_mut(|line_spans| {
+        line_spans.clear();
+        let base = result.as_ptr() as usize;
+        for line in result.lines() {
+            let start = line.as_ptr() as usize - base;
+            let end = start + line.len();
+            line_spans.push((start, end));
+        }
+
+        let mut modified = false;
+
+        if has_strip {
+            let before_len = line_spans.len();
+            line_spans.retain(|&(start, end)| {
+                let l = &result[start..end];
+                !filter.strip_patterns.iter().any(|r| r.is_match(l))
+            });
+            if line_spans.len() != before_len {
+                applied.push(filter.rule_strip);
+                modified = true;
+            }
+        }
+
+        if has_keep {
+            let any_kept = line_spans.iter().any(|&(start, end)| {
+                let l = &result[start..end];
+                filter.keep_patterns.iter().any(|r| r.is_match(l))
+            });
+            if any_kept {
+                line_spans.retain(|&(start, end)| {
+                    let l = &result[start..end];
+                    filter.keep_patterns.iter().any(|r| r.is_match(l))
+                });
+                applied.push(filter.rule_keep);
+                modified = true;
+            }
+        }
+
+        if has_collapse {
+            let before_len = line_spans.len();
+            SEEN_COLLAPSE_SET.with_borrow_mut(|seen| {
+                seen.clear();
+                line_spans.retain(|&(start, end)| {
+                    let line = &result[start..end];
+                    if filter.collapse_patterns.iter().any(|r| r.is_match(line)) {
+                        let key = line.trim();
+                        if seen.contains(key) {
+                            return false;
+                        }
+                        seen.insert(key.to_string());
+                    }
+                    true
+                });
+            });
+            if line_spans.len() != before_len {
+                applied.push(filter.rule_collapse);
+                modified = true;
+            }
+        }
+
+        let mut any_truncated = false;
+        if has_line_trunc {
+            for &(start, end) in line_spans.iter() {
+                let line = &result[start..end];
+                if let Some(cut) = find_cut_byte(line, filter.truncate_line_at)
+                    && cut < line.len()
+                {
+                    any_truncated = true;
+                    break;
+                }
+            }
+            if any_truncated {
+                applied.push(filter.rule_truncate_line);
+            }
+        }
+
+        if modified || any_truncated {
+            OUTPUT_BUF.with_borrow_mut(|out| {
+                out.clear();
+                out.reserve(result.len());
+                let mut first = true;
+                for &(start, end) in line_spans.iter() {
+                    if !first {
+                        out.push('\n');
+                    }
+                    first = false;
+                    let line = &result[start..end];
+                    if any_truncated {
+                        let t = truncate_unicode_safe(line, filter.truncate_line_at);
+                        out.push_str(&t);
+                    } else {
+                        out.push_str(line);
+                    }
+                }
+                result.clear();
+                result.push_str(out);
+            });
+        }
+    });
 }
 
 fn apply_truncation_stages(
@@ -571,23 +630,6 @@ fn apply_truncation_stages(
     filter: &CompiledFilter,
     applied: &mut Vec<&'static str>,
 ) {
-    if filter.truncate_line_at > 0 {
-        let mut any_truncated = false;
-        let truncated: Vec<Cow<'_, str>> = result
-            .lines()
-            .map(|l| {
-                let t = truncate_unicode_safe(l, filter.truncate_line_at);
-                if t.len() != l.len() {
-                    any_truncated = true;
-                }
-                t
-            })
-            .collect();
-        if any_truncated {
-            applied.push(filter.rule_truncate_line);
-            *result = truncated.join("\n");
-        }
-    }
     if let Some(ref tc) = filter.truncate {
         let (truncated, did_truncate, _dropped) = smart_truncate(result, tc);
         if did_truncate {
@@ -617,8 +659,7 @@ pub fn apply_line_filter(text: &str, filter: &CompiledFilter) -> (String, Vec<&'
     if let Some(short_circuit) = check_match_output_stage(&result, filter, &mut applied_rules) {
         return (short_circuit, applied_rules);
     }
-    apply_line_dropping_and_keeping(&mut result, filter, &mut applied_rules);
-    apply_collapse_stage(&mut result, filter, &mut applied_rules);
+    apply_line_filtering_pipeline(&mut result, filter, &mut applied_rules);
     apply_truncation_stages(&mut result, filter, &mut applied_rules);
 
     (result, applied_rules)
@@ -656,26 +697,30 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
         return Cow::Borrowed(text);
     };
 
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    out.extend_from_slice(&bytes[..first_esc]);
-    let mut i = first_esc;
-    while i < bytes.len() {
-        if bytes[i] == 0x1B {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                i = skip_csi_sequence(bytes, i);
+    ANSI_BUF.with_borrow_mut(|out| {
+        out.clear();
+        out.reserve(bytes.len());
+        out.extend_from_slice(&bytes[..first_esc]);
+        let mut i = first_esc;
+        while i < bytes.len() {
+            if bytes[i] == 0x1B {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                    i = skip_csi_sequence(bytes, i);
+                } else {
+                    i += 1;
+                }
             } else {
+                out.push(bytes[i]);
                 i += 1;
             }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
         }
-    }
-    // Safety: we only removed ASCII bytes (0x1B, 0x5B, and 0x20..=0x7E).
-    // ASCII bytes are always single-byte in UTF-8, so removing them never
-    // splits a multi-byte sequence. The remaining bytes are a valid UTF-8
-    // subsequence of the original valid UTF-8 string.
-    Cow::Owned(String::from_utf8(out).unwrap_or_default())
+        // Safety: we only removed ASCII bytes (0x1B, 0x5B, and 0x20..=0x7E).
+        // ASCII bytes are always single-byte in UTF-8, so removing them never
+        // splits a multi-byte sequence. The remaining bytes are a valid UTF-8
+        // subsequence of the original valid UTF-8 string.
+        let s = std::str::from_utf8(out).unwrap_or_default();
+        Cow::Owned(s.to_string())
+    })
 }
 
 fn find_cut_byte(s: &str, max_chars: usize) -> Option<usize> {

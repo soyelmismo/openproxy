@@ -361,7 +361,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> Pipe
         max_attempts: 1,
         master_key,
         adapters: Arc::new(vec![
-            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(mock)),
         ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,

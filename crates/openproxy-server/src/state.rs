@@ -485,9 +485,9 @@ impl AppState {
         }?;
         for p in &all_providers {
             if !openproxy_core::seed::is_builtin(p.id.as_str()) {
-                new_adapters.push(adapters::ProviderAdapterEnum::Custom(
+                new_adapters.push(adapters::ProviderAdapterEnum::Custom(Box::new(
                     adapters::CustomAdapter::from_provider_row(p),
-                ));
+                )));
             }
         }
         Ok(new_adapters)

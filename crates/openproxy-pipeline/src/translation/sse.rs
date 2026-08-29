@@ -1,6 +1,6 @@
 use crate::translation::anthropic::map_finish_reason;
 use crate::translation::types::{AnthropicResponse, AnthropicUsage};
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::stream::Stream;
 use openproxy_types::error::{CoreError, Result};
 use serde::{Deserialize, Serialize};
@@ -222,16 +222,23 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
 }
 
 fn format_sse_data(payload: &serde_json::Value) -> String {
-    format!("data: {payload}\n\n")
+    let payload_str = serde_json::to_string(payload).unwrap_or_default();
+    let mut out = String::with_capacity(payload_str.len() + 8);
+    out.push_str("data: ");
+    out.push_str(&payload_str);
+    out.push_str("\n\n");
+    out
 }
 
-fn append_sse_event(out: &mut bytes::BytesMut, event_name: &str, payload: &serde_json::Value) {
-    out.extend_from_slice(format!("event: {event_name}\ndata: ").as_bytes());
-    out.extend_from_slice(
-        serde_json::to_string(payload)
-            .unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string())
-            .as_bytes(),
-    );
+fn append_sse_event(out: &mut BytesMut, event_name: &str, payload: &serde_json::Value) {
+    out.extend_from_slice(b"event: ");
+    out.extend_from_slice(event_name.as_bytes());
+    out.extend_from_slice(b"\ndata: ");
+    if serde_json::to_writer((&mut *out).writer(), payload).is_err() {
+        out.extend_from_slice(
+            br#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#,
+        );
+    }
     out.extend_from_slice(b"\n\n");
 }
 
@@ -244,6 +251,7 @@ pub struct OpenAIToAnthropicSseStream<S> {
     pub block_index: u32,
     pub in_text_block: bool,
     pub in_tool_block: bool,
+    pub scratch: BytesMut,
 }
 
 impl<S> OpenAIToAnthropicSseStream<S> {
@@ -257,10 +265,11 @@ impl<S> OpenAIToAnthropicSseStream<S> {
             block_index: 0,
             in_text_block: false,
             in_tool_block: false,
+            scratch: BytesMut::with_capacity(4096),
         }
     }
 
-    fn emit_message_start(&mut self, out: &mut bytes::BytesMut) {
+    fn emit_message_start(&mut self, out: &mut BytesMut) {
         if self.has_started {
             return;
         }
@@ -290,7 +299,7 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         append_sse_event(out, "content_block_start", &block_start);
     }
 
-    fn handle_content_delta(&mut self, content: &str, out: &mut bytes::BytesMut) {
+    fn handle_content_delta(&mut self, content: &str, out: &mut BytesMut) {
         if content.is_empty() {
             return;
         }
@@ -317,7 +326,7 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         append_sse_event(out, "content_block_delta", &block_delta);
     }
 
-    fn transition_tool_block(&mut self, id: &str, name: &str, out: &mut bytes::BytesMut) {
+    fn transition_tool_block(&mut self, id: &str, name: &str, out: &mut BytesMut) {
         if self.in_text_block || self.in_tool_block {
             let stop = serde_json::json!({"type": "content_block_stop", "index": self.block_index});
             append_sse_event(out, "content_block_stop", &stop);
@@ -338,7 +347,7 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         append_sse_event(out, "content_block_start", &start);
     }
 
-    fn append_tool_call_arguments_delta(&self, args: &str, out: &mut bytes::BytesMut) {
+    fn append_tool_call_arguments_delta(&self, args: &str, out: &mut BytesMut) {
         let block_delta = serde_json::json!({
             "type": "content_block_delta",
             "index": self.block_index,
@@ -347,7 +356,7 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         append_sse_event(out, "content_block_delta", &block_delta);
     }
 
-    fn handle_tool_call_item(&mut self, tc: &OpenAIToolCallProbe<'_>, out: &mut bytes::BytesMut) {
+    fn handle_tool_call_item(&mut self, tc: &OpenAIToolCallProbe<'_>, out: &mut BytesMut) {
         if let Some(id) = &tc.id {
             let name = tc
                 .function
@@ -365,7 +374,7 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         }
     }
 
-    fn handle_finish_reason(&mut self, finish_reason: &str, out: &mut bytes::BytesMut) {
+    fn handle_finish_reason(&mut self, finish_reason: &str, out: &mut BytesMut) {
         if self.has_finished {
             return;
         }
@@ -395,7 +404,7 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         out.extend_from_slice(b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
     }
 
-    fn process_openai_probe(&mut self, v: OpenAISseProbe<'_>, out: &mut bytes::BytesMut) {
+    fn process_openai_probe(&mut self, v: OpenAISseProbe<'_>, out: &mut BytesMut) {
         self.emit_message_start(out);
         let Some(first) = v.choices.as_ref().and_then(|c| c.first()) else {
             return;
@@ -422,9 +431,12 @@ impl<S> OpenAIToAnthropicSseStream<S> {
         if s.starts_with("data: ") && !s.contains("[DONE]") {
             let json_str = s.trim_start_matches("data: ").trim();
             if let Ok(v) = serde_json::from_slice::<OpenAISseProbe<'_>>(json_str.as_bytes()) {
-                let mut out = bytes::BytesMut::new();
+                self.scratch.clear();
+                let mut out = std::mem::take(&mut self.scratch);
                 self.process_openai_probe(v, &mut out);
-                return Some(out.freeze());
+                let frozen = out.split().freeze();
+                self.scratch = out;
+                return Some(frozen);
             }
         }
         if s.starts_with("event: error") || s.starts_with(": keep-alive") {

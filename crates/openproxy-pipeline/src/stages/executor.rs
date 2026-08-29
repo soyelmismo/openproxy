@@ -221,12 +221,12 @@ fn resolve_target_proxy_mode(
         return (false, String::new());
     };
     let is_incremental_mode = matches!(
-        prov.proxy_rotation_mode.as_str(),
+        prov.proxy_rotation_mode.as_ref(),
         "incremental_race" | "incremental"
     );
     let can_incremental_race =
         prov.use_proxies && is_incremental_mode && target.target.account_id.is_none();
-    (can_incremental_race, prov.proxy_rotation_errors)
+    (can_incremental_race, prov.proxy_rotation_errors.to_string())
 }
 
 fn should_retry_target(

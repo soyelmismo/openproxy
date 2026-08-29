@@ -193,6 +193,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
 mod tests {
     use crate::ids::*;
     use crate::usage::*;
+    use openproxy_types::usage::USAGE_FLAG_RACE_LOST;
 
     use rusqlite::{Connection, params};
     use std::path::PathBuf;
@@ -1001,9 +1002,9 @@ mod tests {
         assert_eq!(all.len(), 3);
         assert!(all.iter().map(|r| r.id.0).eq(1..=3));
         // race_lost propagates (1 = true).
-        assert!(!all[0].race_lost);
-        assert!(all[1].race_lost);
-        assert!(!all[2].race_lost);
+        assert!(!all[0].has_flag(USAGE_FLAG_RACE_LOST));
+        assert!(all[1].has_flag(USAGE_FLAG_RACE_LOST));
+        assert!(!all[2].has_flag(USAGE_FLAG_RACE_LOST));
         // cost_usd + tokens survive the round-trip.
         assert_eq!(all[0].prompt_tokens, Some(10));
         assert_eq!(all[0].completion_tokens, Some(5));
@@ -1344,7 +1345,7 @@ mod tests {
         assert_eq!(row.error_msg, Some("raw secret".to_string()));
         assert_eq!(row.error_msg_redacted, Some("raw secret".to_string()));
         assert_eq!(row.race_total, 3);
-        assert!(row.race_lost);
+        assert!(row.has_flag(USAGE_FLAG_RACE_LOST));
         assert_eq!(row.api_key_id, None);
         assert!(!row.created_at.is_empty());
 

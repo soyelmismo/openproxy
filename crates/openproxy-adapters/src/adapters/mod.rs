@@ -42,6 +42,10 @@ pub struct ProviderAdapterConfig {
 pub type AdapterAuthType = openproxy_types::AuthType;
 pub type AdapterFormat = openproxy_types::ProviderFormat;
 
+thread_local! {
+    static SERIALIZE_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Helper to serialize a request object, overwrite its `model` field, and return `Bytes`.
 pub fn inject_model_and_serialize<T: Serialize>(
     req: &T,
@@ -54,9 +58,12 @@ pub fn inject_model_and_serialize<T: Serialize>(
             serde_json::Value::String(upstream_model.to_string()),
         );
     }
-    serde_json::to_vec(&val)
-        .map(Bytes::from)
-        .map_err(|e| CoreError::Validation(e.to_string()))
+    SERIALIZE_BUF.with_borrow_mut(|buf| {
+        buf.clear();
+        serde_json::to_writer(&mut *buf, &val)
+            .map_err(|e| CoreError::Validation(e.to_string()))?;
+        Ok(Bytes::copy_from_slice(buf))
+    })
 }
 
 /// Per-provider adapter. One concrete impl per upstream.
@@ -381,27 +388,27 @@ pub trait ProviderAdapter: Send + Sync {
 macro_rules! delegate_adapter_dispatch {
     ($self:expr, |$inner:ident| $call:expr) => {
         match $self {
-            Self::Antigravity($inner) => $call,
-            Self::Atomesus($inner) => $call,
-            Self::Cline($inner) => $call,
-            Self::CloudflareWorkersAI($inner) => $call,
-            Self::Codex($inner) => $call,
-            Self::Gemini($inner) => $call,
-            Self::Horde($inner) => $call,
-            Self::Kilocode($inner) => $call,
-            Self::Kiro($inner) => $call,
-            Self::MiniMax($inner) => $call,
-            Self::NousResearch($inner) => $call,
-            Self::NvidiaNim($inner) => $call,
-            Self::OllamaCloud($inner) => $call,
-            Self::OpenCodeGo($inner) => $call,
-            Self::OpenCodeZen($inner) => $call,
-            Self::OpenRouter($inner) => $call,
-            Self::VercelGateway($inner) => $call,
-            Self::Fx($inner) => $call,
-            Self::Custom($inner) => $call,
+            Self::Antigravity($inner) => { let $inner = &**$inner; $call },
+            Self::Atomesus($inner) => { let $inner = &**$inner; $call },
+            Self::Cline($inner) => { let $inner = &**$inner; $call },
+            Self::CloudflareWorkersAI($inner) => { let $inner = &**$inner; $call },
+            Self::Codex($inner) => { let $inner = &**$inner; $call },
+            Self::Gemini($inner) => { let $inner = &**$inner; $call },
+            Self::Horde($inner) => { let $inner = &**$inner; $call },
+            Self::Kilocode($inner) => { let $inner = &**$inner; $call },
+            Self::Kiro($inner) => { let $inner = &**$inner; $call },
+            Self::MiniMax($inner) => { let $inner = &**$inner; $call },
+            Self::NousResearch($inner) => { let $inner = &**$inner; $call },
+            Self::NvidiaNim($inner) => { let $inner = &**$inner; $call },
+            Self::OllamaCloud($inner) => { let $inner = &**$inner; $call },
+            Self::OpenCodeGo($inner) => { let $inner = &**$inner; $call },
+            Self::OpenCodeZen($inner) => { let $inner = &**$inner; $call },
+            Self::OpenRouter($inner) => { let $inner = &**$inner; $call },
+            Self::VercelGateway($inner) => { let $inner = &**$inner; $call },
+            Self::Fx($inner) => { let $inner = &**$inner; $call },
+            Self::Custom($inner) => { let $inner = &**$inner; $call },
             #[cfg(any(test, feature = "test-utils"))]
-            Self::Mock($inner) => $call,
+            Self::Mock($inner) => { let $inner = &**$inner; $call },
         }
     };
     ($self:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
@@ -427,20 +434,20 @@ macro_rules! define_provider_adapter {
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
         #[serde(tag = "provider_id", content = "config", rename_all = "kebab-case")]
         pub enum ProviderAdapterEnum {
-            $( $(#[$b_varmeta])* $b_variant($b_inner) ),+,
-            $( $(#[$c_varmeta])* $c_variant($c_inner) ),+
+            $( $(#[$b_varmeta])* $b_variant(Box<$b_inner>) ),+,
+            $( $(#[$c_varmeta])* $c_variant(Box<$c_inner>) ),+
         }
 
         pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
             vec![
-                $( $(#[$b_varmeta])* ProviderAdapterEnum::$b_variant(<$b_inner>::new()) ),+
+                $( $(#[$b_varmeta])* ProviderAdapterEnum::$b_variant(Box::default()) ),+
             ]
         }
 
         impl ProviderAdapterEnum {
             pub fn from_provider_id(id: &str) -> Option<Self> {
                 match id {
-                    $( $(#[$b_varmeta])* $b_id => Some(Self::$b_variant(<$b_inner>::new())), )+
+                    $( $(#[$b_varmeta])* $b_id => Some(Self::$b_variant(Box::default())), )+
                     _ => None,
                 }
             }
@@ -1695,7 +1702,7 @@ mod tests {
     ) -> openproxy_types::Provider {
         openproxy_types::Provider {
             id: ProviderId::new(id),
-            name: format!("Test {id}"),
+            name: format!("Test {id}").into(),
             base_url: base_url.into(),
             auth_type,
             format,
@@ -1706,8 +1713,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             use_proxies: false,
             current_proxy_id: None,
-            proxy_rotation_errors: "429,connect_error,timeout".to_string(),
-            proxy_rotation_mode: "global".to_string(),
+            proxy_rotation_errors: "429,connect_error,timeout".into(),
+            proxy_rotation_mode: "global".into(),
             favicon_base64: None,
         }
     }
@@ -2031,5 +2038,17 @@ mod tests {
 
         let opencode_go = ProviderAdapterEnum::from_provider_id("opencode-go").unwrap();
         assert_eq!(opencode_go.models_dev_canonical_ids(), &["opencode-go"]);
+    }
+
+    #[test]
+    fn test_inject_model_and_serialize() {
+        let input = serde_json::json!({
+            "model": "old-model",
+            "prompt": "hello world"
+        });
+        let bytes = inject_model_and_serialize(&input, "new-model").unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["model"], "new-model");
+        assert_eq!(parsed["prompt"], "hello world");
     }
 }

@@ -274,7 +274,6 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
     let input = UsageInput {
         proxy_url: None,
         proxy_status: None,
-        is_proxy_rotated: false,
         request_id: args.request_id,
         trace_id: TraceId::new().to_string(),
         attempt: 1,
@@ -293,7 +292,6 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
         status_code: args.status_code,
         error_msg: args.error_msg.clone(),
         race_total: 1,
-        race_lost: false,
         api_key_id: args.api_key_id,
         request_body_json: None,
         response_body_json: None,
@@ -301,14 +299,10 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
         response_headers: None,
         error_message: args.error_msg.clone(),
         race_attempts: 1,
-        is_streaming: false,
-        stream_complete: false,
         stop_reason: None,
         compression_savings_pct: None,
         compression_techniques: None,
-        client_response: true,
-        prompt_tokens_estimated: false,
-        completion_tokens_estimated: false,
+        flags: openproxy_types::usage::USAGE_FLAG_CLIENT_RESPONSE,
         endpoint_kind: args.endpoint_kind,
     };
     let Some(w) = db_pool.try_writer_for(std::time::Duration::from_millis(100)) else {

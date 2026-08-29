@@ -2382,13 +2382,13 @@ pub fn parse_responses_sse_stream_line(
         .map_err(|e| CoreError::Parse(format!("responses SSE JSON parse: {e}")))?;
 
     if let Some(error) = value.get("error") {
-        return Err(CoreError::UpstreamError {
-            status: 500,
-            provider: "responses".into(),
-            model: model_name.to_string(),
-            body: error.to_string(),
-            is_proxy_rotated: false,
-        });
+        return Err(CoreError::upstream_error(
+            500,
+            "responses",
+            model_name,
+            error.to_string(),
+            false,
+        ));
     }
 
     let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");

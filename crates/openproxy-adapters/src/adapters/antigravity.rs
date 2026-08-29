@@ -762,7 +762,7 @@ fn parse_antigravity_models_response(
         weekly_reset_at: None,
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
-        model_details: Some(details),
+        model_details: Some(details.into()),
     })
 }
 
@@ -1012,7 +1012,7 @@ pub async fn load_code_assist(
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
         let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
         return Err(format!(
             "antigravity loadCodeAssist status {status}: {body_str}"
         ));
@@ -1079,7 +1079,7 @@ pub async fn onboard_user(
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
         let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
         return Err(format!(
             "antigravity onboardUser status {status}: {body_str}"
         ));

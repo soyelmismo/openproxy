@@ -165,6 +165,13 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
 /// case; 4 MiB × 50 = 200 MiB, a 4x reduction.)
 pub const MAX_ACCUMULATED_BYTES: usize = 4 * 1024 * 1024;
 
+/// Data for opening an Anthropic tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnthropicToolOpen {
+    pub id: String,
+    pub name: String,
+}
+
 /// Per-provider marker for tool_use events. Anthropic streams a tool call
 /// across multiple SSE events; this enum lets the loop dispatch without
 /// inspecting the raw payload.
@@ -172,7 +179,7 @@ pub const MAX_ACCUMULATED_BYTES: usize = 4 * 1024 * 1024;
 pub enum AnthropicToolEvent {
     /// `content_block_start` with `type: "tool_use"`. Carries `id` and
     /// `name`. The accumulator opens a new tool_call entry.
-    Open { id: String, name: String },
+    Open(Box<AnthropicToolOpen>),
     /// `content_block_delta` with `type: "input_json_delta"`. Carries a
     /// `partial_json` fragment that gets appended to the in-flight tool
     /// call's `arguments`.
@@ -512,10 +519,10 @@ impl ResponseAccumulator {
     /// `content_block_stop` clear in `translate_anthropic_sse_event`.
     pub fn update_anthropic_tool_use(&mut self, event: AnthropicToolEvent) {
         match event {
-            AnthropicToolEvent::Open { id, name } => {
+            AnthropicToolEvent::Open(open) => {
                 self.tool_calls.push(AccumulatedToolCall {
-                    id,
-                    name,
+                    id: open.id,
+                    name: open.name,
                     arguments: String::new(),
                 });
             }
@@ -723,10 +730,10 @@ mod tests {
     #[test]
     fn anthropic_tool_use_lifecycle() {
         let mut acc = ResponseAccumulator::new();
-        acc.update_anthropic_tool_use(AnthropicToolEvent::Open {
+        acc.update_anthropic_tool_use(AnthropicToolEvent::Open(Box::new(AnthropicToolOpen {
             id: "toolu_1".to_string(),
             name: "get_weather".to_string(),
-        });
+        })));
         acc.update_anthropic_tool_use(AnthropicToolEvent::Delta {
             partial_json: r#"{"city":"#.to_string(),
         });

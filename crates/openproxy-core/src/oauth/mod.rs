@@ -545,6 +545,8 @@ pub struct OAuthRefreshParams<'a> {
     pub master_key: &'a MasterKey,
 }
 
+type ProviderMutexMap = HashMap<Box<str>, Arc<tokio::sync::Mutex<()>>>;
+
 /// Coordinates OAuth refresh calls so every runtime path uses the same
 /// serialization and persistence behavior.
 ///
@@ -553,7 +555,7 @@ pub struct OAuthRefreshParams<'a> {
 /// refreshes for sibling accounts under the same public client.
 #[derive(Default)]
 pub struct TokenRefreshCoordinator {
-    provider_mutexes: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    provider_mutexes: Arc<tokio::sync::Mutex<ProviderMutexMap>>,
 }
 
 impl TokenRefreshCoordinator {
@@ -571,8 +573,11 @@ impl TokenRefreshCoordinator {
 
     async fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut map = self.provider_mutexes.lock().await;
+        if let Some(mutex) = map.get(provider_id) {
+            return Arc::clone(mutex);
+        }
         Arc::clone(
-            map.entry(provider_id.to_string())
+            map.entry(Box::from(provider_id))
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
         )
     }
@@ -1337,11 +1342,11 @@ mod tests {
             quota_fetch_error: None,
             quota_model_details: None,
             auth_type: "oauth".into(),
-            email: Some("t@example.com".to_string()),
+            email: Some("t@example.com".into()),
             oauth_scope: None,
             oauth_provider_specific: None,
-            expires_at: expires_at.map(str::to_string),
-            created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            expires_at: expires_at.map(Into::into),
+            created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string().into_boxed_str(),
             current_proxy_id: None,
         }
     }

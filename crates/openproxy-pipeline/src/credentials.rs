@@ -28,7 +28,7 @@ pub struct ResolutionMaps<'a> {
     pub models_map: &'a HashMap<i64, Model>,
     pub accounts_map: &'a HashMap<i64, RawAccount>,
     pub kiro_map: &'a HashMap<i64, KiroMeta>,
-    pub antigravity_map: &'a HashMap<i64, String>,
+    pub antigravity_map: &'a HashMap<i64, Box<str>>,
     pub providers_map: &'a HashMap<String, String>,
 }
 
@@ -127,8 +127,8 @@ fn extract_provider_custom_meta(
         "kiro" => {
             let meta = maps.kiro_map.get(&account_id);
             ProviderCustomFields {
-                kiro_region: meta.and_then(|m| m.region.clone()),
-                kiro_profile_arn: meta.and_then(|m| m.profile_arn.clone()),
+                kiro_region: meta.and_then(|m| m.region.as_deref().map(ToString::to_string)),
+                kiro_profile_arn: meta.and_then(|m| m.profile_arn.as_deref().map(ToString::to_string)),
                 ..Default::default()
             }
         }
@@ -136,9 +136,9 @@ fn extract_provider_custom_meta(
             let proj = maps
                 .antigravity_map
                 .get(&account_id)
-                .cloned()
+                .map(|s| s.to_string())
                 .or_else(|| CredentialManager::antigravity_project_from_account(raw_account));
-            let metadata = raw_account.oauth_provider_specific.clone();
+            let metadata = raw_account.oauth_provider_specific.as_deref().map(ToString::to_string);
             ProviderCustomFields {
                 antigravity_project: proj,
                 antigravity_metadata: metadata,
@@ -279,7 +279,7 @@ fn resolve_account_credentials(
         None
     };
 
-    Some((key, raw_account.label.clone(), custom_meta))
+    Some((key, raw_account.label.as_deref().map(ToString::to_string), custom_meta))
 }
 
 #[cfg(test)]
@@ -293,7 +293,7 @@ mod tests {
             access_token_encrypted: None,
             refresh_token_encrypted: None,
             expires_at: None,
-            oauth_provider_specific: raw.map(ToString::to_string),
+            oauth_provider_specific: raw.map(Into::into),
             quota_model_details: None,
             quota_session_reset_at: None,
         }

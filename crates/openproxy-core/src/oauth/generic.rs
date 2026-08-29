@@ -314,7 +314,9 @@ impl OAuthProvider for GenericOAuthProvider {
             .await
         {
             Ok(token) => Ok(Some(token)),
-            Err(CoreError::UpstreamError { status, .. }) if status == 400 || status == 428 => {
+            Err(CoreError::UpstreamError { status, .. })
+                if status == 400 || status == 428 =>
+            {
                 Ok(None)
             }
             Err(e) => Err(e),

@@ -218,10 +218,7 @@ fn translate_plan_to_targets(
             if let Some(h) = hint {
                 let _ = write!(msg, " (hint: {h})");
             }
-            Err(ApiError(CoreError::ModelNotFound {
-                provider: "<unknown>".into(),
-                model: msg,
-            }))
+            Err(ApiError(CoreError::model_not_found("<unknown>", msg)))
         }
     }
 }
@@ -232,12 +229,11 @@ fn record_model_not_found_usage_row(
     api_key_id: Option<ApiKeyId>,
     upstream_model: &str,
 ) {
-    use openproxy_types::UsageInput;
     use openproxy_types::ids::{ProviderId, TraceId};
+    use openproxy_types::{USAGE_FLAG_CLIENT_RESPONSE, UsageInput};
     let input = UsageInput {
         proxy_url: None,
         proxy_status: None,
-        is_proxy_rotated: false,
         request_id,
         trace_id: TraceId::new().to_string(),
         attempt: 1,
@@ -256,7 +252,6 @@ fn record_model_not_found_usage_row(
         status_code: 404,
         error_msg: Some("model_not_found".to_string()),
         race_total: 1,
-        race_lost: false,
         api_key_id,
         request_body_json: None,
         response_body_json: None,
@@ -264,15 +259,11 @@ fn record_model_not_found_usage_row(
         response_headers: None,
         error_message: Some("model_not_found".to_string()),
         race_attempts: 1,
-        is_streaming: false,
-        stream_complete: false,
         stop_reason: None,
         compression_savings_pct: None,
         compression_techniques: None,
-        client_response: true,
-        prompt_tokens_estimated: false,
-        completion_tokens_estimated: false,
         endpoint_kind: openproxy_types::EndpointKind::Chat,
+        flags: USAGE_FLAG_CLIENT_RESPONSE,
     };
     let Some(w) = state
         .db_pool()

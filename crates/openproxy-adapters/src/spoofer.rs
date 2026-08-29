@@ -175,6 +175,26 @@ impl ClientSpoofer for FxSpoofer {
         list.push(("x-session-affinity".into(), session_id));
         list
     }
+
+    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
+        for &(k, v) in FX_STATIC_SPOOFING_HEADERS {
+            if let Ok(name) = http::header::HeaderName::try_from(k)
+                && let Ok(val) = HeaderValue::try_from(v)
+            {
+                headers.insert(name, val);
+            }
+        }
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let session_id = format!("{now_ms}-{now_ms}000000-59e35abc56800be2");
+        if let Ok(val) = HeaderValue::try_from(session_id.as_str()) {
+            headers.insert(http::header::HeaderName::from_static("x-session-id"), val.clone());
+            headers.insert(http::header::HeaderName::from_static("x-session-affinity"), val);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +266,14 @@ mod tests {
                 .any(|(k, v)| k == "http-referer" && v == "https://github.com/vercel-labs/fx")
         );
         assert!(headers.iter().any(|(k, _)| k == "x-session-id"));
+
+        let mut req = UpstreamRequest::get("https://fx.sh");
+        spoofer.apply_to_request(&mut req);
+        assert_eq!(
+            req.headers.get("origin").unwrap(),
+            HeaderValue::from_static("https://fx.sh")
+        );
+        assert!(req.headers.contains_key("x-session-id"));
+        assert!(req.headers.contains_key("x-session-affinity"));
     }
 }

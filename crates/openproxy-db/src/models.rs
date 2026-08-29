@@ -16,22 +16,22 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
         row_id: @id(0, ModelRowId),
         provider_id: @id_str(1, ProviderId),
         model_id: @id_str(2, ModelId),
-        display_name: 3,
+        display_name: @opt_box_str(3),
         target_format: @enum_parse(4, TargetFormat),
-        discovered_at: 5,
-        expires_at: 6,
-        timeout_overrides_json: 7,
+        discovered_at: @box_str(5),
+        expires_at: @opt_box_str(6),
+        timeout_overrides_json: @opt_box_str(7),
         active: @bool(8),
         last_test_status: 9,
-        last_test_at: 10,
+        last_test_at: @opt_box_str(10),
         custom: @bool(11),
         context_length: 12,
         max_output_tokens: 13,
-        capabilities_json: 14,
-        family: 15,
-        model_type: @opt_default(16, "chat".to_string()),
-        input_modalities_json: 17,
-        output_modalities_json: 18,
+        capabilities_json: @opt_box_str(14),
+        family: @opt_box_str(15),
+        model_type: @box_str_default(16, "chat"),
+        input_modalities_json: @opt_box_str(17),
+        output_modalities_json: @opt_box_str(18),
     })
 }
 
@@ -674,7 +674,7 @@ pub fn upsert_many(
 
     Ok(UpsertResult {
         touched: total,
-        new_model_ids,
+        new_model_ids: new_model_ids.into(),
     })
 }
 

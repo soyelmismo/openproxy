@@ -33,9 +33,10 @@ struct TargetIdCollections {
 }
 
 fn collect_and_dedup_target_ids(eligible: &[ComboTarget]) -> TargetIdCollections {
-    let mut model_row_ids = Vec::new();
-    let mut account_ids = Vec::new();
-    let mut provider_ids_no_account = Vec::new();
+    let capacity = eligible.len();
+    let mut model_row_ids = Vec::with_capacity(capacity);
+    let mut account_ids = Vec::with_capacity(capacity);
+    let mut provider_ids_no_account = Vec::with_capacity(capacity);
 
     for t in eligible {
         if let Some(m) = t.model_row_id {

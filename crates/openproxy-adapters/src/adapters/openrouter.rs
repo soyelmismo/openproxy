@@ -96,15 +96,18 @@ impl ProviderAdapter for OpenRouterAdapter {
     }
 }
 
+type ExtractedModalities = (Option<Box<[String]>>, Option<Box<[String]>>);
+
 fn extract_modalities(
     arch: &mut Option<OpenRouterArchitecture>,
-) -> (Option<Vec<String>>, Option<Vec<String>>) {
+) -> ExtractedModalities {
     let Some(a) = arch.as_mut() else {
         return (None, None);
     };
-    let input = (!a.input_modalities.is_empty()).then(|| std::mem::take(&mut a.input_modalities));
-    let output =
-        (!a.output_modalities.is_empty()).then(|| std::mem::take(&mut a.output_modalities));
+    let input = (!a.input_modalities.is_empty())
+        .then(|| std::mem::take(&mut a.input_modalities).into_boxed_slice());
+    let output = (!a.output_modalities.is_empty())
+        .then(|| std::mem::take(&mut a.output_modalities).into_boxed_slice());
     (input, output)
 }
 

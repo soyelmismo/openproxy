@@ -109,7 +109,7 @@ fn find_bad_proxy_id(
             openproxy_db::accounts::get_current_proxy_id(conn, acc_id).unwrap_or(None)
         })
     } else {
-        provider.current_proxy_id.clone()
+        provider.current_proxy_id.as_deref().map(ToString::to_string)
     }
 }
 
@@ -218,7 +218,7 @@ impl UpstreamDispatcher {
             if !provider.use_proxies {
                 return false;
             }
-            let is_per_account = provider.proxy_rotation_mode == "account";
+            let is_per_account = provider.proxy_rotation_mode.as_ref() == "account";
             let bad_proxy_id = find_bad_proxy_id(
                 &provider,
                 &conn,
@@ -434,13 +434,13 @@ impl UpstreamDispatcher {
             )
             .await;
 
-        let core_err = CoreError::UpstreamError {
+        let core_err = CoreError::upstream_error(
             status,
-            provider: target.provider_id.to_string(),
-            model: dctx.model.model_id.as_str().to_string(),
+            target.provider_id.to_string(),
+            dctx.model.model_id.as_str().to_string(),
             body,
             is_proxy_rotated,
-        };
+        );
 
         self.record_and_fail(
             req,
@@ -553,13 +553,13 @@ impl UpstreamDispatcher {
                     "MiniMax 2013 error: tool_call/tool_result mismatch."
                 );
             }
-            CoreError::UpstreamError {
-                status: status_code,
-                provider: target.provider_id.to_string(),
-                model: dctx.model.model_id.as_str().to_string(),
-                body: body_str,
+            CoreError::upstream_error(
+                status_code,
+                target.provider_id.to_string(),
+                dctx.model.model_id.as_str().to_string(),
+                body_str,
                 is_proxy_rotated,
-            }
+            )
         };
 
         self.record_and_fail(
@@ -1423,13 +1423,13 @@ impl UpstreamDispatcher {
                 inline_error_message = %message,
                 "client disconnected but upstream had sent inline SSE error (code={code}); attributing to upstream error",
             );
-            let err = CoreError::UpstreamError {
-                status: code,
-                provider: fctx.target.provider_id.to_string(),
-                model: fctx.model_name.to_string(),
-                body: message,
-                is_proxy_rotated: false,
-            };
+            let err = CoreError::upstream_error(
+                code,
+                fctx.target.provider_id.to_string(),
+                fctx.model_name,
+                message,
+                false,
+            );
             return self.fail_stream_with_error(err, fctx, Some(code));
         }
 
@@ -1474,13 +1474,13 @@ impl UpstreamDispatcher {
                 inline_error_message = %message,
                 "sink closed after upstream sent inline SSE error (code={code}, elapsed={elapsed}ms)",
             );
-            let err = CoreError::UpstreamError {
-                status: code,
-                provider: fctx.target.provider_id.to_string(),
-                model: fctx.model_name.to_string(),
-                body: message,
-                is_proxy_rotated: false,
-            };
+            let err = CoreError::upstream_error(
+                code,
+                fctx.target.provider_id.to_string(),
+                fctx.model_name,
+                message,
+                false,
+            );
             return self.fail_stream_with_error(err, fctx, Some(code));
         }
 

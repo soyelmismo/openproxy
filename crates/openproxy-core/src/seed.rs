@@ -151,7 +151,7 @@ fn needs_model_type_fix(current_type: &str, inferred_type: &str) -> bool {
 }
 
 fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> Result<usize> {
-    let model_id = m.model_id.as_str();
+    let model_id = m.model_id.as_ref();
     let inferred_model_type = capabilities::infer_model_type(model_id);
     let model_type_needs_fix = needs_model_type_fix(&m.model_type, inferred_model_type);
 
@@ -169,7 +169,7 @@ fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> 
     let model_type = if model_type_needs_fix {
         inferred_model_type
     } else {
-        m.model_type.as_str()
+        &m.model_type
     };
     let family = capabilities::infer_family(model_id);
 
@@ -316,7 +316,7 @@ mod tests {
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
             .expect("get")
             .unwrap();
-        assert_eq!(p.name, "Custom name override", "existing row untouched");
+        assert_eq!(&*p.name, "Custom name override", "existing row untouched");
     }
 
     #[test]
@@ -354,7 +354,7 @@ mod tests {
             .unwrap();
         assert_eq!(vercel.auth_type, AuthType::Bearer);
         assert_eq!(vercel.format, ProviderFormat::Openai);
-        assert_eq!(vercel.name, "Vercel Gateway");
+        assert_eq!(&*vercel.name, "Vercel Gateway");
 
         let ollama = providers::get(&conn, &ProviderId::new("ollama-cloud"))
             .expect("get")

@@ -815,7 +815,7 @@ async fn dispatch_horde_img2img(
     let post_processing = if post_processing_list.is_empty() {
         None
     } else {
-        Some(post_processing_list)
+        Some(post_processing_list.into_boxed_slice())
     };
 
     let dummy_req = ImageGenerationRequest {
@@ -1507,7 +1507,10 @@ async fn poll_horde_image_generation(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs()) as i64;
 
-    Ok(ImageGenerationResponse { created, data })
+    Ok(ImageGenerationResponse {
+        created,
+        data: data.into_boxed_slice(),
+    })
 }
 
 #[cfg(test)]

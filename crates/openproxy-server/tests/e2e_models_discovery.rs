@@ -380,11 +380,11 @@ async fn call_refresh(
         .unwrap();
     let mut provider_row = provider_row;
     if !provider_row.base_url.ends_with("/v1") {
-        provider_row.base_url = format!("{}/v1", provider_row.base_url);
+        provider_row.base_url = format!("{}/v1", provider_row.base_url).into();
     }
     let custom_adapter =
         openproxy_adapters::adapters::CustomAdapter::from_provider_row(&provider_row);
-    let adapter_enum = openproxy_adapters::adapters::ProviderAdapterEnum::Custom(custom_adapter);
+    let adapter_enum = openproxy_adapters::adapters::ProviderAdapterEnum::Custom(Box::new(custom_adapter));
 
     admin::refresh_models(
         conn,
@@ -442,7 +442,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
         // to the plaintext we used at create-time — but pinning
         // the value keeps the fixture from silently changing
         // shape if `accounts::create`'s default ever flips.
-        assert_eq!(accounts_list[0].auth_type, "api_key");
+        assert_eq!(accounts_list[0].auth_type.as_ref(), "api_key");
         accounts_list[0].id
     };
 
@@ -687,7 +687,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             combos::list_targets_with_model(&w, combo_id).expect("list_targets_with_model before");
         assert_eq!(before.len(), 1);
         assert_eq!(
-            before[0].model_id, "c",
+            &*before[0].model_id, "c",
             "target must surface c before the upstream drops it"
         );
     }
@@ -864,7 +864,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             "the bookkeeping view returns exactly the new target"
         );
         assert_eq!(
-            detailed[0].model_id, "c",
+            &*detailed[0].model_id, "c",
             "the new target surfaces the re-introduced c"
         );
         assert_eq!(

@@ -535,7 +535,7 @@ mod tests {
         use openproxy_types::models::Model;
         use std::sync::Arc;
 
-        let adapter = ProviderAdapterEnum::NvidiaNim(NvidiaNimAdapter::new());
+        let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
         let mut extra = serde_json::Map::new();
         extra.insert("disabled".to_string(), json!(true));
         extra.insert("custom_val".to_string(), json!("ok"));
@@ -577,9 +577,9 @@ mod tests {
             row_id: ModelRowId(1),
             provider_id: ProviderId::new("nvidia-nim"),
             model_id: ModelId::new("deepseek-ai/deepseek-v4-flash-0731"),
-            display_name: Some("test".to_string()),
+            display_name: Some("test".into()),
             target_format: TargetFormat::Openai,
-            discovered_at: "2026-01-01T00:00:00Z".to_string(),
+            discovered_at: "2026-01-01T00:00:00Z".into(),
             expires_at: None,
             timeout_overrides_json: None,
             active: true,
@@ -590,7 +590,7 @@ mod tests {
             max_output_tokens: None,
             capabilities_json: None,
             family: None,
-            model_type: "chat".to_string(),
+            model_type: "chat".into(),
             input_modalities_json: None,
             output_modalities_json: None,
         };

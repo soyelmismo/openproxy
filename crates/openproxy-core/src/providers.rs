@@ -473,20 +473,20 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
 
     Ok(Provider {
         id: ProviderId::new(id),
-        name,
-        base_url,
+        name: name.into_boxed_str(),
+        base_url: base_url.into_boxed_str(),
         auth_type,
         format,
-        extra_headers_json,
-        auto_activate_keyword,
+        extra_headers_json: extra_headers_json.map(String::into_boxed_str),
+        auto_activate_keyword: auto_activate_keyword.map(String::into_boxed_str),
         active,
-        created_at,
+        created_at: created_at.into_boxed_str(),
         use_proxies,
-        current_proxy_id,
-        proxy_rotation_errors,
+        current_proxy_id: current_proxy_id.map(String::into_boxed_str),
+        proxy_rotation_errors: proxy_rotation_errors.into_boxed_str(),
         rate_limit_scope,
-        proxy_rotation_mode,
-        favicon_base64,
+        proxy_rotation_mode: proxy_rotation_mode.into_boxed_str(),
+        favicon_base64: favicon_base64.map(String::into_boxed_str),
     })
 }
 
@@ -550,8 +550,8 @@ mod tests {
 
         let got = get(&conn, &id).expect("get").expect("present");
         assert_eq!(got.id, id);
-        assert_eq!(got.name, "OpenRouter");
-        assert_eq!(got.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(&*got.name, "OpenRouter");
+        assert_eq!(&*got.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(got.auth_type, AuthType::Bearer);
         assert_eq!(got.format, ProviderFormat::Openai);
         assert_eq!(
@@ -719,8 +719,8 @@ mod tests {
         )
         .expect("update name");
         let p = get(&conn, &id).expect("get").expect("present");
-        assert_eq!(p.name, "Renamed");
-        assert_eq!(p.base_url, "https://original.example", "untouched");
+        assert_eq!(&*p.name, "Renamed");
+        assert_eq!(&*p.base_url, "https://original.example", "untouched");
         assert_eq!(
             p.extra_headers_json.as_deref(),
             Some(r#"{"old":true}"#),
@@ -741,8 +741,8 @@ mod tests {
         )
         .expect("update url+headers+keyword");
         let p = get(&conn, &id).expect("get").expect("present");
-        assert_eq!(p.name, "Renamed", "untouched");
-        assert_eq!(p.base_url, "https://new.example");
+        assert_eq!(&*p.name, "Renamed", "untouched");
+        assert_eq!(&*p.base_url, "https://new.example");
         assert_eq!(p.extra_headers_json.as_deref(), Some(r#"{"new":true}"#));
         assert_eq!(p.auto_activate_keyword.as_deref(), Some("claude"));
 
@@ -762,7 +762,7 @@ mod tests {
         // No-op update on an existing id: should not error and not touch row.
         update(&conn, &id, UpdateProviderParams::default()).expect("no-op");
         let p = get(&conn, &id).expect("get").expect("present");
-        assert_eq!(p.base_url, "https://new.example");
+        assert_eq!(&*p.base_url, "https://new.example");
 
         // Update on a missing id: ProviderNotFound.
         let missing = ProviderId::new("nope");

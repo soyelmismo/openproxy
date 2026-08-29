@@ -258,9 +258,9 @@ async fn fetch_antigravity_quota(
     access_token: &str,
     project_id: &str,
 ) -> Option<crate::error::Result<openproxy_types::AccountQuota>> {
-    let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(
+    let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(Box::new(
         openproxy_adapters::adapters::AntigravityAdapter::new(),
-    );
+    ));
     adapter
         .fetch_quota(upstream, project_id, Some(access_token), None)
         .await

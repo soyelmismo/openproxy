@@ -10,7 +10,7 @@ pub struct CompiledTruncateConfig {
     pub max_lines: usize,
     pub head_lines: usize,
     pub tail_lines: usize,
-    pub priority_patterns: Vec<regex::Regex>,
+    pub priority_patterns: Box<[regex::Regex]>,
 }
 
 /// Trunca texto manteniendo head + priority + tail, con marcador.
@@ -115,12 +115,13 @@ mod tests {
 
     /// Helper: compile a single priority pattern for tests (mirrors the
     /// production default `TruncateConfig::default().priority_patterns`).
-    fn default_priority() -> Vec<regex::Regex> {
-        static RE: std::sync::LazyLock<Vec<regex::Regex>> = std::sync::LazyLock::new(|| {
+    fn default_priority() -> Box<[regex::Regex]> {
+        static RE: std::sync::LazyLock<Box<[regex::Regex]>> = std::sync::LazyLock::new(|| {
             vec![
                 regex::Regex::new(r"(?i)(error|failed|exception|traceback|FAIL|panic|✖|✗)")
                     .unwrap(),
             ]
+            .into_boxed_slice()
         });
         RE.clone()
     }

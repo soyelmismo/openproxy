@@ -7,10 +7,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SHARD_COUNT: usize = 256;
-const DEFAULT_BURST_CAPACITY: u32 = 1000;
-const DEFAULT_WINDOW_DURATION_MS: u64 = 60_000;
-const PROBE_SUCCESS_THRESHOLD: u32 = 2;
-const MIN_RECOVERED_BURST: u32 = 2;
+const DEFAULT_BURST_CAPACITY: u16 = 1000;
+const DEFAULT_WINDOW_DURATION_MS: u32 = 60_000;
+const PROBE_SUCCESS_THRESHOLD: u16 = 2;
+const MIN_RECOVERED_BURST: u16 = 2;
 const MEMORY_DECAY_IDLE_MS: u64 = 15 * 60 * 1000; // 15 min sin 429s -> decay
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,37 +22,37 @@ pub enum TargetRateState {
 
 #[derive(Debug, Clone)]
 pub struct TargetPredictiveState {
-    pub state: TargetRateState,
-    pub learned_burst: u32,
-    pub window_count: u32,
-    pub in_flight: u32,
-    pub success_streak: u32,
-    pub consecutive_failures: u32,
-    pub consecutive_same_fingerprint: u32,
-    pub last_error_fingerprint: u64,
     pub window_start_ms: u64,
-    pub window_duration_ms: u64,
     pub reset_at_ms: u64,
     pub last_429_at_ms: u64,
     pub last_success_at_ms: u64,
+    pub last_error_fingerprint: u64,
+    pub window_duration_ms: u32,
+    pub learned_burst: u16,
+    pub window_count: u16,
+    pub in_flight: u16,
+    pub success_streak: u16,
+    pub consecutive_failures: u8,
+    pub consecutive_same_fingerprint: u8,
+    pub state: TargetRateState,
 }
 
 impl Default for TargetPredictiveState {
     fn default() -> Self {
         Self {
-            state: TargetRateState::Closed,
+            window_start_ms: 0,
+            reset_at_ms: 0,
+            last_429_at_ms: 0,
+            last_success_at_ms: 0,
+            last_error_fingerprint: 0,
+            window_duration_ms: DEFAULT_WINDOW_DURATION_MS,
             learned_burst: DEFAULT_BURST_CAPACITY,
             window_count: 0,
             in_flight: 0,
             success_streak: 0,
             consecutive_failures: 0,
             consecutive_same_fingerprint: 0,
-            last_error_fingerprint: 0,
-            window_start_ms: 0,
-            window_duration_ms: DEFAULT_WINDOW_DURATION_MS,
-            reset_at_ms: 0,
-            last_429_at_ms: 0,
-            last_success_at_ms: 0,
+            state: TargetRateState::Closed,
         }
     }
 }
@@ -91,7 +91,7 @@ impl TargetPredictiveState {
         if self.window_start_ms == 0 {
             self.window_start_ms = now_ms;
         }
-        if now_ms >= self.window_start_ms + self.window_duration_ms {
+        if now_ms >= self.window_start_ms + u64::from(self.window_duration_ms) {
             if self.state == TargetRateState::Closed
                 && self.window_count > 0
                 && self.learned_burst < DEFAULT_BURST_CAPACITY
@@ -138,7 +138,7 @@ impl TargetPredictiveState {
                 self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms))
             }
             TargetRateState::Closed if self.window_count >= self.learned_burst => {
-                let window_end = self.window_start_ms + self.window_duration_ms;
+                let window_end = self.window_start_ms + u64::from(self.window_duration_ms);
                 self.saturated_readiness(window_end.saturating_sub(now_ms))
             }
             TargetRateState::Closed => TargetReadiness::Ready,
@@ -235,14 +235,19 @@ impl TargetPredictiveState {
 
     fn update_window_duration(&mut self, reset_window_secs: Option<u64>) {
         if let Some(reset_s) = reset_window_secs {
-            self.window_duration_ms = (reset_s * 1000).max(1000);
+            self.window_duration_ms = (reset_s.saturating_mul(1000) as u32).max(1000);
         }
     }
 
     fn calibrate_from_remaining_header(&mut self, remaining_header: Option<u32>) {
         match remaining_header {
             Some(0) => self.learned_burst = self.window_count,
-            Some(rem) => self.learned_burst = self.learned_burst.max(self.window_count + rem),
+            Some(rem) => {
+                let rem_u16 = rem.min(u16::MAX as u32) as u16;
+                self.learned_burst = self
+                    .learned_burst
+                    .max(self.window_count.saturating_add(rem_u16));
+            }
             None => {}
         }
     }
@@ -261,8 +266,8 @@ pub enum TargetReadiness {
     Ready,
     Probe,
     Saturated {
-        learned_burst: u32,
-        window_count: u32,
+        learned_burst: u16,
+        window_count: u16,
         reset_in_ms: u64,
     },
 }
@@ -464,7 +469,7 @@ impl PredictiveRateLimiter {
         state.state = TargetRateState::Open;
 
         let penalty_ms =
-            retry_after_secs.map_or(DEFAULT_WINDOW_DURATION_MS, |s| (s * 1000).max(3000));
+            retry_after_secs.map_or(u64::from(DEFAULT_WINDOW_DURATION_MS), |s| (s * 1000).max(3000));
         state.reset_at_ms = now_ms + penalty_ms;
     }
 
@@ -785,13 +790,13 @@ mod tests {
         let target = ComboTargetId(500);
         let now = 100_000;
 
-        let err1 = openproxy_types::CoreError::UpstreamError {
-            status: 500,
-            provider: "opencode-zen".to_string(),
-            model: "muse-spark".to_string(),
-            body: "{\"type\":\"error\",\"error\":{\"type\":\"error\",\"message\":\"Internal server error\"}}".to_string(),
-            is_proxy_rotated: false,
-        };
+        let err1 = openproxy_types::CoreError::upstream_error(
+            500,
+            "opencode-zen",
+            "muse-spark",
+            "{\"type\":\"error\",\"error\":{\"type\":\"error\",\"message\":\"Internal server error\"}}",
+            false,
+        );
         let fp1 = compute_error_fingerprint(&err1);
 
         // Primer fallo: se reporta

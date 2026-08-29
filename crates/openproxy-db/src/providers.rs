@@ -85,20 +85,20 @@ pub fn update_current_proxy(
 fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     crate::map_row_struct!(row, Provider {
         id: @id_str(0, ProviderId),
-        name: 1,
-        base_url: 2,
+        name: @box_str(1),
+        base_url: @box_str(2),
         auth_type: @enum_parse(3, AuthType),
         format: @enum_parse(4, ProviderFormat),
-        extra_headers_json: 5,
-        auto_activate_keyword: 6,
+        extra_headers_json: @opt_box_str(5),
+        auto_activate_keyword: @opt_box_str(6),
         active: @bool(7),
-        created_at: 8,
+        created_at: @box_str(8),
         use_proxies: @bool(9),
-        current_proxy_id: 10,
-        proxy_rotation_errors: 11,
+        current_proxy_id: @opt_box_str(10),
+        proxy_rotation_errors: @box_str(11),
         rate_limit_scope: @enum_parse(12, RateLimitScope),
-        proxy_rotation_mode: 13,
-        favicon_base64: 14,
+        proxy_rotation_mode: @box_str(13),
+        favicon_base64: @opt_box_str(14),
     })
 }
 

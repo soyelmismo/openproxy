@@ -96,13 +96,13 @@ impl OAuthProvider for ClineOAuthProvider {
             .map_err(|e| map_upstream_err(e, "cline exchange body"))?;
 
         if !status.is_success() {
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "cline".into(),
-                model: "<oauth>".into(),
-                body: String::from_utf8_lossy(&resp_body).into(),
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                status.as_u16(),
+                "cline",
+                "<oauth>",
+                String::from_utf8_lossy(&resp_body).to_string(),
+                false,
+            ));
         }
 
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
@@ -183,13 +183,13 @@ impl OAuthProvider for ClineOAuthProvider {
             .map_err(|e| map_upstream_err(e, "cline refresh body"))?;
 
         if !status.is_success() {
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "cline".into(),
-                model: "<oauth>".into(),
-                body: String::from_utf8_lossy(&resp_body).into(),
-                is_proxy_rotated: false,
-            });
+            return Err(CoreError::upstream_error(
+                status.as_u16(),
+                "cline",
+                "<oauth>",
+                String::from_utf8_lossy(&resp_body).to_string(),
+                false,
+            ));
         }
 
         let resp: ClineResponse = serde_json::from_slice(&resp_body)

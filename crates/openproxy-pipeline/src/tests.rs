@@ -1727,13 +1727,7 @@ async fn pipeline_does_not_record_cooldown_on_4xx_error() {
     // is true (so the walk continues) but the cooldown logic
     // itself gates on a different condition.
     use crate::retry::RetryPolicy;
-    let err_4xx = CoreError::UpstreamError {
-        status: 400,
-        provider: "p".into(),
-        model: "m".into(),
-        body: "bad".into(),
-        is_proxy_rotated: false,
-    };
+    let err_4xx = CoreError::upstream_error(400, "p", "m", "bad", false);
     // 4xx is now retryable (combo walk continues to next target).
     assert!(
         RetryPolicy::is_retryable(&err_4xx, true),
@@ -4520,23 +4514,11 @@ fn test_matches_proxy_rotation_errors_filtering() {
     assert!(crate::stages::executor::matches_proxy_rotation_errors(&err_429, rotation_errors));
 
     // 502 UpstreamError matches
-    let err_502 = CoreError::UpstreamError {
-        status: 502,
-        provider: "p".into(),
-        model: "m".into(),
-        body: "bad gateway".into(),
-        is_proxy_rotated: false,
-    };
+    let err_502 = CoreError::upstream_error(502, "p", "m", "bad gateway", false);
     assert!(crate::stages::executor::matches_proxy_rotation_errors(&err_502, rotation_errors));
 
     // 400 Bad Request does not match rotation errors
-    let err_400 = CoreError::UpstreamError {
-        status: 400,
-        provider: "p".into(),
-        model: "m".into(),
-        body: "invalid request".into(),
-        is_proxy_rotated: false,
-    };
+    let err_400 = CoreError::upstream_error(400, "p", "m", "invalid request", false);
     assert!(!crate::stages::executor::matches_proxy_rotation_errors(&err_400, rotation_errors));
 
     // Connect error matches

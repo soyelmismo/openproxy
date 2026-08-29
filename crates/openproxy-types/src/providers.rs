@@ -10,8 +10,8 @@ pub struct DiscoveredModel {
     pub target_format: TargetFormat,
     pub context_length: Option<i64>,
     pub max_output_tokens: Option<i64>,
-    pub input_modalities: Option<Vec<String>>,
-    pub output_modalities: Option<Vec<String>>,
+    pub input_modalities: Option<Box<[String]>>,
+    pub output_modalities: Option<Box<[String]>>,
     pub model_type: Option<String>,
     pub family: Option<String>,
     pub capabilities: Option<ModelCapabilities>,
@@ -94,8 +94,8 @@ impl_string_enum! {
     error: "rate_limit_scope"
 }
 
-fn default_proxy_rotation_errors() -> String {
-    "429,connect_error,timeout".to_string()
+fn default_proxy_rotation_errors() -> Box<str> {
+    "429,connect_error,timeout".into()
 }
 
 fn default_true() -> bool {
@@ -105,32 +105,32 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: crate::ids::ProviderId,
-    pub name: String,
-    pub base_url: String,
+    pub name: Box<str>,
+    pub base_url: Box<str>,
     pub auth_type: AuthType,
     pub format: ProviderFormat,
-    pub extra_headers_json: Option<String>,
-    pub auto_activate_keyword: Option<String>,
+    pub extra_headers_json: Option<Box<str>>,
+    pub auto_activate_keyword: Option<Box<str>>,
     #[serde(default = "default_true")]
     pub active: bool,
-    pub created_at: String,
+    pub created_at: Box<str>,
     #[serde(default)]
     pub use_proxies: bool,
     #[serde(default)]
-    pub current_proxy_id: Option<String>,
+    pub current_proxy_id: Option<Box<str>>,
     #[serde(default = "default_proxy_rotation_errors")]
-    pub proxy_rotation_errors: String,
+    pub proxy_rotation_errors: Box<str>,
     pub rate_limit_scope: RateLimitScope,
     #[serde(default = "default_proxy_rotation_mode")]
-    pub proxy_rotation_mode: String,
+    pub proxy_rotation_mode: Box<str>,
     /// Cached favicon as a data URI (`data:image/png;base64,...`).
     /// Populated lazily by the discovery scheduler.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub favicon_base64: Option<String>,
+    pub favicon_base64: Option<Box<str>>,
 }
 
-fn default_proxy_rotation_mode() -> String {
-    "global".to_string()
+fn default_proxy_rotation_mode() -> Box<str> {
+    "global".into()
 }
 
 #[cfg(test)]

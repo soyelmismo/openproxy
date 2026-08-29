@@ -29,17 +29,19 @@ pub struct ImageGenerationRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_string_or_vec_opt"
     )]
-    pub post_processing: Option<Vec<String>>,
+    pub post_processing: Option<Box<[String]>>,
 }
 
-fn deserialize_string_or_vec_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+fn deserialize_string_or_vec_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<Box<[String]>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     struct StringOrVecVisitor;
 
     impl<'de> serde::de::Visitor<'de> for StringOrVecVisitor {
-        type Value = Option<Vec<String>>;
+        type Value = Option<Box<[String]>>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a string, a list of strings, or null")
@@ -75,7 +77,7 @@ where
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            Ok((!list.is_empty()).then_some(list))
+            Ok((!list.is_empty()).then(|| list.into_boxed_slice()))
         }
 
         fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
@@ -90,7 +92,7 @@ where
     deserializer.deserialize_option(StringOrVecVisitor)
 }
 
-fn collect_non_empty_seq<'de, A>(mut seq: A) -> Result<Vec<String>, A::Error>
+fn collect_non_empty_seq<'de, A>(mut seq: A) -> Result<Box<[String]>, A::Error>
 where
     A: serde::de::SeqAccess<'de>,
 {
@@ -101,7 +103,7 @@ where
             list.push(trimmed.to_string());
         }
     }
-    Ok(list)
+    Ok(list.into_boxed_slice())
 }
 
 fn default_image_model() -> String {
@@ -128,7 +130,7 @@ pub struct ImageEditRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_string_or_vec_opt"
     )]
-    pub post_processing: Option<Vec<String>>,
+    pub post_processing: Option<Box<[String]>>,
 }
 
 /// An individual generated image in the response.
@@ -146,7 +148,7 @@ pub struct ImageData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageGenerationResponse {
     pub created: i64,
-    pub data: Vec<ImageData>,
+    pub data: Box<[ImageData]>,
 }
 
 #[cfg(test)]
@@ -251,7 +253,7 @@ mod tests {
             serde_json::from_str(json_arr).expect("deserialize array");
         assert_eq!(
             req_arr.post_processing,
-            Some(vec!["RealESRGAN_x4plus".to_string(), "GFPGAN".to_string()])
+            Some(vec!["RealESRGAN_x4plus".to_string(), "GFPGAN".to_string()].into_boxed_slice())
         );
 
         // Comma-separated string format
@@ -261,11 +263,14 @@ mod tests {
             serde_json::from_str(json_str).expect("deserialize string");
         assert_eq!(
             req_str.post_processing,
-            Some(vec![
-                "RealESRGAN_x4plus".to_string(),
-                "GFPGAN".to_string(),
-                "CodeFormers".to_string()
-            ])
+            Some(
+                vec![
+                    "RealESRGAN_x4plus".to_string(),
+                    "GFPGAN".to_string(),
+                    "CodeFormers".to_string()
+                ]
+                .into_boxed_slice()
+            )
         );
 
         // Null / omitted

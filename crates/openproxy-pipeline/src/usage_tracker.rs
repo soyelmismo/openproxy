@@ -9,7 +9,11 @@ use openproxy_types::SelectionRegistry;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::models::Model;
-use openproxy_types::usage::UsageInput;
+use openproxy_types::usage::{
+    USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED, USAGE_FLAG_IS_STREAMING,
+    USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED, USAGE_FLAG_RACE_LOST,
+    USAGE_FLAG_STREAM_COMPLETE, UsageInput,
+};
 
 #[derive(Clone)]
 pub struct UsageTracker {
@@ -51,13 +55,13 @@ impl UsageTracker {
 
     pub(crate) fn mark_client_response(
         &self,
-        usage_tuple: Option<(String, u8, openproxy_types::ids::ComboTargetId)>,
+        usage_tuple: Option<(openproxy_types::ids::RequestId, u8, openproxy_types::ids::ComboTargetId)>,
     ) {
         let Some((request_id, attempt, target_id)) = usage_tuple else {
             return;
         };
         let job = crate::worker::BackgroundJob::MarkClientResponse {
-            request_id,
+            request_id: request_id.to_string(),
             attempt,
             target_id,
         };
@@ -88,7 +92,6 @@ impl UsageTracker {
         let input = UsageInput {
             proxy_url: None,
             proxy_status: None,
-            is_proxy_rotated: false,
             request_id: req.request_id,
             trace_id: req.trace_id.to_string(),
             attempt: 1,
@@ -107,7 +110,6 @@ impl UsageTracker {
             status_code: 502,
             error_msg: Some("no_healthy_targets".to_string()),
             race_total: 1,
-            race_lost: false,
             api_key_id: req.api_key_id,
             compression_savings_pct: None,
             compression_techniques: None,
@@ -117,12 +119,8 @@ impl UsageTracker {
             response_headers: None,
             error_message: Some("no_healthy_targets".to_string()),
             race_attempts: 1,
-            is_streaming: false,
-            stream_complete: false,
             stop_reason: None,
-            client_response: true,
-            prompt_tokens_estimated: false,
-            completion_tokens_estimated: false,
+            flags: USAGE_FLAG_CLIENT_RESPONSE,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         };
         let conn = Arc::clone(&self.conn);
@@ -143,7 +141,6 @@ impl UsageTracker {
         let input = UsageInput {
             proxy_url: None,
             proxy_status: None,
-            is_proxy_rotated: false,
             request_id: req.request_id,
             trace_id,
             attempt,
@@ -152,7 +149,7 @@ impl UsageTracker {
             combo_id: Some(combo.id),
             combo_target_id: Some(target.target.id),
             model_row_id: target.target.model_row_id,
-            upstream_model_id: target.model.model_id.0.clone(),
+            upstream_model_id: target.model.model_id.0.clone().into(),
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
@@ -162,7 +159,6 @@ impl UsageTracker {
             status_code: 0,
             error_msg: Some("predict_skipped".to_string()),
             race_total: 1,
-            race_lost: false,
             api_key_id: req.api_key_id,
             compression_savings_pct: None,
             compression_techniques: None,
@@ -172,12 +168,8 @@ impl UsageTracker {
             response_headers: None,
             error_message: Some("predictive rate limit: skipped to avoid 429".to_string()),
             race_attempts: 1,
-            is_streaming: false,
-            stream_complete: false,
             stop_reason: None,
-            client_response: false,
-            prompt_tokens_estimated: false,
-            completion_tokens_estimated: false,
+            flags: 0,
             endpoint_kind: req.endpoint_kind,
         };
         let conn = Arc::clone(&self.conn);
@@ -584,6 +576,26 @@ impl UsageRecordBuilder<'_> {
         let request_headers = optional_when_recording(recording, self.request_headers.clone());
         let response_headers = optional_when_recording(recording, self.response_headers.clone());
 
+        let mut flags = 0u8;
+        if self.err.is_some() && self.req.race_cancelled {
+            flags |= USAGE_FLAG_RACE_LOST;
+        }
+        if self.is_streaming {
+            flags |= USAGE_FLAG_IS_STREAMING;
+        }
+        if self.stream_complete {
+            flags |= USAGE_FLAG_STREAM_COMPLETE;
+        }
+        if prompt_tokens_estimated {
+            flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+        }
+        if completion_tokens_estimated {
+            flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+        }
+        if self.is_proxy_rotated {
+            flags |= USAGE_FLAG_PROXY_ROTATED;
+        }
+
         UsageInput {
             request_id: self.req.request_id,
             trace_id: self.trace_id.clone(),
@@ -606,7 +618,6 @@ impl UsageRecordBuilder<'_> {
             status_code: self.status_code,
             error_msg: self.err.map(|e| format!("{e}")),
             race_total: self.total_targets,
-            race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json,
             response_body_json,
@@ -614,18 +625,13 @@ impl UsageRecordBuilder<'_> {
             response_headers,
             error_message: self.err.map(|e| format!("{e}")),
             race_attempts: self.race_size,
-            is_streaming: self.is_streaming,
-            stream_complete: self.stream_complete,
             stop_reason: self.stop_reason.clone(),
             compression_savings_pct,
             compression_techniques,
-            client_response: false,
-            prompt_tokens_estimated,
-            completion_tokens_estimated,
+            flags,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             proxy_url: self.proxy_url.clone(),
             proxy_status: self.proxy_status.clone(),
-            is_proxy_rotated: self.is_proxy_rotated,
         }
     }
 
@@ -641,7 +647,7 @@ impl UsageRecordBuilder<'_> {
         }
     }
 
-    pub fn record(self) -> Result<Option<(String, u8, openproxy_types::ids::ComboTargetId)>> {
+    pub fn record(self) -> Result<Option<(openproxy_types::ids::RequestId, u8, openproxy_types::ids::ComboTargetId)>> {
         let (compression_savings_pct, compression_techniques) = {
             let guard = self.tracker.compression_stats_cell.read();
             (
@@ -671,7 +677,7 @@ impl UsageRecordBuilder<'_> {
         self.update_selection_registry();
 
         Ok(Some((
-            self.req.request_id.to_string(),
+            self.req.request_id,
             self.attempt,
             self.target.id,
         )))

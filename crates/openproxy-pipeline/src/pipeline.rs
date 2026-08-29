@@ -63,7 +63,7 @@ pub struct PipelineResult {
     pub error: Option<CoreError>,
     pub final_response: Option<OpenAIResponse>,
     pub attempts: u8,
-    pub usage_tuple: Option<(String, u8, openproxy_types::ids::ComboTargetId)>,
+    pub usage_tuple: Option<(RequestId, u8, openproxy_types::ids::ComboTargetId)>,
 }
 
 pub struct FailureContext<'a> {

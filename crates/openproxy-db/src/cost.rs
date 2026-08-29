@@ -1,6 +1,10 @@
 use crate::pricing;
 use openproxy_types::ids::UsageId;
-use openproxy_types::usage::{RecentUsageRow, UsageInput, publish_usage_row};
+use openproxy_types::usage::{
+    RecentUsageRow, USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED,
+    USAGE_FLAG_IS_STREAMING, USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED,
+    USAGE_FLAG_RACE_LOST, USAGE_FLAG_STREAM_COMPLETE, UsageInput, publish_usage_row,
+};
 use rusqlite::{Connection, params};
 use std::sync::LazyLock;
 
@@ -111,7 +115,7 @@ fn insert_usage_record(
             error_msg_redacted_for_db,
             i64::from(input.race_total),
             i64::from(input.race_attempts),
-            i64::from(input.race_lost),
+            i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
             input.api_key_id.map(|k| k.0),
             input
                 .request_body_json
@@ -130,18 +134,18 @@ fn insert_usage_record(
                 .as_ref()
                 .and_then(|h| { serde_json::to_string(h).ok() }),
             input.error_message,
-            i64::from(input.is_streaming),
-            i64::from(input.stream_complete),
+            i64::from(input.has_flag(USAGE_FLAG_IS_STREAMING)),
+            i64::from(input.has_flag(USAGE_FLAG_STREAM_COMPLETE)),
             input.stop_reason,
             input.compression_savings_pct,
             input.compression_techniques,
-            i64::from(input.client_response),
-            i64::from(input.prompt_tokens_estimated),
-            i64::from(input.completion_tokens_estimated),
+            i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
+            i64::from(input.has_flag(USAGE_FLAG_PROMPT_ESTIMATED)),
+            i64::from(input.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED)),
             input.endpoint_kind.as_str(),
             input.proxy_url,
             input.proxy_status,
-            i64::from(input.is_proxy_rotated),
+            i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
             input.cached_tokens.map(i64::from),
         ],
     )
@@ -186,7 +190,6 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         completion_tokens: input.completion_tokens,
         cached_tokens: input.cached_tokens,
         cost_usd,
-        race_lost: input.race_lost,
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         connect_ms: input.connect_ms,
         ttft_ms: input.ttft_ms,
@@ -197,17 +200,12 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         error_message: error_msg_redacted_for_db,
         race_total: Some(input.race_total),
         race_attempts: Some(input.race_attempts),
-        is_streaming: input.is_streaming,
-        stream_complete: input.stream_complete,
         stop_reason: input.stop_reason.as_deref().map(str::to_owned),
         compression_savings_pct: input.compression_savings_pct,
         compression_techniques: input.compression_techniques.as_deref().map(str::to_owned),
-        client_response: input.client_response,
-        prompt_tokens_estimated: input.prompt_tokens_estimated,
-        completion_tokens_estimated: input.completion_tokens_estimated,
         proxy_url: input.proxy_url.as_deref().map(str::to_owned),
         proxy_status: input.proxy_status.as_deref().map(str::to_owned),
-        is_proxy_rotated: input.is_proxy_rotated,
+        flags: input.flags,
         endpoint_kind: input.endpoint_kind,
     };
     publish_usage_row(row);
@@ -339,7 +337,7 @@ mod tests {
         let price = crate::pricing::Price {
             input_per_1m: 1.0,
             output_per_1m: 2.0,
-            kind: "chat".to_string(),
+            kind: crate::pricing::PriceKind::Chat,
         };
 
         let mut input = UsageInput {
@@ -360,7 +358,6 @@ mod tests {
             status_code: 200,
             error_msg: None,
             race_total: 1,
-            race_lost: false,
             api_key_id: None,
             request_body_json: None,
             response_body_json: None,
@@ -368,19 +365,14 @@ mod tests {
             response_headers: None,
             error_message: None,
             race_attempts: 1,
-            is_streaming: true,
-            stream_complete: true,
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
-            client_response: true,
-            prompt_tokens_estimated: false,
-            completion_tokens_estimated: false,
             endpoint_kind: EndpointKind::Chat,
             proxy_url: None,
             proxy_status: None,
-            is_proxy_rotated: false,
             cached_tokens: None,
+            flags: USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
         };
 
         let (cost, tps) = compute(Some(price), &input);
@@ -449,7 +441,6 @@ mod tests {
             status_code: 200,
             error_msg: Some("test error sk-1234567890abcdef".to_string()),
             race_total: 1,
-            race_lost: false,
             api_key_id: None,
             request_body_json: None,
             response_body_json: None,
@@ -457,19 +448,14 @@ mod tests {
             response_headers: None,
             error_message: None,
             race_attempts: 1,
-            is_streaming: true,
-            stream_complete: true,
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
-            client_response: true,
-            prompt_tokens_estimated: false,
-            completion_tokens_estimated: false,
             endpoint_kind: EndpointKind::Chat,
             proxy_url: None,
             proxy_status: None,
-            is_proxy_rotated: false,
             cached_tokens: None,
+            flags: USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
         };
 
         let result = record(&conn, &input);

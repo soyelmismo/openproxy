@@ -1142,10 +1142,7 @@ pub fn create_proxy_source(
         source: Some(std::sync::Arc::new(e)),
     })?;
 
-    get_proxy_source(conn, &id)?.ok_or_else(|| crate::error::CoreError::NotFound {
-        what: "proxy_source".to_string(),
-        id,
-    })
+    get_proxy_source(conn, &id)?.ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
 }
 
 pub fn update_proxy_source(
@@ -1154,10 +1151,7 @@ pub fn update_proxy_source(
     input: UpdateProxySourceInput,
 ) -> crate::error::Result<ProxySource> {
     let existing =
-        get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::NotFound {
-            what: "proxy_source".to_string(),
-            id: id.to_string(),
-        })?;
+        get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))?;
 
     let name = input.name.unwrap_or(existing.name);
     let url = input.url.unwrap_or(existing.url);
@@ -1173,10 +1167,7 @@ pub fn update_proxy_source(
         source: Some(std::sync::Arc::new(e)),
     })?;
 
-    get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::NotFound {
-        what: "proxy_source".to_string(),
-        id: id.to_string(),
-    })
+    get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
 }
 
 pub use openproxy_db::free_proxies::*;

@@ -136,16 +136,16 @@ fn map_horde_cluster_model(
     let count = item.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
     let eta = item.get("eta").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
 
-    let (family, out_mods, m_type) = if is_image {
+    let (family, out_mods, m_type): (_, Box<[String]>, _) = if is_image {
         (
             Some(infer_horde_family(&name)),
-            vec!["image".into()],
+            vec!["image".into()].into(),
             "image",
         )
     } else {
         (
             openproxy_types::capabilities::infer_family(&name).or_else(|| Some("instruct".into())),
-            vec!["text".into()],
+            vec!["text".into()].into(),
             "chat",
         )
     };
@@ -167,7 +167,7 @@ fn map_horde_cluster_model(
             target_format: TargetFormat::Openai,
             context_length: None,
             max_output_tokens: None,
-            input_modalities: Some(vec!["text".into()]),
+            input_modalities: Some(vec!["text".into()].into()),
             output_modalities: Some(out_mods),
             model_type: Some(m_type.into()),
             family,
@@ -292,8 +292,8 @@ impl ProviderAdapter for HordeAdapter {
             target_format: TargetFormat::Openai,
             context_length: None,
             max_output_tokens: None,
-            input_modalities: Some(vec!["text".into(), "image".into()]),
-            output_modalities: Some(vec!["text".into()]),
+            input_modalities: Some(vec!["text".into(), "image".into()].into()),
+            output_modalities: Some(vec!["text".into()].into()),
             model_type: Some("chat".into()),
             family: Some("vision".into()),
             capabilities: None,
@@ -1663,7 +1663,7 @@ mod tests {
             aspect_ratio: None,
             seed: None,
             negative_prompt: None,
-            post_processing: Some(vec!["RealESRGAN_x4plus".into(), "CodeFormers".into()]),
+            post_processing: Some(vec!["RealESRGAN_x4plus".into(), "CodeFormers".into()].into()),
         };
         let body = a.format_image_request(&req, "SDXL 1.0").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
