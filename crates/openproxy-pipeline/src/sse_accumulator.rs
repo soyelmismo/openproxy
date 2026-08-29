@@ -257,7 +257,11 @@ impl ResponseAccumulator {
     pub fn append_raw_line(&mut self, line: &str) {
         if self.raw_response_body.len() < 32768 {
             let limit = 32768 - self.raw_response_body.len();
-            let to_add = &line[..line.len().min(limit)];
+            let mut cut = line.len().min(limit);
+            while cut > 0 && !line.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            let to_add = &line[..cut];
             self.raw_response_body.push_str(to_add);
             if to_add.len() < line.len() {
                 self.raw_response_body.push_str("... [truncated]");

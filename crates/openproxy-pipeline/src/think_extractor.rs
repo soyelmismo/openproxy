@@ -160,8 +160,8 @@ impl ExtractedThink {
 fn find_matching_close_tag(after_open: &str) -> Option<&'static str> {
     let after_open_bytes = after_open.as_bytes();
     THINK_CLOSE_TAGS.iter().copied().find(|ct| {
-        let open_prefix = &ct[..ct.len() - 1]; // "</think" from "</think>"
-        let open_eq = format!("<{}>", &open_prefix[2..]); // "<think>" from "</think>"
+        let open_prefix = safe_slice_to(ct, ct.len() - 1); // "</think" from "</think>"
+        let open_eq = format!("<{}>", safe_slice_from(open_prefix, 2)); // "<think>" from "</think>"
         let open_eq_bytes = open_eq.as_bytes();
         after_open_bytes.len() >= open_eq_bytes.len()
             && after_open_bytes[..open_eq_bytes.len()].eq_ignore_ascii_case(open_eq_bytes)
@@ -258,12 +258,19 @@ fn strip_orphaned_close_tags(content: &str) -> String {
         while let Some(pos) = find_ignore_ascii_case(&result, close_tag) {
             // Check that there's no matching open tag before this
             // close tag in the content.
-            let open_tag = format!("<{}>", &close_tag[2..close_tag.len() - 1]);
-            if find_ignore_ascii_case(&result[..pos], &open_tag).is_some() {
+            let open_tag = format!(
+                "<{}>",
+                safe_slice_from(safe_slice_to(close_tag, close_tag.len() - 1), 2)
+            );
+            if find_ignore_ascii_case(safe_slice_to(&result, pos), &open_tag).is_some() {
                 break;
             }
             // Remove the orphaned close tag.
-            result = format!("{}{}", &result[..pos], &result[pos + close_tag.len()..]);
+            result = format!(
+                "{}{}",
+                safe_slice_to(&result, pos),
+                safe_slice_from(&result, pos + close_tag.len())
+            );
         }
     }
     result
@@ -384,8 +391,8 @@ impl ThinkStreamExtractor {
             // be the start of a tag (e.g. "<thi"). Check if the
             // input ends with a partial tag prefix and buffer it.
             let safe_len = find_safe_split_point(input);
-            let content = input[..safe_len].to_string();
-            self.tag_buffer = input[safe_len..].to_string();
+            let content = safe_slice_to(input, safe_len).to_string();
+            self.tag_buffer = safe_slice_from(input, safe_len).to_string();
             // Strip orphaned close tags from the content (e.g.
             // stray </think> without a matching <think>).
             let cleaned = strip_orphaned_close_tags(&content);
@@ -393,8 +400,8 @@ impl ThinkStreamExtractor {
         };
 
         // Found an opening tag. Emit content before it.
-        let content_before = input[..tag_pos].to_string();
-        let after_tag = &input[tag_pos..];
+        let content_before = safe_slice_to(input, tag_pos).to_string();
+        let after_tag = safe_slice_from(input, tag_pos);
 
         // Determine the close tag we're looking for.
         let close_tag = THINK_CLOSE_TAGS
@@ -441,8 +448,8 @@ impl ThinkStreamExtractor {
         match find_ignore_ascii_case(input, &close_tag) {
             Some(pos) => {
                 // Found closing tag. Everything before it is reasoning.
-                let reasoning = input[..pos].to_string();
-                let after_close = &input[pos + close_tag.len()..];
+                let reasoning = safe_slice_to(input, pos).to_string();
+                let after_close = safe_slice_from(input, pos + close_tag.len());
                 self.inside_think = false;
                 self.close_tag = None;
 
@@ -464,8 +471,8 @@ impl ThinkStreamExtractor {
                 // be the start of the close tag. Buffer the potential
                 // partial close tag.
                 let safe_len = find_safe_split_point_close(input, &close_tag);
-                let reasoning = input[..safe_len].to_string();
-                self.tag_buffer = input[safe_len..].to_string();
+                let reasoning = safe_slice_to(input, safe_len).to_string();
+                self.tag_buffer = safe_slice_from(input, safe_len).to_string();
                 (String::new(), reasoning)
             }
         }

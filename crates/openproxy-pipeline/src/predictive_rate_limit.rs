@@ -63,11 +63,19 @@ pub fn compute_error_fingerprint(err: &openproxy_types::CoreError) -> u64 {
     match err {
         openproxy_types::CoreError::UpstreamError { status, body, .. } => {
             status.hash(&mut hasher);
-            let prefix = &body[..body.len().min(64)];
+            let mut limit = body.len().min(64);
+            while limit > 0 && !body.is_char_boundary(limit) {
+                limit -= 1;
+            }
+            let prefix = &body[..limit];
             prefix.hash(&mut hasher);
         }
         openproxy_types::CoreError::UpstreamConnection(msg) => {
-            let prefix = &msg[..msg.len().min(64)];
+            let mut limit = msg.len().min(64);
+            while limit > 0 && !msg.is_char_boundary(limit) {
+                limit -= 1;
+            }
+            let prefix = &msg[..limit];
             prefix.hash(&mut hasher);
         }
         openproxy_types::CoreError::UpstreamTimeout { phase, .. } => {
@@ -877,8 +885,10 @@ mod tests {
         let model1 = Some(ModelRowId(10));
         let model2 = Some(ModelRowId(20));
 
-        let k1 = PredictiveRateLimiter::compute_key_parts(&prov, None, model1, RateLimitScope::Account);
-        let k2 = PredictiveRateLimiter::compute_key_parts(&prov, None, model2, RateLimitScope::Account);
+        let k1 =
+            PredictiveRateLimiter::compute_key_parts(&prov, None, model1, RateLimitScope::Account);
+        let k2 =
+            PredictiveRateLimiter::compute_key_parts(&prov, None, model2, RateLimitScope::Account);
         assert_ne!(
             k1, k2,
             "Modelos distintos sin account_id deben generar claves aisladas"
