@@ -646,8 +646,7 @@ impl OAuthProvider for KiroOAuthProvider {
 
                 Ok::<_, CoreError>((access_token, meta))
             })
-            .await
-            .map_err(|e| CoreError::Internal(e.to_string()))??
+            .await??
         };
 
         // 2. Hit `ListAvailableProfiles` and pick the first profile
@@ -695,8 +694,7 @@ impl OAuthProvider for KiroOAuthProvider {
             })?;
             Ok(())
         })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))??;
+        .await??;
 
         Ok(())
     }
