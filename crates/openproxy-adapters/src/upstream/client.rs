@@ -459,9 +459,14 @@ fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Byt
         *headers = spec.headers;
         if let Some(len) = body_len
             && !headers.contains_key(http::header::CONTENT_LENGTH)
-            && let Ok(v) = http::HeaderValue::from_str(&len.to_string())
         {
-            headers.insert(http::header::CONTENT_LENGTH, v);
+            let mut buf = itoa::Buffer::new();
+            let len_str = buf.format(len);
+            let mut bytes = bytes::BytesMut::with_capacity(len_str.len());
+            bytes.extend_from_slice(len_str.as_bytes());
+            if let Ok(v) = http::HeaderValue::from_maybe_shared(bytes.freeze()) {
+                headers.insert(http::header::CONTENT_LENGTH, v);
+            }
         }
     }
     builder
