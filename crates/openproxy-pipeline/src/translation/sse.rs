@@ -418,7 +418,8 @@ impl<S> OpenAIToAnthropicSseStream<S> {
     }
 
     fn process_raw_chunk(&mut self, chunk: &Bytes) -> Option<Bytes> {
-        let s = std::str::from_utf8(chunk).unwrap_or("");
+        let s = String::from_utf8_lossy(chunk);
+        let s = s.as_ref();
         if s.starts_with("data: ") && !s.contains("[DONE]") {
             let json_str = s.trim_start_matches("data: ").trim();
             if let Ok(v) = serde_json::from_slice::<OpenAISseProbe<'_>>(json_str.as_bytes()) {
