@@ -3,7 +3,6 @@ use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::ids::ComboId;
 use rand::RngExt;
 use rand::seq::SliceRandom;
-use std::sync::Arc;
 
 /// Default selection window (1 hour) when the combo's
 /// `selection_window_secs` column is `NULL`. Matches the spec's
@@ -18,16 +17,19 @@ pub const DEFAULT_LKGP_EXPLORATION_RATE: f64 = 0.1;
 fn execute_round_robin(
     mut targets: Vec<ComboTarget>,
     combo_id: ComboId,
-    rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+    rr_counters: &std::sync::Arc<
+        dashmap::DashMap<openproxy_types::ids::ComboId, std::sync::atomic::AtomicU64>,
+    >,
 ) -> Vec<ComboTarget> {
     let n = targets.len();
-    let shift = {
-        let mut counters = rr_counters.lock();
-        let counter = counters.entry(combo_id).or_insert(0);
-        let s = (*counter % n as u64) as usize;
-        *counter = counter.wrapping_add(1);
-        s
-    };
+    if n == 0 {
+        return targets;
+    }
+    let counter = rr_counters
+        .entry(combo_id)
+        .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
+    let val = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let shift = (val % n as u64) as usize;
     targets.rotate_left(shift);
     targets
 }
@@ -52,7 +54,9 @@ fn execute_priority_strategy(
 pub fn execute_load_balancing(
     targets: Vec<ComboTarget>,
     combo: &Combo,
-    rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+    rr_counters: &std::sync::Arc<
+        dashmap::DashMap<openproxy_types::ids::ComboId, std::sync::atomic::AtomicU64>,
+    >,
     selection_registry: &SelectionRegistry,
 ) -> Vec<ComboTarget> {
     if targets.len() <= 1 {
