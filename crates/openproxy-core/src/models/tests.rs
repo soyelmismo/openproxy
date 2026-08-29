@@ -488,10 +488,11 @@ fn apply_auto_activation_does_not_affect_old_re_upserted_model() {
     let m_after_backdate = list_all(&conn).unwrap().pop().unwrap();
     let pre_upsert_discovered = m_after_backdate.discovered_at;
     assert!(
-        &*pre_upsert_discovered
+        pre_upsert_discovered.as_ref()
             != conn
                 .query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0))
-                .unwrap(),
+                .unwrap()
+                .as_str(),
         "pre-condition: backdate must move discovered_at into the past",
     );
 

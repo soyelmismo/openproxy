@@ -149,7 +149,7 @@ impl UsageTracker {
             combo_id: Some(combo.id),
             combo_target_id: Some(target.target.id),
             model_row_id: target.target.model_row_id,
-            upstream_model_id: target.model.model_id.0.clone().into(),
+            upstream_model_id: target.model.model_id.0.clone(),
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,

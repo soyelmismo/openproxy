@@ -178,7 +178,7 @@ async fn try_initial_race(
     if race_result.error.is_none() {
         ctx.pipeline
             .tracker
-            .mark_client_response(race_result.usage_tuple.clone());
+            .mark_client_response(race_result.usage_tuple);
         return Some(race_result);
     }
 
@@ -574,7 +574,7 @@ fn finalize_target_result(
     if result.error.is_none() {
         ctx.pipeline
             .tracker
-            .mark_client_response(result.usage_tuple.clone());
+            .mark_client_response(result.usage_tuple);
         TargetStepResult::Success(result)
     } else {
         log_target_failure(
@@ -705,7 +705,7 @@ fn finalize_exhausted_combo(
         );
         ctx.pipeline
             .tracker
-            .mark_client_response(r.usage_tuple.clone());
+            .mark_client_response(r.usage_tuple);
         return Ok(r);
     }
 
