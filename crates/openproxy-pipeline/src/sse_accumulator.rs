@@ -119,15 +119,10 @@ fn merge_reasoning_details(obj: &mut serde_json::Map<String, Value>, details: se
     if combined.is_empty() {
         return;
     }
-    if let Some(existing) = obj.get_mut("reasoning_content")
-        && let Some(s) = existing.as_str()
-    {
-        *existing = serde_json::Value::String(format!("{s}{combined}"));
+    if let Some(Value::String(existing)) = obj.get_mut("reasoning_content") {
+        existing.push_str(&combined);
     } else {
-        obj.insert(
-            "reasoning_content".to_string(),
-            serde_json::Value::String(combined),
-        );
+        obj.insert("reasoning_content".to_string(), Value::String(combined));
     }
 }
 
