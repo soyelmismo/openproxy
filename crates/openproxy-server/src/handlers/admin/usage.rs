@@ -219,16 +219,13 @@ fn is_allowed_origin(origin: &str, host: &str) -> bool {
         return true;
     }
 
-    const LOCAL_ORIGIN_PREFIXES: &[&str] = &[
-        "http://localhost",
-        "http://127.0.0.1",
-        "https://localhost",
-        "https://127.0.0.1",
-    ];
+    let origin = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .unwrap_or(origin);
+    let host_part = origin.split(':').next().unwrap_or(origin);
 
-    LOCAL_ORIGIN_PREFIXES
-        .iter()
-        .any(|prefix| origin == *prefix || origin.starts_with(&format!("{prefix}:")))
+    matches!(host_part, "localhost" | "127.0.0.1")
 }
 
 fn check_cswsh_origin(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {

@@ -19,26 +19,38 @@ pub struct TransportCompressionPredicate;
 
 impl TransportCompressionPredicate {
     fn is_compressible_mime(content_type: &str) -> bool {
-        const COMPRESSIBLE_PREFIXES: &[&str] = &[
-            "application/json",
-            "text/json",
-            "text/html",
-            "text/css",
-            "text/javascript",
-            "application/javascript",
-            "application/x-javascript",
-            "text/plain",
-            "text/markdown",
-            "image/svg+xml",
-            "application/wasm",
-            "font/",
-            "application/font-",
-        ];
+        let base_type = content_type
+            .split(';')
+            .next()
+            .unwrap_or(content_type)
+            .trim();
 
-        content_type.contains("+json")
-            || COMPRESSIBLE_PREFIXES
-                .iter()
-                .any(|prefix| content_type.starts_with(prefix))
+        if base_type.ends_with("+json") {
+            return true;
+        }
+
+        if base_type.starts_with("font/") {
+            return true;
+        }
+
+        if base_type.starts_with("application/font-") {
+            return true;
+        }
+
+        matches!(
+            base_type,
+            "application/json"
+                | "text/json"
+                | "text/html"
+                | "text/css"
+                | "text/javascript"
+                | "application/javascript"
+                | "application/x-javascript"
+                | "text/plain"
+                | "text/markdown"
+                | "image/svg+xml"
+                | "application/wasm"
+        )
     }
 
     #[inline]
