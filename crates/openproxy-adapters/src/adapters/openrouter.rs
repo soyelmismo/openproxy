@@ -114,8 +114,9 @@ fn extract_modalities(
 fn derive_openrouter_family(entry: &OpenRouterModelEntry, id_string: &str) -> Option<String> {
     entry
         .canonical_slug
-        .clone()
-        .or_else(|| entry.hugging_face_id.clone())
+        .as_deref()
+        .or(entry.hugging_face_id.as_deref())
+        .map(|s| s.to_string())
         .or_else(|| derive_family_from_id(id_string))
 }
 
@@ -125,7 +126,11 @@ fn map_openrouter_entry(raw: &serde_json::Value) -> Option<DiscoveredModel> {
     let caps = derive_capabilities(&entry);
     let model_type = infer_model_type_openrouter(&id_string, entry.architecture.as_ref());
     let family = derive_openrouter_family(&entry, &id_string);
-    let display_name = entry.name.or_else(|| Some(id_string.clone()));
+    let display_name = entry
+        .name
+        .as_deref()
+        .or(Some(id_string.as_str()))
+        .map(|s| s.to_string());
     let context_length = entry
         .context_length
         .or_else(|| entry.top_provider.as_ref().and_then(|t| t.context_length));
