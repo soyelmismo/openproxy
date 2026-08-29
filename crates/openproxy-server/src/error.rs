@@ -27,12 +27,6 @@ impl From<CoreError> for ApiError {
     }
 }
 
-impl From<tokio::task::JoinError> for ApiError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        ApiError(CoreError::Internal(err.to_string()))
-    }
-}
-
 impl ApiError {
     /// Return the error message sanitized (secrets redacted) and truncated to length limit.
     pub fn sanitized_message(&self) -> String {

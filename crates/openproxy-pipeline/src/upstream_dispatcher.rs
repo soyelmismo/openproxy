@@ -697,8 +697,7 @@ impl UpstreamDispatcher {
             tokio::task::spawn_blocking(move || {
                 repo.get_or_assign_provider_proxy(&provider_id, account_id)
             })
-            .await
-            .map_err(|e| CoreError::Internal(e.to_string()))??
+            .await??
         };
 
         let proxy_status = self.fetch_proxy_status(proxy_url.as_deref()).await;

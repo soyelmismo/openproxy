@@ -33,8 +33,7 @@ impl PipelineStage for QuotaEnforcerStage {
                 &model,
             )
         })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))?;
+        .await?;
         if filtered.is_empty()
             && let Some(ref combo) = ctx.combo
         {

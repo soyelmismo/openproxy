@@ -103,8 +103,7 @@ impl Pipeline {
         tokio::task::spawn_blocking(move || {
             flatten_sub_combos(repo.as_ref(), root_combo_id, targets)
         })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))?
+        .await?
     }
 }
 
@@ -135,8 +134,7 @@ impl Pipeline {
         let combo_id = combo.id;
         let combo_name = combo.name.clone();
         tokio::task::spawn_blocking(move || do_auto_populate(repo.as_ref(), combo_id, &combo_name))
-            .await
-            .map_err(|e| CoreError::Internal(e.to_string()))?
+            .await?
     }
 
     pub async fn resolve_combo_targets_full(
@@ -270,8 +268,7 @@ impl Pipeline {
             repo.load_combo(combo_id)?
                 .ok_or(CoreError::ComboNotFound(combo_id.0))
         })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))?
+        .await?
     }
 }
 
@@ -317,8 +314,7 @@ impl Pipeline {
                 &selection_registry,
             )
         })
-        .await
-        .map_err(|e| CoreError::Internal(e.to_string()))?
+        .await?
     }
 
     pub(crate) fn failure(err: CoreError, attempts: u8, _phase: ErrorPhase) -> PipelineResult {
