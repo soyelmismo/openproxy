@@ -132,12 +132,12 @@ impl SqlitePipelineRepository {
 
 impl PipelineRepository for SqlitePipelineRepository {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::combos::get_combo(&conn, combo_id)
     }
 
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::combos::list_targets(&conn, combo_id)
     }
 
@@ -150,12 +150,12 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<Option<Account>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::get(&conn, account_id, master_key)
     }
 
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::decrypt_api_key(&conn, account_id, master_key)
     }
 
@@ -164,7 +164,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<String> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::decrypt_access_token(&conn, account_id, master_key)
     }
 
@@ -174,7 +174,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         master_key: &MasterKey,
         params: openproxy_types::accounts::StoreOAuthTokensParams<'_>,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::store_oauth_tokens(&conn, account_id, master_key, params)
     }
 
@@ -185,7 +185,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         dedup_key: Option<&str>,
         provider_id: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         if let Some(id) =
             openproxy_db::notifications::insert(&conn, kind, payload, dedup_key, provider_id)?
         {
@@ -204,7 +204,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn load_model(&self, row_id: ModelRowId) -> Result<Model> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::models::get_by_row_id(&conn, row_id)?.ok_or_else(|| {
             openproxy_types::error::CoreError::Internal(format!("model {} not found", row_id.0))
         })
@@ -215,18 +215,18 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<Option<String>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::get(&conn, account_id, master_key)
             .map(|opt| opt.and_then(|a| a.label))
     }
 
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cost::record(&conn, input).map(Some)
     }
 
     fn mark_client_response(&self, row_id: UsageId) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cost::mark_client_response(&conn, row_id)
     }
 
@@ -236,7 +236,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         attempt: u8,
         target_id: ComboTargetId,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cost::mark_winner_usage_row(&conn, request_id, attempt, target_id)
     }
 
@@ -249,7 +249,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         created_str: &str,
         error_msg: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cost::record_no_healthy_targets_row(
             &conn,
             request_id,
@@ -262,7 +262,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cooldowns::clear_cooldown(&conn, target_id)
     }
 
@@ -275,14 +275,14 @@ impl PipelineRepository for SqlitePipelineRepository {
         max_secs: u64,
         factor: u32,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cooldowns::record_cooldown(
             &conn, target_id, reason, mode, base_secs, max_secs, factor,
         )
     }
 
     fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         let models = openproxy_db::models::get_by_row_ids(&conn, model_row_ids)?;
         let mut map = HashMap::new();
         for m in models {
@@ -292,12 +292,12 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::get_accounts_meta(&conn, account_ids)
     }
 
     fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::accounts::update_antigravity_project_id(&conn, account_id, new_project_id)
     }
 
@@ -305,7 +305,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         &self,
         provider_ids: &[ProviderId],
     ) -> Result<HashMap<String, String>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::providers::get_auth_types(&conn, provider_ids)
     }
 
@@ -349,7 +349,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         &self,
         provider_id: &ProviderId,
     ) -> Result<Option<openproxy_types::providers::Provider>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::providers::get(&conn, provider_id)
     }
 
@@ -359,7 +359,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         status: &str,
         _error_msg: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::free_proxies::update_proxy_status(&conn, proxy_id, status, None)
     }
 
@@ -368,7 +368,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: &ProviderId,
         account_id: Option<AccountId>,
     ) -> Result<Option<String>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::free_proxies::get_or_assign_provider_proxy(
             &conn,
             provider_id,
@@ -381,17 +381,17 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: &ProviderId,
         limit: usize,
     ) -> Result<Vec<(String, String)>> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::free_proxies::get_candidate_proxies_for_provider(&conn, provider_id, limit)
     }
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::free_proxies::get_proxy_status_by_url(&conn, url)
     }
 
     fn prune_expired_cooldowns(&self) -> Result<usize> {
-        let conn = self.conn.lock();
+        let conn = parking_lot::Mutex::lock(&self.conn);
         openproxy_db::cooldowns::prune_expired(&conn)
     }
 }

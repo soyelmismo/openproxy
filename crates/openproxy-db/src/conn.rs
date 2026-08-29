@@ -115,7 +115,7 @@ impl DbPool {
 
     /// Acquire the serialized writer. Blocks until the previous writer is released.
     pub fn writer(&self) -> WriterGuard<'_> {
-        self.writer.lock()
+        parking_lot::Mutex::lock(&self.writer)
     }
 
     /// Try to acquire the writer lock for at most `timeout` (blocking).
@@ -154,7 +154,7 @@ impl DbPool {
     /// Acquire the serialized reader. Blocks until the previous reader is released.
     pub fn reader(&self) -> ReaderGuard<'_> {
         let idx = self.get_reader_idx();
-        self.readers[idx].lock()
+        parking_lot::Mutex::lock(&self.readers[idx])
     }
 
     /// Try to acquire the reader lock for at most `timeout` (blocking).
@@ -172,7 +172,7 @@ impl DbPool {
     where
         F: FnOnce(&Connection) -> R,
     {
-        let guard = self.writer.lock();
+        let guard = parking_lot::Mutex::lock(&self.writer);
         f(&guard)
     }
 
@@ -217,9 +217,9 @@ impl DbPool {
             new_readers.push(reopen_and_configure_reader(&self.path, flags, i)?);
         }
 
-        *self.writer.lock() = new_writer;
+        *parking_lot::Mutex::lock(&self.writer) = new_writer;
         for (i, new_r) in new_readers.into_iter().enumerate() {
-            *self.readers[i].lock() = new_r;
+            *parking_lot::Mutex::lock(&self.readers[i]) = new_r;
         }
 
         tracing::info!("DbPool: reopened all connections (writer + readers)");
