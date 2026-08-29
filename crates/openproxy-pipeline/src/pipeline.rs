@@ -12,7 +12,7 @@ use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ApiKeyId, ComboId, RequestId, TraceId};
 use parking_lot::RwLock;
 use rusqlite::Connection;
-use std::collections::HashMap;
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -106,7 +106,7 @@ pub struct Pipeline {
     pub(crate) conn: Arc<parking_lot::Mutex<Connection>>,
     pub(crate) config: PipelineConfig,
     pub(crate) circuit_breaker: CircuitBreakerRegistry,
-    pub(crate) rr_counters: Arc<parking_lot::Mutex<HashMap<ComboId, u64>>>,
+    pub(crate) rr_counters: Arc<dashmap::DashMap<ComboId, std::sync::atomic::AtomicU64>>,
     pub(crate) selection_registry: Arc<SelectionRegistry>,
     pub(crate) record_bodies_and_headers: Arc<AtomicBool>,
     pub(crate) compression_stats_cell: Arc<RwLock<Option<CompressionStats>>>,
@@ -176,7 +176,7 @@ impl Pipeline {
             conn,
             config,
             circuit_breaker,
-            rr_counters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            rr_counters: Arc::new(dashmap::DashMap::new()),
             selection_registry,
             record_bodies_and_headers,
             compression_stats_cell,

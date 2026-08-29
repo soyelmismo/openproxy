@@ -26,6 +26,7 @@ name = "sse_accumulator"
 harness = false
 
 [dependencies]
+dashmap = { workspace = true }
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
 openproxy-adapters = { path = "../openproxy-adapters", features = ["test-utils"] }

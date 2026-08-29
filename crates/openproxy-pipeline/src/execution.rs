@@ -279,7 +279,7 @@ fn resolve_targets_blocking(
     repo: &dyn crate::repository::PipelineRepository,
     combo: &Combo,
     overrides: Option<Vec<ComboTarget>>,
-    rr_counters: &Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+    rr_counters: &Arc<dashmap::DashMap<ComboId, std::sync::atomic::AtomicU64>>,
     selection_registry: &Arc<openproxy_types::SelectionRegistry>,
 ) -> Result<Vec<ComboTarget>> {
     if let Some(overrides) = overrides {

@@ -105,7 +105,7 @@ pub trait PipelineRepository: Send + Sync {
     fn resolve_target_order_with_mode(
         &self,
         combo: &Combo,
-        rr_counters: &std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+        rr_counters: &std::sync::Arc<dashmap::DashMap<ComboId, std::sync::atomic::AtomicU64>>,
         selection_registry: &SelectionRegistry,
     ) -> Result<Vec<ComboTarget>>;
     fn decrypt_api_key_and_label(
@@ -323,7 +323,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     fn resolve_target_order_with_mode(
         &self,
         combo: &Combo,
-        rr_counters: &std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
+        rr_counters: &std::sync::Arc<dashmap::DashMap<ComboId, std::sync::atomic::AtomicU64>>,
         selection_registry: &SelectionRegistry,
     ) -> Result<Vec<ComboTarget>> {
         let targets = self.list_targets(combo.id)?;
