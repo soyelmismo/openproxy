@@ -294,7 +294,6 @@ impl From<tokio::task::JoinError> for CoreError {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
