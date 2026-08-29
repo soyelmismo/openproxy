@@ -134,25 +134,26 @@ fn session_id() -> &'static str {
     &SESSION_ID
 }
 
-/// The full User-Agent string:
-/// `Antigravity/{version} ({platform}) Chrome/{chrome} Electron/{electron}`
-fn user_agent() -> String {
-    format!(
-        "Antigravity/{} ({}) Chrome/{} Electron/{}",
-        version(),
-        platform_info(),
-        KNOWN_STABLE_CHROME,
-        KNOWN_STABLE_ELECTRON,
-    )
-}
-
-static HEADER_VAL_USER_AGENT: LazyLock<HeaderValue> =
-    LazyLock::new(|| HeaderValue::from_str(&user_agent()).expect("user_agent must be valid ascii"));
+static HEADER_VAL_USER_AGENT: LazyLock<HeaderValue> = LazyLock::new(|| {
+    let mut bytes = bytes::BytesMut::with_capacity(128);
+    bytes.extend_from_slice(b"Antigravity/");
+    bytes.extend_from_slice(version().as_bytes());
+    bytes.extend_from_slice(b" (");
+    bytes.extend_from_slice(platform_info().as_bytes());
+    bytes.extend_from_slice(b") Chrome/");
+    bytes.extend_from_slice(KNOWN_STABLE_CHROME.as_bytes());
+    bytes.extend_from_slice(b" Electron/");
+    bytes.extend_from_slice(KNOWN_STABLE_ELECTRON.as_bytes());
+    HeaderValue::from_maybe_shared(bytes.freeze()).expect("user_agent must be valid ascii")
+});
 
 /// Native OAuth User-Agent (used for token exchange / refresh / userinfo):
 /// `vscode/1.X.X (Antigravity/{version})`
 pub fn oauth_user_agent() -> String {
-    format!("vscode/1.X.X (Antigravity/{})", version())
+    let mut out = String::with_capacity(64);
+    use std::fmt::Write;
+    let _ = write!(out, "vscode/1.X.X (Antigravity/{})", version());
+    out
 }
 
 fn is_valid_project_id(pid: &str) -> bool {
@@ -194,7 +195,7 @@ mod tests {
 
     #[test]
     fn user_agent_contains_antigravity_and_version() {
-        let ua = user_agent();
+        let ua = HEADER_VAL_USER_AGENT.to_str().unwrap();
         assert!(ua.contains("Antigravity/"));
         assert!(ua.contains("Chrome/"));
         assert!(ua.contains("Electron/"));

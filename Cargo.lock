@@ -1824,6 +1824,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "itoa",
  "openproxy-types",
  "parking_lot",
  "regex",
