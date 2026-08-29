@@ -1081,20 +1081,20 @@ fn assemble_post_processing(
     let mut seen_post_processing = HashSet::new();
     if quality == Some("hd") {
         for item in ["RealESRGAN_x4plus", "GFPGAN"] {
-            if seen_post_processing.insert(item.to_string()) {
+            if seen_post_processing.insert(item) {
                 post_processing_list.push(item.to_string());
             }
         }
     }
     if let Some(req_pp) = req_pp {
         for pp in req_pp {
-            if seen_post_processing.insert(pp.clone()) {
+            if seen_post_processing.insert(pp.as_str()) {
                 post_processing_list.push(pp.clone());
             }
         }
     }
     for pp in parsed_pp {
-        if seen_post_processing.insert(pp.clone()) {
+        if seen_post_processing.insert(pp.as_str()) {
             post_processing_list.push(pp.clone());
         }
     }
