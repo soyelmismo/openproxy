@@ -167,14 +167,26 @@ fn is_valid_project_id(pid: &str) -> bool {
 /// set to the project ID (required for the API to route the request
 /// to the correct Cloud Code project).
 pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Option<&str>) {
-    headers.insert(http::header::USER_AGENT, HEADER_VAL_USER_AGENT.clone());
+    headers.insert(
+        http::header::USER_AGENT,
+        HeaderValue::clone(&HEADER_VAL_USER_AGENT),
+    );
     headers.insert(
         &HEADER_X_CLIENT_NAME,
         HeaderValue::from_static("antigravity"),
     );
-    headers.insert(&HEADER_X_CLIENT_VERSION, HEADER_VAL_VERSION.clone());
-    headers.insert(&HEADER_X_MACHINE_ID, HEADER_VAL_MACHINE_ID.clone());
-    headers.insert(&HEADER_X_VSCODE_SESSIONID, HEADER_VAL_SESSION_ID.clone());
+    headers.insert(
+        &HEADER_X_CLIENT_VERSION,
+        HeaderValue::clone(&HEADER_VAL_VERSION),
+    );
+    headers.insert(
+        &HEADER_X_MACHINE_ID,
+        HeaderValue::clone(&HEADER_VAL_MACHINE_ID),
+    );
+    headers.insert(
+        &HEADER_X_VSCODE_SESSIONID,
+        HeaderValue::clone(&HEADER_VAL_SESSION_ID),
+    );
 
     if let Some(pid) = project_id.filter(|p| is_valid_project_id(p))
         && let Ok(v) = HeaderValue::from_str(pid)
