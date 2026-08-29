@@ -877,10 +877,8 @@ mod tests {
         let model1 = Some(ModelRowId(10));
         let model2 = Some(ModelRowId(20));
 
-        let k1 =
-            PredictiveRateLimiter::compute_key_parts(&prov, None, model1, RateLimitScope::Account);
-        let k2 =
-            PredictiveRateLimiter::compute_key_parts(&prov, None, model2, RateLimitScope::Account);
+        let k1 = PredictiveRateLimiter::compute_key_parts(&prov, None, model1, RateLimitScope::Account);
+        let k2 = PredictiveRateLimiter::compute_key_parts(&prov, None, model2, RateLimitScope::Account);
         assert_ne!(
             k1, k2,
             "Modelos distintos sin account_id deben generar claves aisladas"
