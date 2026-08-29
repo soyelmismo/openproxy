@@ -206,7 +206,10 @@ impl Pipeline {
         ctx.started = Some(std::time::Instant::now());
 
         if attempt > 1 {
-            ctx.trace_id = format!("{}:retry{}", ctx.req.trace_id, attempt - 1);
+            let mut s = String::with_capacity(48);
+            use std::fmt::Write;
+            let _ = write!(&mut s, "{}:retry{}", ctx.req.trace_id, attempt - 1);
+            ctx.trace_id = s;
         } else {
             ctx.trace_id = ctx.req.trace_id.to_string();
         }
@@ -352,7 +355,12 @@ impl Pipeline {
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
         let trace_id = if ctx.attempt > 1 {
-            format!("{}:retry{}", req.trace_id, ctx.attempt - 1)
+            {
+                let mut s = String::with_capacity(48);
+                use std::fmt::Write;
+                let _ = write!(&mut s, "{}:retry{}", req.trace_id, ctx.attempt - 1);
+                s
+            }
         } else {
             req.trace_id.to_string()
         };
