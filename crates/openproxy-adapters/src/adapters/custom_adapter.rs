@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, Arc, CoreError, DiscoveredModel, OpenAIModelEntry, ProviderAdapter,
     ProviderAdapterConfig, ProviderMetadata, Result, TargetFormat, UpstreamClient,
-    build_discovered_model_full, build_discovered_model_with, upstream_get_json,
+    build_discovered_model_with, parse_gemini_model_json, upstream_get_json,
 };
 
 // =====================================================================
@@ -122,24 +122,7 @@ fn parse_custom_openai_models(
 
 fn parse_custom_gemini_models(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
     let arr = body.get("models")?.as_array()?;
-    let models = arr
-        .iter()
-        .filter_map(|m| {
-            let full_name = m.get("name")?.as_str()?;
-            let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-            let display_name = m
-                .get("displayName")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string);
-            Some(build_discovered_model_full(
-                id.to_string(),
-                display_name,
-                TargetFormat::Gemini,
-                None,
-                None,
-            ))
-        })
-        .collect();
+    let models = arr.iter().filter_map(parse_gemini_model_json).collect();
     Some(models)
 }
 

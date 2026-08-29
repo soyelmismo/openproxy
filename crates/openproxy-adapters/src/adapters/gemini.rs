@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    build_discovered_model_full, fetch_models_with_auth,
+    fetch_models_with_auth, parse_gemini_model_json,
 };
 
 // =====================================================================
@@ -85,25 +85,7 @@ impl ProviderAdapter for GeminiAdapter {
             &[("x-goog-api-key", api_key)],
             "models",
             "gemini",
-            |m| {
-                let full_name = m.get("name").and_then(|v| v.as_str())?;
-                let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-                let display_name = m
-                    .get("displayName")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string);
-                let ctx = m.get("inputTokenLimit").and_then(serde_json::Value::as_i64);
-                let out = m
-                    .get("outputTokenLimit")
-                    .and_then(serde_json::Value::as_i64);
-                Some(build_discovered_model_full(
-                    id.to_string(),
-                    display_name,
-                    TargetFormat::Gemini,
-                    ctx,
-                    out,
-                ))
-            },
+            parse_gemini_model_json,
         )
         .await
     }

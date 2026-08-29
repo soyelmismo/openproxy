@@ -1148,6 +1148,27 @@ where
     Ok(arr.iter().filter_map(mapper).collect())
 }
 
+/// Shared mapper for parsing Gemini-style model discovery JSON objects.
+pub fn parse_gemini_model_json(m: &serde_json::Value) -> Option<DiscoveredModel> {
+    let full_name = m.get("name")?.as_str()?;
+    let id = full_name.strip_prefix("models/").unwrap_or(full_name);
+    let display_name = m
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
+    let ctx = m.get("inputTokenLimit").and_then(serde_json::Value::as_i64);
+    let out = m
+        .get("outputTokenLimit")
+        .and_then(serde_json::Value::as_i64);
+    Some(build_discovered_model_full(
+        id.to_string(),
+        display_name,
+        TargetFormat::Gemini,
+        ctx,
+        out,
+    ))
+}
+
 // =====================================================================
 // Factory
 // =====================================================================
