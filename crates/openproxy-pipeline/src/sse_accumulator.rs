@@ -119,10 +119,8 @@ fn merge_reasoning_details(obj: &mut serde_json::Map<String, Value>, details: se
     if combined.is_empty() {
         return;
     }
-    if let Some(existing) = obj.get_mut("reasoning_content")
-        && let Some(s) = existing.as_str()
-    {
-        *existing = serde_json::Value::String(format!("{s}{combined}"));
+    if let Some(serde_json::Value::String(existing_str)) = obj.get_mut("reasoning_content") {
+        existing_str.push_str(&combined);
     } else {
         obj.insert(
             "reasoning_content".to_string(),
@@ -133,10 +131,10 @@ fn merge_reasoning_details(obj: &mut serde_json::Map<String, Value>, details: se
 
 fn apply_reasoning_normalizations(obj: &mut serde_json::Map<String, Value>) {
     let reasoning_was_present = convert_reasoning_field(obj);
-    if let Some(details) = obj.remove("reasoning_details")
-        && !reasoning_was_present
-    {
-        merge_reasoning_details(obj, details);
+    if let Some(details) = obj.remove("reasoning_details") {
+        if !reasoning_was_present {
+            merge_reasoning_details(obj, details);
+        }
     }
 }
 
@@ -647,11 +645,14 @@ impl ResponseAccumulator {
 impl crate::streaming::StreamingChunkStage for ResponseAccumulator {
     fn process_chunk(&mut self, payload: &str) -> crate::streaming::StreamAction {
         self.append_openai_raw(payload);
-        if payload.contains("\"reasoning_content\"")
-            && let Some(rc) = extract_reasoning_content(payload)
-            && !rc.is_empty()
-        {
-            self.append_reasoning(rc);
+        #[allow(clippy::collapsible_if)]
+        if payload.contains("\"reasoning_content\"") {
+            #[allow(clippy::collapsible_if)]
+            if let Some(rc) = extract_reasoning_content(payload) {
+                if !rc.is_empty() {
+                    self.append_reasoning(rc);
+                }
+            }
         }
         crate::streaming::StreamAction::Passthrough
     }
