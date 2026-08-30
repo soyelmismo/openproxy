@@ -372,7 +372,9 @@ mod tests {
             proxy_url: None,
             proxy_status: None,
             cached_tokens: None,
-            flags: USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
+            flags: USAGE_FLAG_IS_STREAMING
+                | USAGE_FLAG_STREAM_COMPLETE
+                | USAGE_FLAG_CLIENT_RESPONSE,
         };
 
         let (cost, tps) = compute(Some(price), &input);
@@ -455,7 +457,9 @@ mod tests {
             proxy_url: None,
             proxy_status: None,
             cached_tokens: None,
-            flags: USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
+            flags: USAGE_FLAG_IS_STREAMING
+                | USAGE_FLAG_STREAM_COMPLETE
+                | USAGE_FLAG_CLIENT_RESPONSE,
         };
 
         let result = record(&conn, &input);

@@ -232,12 +232,9 @@ fn validate_active_ticket(s: &AppState, device_code: &str) -> Result<(), ApiErro
                 CoreError::Validation("device_code has expired; restart the OAuth flow".into()),
             )),
             openproxy_core::oauth::tickets::TicketStatus::Consumed
-            | openproxy_core::oauth::tickets::TicketStatus::Unknown => {
-                Err(ApiError(CoreError::not_found(
-                    "oauth_device_ticket",
-                    device_code,
-                )))
-            }
+            | openproxy_core::oauth::tickets::TicketStatus::Unknown => Err(ApiError(
+                CoreError::not_found("oauth_device_ticket", device_code),
+            )),
         }
     })
 }
