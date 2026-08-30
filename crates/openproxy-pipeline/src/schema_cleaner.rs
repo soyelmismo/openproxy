@@ -98,22 +98,27 @@ fn resolve_ref_path(
     let ref_name = ref_path.split('/').next_back().unwrap_or(ref_path);
     if let Some(Value::Object(def_map)) = defs.get(ref_name) {
         for (k, v) in def_map {
-            map.entry(k.clone()).or_insert_with(|| v.clone());
+            if !map.contains_key(k) {
+                map.insert(k.clone(), v.clone());
+            }
         }
         flatten_refs(map, defs, depth + 1);
     } else {
         map.insert("type".to_string(), serde_json::json!("string"));
-        let hint = format!("(Unresolved $ref: {ref_path})");
-        let desc_val = map
-            .entry("description".to_string())
-            .or_insert_with(|| Value::String(String::new()));
-        if let Value::String(s) = desc_val
-            && !s.contains(&hint)
+        if !map.contains_key("description") {
+            map.insert(
+                "description".to_string(),
+                Value::String(String::with_capacity(32 + ref_path.len())),
+            );
+        }
+        if let Some(Value::String(s)) = map.get_mut("description")
+            && !s.contains(ref_path)
         {
             if !s.is_empty() {
                 s.push(' ');
             }
-            s.push_str(&hint);
+            use std::fmt::Write;
+            let _ = write!(s, "(Unresolved $ref: {ref_path})");
         }
     }
 }
