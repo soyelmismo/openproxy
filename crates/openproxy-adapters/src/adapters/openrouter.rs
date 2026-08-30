@@ -98,9 +98,7 @@ impl ProviderAdapter for OpenRouterAdapter {
 
 type ExtractedModalities = (Option<Box<[String]>>, Option<Box<[String]>>);
 
-fn extract_modalities(
-    arch: &mut Option<OpenRouterArchitecture>,
-) -> ExtractedModalities {
+fn extract_modalities(arch: &mut Option<OpenRouterArchitecture>) -> ExtractedModalities {
     let Some(a) = arch.as_mut() else {
         return (None, None);
     };
