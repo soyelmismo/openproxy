@@ -191,8 +191,14 @@ impl ClientSpoofer for FxSpoofer {
             .as_millis();
         let session_id = format!("{now_ms}-{now_ms}000000-59e35abc56800be2");
         if let Ok(val) = HeaderValue::try_from(session_id.as_str()) {
-            headers.insert(http::header::HeaderName::from_static("x-session-id"), val.clone());
-            headers.insert(http::header::HeaderName::from_static("x-session-affinity"), val);
+            headers.insert(
+                http::header::HeaderName::from_static("x-session-id"),
+                val.clone(),
+            );
+            headers.insert(
+                http::header::HeaderName::from_static("x-session-affinity"),
+                val,
+            );
         }
     }
 }
