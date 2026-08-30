@@ -109,7 +109,10 @@ fn find_bad_proxy_id(
             openproxy_db::accounts::get_current_proxy_id(conn, acc_id).unwrap_or(None)
         })
     } else {
-        provider.current_proxy_id.as_deref().map(ToString::to_string)
+        provider
+            .current_proxy_id
+            .as_deref()
+            .map(ToString::to_string)
     }
 }
 
