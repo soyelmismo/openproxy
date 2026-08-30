@@ -115,7 +115,7 @@ impl DbPool {
 
     /// Acquire the serialized writer. Blocks until the previous writer is released.
     pub fn writer(&self) -> WriterGuard<'_> {
-        parking_lot::Mutex::lock(&self.writer)
+        self.writer.lock()
     }
 
     /// Try to acquire the writer lock for at most `timeout` (blocking).
@@ -142,19 +142,19 @@ impl DbPool {
 
     /// Acquire the serialized writer with an owned guard backed by Arc.
     pub fn writer_guard(&self) -> ArcWriterGuard {
-        parking_lot::Mutex::lock_arc(&self.writer)
+        self.writer.lock_arc()
     }
 
     /// Acquire the serialized reader with an owned guard backed by Arc.
     pub fn reader_guard(&self) -> ArcReaderGuard {
         let idx = self.get_reader_idx();
-        parking_lot::Mutex::lock_arc(&self.readers[idx])
+        self.readers[idx].lock_arc()
     }
 
     /// Acquire the serialized reader. Blocks until the previous reader is released.
     pub fn reader(&self) -> ReaderGuard<'_> {
         let idx = self.get_reader_idx();
-        parking_lot::Mutex::lock(&self.readers[idx])
+        self.readers[idx].lock()
     }
 
     /// Try to acquire the reader lock for at most `timeout` (blocking).
@@ -172,7 +172,7 @@ impl DbPool {
     where
         F: FnOnce(&Connection) -> R,
     {
-        let guard = parking_lot::Mutex::lock(&self.writer);
+        let guard = self.writer.lock();
         f(&guard)
     }
 
@@ -217,7 +217,7 @@ impl DbPool {
             new_readers.push(reopen_and_configure_reader(&self.path, flags, i)?);
         }
 
-        *parking_lot::Mutex::lock(&self.writer) = new_writer;
+        *self.writer.lock() = new_writer;
         for (i, new_r) in new_readers.into_iter().enumerate() {
             *parking_lot::Mutex::lock(&self.readers[i]) = new_r;
         }
