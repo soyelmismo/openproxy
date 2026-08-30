@@ -69,11 +69,11 @@ fn resolve_raw_routing_plan(
     legacy_combo_name: Option<&str>,
     model: &str,
 ) -> Result<RoutingPlan, ApiError> {
-    let w = state.db_pool().writer();
+    let r = state.db_pool().reader();
     if let Some(name) = legacy_combo_name {
-        match openproxy_db::combos::get_combo_by_name(&w, name)? {
+        match openproxy_db::combos::get_combo_by_name(&r, name)? {
             Some(combo) => {
-                let targets = openproxy_db::combos::list_targets(&w, combo.id)?;
+                let targets = openproxy_db::combos::list_targets(&r, combo.id)?;
                 Ok(RoutingPlan::Combo {
                     combo_id: combo.id,
                     combo_name: combo.name,
@@ -85,7 +85,7 @@ fn resolve_raw_routing_plan(
             None => Err(ApiError(CoreError::ComboNotFound(0))),
         }
     } else {
-        Ok(routing::resolve(&w, model)?)
+        Ok(routing::resolve(&r, model)?)
     }
 }
 
@@ -138,9 +138,9 @@ fn apply_auth_restrictions_to_plan(
         )));
     }
 
-    let has_restrictions = auth.blacklisted_providers.is_some()
-        || auth.blacklisted_models.is_some()
-        || auth.allowed_models.as_ref().is_some_and(|a| !a.is_empty());
+    let has_restrictions = auth.key.blacklisted_providers.is_some()
+        || auth.key.blacklisted_models.is_some()
+        || auth.key.allowed_models.as_ref().is_some_and(|a| !a.is_empty());
 
     if has_restrictions {
         filter_combo_targets_by_auth(state, targets, auth)?;

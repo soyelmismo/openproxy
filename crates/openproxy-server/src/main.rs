@@ -52,7 +52,7 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
     Ok(())
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 0. Install rustls crypto provider. `ring` is pure-Rust and
     // transitively available; `aws-lc-rs` is also pulled in by

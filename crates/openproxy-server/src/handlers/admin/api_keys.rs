@@ -3,6 +3,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use std::sync::Arc;
 
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
@@ -30,6 +31,7 @@ pub async fn create_api_key(
     Json(body): Json<core_api_keys::CreateApiKeyInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let (key, plaintext) = s.services().api_keys.create(body, "admin")?;
+    s.cache_api_key(Arc::new(key.clone()));
     Ok(Json(serde_json::json!({
         "key": key,
         "plaintext": plaintext,
@@ -122,6 +124,7 @@ pub async fn update_api_key(
             expires_at: expires_slice,
         },
     )?;
+    s.invalidate_api_key_cache(None);
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
@@ -131,6 +134,7 @@ crate::admin_entity_action_handler! {
         Path(id): Path<i64>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
         core_api_keys::revoke(&w, ApiKeyId(id))?;
+        s.invalidate_api_key_cache(None);
         Ok(Json(serde_json::json!({ "id": id, "revoked": true })))
     }
 }
@@ -141,6 +145,7 @@ crate::admin_entity_action_handler! {
         Path(id): Path<i64>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
         core_api_keys::hard_delete(&w, ApiKeyId(id))?;
+        s.invalidate_api_key_cache(None);
         Ok(Json(serde_json::json!({ "id": id, "deleted": true })))
     }
 }
@@ -151,6 +156,7 @@ pub async fn regenerate_api_key(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let w = s.db_pool().writer();
     let (key, plaintext) = core_api_keys::regenerate(&w, ApiKeyId(id))?;
+    s.invalidate_api_key_cache(None);
     Ok(Json(serde_json::json!({
         "key": key,
         "plaintext": plaintext,

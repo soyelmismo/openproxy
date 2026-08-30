@@ -15,24 +15,20 @@ pub struct ParsedChatRequest {
 /// per-key restrictions that need to be enforced after routing.
 #[derive(Clone, Debug)]
 pub struct ValidatedApiToken {
+    pub key: Arc<core_api_keys::ApiKey>,
     pub key_id: ApiKeyId,
-    pub allowed_models: Option<Vec<String>>,
-    pub allowed_combos: Option<Vec<i64>>,
-    pub blacklisted_providers: Option<Vec<String>>,
-    pub blacklisted_models: Option<Vec<String>>,
-    pub scopes: Vec<String>,
 }
 
 impl ValidatedApiToken {
     pub fn is_combo_allowed(&self, combo_id: i64) -> bool {
-        match &self.allowed_combos {
+        match &self.key.allowed_combos {
             Some(allowed) if !allowed.is_empty() => allowed.contains(&combo_id),
             _ => true,
         }
     }
 
     pub fn is_provider_allowed(&self, provider_id: &str) -> bool {
-        if let Some(blacklisted) = &self.blacklisted_providers
+        if let Some(blacklisted) = &self.key.blacklisted_providers
             && blacklisted.iter().any(|p| p == provider_id || p == "*")
         {
             return false;
@@ -53,7 +49,7 @@ impl ValidatedApiToken {
             }
         });
 
-        if let Some(allowed) = &self.allowed_models
+        if let Some(allowed) = &self.key.allowed_models
             && !allowed.is_empty()
             && !allowed
                 .iter()
@@ -62,13 +58,13 @@ impl ValidatedApiToken {
             return false;
         }
 
-        if let Some(blacklisted_provs) = &self.blacklisted_providers
+        if let Some(blacklisted_provs) = &self.key.blacklisted_providers
             && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
         {
             return false;
         }
 
-        if let Some(blacklisted) = &self.blacklisted_models
+        if let Some(blacklisted) = &self.key.blacklisted_models
             && blacklisted
                 .iter()
                 .any(|b| matches_any_model_pattern(b, model, bare_model, full_id.as_deref()))
@@ -175,11 +171,7 @@ pub(crate) fn authenticate(
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
-        allowed_models: key.allowed_models,
-        allowed_combos: key.allowed_combos,
-        blacklisted_providers: key.blacklisted_providers,
-        blacklisted_models: key.blacklisted_models,
-        scopes: key.scopes,
+        key,
     }))
 }
 
@@ -212,15 +204,22 @@ pub(crate) fn verify_key_credentials(
     state: &AppState,
     token: &str,
     required_scope: &str,
-) -> Result<core_api_keys::ApiKey, ApiError> {
+) -> Result<Arc<core_api_keys::ApiKey>, ApiError> {
     let key_hash = core_api_keys::hash_key(token);
-    let r = state.db_pool().reader();
-    let key = core_api_keys::get_by_hash(&r, &key_hash)
-        .map_err(|e| {
-            tracing::error!(%e, "db error looking up api key");
-            ApiError(CoreError::Auth("invalid api key".into()))
-        })?
-        .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
+    let key = if let Some(cached) = state.get_cached_api_key(&key_hash) {
+        cached
+    } else {
+        let r = state.db_pool().reader();
+        let fetched = core_api_keys::get_by_hash(&r, &key_hash)
+            .map_err(|e| {
+                tracing::error!(%e, "db error looking up api key");
+                ApiError(CoreError::Auth("invalid api key".into()))
+            })?
+            .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
+        let arc_key = Arc::new(fetched);
+        state.cache_api_key(Arc::clone(&arc_key));
+        arc_key
+    };
 
     validate_key_record(&key, required_scope)?;
 
@@ -418,7 +417,7 @@ pub async fn auth_middleware(
 
     let requested_model = &parsed.model;
     if let Some(token) = &auth_result {
-        if !token.scopes.iter().any(|s| s == "chat") {
+        if !token.key.scopes.iter().any(|s| s == "chat") {
             return Err(ApiError(CoreError::Auth(
                 "api key lacks required scope".into(),
             )));

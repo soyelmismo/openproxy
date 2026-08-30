@@ -122,8 +122,8 @@ pub async fn list_models(
         .list_active_all(std::time::Duration::from_secs(5))?;
     let raw_combos = state.services().combos.list_combos()?;
 
-    let rows = filter_models_for_key(raw_models, maybe_api_key.as_ref());
-    let combo_rows = filter_combos_for_key(raw_combos, maybe_api_key.as_ref());
+    let rows = filter_models_for_key(raw_models, maybe_api_key.as_deref());
+    let combo_rows = filter_combos_for_key(raw_combos, maybe_api_key.as_deref());
 
     let mut data: Vec<serde_json::Value> =
         rows.into_iter().map(|m| build_model_entry(&m)).collect();
@@ -170,7 +170,7 @@ fn extract_auth_header_token(headers: &HeaderMap) -> Option<&str> {
 fn authenticate_chat_or_anonymous(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<Option<openproxy_core::api_keys::ApiKey>, ApiError> {
+) -> Result<Option<std::sync::Arc<openproxy_core::api_keys::ApiKey>>, ApiError> {
     let token = extract_auth_header_token(headers);
 
     let Some(token) = token else {

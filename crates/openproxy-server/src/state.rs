@@ -127,6 +127,8 @@ pub struct AppState {
     background_tx: tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob>,
     /// Supervisor for managing background service lifecycles and graceful shutdown.
     supervisor: Arc<crate::background::BackgroundSupervisor>,
+    /// In-memory cache for validated API keys (key_hash -> (Arc<ApiKey>, expires_at))
+    api_key_cache: Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
 }
 
 /// VACUUM status reported to the dashboard. Updated by the background
@@ -284,6 +286,7 @@ impl AppState {
             vacuum_status,
             background_tx,
             supervisor,
+            api_key_cache: Arc::new(dashmap::DashMap::new()),
         };
 
         Ok(state)
@@ -404,6 +407,34 @@ impl AppState {
             vacuum_status,
             background_tx,
             supervisor,
+            api_key_cache: Arc::new(dashmap::DashMap::new()),
+        }
+    }
+
+    /// Retrieve an active API key from the fast in-memory cache if not expired.
+    pub fn get_cached_api_key(&self, key_hash: &str) -> Option<Arc<openproxy_core::api_keys::ApiKey>> {
+        let entry = self.api_key_cache.get(key_hash)?;
+        if std::time::Instant::now() < entry.1 {
+            Some(Arc::clone(&entry.0))
+        } else {
+            None
+        }
+    }
+
+    /// Insert or refresh a validated API key in the fast in-memory cache (60s TTL).
+    pub fn cache_api_key(&self, key: Arc<openproxy_core::api_keys::ApiKey>) {
+        let now = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(60);
+        self.api_key_cache
+            .insert(key.key_hash.clone(), (key, now + ttl));
+    }
+
+    /// Invalidate one or all cached API keys upon mutations (create/update/revoke/delete).
+    pub fn invalidate_api_key_cache(&self, key_hash: Option<&str>) {
+        if let Some(hash) = key_hash {
+            self.api_key_cache.remove(hash);
+        } else {
+            self.api_key_cache.clear();
         }
     }
 
