@@ -236,7 +236,13 @@ where
     for item in chunk {
         row_fn(item, params);
     }
-    let sql = build_insert_sql(target.prefix, target.table, target.columns, chunk.len(), target.suffix);
+    let sql = build_insert_sql(
+        target.prefix,
+        target.table,
+        target.columns,
+        chunk.len(),
+        target.suffix,
+    );
     let mut stmt = conn.prepare_cached(&sql)?;
     stmt.execute(rusqlite::params_from_iter(params.iter()))
 }
@@ -272,13 +278,8 @@ where
     let mut params = Vec::with_capacity(max_rows_per_chunk * num_cols);
 
     for chunk in items.chunks(max_rows_per_chunk) {
-        total_affected += execute_batch_insert_chunk(
-            conn,
-            &target,
-            chunk,
-            &mut params,
-            &mut row_fn,
-        )?;
+        total_affected +=
+            execute_batch_insert_chunk(conn, &target, chunk, &mut params, &mut row_fn)?;
     }
 
     Ok(total_affected)
@@ -494,9 +495,7 @@ mod tests {
         )
         .unwrap();
 
-        let data: Vec<(String, i64)> = (0..1200)
-            .map(|i| (format!("item_{i}"), i as i64))
-            .collect();
+        let data: Vec<(String, i64)> = (0..1200).map(|i| (format!("item_{i}"), i as i64)).collect();
 
         let count = batch_insert(
             &conn,

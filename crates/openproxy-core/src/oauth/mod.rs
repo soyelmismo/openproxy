@@ -1346,7 +1346,10 @@ mod tests {
             oauth_scope: None,
             oauth_provider_specific: None,
             expires_at: expires_at.map(Into::into),
-            created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string().into_boxed_str(),
+            created_at: chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string()
+                .into_boxed_str(),
             current_proxy_id: None,
         }
     }
