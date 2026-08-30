@@ -703,9 +703,7 @@ fn finalize_exhausted_combo(
             ctx.combo_walk_log.len(),
             ctx.combo_walk_log.join("\n")
         );
-        ctx.pipeline
-            .tracker
-            .mark_client_response(r.usage_tuple);
+        ctx.pipeline.tracker.mark_client_response(r.usage_tuple);
         return Ok(r);
     }
 
