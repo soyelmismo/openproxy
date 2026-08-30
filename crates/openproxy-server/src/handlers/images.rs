@@ -231,26 +231,25 @@ async fn fetch_remote_image(
         )));
     }
 
-    #[allow(clippy::collapsible_if)]
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if openproxy_adapters::upstream::is_private_or_reserved(&ip) {
             return Err(ApiError(CoreError::Validation(
                 "private or reserved IP addresses are not allowed".into(),
             )));
         }
-    }
+    } else {
+        let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+            ApiError(CoreError::Validation(format!(
+                "failed to resolve image URL host: {e}"
+            )))
+        })?;
 
-    let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
-        ApiError(CoreError::Validation(format!(
-            "failed to resolve image URL host: {e}"
-        )))
-    })?;
-
-    for addr in addrs {
-        if openproxy_adapters::upstream::is_private_or_reserved(&addr.ip()) {
-            return Err(ApiError(CoreError::Validation(
-                "private or reserved IP addresses are not allowed".into(),
-            )));
+        for addr in addrs {
+            if openproxy_adapters::upstream::is_private_or_reserved(&addr.ip()) {
+                return Err(ApiError(CoreError::Validation(
+                    "private or reserved IP addresses are not allowed".into(),
+                )));
+            }
         }
     }
 
