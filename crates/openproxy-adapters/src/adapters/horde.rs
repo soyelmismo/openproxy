@@ -827,8 +827,13 @@ fn apply_horde_auth_headers(req: &mut UpstreamRequest, api_key: &str, include_be
         http::header::HeaderName::from_static("client-agent"),
         HORDE_CLIENT_AGENT.clone(),
     );
-    if include_bearer && let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {key}")) {
-        req.headers.insert(http::header::AUTHORIZATION, val);
+    if include_bearer {
+        let mut bytes = bytes::BytesMut::with_capacity(7 + key.len());
+        bytes.extend_from_slice(b"Bearer ");
+        bytes.extend_from_slice(key.as_bytes());
+        if let Ok(val) = http::HeaderValue::from_maybe_shared(bytes.freeze()) {
+            req.headers.insert(http::header::AUTHORIZATION, val);
+        }
     }
 }
 
