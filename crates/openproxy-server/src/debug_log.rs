@@ -422,7 +422,10 @@ mod tests {
             for i in 0..(BUFFER_CAPACITY + 10) {
                 guard.push(DebugLogEntry {
                     seq: 0,
-                    timestamp: DateTime::from_timestamp_millis(1_767_225_600_000 + (i as i64 * 1000)).unwrap(),
+                    timestamp: DateTime::from_timestamp_millis(
+                        1_767_225_600_000 + (i as i64 * 1000),
+                    )
+                    .unwrap(),
                     level: "WARN",
                     target: "test".into(),
                     message: format!("entry {i}"),
@@ -455,7 +458,10 @@ mod tests {
             for i in 0..5 {
                 guard.push(DebugLogEntry {
                     seq: 0,
-                    timestamp: DateTime::from_timestamp_millis(1_767_225_600_000 + (i as i64 * 1000)).unwrap(),
+                    timestamp: DateTime::from_timestamp_millis(
+                        1_767_225_600_000 + (i as i64 * 1000),
+                    )
+                    .unwrap(),
                     level: "INFO",
                     target: "test".into(),
                     message: format!("entry {i}"),
