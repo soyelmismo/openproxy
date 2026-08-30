@@ -384,7 +384,8 @@ async fn call_refresh(
     }
     let custom_adapter =
         openproxy_adapters::adapters::CustomAdapter::from_provider_row(&provider_row);
-    let adapter_enum = openproxy_adapters::adapters::ProviderAdapterEnum::Custom(Box::new(custom_adapter));
+    let adapter_enum =
+        openproxy_adapters::adapters::ProviderAdapterEnum::Custom(Box::new(custom_adapter));
 
     admin::refresh_models(
         conn,
