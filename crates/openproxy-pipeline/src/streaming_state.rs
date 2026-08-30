@@ -544,13 +544,7 @@ impl ChunkProcessor<'_> {
             message,
             "upstream error embedded in streaming chunk"
         );
-        let err = CoreError::upstream_error(
-            code,
-            provider_name,
-            ctx.model_name,
-            message,
-            false,
-        );
+        let err = CoreError::upstream_error(code, provider_name, ctx.model_name, message, false);
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
             match &mut self.state.acc {
                 Some(a) => {

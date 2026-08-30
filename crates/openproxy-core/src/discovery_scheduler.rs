@@ -1491,9 +1491,9 @@ mod tests {
         // Adapter that ALWAYS fails on `fetch_models`. We can't
         // reuse `MockAdapter` because its `fetch_models` returns
         // `Ok`. Build a thin shim.
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            Box::new(openproxy_adapters::adapters::MockAdapter::failing_discovery("openrouter")),
-        );
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(
+            openproxy_adapters::adapters::MockAdapter::failing_discovery("openrouter"),
+        ));
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
             Arc::new(vec![adapter]);
 
