@@ -386,7 +386,7 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("user-agent", HeaderValue::from_str("").unwrap());
         let out = redact_sensitive_headers(&h);
-        assert_eq!(out.get("user-agent"), Some(&"".to_string()));
+        assert_eq!(out.get("user-agent"), Some(&String::new()));
     }
 
     #[test]
