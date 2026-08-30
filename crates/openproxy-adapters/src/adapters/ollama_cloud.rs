@@ -29,7 +29,9 @@ declare_openai_adapter!(
                 CoreError::Internal("ollama-cloud: models_url is None (impossible)".into())
             })?;
 
-            let auth = format!("Bearer {api_key}");
+            let mut auth = String::with_capacity(7 + api_key.len());
+            auth.push_str("Bearer ");
+            auth.push_str(api_key);
             let body = upstream_get_json(
                 upstream_client,
                 &url,

@@ -60,8 +60,7 @@ pub fn inject_model_and_serialize<T: Serialize>(
     }
     SERIALIZE_BUF.with_borrow_mut(|buf| {
         buf.clear();
-        serde_json::to_writer(&mut *buf, &val)
-            .map_err(|e| CoreError::Validation(e.to_string()))?;
+        serde_json::to_writer(&mut *buf, &val).map_err(|e| CoreError::Validation(e.to_string()))?;
         Ok(Bytes::copy_from_slice(buf))
     })
 }
@@ -234,7 +233,10 @@ pub trait ProviderAdapter: Send + Sync {
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config().auth_type {
             AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                Some(("Authorization".into(), format!("Bearer {api_key}")))
+                let mut auth = String::with_capacity(7 + api_key.len());
+                auth.push_str("Bearer ");
+                auth.push_str(api_key);
+                Some(("Authorization".into(), auth))
             }
             AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
             AdapterAuthType::XApiKey => Some(("x-api-key".into(), api_key.to_string())),
@@ -1107,7 +1109,9 @@ pub(crate) async fn fetch_openai_models(
     provider_name: &str,
     target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
-    let auth = format!("Bearer {api_key}");
+    let mut auth = String::with_capacity(7 + api_key.len());
+    auth.push_str("Bearer ");
+    auth.push_str(api_key);
     let body = upstream_get_json(upstream_client, url, &[("Authorization", &auth)])
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;

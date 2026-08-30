@@ -104,9 +104,15 @@ impl ProviderAdapter for ClineAdapter {
         let token = if access_token.starts_with("workos:") {
             access_token.to_string()
         } else {
-            format!("workos:{access_token}")
+            let mut t = String::with_capacity(7 + access_token.len());
+            t.push_str("workos:");
+            t.push_str(access_token);
+            t
         };
-        Some(("Authorization".into(), format!("Bearer {token}")))
+        let mut auth = String::with_capacity(7 + token.len());
+        auth.push_str("Bearer ");
+        auth.push_str(&token);
+        Some(("Authorization".into(), auth))
     }
 
     fn models_url(&self) -> Option<String> {

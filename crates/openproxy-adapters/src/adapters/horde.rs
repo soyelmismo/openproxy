@@ -224,7 +224,10 @@ impl ProviderAdapter for HordeAdapter {
         } else {
             api_key.trim()
         };
-        Some(("Authorization".into(), format!("Bearer {key}")))
+        let mut auth = String::with_capacity(7 + key.len());
+        auth.push_str("Bearer ");
+        auth.push_str(key);
+        Some(("Authorization".into(), auth))
     }
 
     fn build_headers(
@@ -239,7 +242,10 @@ impl ProviderAdapter for HordeAdapter {
             api_key.trim()
         };
         let mut headers = Vec::with_capacity(4);
-        headers.push(("Authorization".into(), format!("Bearer {key}")));
+        let mut auth = String::with_capacity(7 + key.len());
+        auth.push_str("Bearer ");
+        auth.push_str(key);
+        headers.push(("Authorization".into(), auth));
         headers.push(("apikey".into(), key.to_string()));
         headers.push((
             "Client-Agent".into(),
@@ -827,8 +833,13 @@ fn apply_horde_auth_headers(req: &mut UpstreamRequest, api_key: &str, include_be
         http::header::HeaderName::from_static("client-agent"),
         HORDE_CLIENT_AGENT.clone(),
     );
-    if include_bearer && let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {key}")) {
-        req.headers.insert(http::header::AUTHORIZATION, val);
+    if include_bearer {
+        let mut auth_val = bytes::BytesMut::with_capacity(7 + key.len());
+        auth_val.extend_from_slice(b"Bearer ");
+        auth_val.extend_from_slice(key.as_bytes());
+        if let Ok(val) = http::HeaderValue::from_maybe_shared(auth_val.freeze()) {
+            req.headers.insert(http::header::AUTHORIZATION, val);
+        }
     }
 }
 

@@ -232,9 +232,13 @@ impl CodexAdapter {
 fn build_codex_quota_request(access_token: &str, workspace_id: Option<&str>) -> UpstreamRequest {
     let url = "https://chatgpt.com/backend-api/wham/usage";
     let mut req = UpstreamRequest::get(url);
+
+    let mut auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+    auth_val.extend_from_slice(b"Bearer ");
+    auth_val.extend_from_slice(access_token.as_bytes());
     req.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+        http::HeaderValue::from_maybe_shared(auth_val.freeze())
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
     req.headers.insert(

@@ -164,7 +164,9 @@ impl ProviderAdapter for CustomAdapter {
             ))
         })?;
 
-        let bearer_auth = format!("Bearer {api_key}");
+        let mut bearer_auth = String::with_capacity(7 + api_key.len());
+        bearer_auth.push_str("Bearer ");
+        bearer_auth.push_str(api_key);
         let headers = build_custom_headers(
             self.config.auth_type,
             api_key,

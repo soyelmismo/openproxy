@@ -74,7 +74,9 @@ pub async fn fetch_opencode_models(
         .models_url()
         .ok_or_else(|| CoreError::Validation(format!("{}: models_url is None", adapter.id())))?;
 
-    let auth = format!("Bearer {api_key}");
+    let mut auth = String::with_capacity(7 + api_key.len());
+    auth.push_str("Bearer ");
+    auth.push_str(api_key);
     let body = upstream_get_json(upstream_client, &url, &[("Authorization", &auth)])
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("{} /models: {e}", adapter.id())))?;

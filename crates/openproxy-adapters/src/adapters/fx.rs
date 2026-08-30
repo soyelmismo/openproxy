@@ -228,7 +228,10 @@ impl ProviderAdapter for FxAdapter {
         } else {
             api_key
         };
-        headers.push(("authorization".into(), format!("Bearer {key}")));
+        let mut auth = String::with_capacity(7 + key.len());
+        auth.push_str("Bearer ");
+        auth.push_str(key);
+        headers.push(("authorization".into(), auth));
         headers.push(("content-type".into(), "application/json".into()));
         headers.push(("ai-language-model-id".into(), model.as_str().to_string()));
         headers
