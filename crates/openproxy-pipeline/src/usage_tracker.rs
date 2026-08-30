@@ -141,7 +141,9 @@ impl UsageTracker {
         target: &crate::context::ResolvedTarget,
         attempt: u8,
     ) {
-        let trace_id = format!("{}:{}", req.trace_id, attempt);
+        use std::fmt::Write;
+        let mut trace_id = String::with_capacity(40);
+        let _ = write!(&mut trace_id, "{}:{}", req.trace_id, attempt);
         let input = UsageInput {
             proxy_url: None,
             proxy_status: None,
