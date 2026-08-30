@@ -367,10 +367,7 @@ fn cap_hunks<'b, 'a>(hunks: &'b [Hunk<'a>]) -> (Box<[&'b Hunk<'a>]>, usize) {
     }
     let kept_indices = collect_hunk_indices(hunks);
     let truncated = hunks.len() - kept_indices.len();
-    let kept: Box<[&'b Hunk<'a>]> = kept_indices
-        .iter()
-        .filter_map(|&i| hunks.get(i))
-        .collect();
+    let kept: Box<[&'b Hunk<'a>]> = kept_indices.iter().filter_map(|&i| hunks.get(i)).collect();
     (kept, truncated)
 }
 

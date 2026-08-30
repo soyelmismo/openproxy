@@ -701,7 +701,9 @@ mod tests {
             status_code: 200,
             race_total: Some(2),
             race_attempts: Some(2),
-            flags: USAGE_FLAG_IS_STREAMING | USAGE_FLAG_CLIENT_RESPONSE | USAGE_FLAG_STREAM_COMPLETE,
+            flags: USAGE_FLAG_IS_STREAMING
+                | USAGE_FLAG_CLIENT_RESPONSE
+                | USAGE_FLAG_STREAM_COMPLETE,
             endpoint_kind: EndpointKind::Chat,
         };
 
