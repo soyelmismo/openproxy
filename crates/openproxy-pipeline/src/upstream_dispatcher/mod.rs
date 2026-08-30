@@ -1,7 +1,15 @@
-use crate::timeouts::Timeouts;
+pub(crate) mod context;
+pub(crate) mod horde;
+pub(crate) mod proxy;
+pub(crate) mod translation;
+
+pub(crate) use context::{
+    DispatchContext, DispatchParams, StreamDispatchParams, StreamFailureContext,
+};
+pub(crate) use proxy::ProxyRotationTrigger;
+
 use crate::translation::OpenAIResponse;
 use crate::{FailureContext, PipelineRequest, PipelineResult, parse_retry_after_ms};
-use openproxy_adapters::ProviderAdapter;
 use openproxy_adapters::upstream::{CancellationToken, UpstreamError, UpstreamRequest};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::CoreError;
@@ -11,64 +19,6 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 use crate::think_extractor::extract_think_from_response;
-
-/// Bundles the parameters shared by streaming failure methods
-/// (`fail_stream_client_disconnected`, `fail_on_sink_send_error`).
-/// Eliminates la anti-pattern de 14-15 argumentos posicionales.
-pub(crate) struct DispatchContext<'a> {
-    pub(crate) attempt: u8,
-    pub(crate) race_size: u8,
-    pub(crate) started: Instant,
-    pub(crate) model: &'a Model,
-    pub(crate) proxy_url: Option<String>,
-    pub(crate) proxy_status: Option<String>,
-}
-
-impl<'a> DispatchContext<'a> {
-    #[inline]
-    pub(crate) fn fail_ctx_code<'e>(
-        &self,
-        err: &'e CoreError,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-        status_code: u16,
-    ) -> crate::FailureContext<'e>
-    where
-        'a: 'e,
-    {
-        crate::FailureContext {
-            proxy_url: self.proxy_url.clone(),
-            proxy_status: self.proxy_status.clone(),
-            attempt: self.attempt,
-            race_size: self.race_size,
-            err,
-            started: self.started,
-            model: Some(self.model),
-            connect_ms,
-            ttft_ms,
-            status_code,
-        }
-    }
-}
-
-pub(crate) struct StreamFailureContext<'a> {
-    pub(crate) req: PipelineRequest,
-    pub(crate) combo: &'a Combo,
-    pub(crate) target: &'a ComboTarget,
-    pub(crate) attempt: u8,
-    pub(crate) race_size: u8,
-    pub(crate) started: std::time::Instant,
-    pub(crate) model: &'a Model,
-    pub(crate) connect_ms: u64,
-    pub(crate) ttft_ms: Option<u64>,
-    pub(crate) trace_id: String,
-    pub(crate) acc: Option<&'a mut crate::sse_accumulator::ResponseAccumulator>,
-    pub(crate) chunk_id: &'a str,
-    pub(crate) created: u64,
-    pub(crate) model_name: &'a str,
-    pub(crate) proxy_url: Option<String>,
-    pub(crate) proxy_status: Option<String>,
-}
 
 pub trait Dispatcher: Send + Sync {
     fn is_recording(&self) -> bool;
@@ -86,95 +36,6 @@ pub struct UpstreamDispatcher {
     pub(crate) config: crate::PipelineConfig,
     pub(crate) tracker: crate::usage_tracker::UsageTracker,
     pub(crate) record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum ProxyRotationTrigger {
-    Status(u16),
-    ConnectError,
-    RateLimited,
-}
-
-fn find_bad_proxy_id(
-    provider: &openproxy_types::providers::Provider,
-    conn: &rusqlite::Connection,
-    override_proxy_id: Option<&str>,
-    is_per_account: bool,
-    account_id: Option<openproxy_types::ids::AccountId>,
-) -> Option<String> {
-    if let Some(pid) = override_proxy_id {
-        Some(pid.to_string())
-    } else if is_per_account {
-        account_id.and_then(|acc_id| {
-            openproxy_db::accounts::get_current_proxy_id(conn, acc_id).unwrap_or(None)
-        })
-    } else {
-        provider.current_proxy_id.as_deref().map(ToString::to_string)
-    }
-}
-
-fn should_rotate_proxy(
-    provider: &openproxy_types::providers::Provider,
-    trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
-) -> bool {
-    match trigger {
-        crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
-        crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
-            let sc_str = sc.to_string();
-            provider
-                .proxy_rotation_errors
-                .split(',')
-                .map(str::trim)
-                .any(|e| e == sc_str)
-        }
-        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => provider
-            .proxy_rotation_errors
-            .split(',')
-            .map(str::trim)
-            .any(|e| e == "connect_error" || e == "timeout"),
-    }
-}
-
-struct ProxyRotationArgs<'a> {
-    conn: &'a rusqlite::Connection,
-    repo: &'a dyn crate::repository::PipelineRepository,
-    provider_id: &'a openproxy_types::ids::ProviderId,
-    bad_proxy: &'a str,
-    trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
-    is_per_account: bool,
-    account_id: Option<openproxy_types::ids::AccountId>,
-    cooldown_ms: Option<u64>,
-}
-
-fn apply_proxy_rotation(args: ProxyRotationArgs<'_>) -> bool {
-    let cooldown_duration = args.cooldown_ms.map_or_else(
-        || std::time::Duration::from_mins(15),
-        std::time::Duration::from_millis,
-    );
-
-    if matches!(
-        args.trigger,
-        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError
-    ) {
-        let _ = args.repo.update_proxy_status(args.bad_proxy, "dead", None);
-    }
-
-    let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
-        args.conn,
-        args.provider_id.as_str(),
-        args.bad_proxy,
-        cooldown_duration,
-    );
-    if args.is_per_account {
-        if let Some(acc_id) = args.account_id {
-            let _ = openproxy_db::accounts::clear_current_proxy_id(args.conn, acc_id);
-        }
-    } else {
-        let _ = openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
-    }
-
-    openproxy_db::free_proxies::get_candidate_proxies_for_provider(args.conn, args.provider_id, 1)
-        .is_ok_and(|c| !c.is_empty())
 }
 
 impl UpstreamDispatcher {
@@ -202,7 +63,7 @@ impl UpstreamDispatcher {
         provider_id: &openproxy_types::ids::ProviderId,
         account_id: Option<openproxy_types::ids::AccountId>,
         override_proxy_id: Option<&str>,
-        trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
+        trigger: ProxyRotationTrigger,
         cooldown_ms: Option<u64>,
     ) -> bool {
         let conn_clone = Arc::clone(&self.conn);
@@ -219,7 +80,7 @@ impl UpstreamDispatcher {
                 return false;
             }
             let is_per_account = provider.proxy_rotation_mode.as_ref() == "account";
-            let bad_proxy_id = find_bad_proxy_id(
+            let bad_proxy_id = proxy::find_bad_proxy_id(
                 &provider,
                 &conn,
                 override_proxy_id.as_deref(),
@@ -227,7 +88,7 @@ impl UpstreamDispatcher {
                 account_id,
             );
 
-            if should_rotate_proxy(&provider, trigger)
+            if proxy::should_rotate_proxy(&provider, trigger)
                 && let Some(ref bad_proxy) = bad_proxy_id
             {
                 tracing::warn!(
@@ -237,7 +98,7 @@ impl UpstreamDispatcher {
                     trigger = ?trigger,
                     "proxy rotation triggered: clearing binding and adding cooldown for provider"
                 );
-                return apply_proxy_rotation(ProxyRotationArgs {
+                return proxy::apply_proxy_rotation(proxy::ProxyRotationArgs {
                     conn: &conn,
                     repo: repo.as_ref(),
                     provider_id: &provider_id,
@@ -281,22 +142,6 @@ impl UpstreamDispatcher {
     }
 }
 
-pub(crate) struct DispatchParams<'a> {
-    pub target: &'a ComboTarget,
-    pub combo: &'a Combo,
-    pub req: PipelineRequest,
-    pub model: &'a Model,
-    pub target_format: openproxy_types::TargetFormat,
-    pub url: &'a str,
-    pub headers: &'a [(String, String)],
-    pub body_bytes: bytes::Bytes,
-    pub resolved_timeouts: &'a Timeouts,
-    pub started: Instant,
-    pub attempt: u8,
-    pub race_size: u8,
-    pub trace_id: String,
-}
-
 pub(crate) struct NonStreamingSuccessArgs {
     pub status_code: u16,
     pub connect_and_send_ms: u64,
@@ -304,20 +149,6 @@ pub(crate) struct NonStreamingSuccessArgs {
     pub response_headers: Option<std::collections::BTreeMap<String, String>>,
     pub response_body_raw: serde_json::Value,
     pub openai_response: OpenAIResponse,
-}
-
-pub(crate) struct StreamDispatchParams<'a> {
-    pub target: &'a ComboTarget,
-    pub combo: &'a Combo,
-    pub req: PipelineRequest,
-    pub model: &'a Model,
-    pub target_format: openproxy_types::TargetFormat,
-    pub resolved_timeouts: &'a Timeouts,
-    pub started: Instant,
-    pub attempt: u8,
-    pub race_size: u8,
-    pub trace_id: String,
-    pub upstream_request: UpstreamRequest,
 }
 
 pub(crate) struct StreamingNon2xxArgs<'a> {
@@ -434,7 +265,7 @@ impl UpstreamDispatcher {
                 &target.provider_id,
                 target.account_id,
                 req.proxy_override.as_ref().map(|(pid, _)| pid.as_str()),
-                crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                ProxyRotationTrigger::ConnectError,
                 None,
             )
             .await;
@@ -514,9 +345,9 @@ impl UpstreamDispatcher {
         let retry_ms = retry_after_ms.unwrap_or(300_000);
 
         let trigger = if is_rate_limited_status {
-            crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited
+            ProxyRotationTrigger::RateLimited
         } else {
-            crate::upstream_dispatcher::ProxyRotationTrigger::Status(status_code)
+            ProxyRotationTrigger::Status(status_code)
         };
         let is_proxy_rotated = self
             .check_and_trigger_proxy_rotation(
@@ -576,15 +407,6 @@ impl UpstreamDispatcher {
     }
 }
 
-fn is_horde_vision_request(target: &ComboTarget, model: &Model, req: &PipelineRequest) -> bool {
-    target.provider_id.as_str() == "horde"
-        && (openproxy_adapters::HordeAdapter::is_vision_model(model.model_id.as_str())
-            || openproxy_adapters::HordeAdapter::extract_image_from_messages(
-                &req.openai_request.messages,
-            )
-            .is_some())
-}
-
 fn populate_upstream_headers(upstream_request: &mut UpstreamRequest, headers: &[(String, String)]) {
     for (k, v) in headers {
         if let (Ok(name), Ok(value)) = (
@@ -594,89 +416,6 @@ fn populate_upstream_headers(upstream_request: &mut UpstreamRequest, headers: &[
             upstream_request.headers.insert(name, value);
         }
     }
-}
-
-fn translate_simple_text_response(
-    response_body_raw: &serde_json::Value,
-    model_name: String,
-) -> OpenAIResponse {
-    let text = response_body_raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .or_else(|| response_body_raw.get("content").and_then(|s| s.as_str()))
-        .unwrap_or("");
-    OpenAIResponse {
-        id: format!("chatcmpl_{}", uuid::Uuid::new_v4()),
-        object: "chat.completion".to_string(),
-        created: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-        model: model_name,
-        choices: vec![openproxy_types::OpenAIChoice {
-            index: 0,
-            message: openproxy_types::OpenAIMessage {
-                role: "assistant".to_string(),
-                content: Some(serde_json::Value::String(text.to_string())),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: Default::default(),
-            },
-            finish_reason: Some("stop".to_string()),
-        }],
-        usage: None,
-    }
-}
-
-fn translate_non_streaming_body(
-    target_format: openproxy_types::TargetFormat,
-    response_body_raw: &serde_json::Value,
-    req: &PipelineRequest,
-) -> Result<OpenAIResponse, CoreError> {
-    match target_format {
-        openproxy_types::TargetFormat::Responses => {
-            unreachable!("Responses format is handled natively before dispatcher")
-        }
-        openproxy_types::TargetFormat::Openai => {
-            <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-                .map_err(|e| CoreError::Parse(format!("parse openai response: {e}")))
-        }
-        openproxy_types::TargetFormat::Anthropic => {
-            let anthropic_resp: crate::translation::AnthropicResponse =
-                <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(
-                    response_body_raw,
-                )
-                .map_err(|e| CoreError::Parse(format!("parse anthropic response: {e}")))?;
-            Ok(crate::translation::anthropic_to_openai(&anthropic_resp))
-        }
-        openproxy_types::TargetFormat::Gemini => {
-            let adapter = openproxy_adapters::GeminiAdapter::new();
-            adapter.translate_non_streaming_response(target_format, response_body_raw.clone())
-        }
-        openproxy_types::TargetFormat::Atomesus | openproxy_types::TargetFormat::Fx => Ok(
-            translate_simple_text_response(response_body_raw, req.openai_request.model.clone()),
-        ),
-    }
-}
-
-fn is_empty_response(resp: &OpenAIResponse) -> bool {
-    resp.choices.first().is_some_and(|c| {
-        let msg = &c.message;
-        let content_empty = msg
-            .content
-            .as_ref()
-            .is_none_or(|v| v.as_str().is_none_or(str::is_empty));
-        let no_tool_calls = msg.tool_calls.as_ref().is_none_or(std::vec::Vec::is_empty);
-        let no_reasoning = !msg.extra.contains_key("reasoning_content");
-        let no_finish = c
-            .finish_reason
-            .as_ref()
-            .is_none_or(|f| f == "null" || f.is_empty());
-        content_empty && no_tool_calls && no_reasoning && no_finish
-    })
 }
 
 impl UpstreamDispatcher {
@@ -971,7 +710,7 @@ impl UpstreamDispatcher {
                         .proxy_override
                         .as_ref()
                         .map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    ProxyRotationTrigger::ConnectError,
                     None,
                 )
                 .await;
@@ -997,7 +736,7 @@ impl UpstreamDispatcher {
                         .proxy_override
                         .as_ref()
                         .map(|(pid, _)| pid.as_str()),
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    ProxyRotationTrigger::ConnectError,
                     None,
                 )
                 .await;
@@ -1245,7 +984,7 @@ impl UpstreamDispatcher {
             }
         };
 
-        let openai_response = match translate_non_streaming_body(
+        let openai_response = match translation::translate_non_streaming_body(
             params.target_format,
             &response_body_raw,
             &params.req,
@@ -1266,7 +1005,7 @@ impl UpstreamDispatcher {
             }
         };
 
-        if is_empty_response(&openai_response) {
+        if translation::is_empty_response(&openai_response) {
             let err = CoreError::UpstreamConnection(
                 "upstream returned 200 but response is empty (content=null, finish_reason=null, no tool_calls, no reasoning) — treating as error for retry".to_string(),
             );
@@ -1364,7 +1103,7 @@ impl UpstreamDispatcher {
                 Err(err_res) => return *err_res,
             };
 
-        if is_horde_vision_request(params.target, params.model, &params.req) {
+        if horde::is_horde_vision_request(params.target, params.model, &params.req) {
             return self
                 .dispatch_horde_vision(params, dctx, upstream_request)
                 .await;
