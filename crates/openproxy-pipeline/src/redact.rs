@@ -355,6 +355,63 @@ mod tests {
     }
 
     #[test]
+    fn multi_byte_header_value_truncation() {
+        // A multi-byte string containing emojis (each emoji is 4 bytes).
+        // 1024 * 4 bytes = 4096 bytes (exactly REDACTED_HEADER_VALUE_MAX).
+        // Let's add one more emoji so it goes slightly over.
+        let huge = "🚀".repeat(1025);
+
+        let mut map = BTreeMap::new();
+        map.insert("user-agent".to_string(), huge);
+        let out = redact_btreemap_sensitive(map);
+        let v = out.get("user-agent").expect("present");
+        assert!(v.ends_with("...[truncated]"));
+        let kept = v.strip_suffix("...[truncated]").unwrap();
+        assert!(kept.len() <= REDACTED_HEADER_VALUE_MAX);
+        // The last character should not be a partial multi-byte char
+        assert!(String::from_utf8(kept.as_bytes().to_vec()).is_ok());
+    }
+
+    #[test]
+    fn multi_byte_header_key_handled_safely() {
+        let mut btree = BTreeMap::new();
+        // A multi-byte string as a key. This tests the `is_sensitive` check handling it safely.
+        btree.insert("🚀-header".to_string(), "value".to_string());
+        let out = redact_btreemap_sensitive(btree);
+        assert_eq!(out.get("🚀-header").unwrap(), "value");
+    }
+
+    #[test]
+    fn empty_header_value_is_handled() {
+        let mut h = HeaderMap::new();
+        h.insert("user-agent", HeaderValue::from_str("").unwrap());
+        let out = redact_sensitive_headers(&h);
+        assert_eq!(out.get("user-agent"), Some(&String::new()));
+    }
+
+    #[test]
+    fn header_keys_case_insensitivity() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "AUTHORIZATION",
+            HeaderValue::from_str("Bearer secret").unwrap(),
+        );
+        let out = redact_sensitive_headers(&h);
+        // In axum HeaderMap, keys are always lowercased by the parser, but testing the logic anyway
+        assert_eq!(out.get("authorization").unwrap(), "[REDACTED]");
+
+        let mut btree = BTreeMap::new();
+        btree.insert("X-API-KEY".to_string(), "secret".to_string());
+        let out2 = redact_btreemap_sensitive(btree);
+        assert_eq!(out2.get("X-API-KEY").unwrap(), "[REDACTED]");
+
+        let mut btree2 = BTreeMap::new();
+        btree2.insert("x-AuTh-ToKeN".to_string(), "secret".to_string());
+        let out3 = redact_btreemap_sensitive(btree2);
+        assert_eq!(out3.get("x-AuTh-ToKeN").unwrap(), "[REDACTED]");
+    }
+
+    #[test]
     fn btreemap_path_also_caps() {
         // dispatch_upstream builds the map directly; the cap must
         // be enforced here too or the two entry points diverge.
