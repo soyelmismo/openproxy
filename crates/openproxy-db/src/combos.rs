@@ -559,6 +559,23 @@ pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTa
     )
 }
 
+pub fn target_belongs_to_combo(
+    conn: &Connection,
+    combo_id: ComboId,
+    target_id: ComboTargetId,
+) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM combo_targets WHERE id = ?1 AND combo_id = ?2)",
+        params![target_id.0, combo_id.0],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "check combo_target {} belongs to combo {}",
+        target_id.0, combo_id.0
+    )))
+}
+
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {
     crate::db_execute!(
         conn,

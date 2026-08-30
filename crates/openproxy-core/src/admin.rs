@@ -27,7 +27,7 @@ use crate::validation::{Validatable, validate_base_url};
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::combos;
 use openproxy_db::secrets::MasterKey;
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -766,20 +766,7 @@ fn ensure_target_in_combo(
     combo_id: ComboId,
     target_id: ComboTargetId,
 ) -> Result<()> {
-    let belongs: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM combo_targets WHERE id = ?1 AND combo_id = ?2)",
-            params![target_id.0, combo_id.0],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|v| v != 0)
-        .map_err(|e| CoreError::Database {
-            message: format!(
-                "check combo_target {} belongs to combo {}: {}",
-                target_id.0, combo_id.0, e
-            ),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+    let belongs = combos::target_belongs_to_combo(conn, combo_id, target_id)?;
     if !belongs {
         return Err(CoreError::Validation(format!(
             "target {} not in combo {}",
@@ -1393,13 +1380,13 @@ mod tests {
 
         // We need a minimal adapter impl to satisfy the trait. We don't
         // call `fetch_models` on it.
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            Box::new(openproxy_adapters::adapters::MockAdapter::new(
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(
+            openproxy_adapters::adapters::MockAdapter::new(
                 "stub",
                 "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
-            )),
-        );
+            ),
+        ));
         let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1463,13 +1450,13 @@ mod tests {
         }
 
         let conn = pool.open_connection().expect("open conn");
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            Box::new(openproxy_adapters::adapters::MockAdapter::new(
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(
+            openproxy_adapters::adapters::MockAdapter::new(
                 "prov-preserve",
                 "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
-            )),
-        );
+            ),
+        ));
         let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
