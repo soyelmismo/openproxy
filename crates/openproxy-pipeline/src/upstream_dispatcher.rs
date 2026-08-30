@@ -140,7 +140,6 @@ fn should_rotate_proxy(
 
 struct ProxyRotationArgs<'a> {
     conn: &'a rusqlite::Connection,
-    repo: &'a dyn crate::repository::PipelineRepository,
     provider_id: &'a openproxy_types::ids::ProviderId,
     bad_proxy: &'a str,
     trigger: crate::upstream_dispatcher::ProxyRotationTrigger,
@@ -159,7 +158,12 @@ fn apply_proxy_rotation(args: ProxyRotationArgs<'_>) -> bool {
         args.trigger,
         crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError
     ) {
-        let _ = args.repo.update_proxy_status(args.bad_proxy, "dead", None);
+        let _ = openproxy_db::free_proxies::update_proxy_status(
+            args.conn,
+            args.bad_proxy,
+            "dead",
+            None,
+        );
     }
 
     let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
@@ -210,7 +214,6 @@ impl UpstreamDispatcher {
     ) -> bool {
         let conn_clone = Arc::clone(&self.conn);
         let provider_id = provider_id.to_owned();
-        let repo = Arc::clone(&self.tracker.repo);
         let override_proxy_id = override_proxy_id.map(str::to_string);
         tokio::task::spawn_blocking(move || {
             let conn = conn_clone.lock();
@@ -242,7 +245,6 @@ impl UpstreamDispatcher {
                 );
                 return apply_proxy_rotation(ProxyRotationArgs {
                     conn: &conn,
-                    repo: repo.as_ref(),
                     provider_id: &provider_id,
                     bad_proxy,
                     trigger,

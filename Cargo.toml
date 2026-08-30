@@ -109,10 +109,11 @@ semicolon_if_nothing_returned = "allow"
 unused_async = "allow"
 
 [profile.release]
-lto = true
+lto = "thin"
 opt-level = 3
-codegen-units = 1
-strip = true
+codegen-units = 16
+strip = false
+debug = 1
 
 # Reduce debug info en dev para evitar inflado de target/ (backtraces siguen funcionando)
 [profile.dev]

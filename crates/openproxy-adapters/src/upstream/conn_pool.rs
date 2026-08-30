@@ -175,28 +175,17 @@ impl UpstreamConnectionPool {
     /// Record that a request to `key` just used a freshly-dialed
     /// connection (i.e. it was the first request in a burst).
     pub fn record_dial(&self, key: HostKey) {
-        if let Some(entry) = self.inner.get(&key) {
-            entry.total.fetch_add(1, Ordering::SeqCst);
-            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
-        } else {
-            let entry = self.inner.entry(key).or_insert_with(PoolEntry::new);
-            entry.total.fetch_add(1, Ordering::SeqCst);
-            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
-        }
+        let entry = self.inner.entry(key).or_insert_with(PoolEntry::new);
+        entry.total.fetch_add(1, Ordering::Relaxed);
+        entry.last_used_ms.store(now_ms(), Ordering::Relaxed);
     }
 
     /// Record that a request to `key` just reused a pooled connection.
     pub fn record_reuse(&self, key: HostKey) {
-        if let Some(entry) = self.inner.get(&key) {
-            entry.total.fetch_add(1, Ordering::SeqCst);
-            entry.reuses.fetch_add(1, Ordering::SeqCst);
-            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
-        } else {
-            let entry = self.inner.entry(key).or_insert_with(PoolEntry::new);
-            entry.total.fetch_add(1, Ordering::SeqCst);
-            entry.reuses.fetch_add(1, Ordering::SeqCst);
-            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
-        }
+        let entry = self.inner.entry(key).or_insert_with(PoolEntry::new);
+        entry.total.fetch_add(1, Ordering::Relaxed);
+        entry.reuses.fetch_add(1, Ordering::Relaxed);
+        entry.last_used_ms.store(now_ms(), Ordering::Relaxed);
     }
 
     /// Drop entries whose `last_used_ms` is older than `max_age`
