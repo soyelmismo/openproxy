@@ -1,18 +1,19 @@
 use crate::ids::ComboTargetId;
 use crate::time::now_ms;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Default)]
 pub struct SelectionRegistry {
-    inner: Mutex<HashMap<i64, SelectionRegistryEntry>>,
+    inner: RwLock<HashMap<i64, SelectionRegistryEntry>>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Default)]
 struct SelectionRegistryEntry {
-    last_success_ms: u64,
-    last_activity_ms: u64,
-    request_count: u64,
+    last_success_ms: AtomicU64,
+    last_activity_ms: AtomicU64,
+    request_count: AtomicU64,
 }
 
 impl SelectionRegistry {
@@ -22,111 +23,173 @@ impl SelectionRegistry {
 
     pub fn record_success(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = self
+            .inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&target_id.0)
+        {
+            e.last_success_ms.store(now, Ordering::Relaxed);
+            e.last_activity_ms.store(now, Ordering::Relaxed);
+            let _ = e
+                .request_count
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    Some(v.saturating_add(1))
+                });
+            return;
+        }
+
+        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let e = g.entry(target_id.0).or_default();
-        e.last_success_ms = now;
-        e.last_activity_ms = now;
-        e.request_count = e.request_count.saturating_add(1);
+        e.last_success_ms.store(now, Ordering::Relaxed);
+        e.last_activity_ms.store(now, Ordering::Relaxed);
+        let _ = e
+            .request_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_add(1))
+            });
     }
 
     pub fn record_failure(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = self
+            .inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&target_id.0)
+        {
+            e.last_activity_ms.store(now, Ordering::Relaxed);
+            e.last_success_ms.store(0, Ordering::Relaxed);
+            let _ = e
+                .request_count
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    Some(v.saturating_add(1))
+                });
+            return;
+        }
+
+        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let e = g.entry(target_id.0).or_default();
-        e.last_activity_ms = now;
-        e.last_success_ms = 0;
-        e.request_count = e.request_count.saturating_add(1);
+        e.last_activity_ms.store(now, Ordering::Relaxed);
+        e.last_success_ms.store(0, Ordering::Relaxed);
+        let _ = e
+            .request_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_add(1))
+            });
     }
 
     pub fn record_request(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = self
+            .inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&target_id.0)
+        {
+            e.last_activity_ms.store(now, Ordering::Relaxed);
+            let _ = e
+                .request_count
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    Some(v.saturating_add(1))
+                });
+            return;
+        }
+
+        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let e = g.entry(target_id.0).or_default();
-        e.last_activity_ms = now;
-        e.request_count = e.request_count.saturating_add(1);
+        e.last_activity_ms.store(now, Ordering::Relaxed);
+        let _ = e
+            .request_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_add(1))
+            });
     }
 
     pub fn last_success_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
-        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match g.get(&target_id.0) {
-            Some(e) if e.last_success_ms > 0 => {
+        let g = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = g.get(&target_id.0) {
+            let success_ms = e.last_success_ms.load(Ordering::Relaxed);
+            if success_ms > 0 {
                 let now = now_ms();
                 let window_ms = window_secs.saturating_mul(1000);
-                if now.saturating_sub(e.last_success_ms) <= window_ms {
-                    e.last_success_ms
-                } else {
-                    0
+                if now.saturating_sub(success_ms) <= window_ms {
+                    return success_ms;
                 }
             }
-            _ => 0,
         }
+        0
     }
 
     pub fn last_activity_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
-        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match g.get(&target_id.0) {
-            Some(e) if e.last_activity_ms > 0 => {
+        let g = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = g.get(&target_id.0) {
+            let activity_ms = e.last_activity_ms.load(Ordering::Relaxed);
+            if activity_ms > 0 {
                 let now = now_ms();
                 let window_ms = window_secs.saturating_mul(1000);
-                if now.saturating_sub(e.last_activity_ms) <= window_ms {
-                    e.last_activity_ms
-                } else {
-                    0
+                if now.saturating_sub(activity_ms) <= window_ms {
+                    return activity_ms;
                 }
             }
-            _ => 0,
         }
+        0
     }
 
     fn resolve_entry_reference_ms(e: &SelectionRegistryEntry) -> u64 {
-        if e.last_success_ms > 0 {
-            e.last_success_ms
+        let success_ms = e.last_success_ms.load(Ordering::Relaxed);
+        if success_ms > 0 {
+            success_ms
         } else {
-            e.last_activity_ms
+            e.last_activity_ms.load(Ordering::Relaxed)
         }
     }
 
     fn get_entry_request_count(e: &SelectionRegistryEntry, window_secs: u64) -> u64 {
-        if e.request_count == 0 {
+        let request_count = e.request_count.load(Ordering::Relaxed);
+        if request_count == 0 {
             return 0;
         }
         let reference_ms = Self::resolve_entry_reference_ms(e);
         if reference_ms == 0 {
-            return e.request_count;
+            return request_count;
         }
         let window_ms = window_secs.saturating_mul(1000);
         if now_ms().saturating_sub(reference_ms) <= window_ms {
-            e.request_count
+            request_count
         } else {
             0
         }
     }
 
     pub fn request_count_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
-        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let g = self.inner.read().unwrap_or_else(|e| e.into_inner());
         g.get(&target_id.0)
             .map_or(0, |e| Self::get_entry_request_count(e, window_secs))
     }
 
     pub fn prune_stale(&self, max_age: std::time::Duration) -> usize {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let now = now_ms();
         let cutoff = now.saturating_sub(max_age.as_millis() as u64);
         let before = g.len();
         g.retain(|_, e| {
-            let last_active = e.last_success_ms.max(e.last_activity_ms);
+            let last_active = e
+                .last_success_ms
+                .load(Ordering::Relaxed)
+                .max(e.last_activity_ms.load(Ordering::Relaxed));
             last_active > 0 && last_active >= cutoff
         });
         before - g.len()
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.inner.read().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.inner
-            .lock()
+            .read()
             .unwrap_or_else(|e| e.into_inner())
             .is_empty()
     }
