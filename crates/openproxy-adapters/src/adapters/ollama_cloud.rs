@@ -1,6 +1,5 @@
 use super::{
     Arc, CoreError, Deserialize, DiscoveredModel, ModelId, Result, TargetFormat, UpstreamClient,
-    upstream_get_json,
 };
 
 // =====================================================================
@@ -29,18 +28,31 @@ declare_openai_adapter!(
                 CoreError::Internal("ollama-cloud: models_url is None (impossible)".into())
             })?;
 
-            let auth = format!("Bearer {api_key}");
-            let body = upstream_get_json(
-                upstream_client,
-                &url,
-                &[("Authorization", &auth)],
-            )
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {e}")))?;
+            let mut bytes = bytes::BytesMut::with_capacity(7 + api_key.len());
+            bytes.extend_from_slice(b"Bearer ");
+            bytes.extend_from_slice(api_key.as_bytes());
 
-            let payload: OllamaTagsResponse =
-                serde_json::from_value(body)
-                    .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {e}")))?;
+            // Reconstruct the JSON fetching logic manually because it only accepts &[(&str, &str)]
+            let mut req = crate::upstream::UpstreamRequest::get(&url);
+            if let Ok(val) = http::HeaderValue::from_maybe_shared(bytes.freeze()) {
+                req.headers.insert(http::header::AUTHORIZATION, val);
+            }
+
+            let cancel = crate::upstream::CancellationToken::new();
+            let response = upstream_client
+                .call(req, crate::upstream::TimeoutProfile::ModelDiscovery, cancel)
+                .await
+                .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {url}: {e}")))?;
+
+            if !response.status.is_success() {
+                let status = response.status.as_u16();
+                let err_body = response.collect().await.map_err(|e| CoreError::UpstreamConnection(format!("failed to read error body: {e}")))?;
+                return Err(CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: status {status}: {}", String::from_utf8_lossy(&err_body))));
+            }
+
+            let resp_bytes = response.collect().await.map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {url}: {e}")))?;
+            let payload: OllamaTagsResponse = serde_json::from_slice(&resp_bytes)
+                .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {url}: parse: {e}")))?;
 
             let out = payload
                 .models
