@@ -983,6 +983,9 @@ fn parse_lora_tag(tag_trimmed: &str) -> Option<HordeLora> {
     {
         return None;
     }
+    if !tag_trimmed.is_char_boundary(5) {
+        return None;
+    }
     let lora_body = &tag_trimmed[5..];
     let parts: Vec<&str> = lora_body.split(':').collect();
     if parts.is_empty() {
@@ -1023,8 +1026,14 @@ fn parse_ti_tag(tag_trimmed: &str) -> Option<HordeTi> {
         return None;
     }
     let ti_body = if is_ti {
+        if !tag_trimmed.is_char_boundary(3) {
+            return None;
+        }
         &tag_trimmed[3..]
     } else {
+        if !tag_trimmed.is_char_boundary(4) {
+            return None;
+        }
         &tag_trimmed[4..]
     };
     let parts: Vec<&str> = ti_body.split(':').collect();
@@ -1133,30 +1142,42 @@ fn extract_lora_and_ti_tags(raw_prompt: &str) -> (String, Vec<HordeLora>, Vec<Ho
     let mut without_tags = String::with_capacity(raw_prompt.len());
 
     let mut cursor = 0;
-    while let Some(start_idx) = raw_prompt[cursor..].find('<') {
-        let absolute_start = cursor + start_idx;
-        without_tags.push_str(&raw_prompt[cursor..absolute_start]);
-        if let Some(end_idx) = raw_prompt[absolute_start..].find('>') {
-            let absolute_end = absolute_start + end_idx;
-            let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
-            let tag_trimmed = tag_content.trim();
-
-            if let Some(lora) = parse_lora_tag(tag_trimmed) {
-                loras.push(lora);
-            } else if let Some(ti) = parse_ti_tag(tag_trimmed) {
-                tis.push(ti);
-            } else {
-                without_tags.push_str(&raw_prompt[absolute_start..=absolute_end]);
+    while cursor < raw_prompt.len() && raw_prompt.is_char_boundary(cursor) {
+        if let Some(start_idx) = raw_prompt[cursor..].find('<') {
+            let absolute_start = cursor + start_idx;
+            if !raw_prompt.is_char_boundary(absolute_start) {
+                without_tags.push_str(&raw_prompt[cursor..]);
+                break;
             }
-            cursor = absolute_end + 1;
+            without_tags.push_str(&raw_prompt[cursor..absolute_start]);
+            if let Some(end_idx) = raw_prompt[absolute_start..].find('>') {
+                let absolute_end = absolute_start + end_idx;
+                if !raw_prompt.is_char_boundary(absolute_start + 1)
+                    || !raw_prompt.is_char_boundary(absolute_end)
+                    || !raw_prompt.is_char_boundary(absolute_end + 1)
+                {
+                    without_tags.push_str(&raw_prompt[absolute_start..]);
+                    break;
+                }
+                let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
+                let tag_trimmed = tag_content.trim();
+
+                if let Some(lora) = parse_lora_tag(tag_trimmed) {
+                    loras.push(lora);
+                } else if let Some(ti) = parse_ti_tag(tag_trimmed) {
+                    tis.push(ti);
+                } else {
+                    without_tags.push_str(&raw_prompt[absolute_start..=absolute_end]);
+                }
+                cursor = absolute_end + 1;
+            } else {
+                without_tags.push_str(&raw_prompt[absolute_start..]);
+                break;
+            }
         } else {
-            without_tags.push_str(&raw_prompt[absolute_start..]);
-            cursor = raw_prompt.len();
+            without_tags.push_str(&raw_prompt[cursor..]);
             break;
         }
-    }
-    if cursor < raw_prompt.len() {
-        without_tags.push_str(&raw_prompt[cursor..]);
     }
     (without_tags, loras, tis)
 }
