@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+    map_upstream_err, DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
 };
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
@@ -494,10 +494,9 @@ mod tests {
         let v = generate_code_verifier();
         assert!(v.len() >= 43);
         assert!(v.len() <= 128);
-        assert!(
-            v.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        );
+        assert!(v
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
