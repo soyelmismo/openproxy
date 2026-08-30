@@ -29,7 +29,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 ahash = "0.8.12"
 regex = { workspace = true }
-dashmap = { workspace = true }
+dashmap.workspace = true
 tower-service = "0.3"
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }

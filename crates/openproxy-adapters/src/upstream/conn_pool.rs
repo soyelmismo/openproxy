@@ -19,9 +19,9 @@
 //! dialed. The counter is exposed via `UpstreamConnectionPool::reuses()`
 //! and is what the `conn_pool_reuse` test asserts on.
 
-use std::collections::HashMap;
+use dashmap::DashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// `scheme://host:port` tuple that keys a pooled connection.
@@ -127,7 +127,7 @@ impl PoolEntry {
 /// re-dial on the next request to that host.
 #[derive(Default)]
 pub struct UpstreamConnectionPool {
-    inner: Arc<Mutex<HashMap<HostKey, PoolEntry>>>,
+    inner: Arc<DashMap<HostKey, PoolEntry>>,
 }
 
 impl Clone for UpstreamConnectionPool {
@@ -146,46 +146,57 @@ impl UpstreamConnectionPool {
     /// Total reuses across all hosts. Used by the `conn_pool_reuse`
     /// unit test.
     pub fn reuses(&self) -> usize {
-        let g = self.inner.lock().expect("pool mutex poisoned");
-        g.values().map(|e| e.reuses.load(Ordering::SeqCst)).sum()
+        self.inner
+            .iter()
+            .map(|e| e.value().reuses.load(Ordering::SeqCst))
+            .sum()
     }
 
     /// Total requests across all hosts.
     pub fn total(&self) -> usize {
-        let g = self.inner.lock().expect("pool mutex poisoned");
-        g.values().map(|e| e.total.load(Ordering::SeqCst)).sum()
+        self.inner
+            .iter()
+            .map(|e| e.value().total.load(Ordering::SeqCst))
+            .sum()
     }
 
     /// Number of distinct hosts that have been seen at least once.
     pub fn host_count(&self) -> usize {
-        self.inner.lock().expect("pool mutex poisoned").len()
+        self.inner.len()
     }
 
     /// Per-host reuses (for debugging / tests).
     pub fn reuses_for(&self, key: &HostKey) -> usize {
         self.inner
-            .lock()
-            .expect("pool mutex poisoned")
             .get(key)
-            .map_or(0, |e| e.reuses.load(Ordering::SeqCst))
+            .map_or(0, |e| e.value().reuses.load(Ordering::SeqCst))
     }
 
     /// Record that a request to `key` just used a freshly-dialed
     /// connection (i.e. it was the first request in a burst).
     pub fn record_dial(&self, key: HostKey) {
-        let mut g = self.inner.lock().expect("pool mutex poisoned");
-        let entry = g.entry(key).or_insert_with(PoolEntry::new);
-        entry.total.fetch_add(1, Ordering::SeqCst);
-        entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        if let Some(entry) = self.inner.get(&key) {
+            entry.total.fetch_add(1, Ordering::SeqCst);
+            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        } else {
+            let entry = self.inner.entry(key).or_insert_with(PoolEntry::new);
+            entry.total.fetch_add(1, Ordering::SeqCst);
+            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        }
     }
 
     /// Record that a request to `key` just reused a pooled connection.
     pub fn record_reuse(&self, key: HostKey) {
-        let mut g = self.inner.lock().expect("pool mutex poisoned");
-        let entry = g.entry(key).or_insert_with(PoolEntry::new);
-        entry.total.fetch_add(1, Ordering::SeqCst);
-        entry.reuses.fetch_add(1, Ordering::SeqCst);
-        entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        if let Some(entry) = self.inner.get(&key) {
+            entry.total.fetch_add(1, Ordering::SeqCst);
+            entry.reuses.fetch_add(1, Ordering::SeqCst);
+            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        } else {
+            let entry = self.inner.entry(key).or_insert_with(PoolEntry::new);
+            entry.total.fetch_add(1, Ordering::SeqCst);
+            entry.reuses.fetch_add(1, Ordering::SeqCst);
+            entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        }
     }
 
     /// Drop entries whose `last_used_ms` is older than `max_age`
@@ -199,29 +210,38 @@ impl UpstreamConnectionPool {
     /// `Instant` (monotonic, NTP-immune) so eviction is independent
     /// of request volume.
     pub fn evict_older_than(&self, max_age: Duration) -> usize {
-        let mut g = self.inner.lock().expect("pool mutex poisoned");
         let cutoff = now_ms().saturating_sub(max_age.as_millis() as u64);
-        let before = g.len();
-        g.retain(|_, e| e.last_used_ms.load(Ordering::SeqCst) >= cutoff);
-        before - g.len()
+        let mut evicted = 0;
+        self.inner.retain(|_, e| {
+            if e.last_used_ms.load(Ordering::SeqCst) >= cutoff {
+                true
+            } else {
+                evicted += 1;
+                false
+            }
+        });
+        evicted
     }
 }
 
 impl std::fmt::Debug for UpstreamConnectionPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let g = self.inner.lock().expect("pool mutex poisoned");
         f.debug_struct("UpstreamConnectionPool")
-            .field("host_count", &g.len())
+            .field("host_count", &self.inner.len())
             .field(
                 "reuses",
-                &g.values()
-                    .map(|e| e.reuses.load(Ordering::SeqCst))
+                &self
+                    .inner
+                    .iter()
+                    .map(|e| e.value().reuses.load(Ordering::SeqCst))
                     .sum::<usize>(),
             )
             .field(
                 "total",
-                &g.values()
-                    .map(|e| e.total.load(Ordering::SeqCst))
+                &self
+                    .inner
+                    .iter()
+                    .map(|e| e.value().total.load(Ordering::SeqCst))
                     .sum::<usize>(),
             )
             .finish()
