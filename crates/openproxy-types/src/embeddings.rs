@@ -130,7 +130,9 @@ mod tests {
         assert_eq!(req.model, "text-embedding-3-large");
         assert_eq!(
             req.input,
-            EmbeddingInput::Array(vec!["hello".to_string(), "world".to_string()].into_boxed_slice())
+            EmbeddingInput::Array(
+                vec!["hello".to_string(), "world".to_string()].into_boxed_slice()
+            )
         );
         assert!(!req.input.is_empty());
         assert_eq!(req.dimensions, Some(1536));

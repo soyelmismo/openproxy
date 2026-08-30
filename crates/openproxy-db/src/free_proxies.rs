@@ -88,7 +88,10 @@ fn resolve_current_proxy_id(
             None
         }
     } else {
-        provider.current_proxy_id.as_deref().map(ToString::to_string)
+        provider
+            .current_proxy_id
+            .as_deref()
+            .map(ToString::to_string)
     }
     .pipe(Ok)
 }

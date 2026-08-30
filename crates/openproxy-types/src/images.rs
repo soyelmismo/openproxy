@@ -32,9 +32,7 @@ pub struct ImageGenerationRequest {
     pub post_processing: Option<Box<[String]>>,
 }
 
-fn deserialize_string_or_vec_opt<'de, D>(
-    deserializer: D,
-) -> Result<Option<Box<[String]>>, D::Error>
+fn deserialize_string_or_vec_opt<'de, D>(deserializer: D) -> Result<Option<Box<[String]>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
