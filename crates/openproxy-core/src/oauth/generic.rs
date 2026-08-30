@@ -8,7 +8,6 @@
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
@@ -199,7 +198,9 @@ impl OAuthProvider for GenericOAuthProvider {
             }
 
             // Generate a random state value to prevent CSRF on the callback.
-            let state = Uuid::new_v4().to_string();
+            let mut state_buf = [0u8; 16];
+            getrandom::fill(&mut state_buf).expect("getrandom failed");
+            let state = hex::encode(state_buf);
             params.push(("state", state.as_str()));
 
             Ok((
@@ -314,9 +315,7 @@ impl OAuthProvider for GenericOAuthProvider {
             .await
         {
             Ok(token) => Ok(Some(token)),
-            Err(CoreError::UpstreamError { status, .. })
-                if status == 400 || status == 428 =>
-            {
+            Err(CoreError::UpstreamError { status, .. }) if status == 400 || status == 428 => {
                 Ok(None)
             }
             Err(e) => Err(e),
