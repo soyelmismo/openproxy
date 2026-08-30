@@ -188,25 +188,28 @@ pub fn list_proxies(
     let mut sql = "SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, username, password, priority, created_at, updated_at FROM free_proxies WHERE 1=1".to_string();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    if let Some(src) = source
-        && !src.trim().is_empty()
-    {
-        sql.push_str(" AND source = ?");
-        params.push(Box::new(src.to_string()));
+    #[allow(clippy::collapsible_if)]
+    if let Some(src) = source {
+        if !src.trim().is_empty() {
+            sql.push_str(" AND source = ?");
+            params.push(Box::new(src.to_string()));
+        }
     }
 
-    if let Some(st) = status
-        && !st.trim().is_empty()
-    {
-        sql.push_str(" AND status = ?");
-        params.push(Box::new(st.to_string()));
+    #[allow(clippy::collapsible_if)]
+    if let Some(st) = status {
+        if !st.trim().is_empty() {
+            sql.push_str(" AND status = ?");
+            params.push(Box::new(st.to_string()));
+        }
     }
 
-    if let Some(proto) = protocol
-        && !proto.trim().is_empty()
-    {
-        sql.push_str(" AND type = ?");
-        params.push(Box::new(proto.to_string()));
+    #[allow(clippy::collapsible_if)]
+    if let Some(proto) = protocol {
+        if !proto.trim().is_empty() {
+            sql.push_str(" AND type = ?");
+            params.push(Box::new(proto.to_string()));
+        }
     }
 
     if let Some(s) = search {
@@ -1000,8 +1003,11 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
 ];
 
 fn resolve_scraped_sources<'a>(is_builtin: bool, id: &str, name: &'a str) -> Vec<&'a str> {
-    if is_builtin && let Some(def) = BuiltinProxySourceDef::find_by_id(id) {
-        return def.scraped_sources.to_vec();
+    #[allow(clippy::collapsible_if)]
+    if is_builtin {
+        if let Some(def) = BuiltinProxySourceDef::find_by_id(id) {
+            return def.scraped_sources.to_vec();
+        }
     }
     vec![name]
 }
@@ -1273,11 +1279,12 @@ async fn sync_single_source(
         return;
     }
     if src.is_builtin {
-        if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id)
-            && let Ok(mut list) = (def.sync_fn)().await
-        {
-            *fetched += list.len();
-            scraped.append(&mut list);
+        if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id) {
+            #[allow(clippy::collapsible_if)]
+            if let Ok(mut list) = (def.sync_fn)().await {
+                *fetched += list.len();
+                scraped.append(&mut list);
+            }
         }
         return;
     }
