@@ -476,8 +476,9 @@ impl PredictiveRateLimiter {
         state.learned_burst = std::cmp::max(1, state.window_count.saturating_sub(1));
         state.state = TargetRateState::Open;
 
-        let penalty_ms =
-            retry_after_secs.map_or(u64::from(DEFAULT_WINDOW_DURATION_MS), |s| (s * 1000).max(3000));
+        let penalty_ms = retry_after_secs.map_or(u64::from(DEFAULT_WINDOW_DURATION_MS), |s| {
+            (s * 1000).max(3000)
+        });
         state.reset_at_ms = now_ms + penalty_ms;
     }
 
