@@ -45,6 +45,7 @@
 /// Tags that are recognized as reasoning blocks.
 const THINK_OPEN_TAGS: &[&str] = &["<think>", "<thinking>", "<reasoning>", "<thought>"];
 const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "</thought>"];
+const THINK_OPEN_TAGS_BYTES: &[&[u8]] = &[b"<think>", b"<thinking>", b"<reasoning>", b"<thought>"];
 
 /// Find the first case-insensitive match of a needle in a haystack without allocating.
 fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
@@ -159,13 +160,14 @@ impl ExtractedThink {
 
 fn find_matching_close_tag(after_open: &str) -> Option<&'static str> {
     let after_open_bytes = after_open.as_bytes();
-    THINK_CLOSE_TAGS.iter().copied().find(|ct| {
-        let open_prefix = safe_slice_to(ct, ct.len() - 1); // "</think" from "</think>"
-        let open_eq = format!("<{}>", safe_slice_from(open_prefix, 2)); // "<think>" from "</think>"
-        let open_eq_bytes = open_eq.as_bytes();
-        after_open_bytes.len() >= open_eq_bytes.len()
-            && after_open_bytes[..open_eq_bytes.len()].eq_ignore_ascii_case(open_eq_bytes)
-    })
+    for (i, open_tag_bytes) in THINK_OPEN_TAGS_BYTES.iter().enumerate() {
+        if after_open_bytes.len() >= open_tag_bytes.len()
+            && after_open_bytes[..open_tag_bytes.len()].eq_ignore_ascii_case(open_tag_bytes)
+        {
+            return Some(THINK_CLOSE_TAGS[i]);
+        }
+    }
+    None
 }
 
 fn parse_think_segment(remaining: &str, tag_idx: usize) -> (&str, &str, &str) {
@@ -254,15 +256,12 @@ fn strip_orphaned_close_tags(content: &str) -> String {
         return content.to_string();
     }
     let mut result = content.to_string();
-    for close_tag in THINK_CLOSE_TAGS {
+    for (i, close_tag) in THINK_CLOSE_TAGS.iter().enumerate() {
         while let Some(pos) = find_ignore_ascii_case(&result, close_tag) {
             // Check that there's no matching open tag before this
             // close tag in the content.
-            let open_tag = format!(
-                "<{}>",
-                safe_slice_from(safe_slice_to(close_tag, close_tag.len() - 1), 2)
-            );
-            if find_ignore_ascii_case(safe_slice_to(&result, pos), &open_tag).is_some() {
+            let open_tag = THINK_OPEN_TAGS[i];
+            if find_ignore_ascii_case(safe_slice_to(&result, pos), open_tag).is_some() {
                 break;
             }
             // Remove the orphaned close tag.
@@ -404,13 +403,10 @@ impl ThinkStreamExtractor {
         let after_tag = safe_slice_from(input, tag_pos);
 
         // Determine the close tag we're looking for.
-        let close_tag = THINK_CLOSE_TAGS
+        let close_tag = THINK_OPEN_TAGS
             .iter()
-            .find(|ct| {
-                let open_from_close = format!("<{}>", &ct[2..ct.len() - 1]);
-                tag_str.eq_ignore_ascii_case(&open_from_close)
-            })
-            .map(std::string::ToString::to_string);
+            .position(|&ot| tag_str.eq_ignore_ascii_case(ot))
+            .map(|i| THINK_CLOSE_TAGS[i].to_string());
 
         self.close_tag = close_tag;
         self.inside_think = true;
