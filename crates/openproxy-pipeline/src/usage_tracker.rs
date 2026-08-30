@@ -55,7 +55,11 @@ impl UsageTracker {
 
     pub(crate) fn mark_client_response(
         &self,
-        usage_tuple: Option<(openproxy_types::ids::RequestId, u8, openproxy_types::ids::ComboTargetId)>,
+        usage_tuple: Option<(
+            openproxy_types::ids::RequestId,
+            u8,
+            openproxy_types::ids::ComboTargetId,
+        )>,
     ) {
         let Some((request_id, attempt, target_id)) = usage_tuple else {
             return;
@@ -647,7 +651,15 @@ impl UsageRecordBuilder<'_> {
         }
     }
 
-    pub fn record(self) -> Result<Option<(openproxy_types::ids::RequestId, u8, openproxy_types::ids::ComboTargetId)>> {
+    pub fn record(
+        self,
+    ) -> Result<
+        Option<(
+            openproxy_types::ids::RequestId,
+            u8,
+            openproxy_types::ids::ComboTargetId,
+        )>,
+    > {
         let (compression_savings_pct, compression_techniques) = {
             let guard = self.tracker.compression_stats_cell.read();
             (
@@ -676,10 +688,6 @@ impl UsageRecordBuilder<'_> {
         self.dispatch_record_job(input);
         self.update_selection_registry();
 
-        Ok(Some((
-            self.req.request_id,
-            self.attempt,
-            self.target.id,
-        )))
+        Ok(Some((self.req.request_id, self.attempt, self.target.id)))
     }
 }

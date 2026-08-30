@@ -128,7 +128,8 @@ fn extract_provider_custom_meta(
             let meta = maps.kiro_map.get(&account_id);
             ProviderCustomFields {
                 kiro_region: meta.and_then(|m| m.region.as_deref().map(ToString::to_string)),
-                kiro_profile_arn: meta.and_then(|m| m.profile_arn.as_deref().map(ToString::to_string)),
+                kiro_profile_arn: meta
+                    .and_then(|m| m.profile_arn.as_deref().map(ToString::to_string)),
                 ..Default::default()
             }
         }
@@ -138,7 +139,10 @@ fn extract_provider_custom_meta(
                 .get(&account_id)
                 .map(|s| s.to_string())
                 .or_else(|| CredentialManager::antigravity_project_from_account(raw_account));
-            let metadata = raw_account.oauth_provider_specific.as_deref().map(ToString::to_string);
+            let metadata = raw_account
+                .oauth_provider_specific
+                .as_deref()
+                .map(ToString::to_string);
             ProviderCustomFields {
                 antigravity_project: proj,
                 antigravity_metadata: metadata,
@@ -279,7 +283,11 @@ fn resolve_account_credentials(
         None
     };
 
-    Some((key, raw_account.label.as_deref().map(ToString::to_string), custom_meta))
+    Some((
+        key,
+        raw_account.label.as_deref().map(ToString::to_string),
+        custom_meta,
+    ))
 }
 
 #[cfg(test)]

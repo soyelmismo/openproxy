@@ -1393,13 +1393,13 @@ mod tests {
 
         // We need a minimal adapter impl to satisfy the trait. We don't
         // call `fetch_models` on it.
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            Box::new(openproxy_adapters::adapters::MockAdapter::new(
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(
+            openproxy_adapters::adapters::MockAdapter::new(
                 "stub",
                 "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
-            )),
-        );
+            ),
+        ));
         let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1463,13 +1463,13 @@ mod tests {
         }
 
         let conn = pool.open_connection().expect("open conn");
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            Box::new(openproxy_adapters::adapters::MockAdapter::new(
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(
+            openproxy_adapters::adapters::MockAdapter::new(
                 "prov-preserve",
                 "",
                 openproxy_adapters::adapters::AdapterFormat::Openai,
-            )),
-        );
+            ),
+        ));
         let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()

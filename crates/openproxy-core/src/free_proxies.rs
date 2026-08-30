@@ -1000,10 +1000,13 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
 ];
 
 fn resolve_scraped_sources<'a>(is_builtin: bool, id: &str, name: &'a str) -> Vec<&'a str> {
-    if is_builtin && let Some(def) = BuiltinProxySourceDef::find_by_id(id) {
-        return def.scraped_sources.to_vec();
+    if !is_builtin {
+        return vec![name];
     }
-    vec![name]
+    let Some(def) = BuiltinProxySourceDef::find_by_id(id) else {
+        return vec![name];
+    };
+    def.scraped_sources.to_vec()
 }
 
 fn row_to_proxy_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProxySource> {
@@ -1142,7 +1145,8 @@ pub fn create_proxy_source(
         source: Some(std::sync::Arc::new(e)),
     })?;
 
-    get_proxy_source(conn, &id)?.ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
+    get_proxy_source(conn, &id)?
+        .ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
 }
 
 pub fn update_proxy_source(
@@ -1150,8 +1154,8 @@ pub fn update_proxy_source(
     id: &str,
     input: UpdateProxySourceInput,
 ) -> crate::error::Result<ProxySource> {
-    let existing =
-        get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))?;
+    let existing = get_proxy_source(conn, id)?
+        .ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))?;
 
     let name = input.name.unwrap_or(existing.name);
     let url = input.url.unwrap_or(existing.url);
@@ -1167,7 +1171,8 @@ pub fn update_proxy_source(
         source: Some(std::sync::Arc::new(e)),
     })?;
 
-    get_proxy_source(conn, id)?.ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
+    get_proxy_source(conn, id)?
+        .ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
 }
 
 pub use openproxy_db::free_proxies::*;
@@ -1271,12 +1276,14 @@ async fn sync_single_source(
         return;
     }
     if src.is_builtin {
-        if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id)
-            && let Ok(mut list) = (def.sync_fn)().await
-        {
-            *fetched += list.len();
-            scraped.append(&mut list);
-        }
+        let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id) else {
+            return;
+        };
+        let Ok(mut list) = (def.sync_fn)().await else {
+            return;
+        };
+        *fetched += list.len();
+        scraped.append(&mut list);
         return;
     }
 
@@ -1569,10 +1576,10 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
             while let Some(first) = rx.recv().await {
                 let mut batch = vec![first];
                 while batch.len() < 50 {
-                    match rx.try_recv() {
-                        Ok(item) => batch.push(item),
-                        Err(_) => break,
-                    }
+                    let Ok(item) = rx.try_recv() else {
+                        break;
+                    };
+                    batch.push(item);
                 }
 
                 let pool = Arc::clone(&pool_writer);

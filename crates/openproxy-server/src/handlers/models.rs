@@ -299,8 +299,7 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
     });
 
     let inferred_type = capabilities::infer_model_type(model_id);
-    let effective_type =
-        resolve_effective_model_type(&m.model_type, m.custom, inferred_type);
+    let effective_type = resolve_effective_model_type(&m.model_type, m.custom, inferred_type);
 
     let family = m
         .family
