@@ -66,6 +66,8 @@ manual_is_variant_and = "deny"
 manual_string_new = "deny"
 manual_strip = "deny"
 map_unwrap_or = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 # Noise suppression for practical maintainability
 missing_errors_doc = "allow"
