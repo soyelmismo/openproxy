@@ -885,6 +885,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn test_map_antigravity_physical_model() {
+        assert_eq!(map_antigravity_physical_model("gemini-3.1-pro-high"), "gemini-pro-agent");
+        assert_eq!(map_antigravity_physical_model("gemini-3.1-pro-medium"), "gemini-pro-agent");
+        assert_eq!(map_antigravity_physical_model("gemini-3.5-flash-high"), "gemini-3-flash-agent");
+        assert_eq!(map_antigravity_physical_model("gemini-1.5-pro"), "gemini-1.5-pro");
+        assert_eq!(map_antigravity_physical_model("custom-model"), "custom-model");
+    }
+
+    #[test]
     fn test_parse_models_response_valid() {
         let body = json!({
             "models": {
