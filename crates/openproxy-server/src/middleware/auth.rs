@@ -84,17 +84,16 @@ fn pattern_matches(spec: &str, candidate: &str) -> bool {
     if spec == "*" || spec == candidate {
         return true;
     }
-    if let Some(prefix) = spec.strip_suffix('*')
-        && candidate.starts_with(prefix)
+    if spec
+        .strip_suffix('*')
+        .is_some_and(|p| candidate.starts_with(p))
     {
         return true;
     }
-    if let Some(suffix) = spec.strip_prefix('*')
-        && candidate.ends_with(suffix)
-    {
-        return true;
-    }
-    false
+    let Some(suffix) = spec.strip_prefix('*') else {
+        return false;
+    };
+    candidate.ends_with(suffix)
 }
 
 fn matches_any_model_pattern(
@@ -103,9 +102,16 @@ fn matches_any_model_pattern(
     bare_model: &str,
     full_id: Option<&str>,
 ) -> bool {
-    pattern_matches(pattern, model)
-        || pattern_matches(pattern, bare_model)
-        || full_id.is_some_and(|f| pattern_matches(pattern, f))
+    if pattern_matches(pattern, model) {
+        return true;
+    }
+    if pattern_matches(pattern, bare_model) {
+        return true;
+    }
+    let Some(f) = full_id else {
+        return false;
+    };
+    pattern_matches(pattern, f)
 }
 
 fn is_provider_blacklisted(
