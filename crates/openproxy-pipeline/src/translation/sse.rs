@@ -187,13 +187,13 @@ pub fn anthropic_sse_event_to_openai_chunks(
 ///   non-`data:` lines, `[DONE]` sentinel).
 /// - `Err(CoreError::Parse(_))` for malformed JSON or event payload that should
 ///   be a valid event.
-fn is_ping_payload(payload: &[u8]) -> Result<bool> {
+fn is_ping_payload(payload: &str) -> Result<bool> {
     #[derive(serde::Deserialize)]
     struct TypeProbe<'a> {
         #[serde(borrow)]
         r#type: Option<std::borrow::Cow<'a, str>>,
     }
-    let probe: TypeProbe = serde_json::from_slice(payload)
+    let probe: TypeProbe = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("invalid SSE JSON: {e}")))?;
     Ok(probe.r#type.as_deref() == Some("ping"))
 }
@@ -211,11 +211,11 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
         return Ok(None);
     };
 
-    if payload == "[DONE]" || is_ping_payload(payload.as_bytes())? {
+    if payload == "[DONE]" || is_ping_payload(payload)? {
         return Ok(None);
     }
 
-    let event: AnthropicSseEvent = serde_json::from_slice(payload.as_bytes())
+    let event: AnthropicSseEvent = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("invalid Anthropic SSE event: {e}")))?;
 
     Ok(Some(event))
