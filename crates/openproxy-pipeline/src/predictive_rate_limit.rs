@@ -82,7 +82,7 @@ pub fn compute_error_fingerprint(err: &openproxy_types::CoreError) -> u64 {
             phase.hash(&mut hasher);
         }
         _ => {
-            err.to_string().hash(&mut hasher);
+            std::mem::discriminant(err).hash(&mut hasher);
         }
     }
     hasher.finish()
