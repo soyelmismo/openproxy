@@ -393,16 +393,6 @@ fn clean_unions_and_hints(map: &mut serde_json::Map<String, Value>, depth: usize
     apply_union_type_hints(map, &all_types);
 }
 
-const ALLOWED_SCHEMA_FIELDS: &[&str] = &[
-    "type",
-    "description",
-    "properties",
-    "required",
-    "items",
-    "enum",
-    "title",
-];
-
 fn wrap_bare_properties_node(map: &mut serde_json::Map<String, Value>, depth: usize) {
     let properties = std::mem::take(map);
     map.insert("type".to_string(), Value::String("object".to_string()));
@@ -520,9 +510,12 @@ fn sanitize_schema_fields(
     is_schema_node: bool,
     depth: usize,
 ) -> bool {
-    let has_standard_keyword = map
-        .keys()
-        .any(|k| ALLOWED_SCHEMA_FIELDS.contains(&k.as_str()));
+    let has_standard_keyword = map.keys().any(|k| {
+        matches!(
+            k.as_str(),
+            "type" | "description" | "properties" | "required" | "items" | "enum" | "title"
+        )
+    });
     let is_not_schema_payload =
         map.contains_key("functionCall") || map.contains_key("functionResponse");
     if is_schema_node && !has_standard_keyword && !map.is_empty() && !is_not_schema_payload {
@@ -535,7 +528,12 @@ fn sanitize_schema_fields(
     }
 
     move_constraints_to_description(map);
-    map.retain(|k, _| ALLOWED_SCHEMA_FIELDS.contains(&k.as_str()));
+    map.retain(|k, _| {
+        matches!(
+            k.as_str(),
+            "type" | "description" | "properties" | "required" | "items" | "enum" | "title"
+        )
+    });
 
     if map.get("type").and_then(|t| t.as_str()) == Some("object") && !map.contains_key("properties")
     {
