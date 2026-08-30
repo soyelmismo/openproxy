@@ -184,11 +184,13 @@ fn validate_key_record(key: &core_api_keys::ApiKey, required_scope: &str) -> Res
         )));
     }
 
-    if let Some(exp) = &key.expires_at
-        && core_api_keys::is_expired(Some(exp), chrono::Utc::now())
+    if let Some(exp) = &key.expires_at {
+        #[allow(clippy::collapsible_if)]
+        if core_api_keys::is_expired(Some(exp), chrono::Utc::now())
             .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
-    {
-        return Err(ApiError(CoreError::Auth("api key expired".into())));
+        {
+            return Err(ApiError(CoreError::Auth("api key expired".into())));
+        }
     }
 
     if !key.scopes.iter().any(|s| s == required_scope) {
@@ -237,12 +239,13 @@ fn verify_combo_authorization(
         return Ok(());
     };
 
-    if let Some(auth) = auth
-        && !auth.is_combo_allowed(combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
+    if let Some(auth) = auth {
+        #[allow(clippy::collapsible_if)]
+        if !auth.is_combo_allowed(combo_id.0) {
+            return Err(ApiError(CoreError::Auth(
+                "combo not allowed for this key".into(),
+            )));
+        }
     }
     Ok(())
 }
@@ -255,12 +258,13 @@ pub(crate) fn authenticate_and_authorize_model(
 ) -> Result<Option<ApiKeyId>, ApiError> {
     let auth_result = authenticate(state, headers)?;
 
-    if let Some(token) = &auth_result
-        && !token.is_model_allowed(model_name, None)
-    {
-        return Err(ApiError(CoreError::Auth(format!(
-            "model '{model_name}' not allowed or blacklisted for this key"
-        ))));
+    if let Some(token) = &auth_result {
+        #[allow(clippy::collapsible_if)]
+        if !token.is_model_allowed(model_name, None) {
+            return Err(ApiError(CoreError::Auth(format!(
+                "model '{model_name}' not allowed or blacklisted for this key"
+            ))));
+        }
     }
 
     verify_combo_authorization(state, auth_result.as_ref(), model_name)?;
@@ -271,35 +275,27 @@ const MAX_TOOL_CALLS: usize = 64;
 const MAX_ID_LEN: usize = 128;
 
 fn sanitize_tool_calls(messages: &mut Vec<openproxy_types::OpenAIMessage>) {
-    *messages = retain_valid_tool_messages(std::mem::take(messages));
-    prune_unfulfilled_tool_calls(messages);
-}
-
-fn retain_valid_tool_messages(
-    messages: Vec<openproxy_types::OpenAIMessage>,
-) -> Vec<openproxy_types::OpenAIMessage> {
-    let mut valid_messages = Vec::with_capacity(messages.len());
     let mut last_assistant_tool_calls: Vec<String> = Vec::new();
 
-    for mut msg in messages {
-        match msg.role.as_str() {
-            "assistant" => {
-                last_assistant_tool_calls = extract_assistant_tool_call_ids(&mut msg);
-                valid_messages.push(msg);
-            }
-            "tool" => {
-                if let Some(pos) = find_matching_tool_call(&msg, &last_assistant_tool_calls) {
-                    last_assistant_tool_calls.remove(pos);
-                    valid_messages.push(msg);
-                }
-            }
-            _ => {
-                last_assistant_tool_calls.clear();
-                valid_messages.push(msg);
-            }
+    messages.retain_mut(|msg| match msg.role.as_str() {
+        "assistant" => {
+            last_assistant_tool_calls = extract_assistant_tool_call_ids(msg);
+            true
         }
-    }
-    valid_messages
+        "tool" => {
+            let Some(pos) = find_matching_tool_call(msg, &last_assistant_tool_calls) else {
+                return false;
+            };
+            last_assistant_tool_calls.remove(pos);
+            true
+        }
+        _ => {
+            last_assistant_tool_calls.clear();
+            true
+        }
+    });
+
+    prune_unfulfilled_tool_calls(messages);
 }
 
 fn extract_assistant_tool_call_ids(msg: &mut openproxy_types::OpenAIMessage) -> Vec<String> {
@@ -330,12 +326,13 @@ fn prune_unfulfilled_tool_calls(messages: &mut [openproxy_types::OpenAIMessage])
     let mut remainder = messages;
     while let Some((msg, tail)) = remainder.split_first_mut() {
         remainder = tail;
-        if msg.role == "assistant"
-            && let Some(calls) = &mut msg.tool_calls
-        {
-            calls.retain(|call| is_tool_call_fulfilled(call, remainder));
-            if calls.is_empty() {
-                msg.tool_calls = None;
+        if msg.role == "assistant" {
+            #[allow(clippy::collapsible_if)]
+            if let Some(calls) = &mut msg.tool_calls {
+                calls.retain(|call| is_tool_call_fulfilled(call, remainder));
+                if calls.is_empty() {
+                    msg.tool_calls = None;
+                }
             }
         }
     }
