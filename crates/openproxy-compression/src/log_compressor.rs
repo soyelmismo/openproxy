@@ -111,11 +111,7 @@ fn validate_and_score(lines: &[&str]) -> Option<Vec<LineKind>> {
         }
         kinds.push(kind);
     }
-    if has_scoreable {
-        Some(kinds)
-    } else {
-        None
-    }
+    if has_scoreable { Some(kinds) } else { None }
 }
 
 fn format_selected_lines(lines: &[&str], selected: &[usize]) -> String {
@@ -147,7 +143,8 @@ fn format_selected_lines(lines: &[&str], selected: &[usize]) -> String {
 /// Compress a single content string. Returns `None` if not compressible
 /// (too short, no log format, no scoreable lines, or no lines selected).
 fn compress_log_content(text: &str) -> Option<String> {
-    let lines: Vec<&str> = text.lines().collect();
+    let mut lines = Vec::with_capacity(text.len() / 60 + 1);
+    lines.extend(text.lines());
     let kinds = validate_and_score(&lines)?;
     let selected = select_lines(&lines, &kinds);
     if selected.is_empty() {

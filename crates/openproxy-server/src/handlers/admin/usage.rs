@@ -557,7 +557,10 @@ fn spawn_ws_sender_task(
     tokio::spawn(async move {
         use futures::SinkExt;
         while let Some(text) = outbox_rx.recv().await {
-            if let Err(e) = ws_sender.send(Message::Text(text.into_string().into())).await {
+            if let Err(e) = ws_sender
+                .send(Message::Text(text.into_string().into()))
+                .await
+            {
                 tracing::debug!(error = %e, "stream_usage_rows: ws_sender.send failed, exiting sender task");
                 return;
             }
