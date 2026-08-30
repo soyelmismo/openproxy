@@ -188,7 +188,6 @@ pub async fn update_proxy_test_url(
             _ => 80,
         });
 
-    #[allow(clippy::collapsible_if)]
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if is_private_or_reserved(&ip) {
             return Err(ApiError(CoreError::Validation(format!(
