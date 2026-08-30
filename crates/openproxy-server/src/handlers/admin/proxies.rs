@@ -172,6 +172,45 @@ pub async fn update_proxy_test_url(
             "url cannot be empty".into(),
         )));
     }
+
+    let parsed_url: axum::http::Uri = url
+        .parse()
+        .map_err(|_| ApiError(CoreError::Validation("invalid URL format".into())))?;
+
+    let host = parsed_url
+        .host()
+        .ok_or_else(|| ApiError(CoreError::Validation("URL must contain a host".into())))?;
+
+    let port = parsed_url
+        .port_u16()
+        .unwrap_or_else(|| match parsed_url.scheme_str() {
+            Some("https") => 443,
+            _ => 80,
+        });
+
+    #[allow(clippy::collapsible_if)]
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if is_private_or_reserved(&ip) {
+            return Err(ApiError(CoreError::Validation(format!(
+                "url host '{host}' resolves to a private/reserved IP and is not allowed"
+            ))));
+        }
+    } else {
+        let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+            ApiError(CoreError::Validation(format!(
+                "failed to resolve url host '{host}': {e}"
+            )))
+        })?;
+
+        for addr in addrs {
+            if is_private_or_reserved(&addr.ip()) {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "url host '{host}' resolves to a private/reserved IP and is not allowed"
+                ))));
+            }
+        }
+    }
+
     openproxy_db::app_config::save_proxy_test_url(&w, url)?;
     Ok(Json(serde_json::json!({ "proxy_test_url": url })))
 }
