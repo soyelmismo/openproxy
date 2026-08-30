@@ -83,11 +83,24 @@ use tower_service::Service;
 use super::phases::UpstreamPhase;
 
 fn is_v4_private_or_reserved(v4: std::net::Ipv4Addr) -> bool {
-    v4.octets()[0] == 0 || v4.is_loopback() || v4.is_private() || v4.is_link_local()
+    let octets = v4.octets();
+    octets[0] == 0
+        || v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2) // 192.0.2.0/24 (TEST-NET-1)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100) // 198.51.100.0/24 (TEST-NET-2)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113) // 203.0.113.0/24 (TEST-NET-3)
 }
 
 fn is_v6_private_or_reserved(v6: &std::net::Ipv6Addr) -> bool {
-    v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local()
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return is_v4_private_or_reserved(v4);
+    }
+    v6.is_loopback()
+        || v6.is_unique_local()
+        || v6.is_unicast_link_local()
+        || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 Unique Local
 }
 
 /// Returns `true` for private, reserved, loopback, and link-local IP
@@ -1107,6 +1120,33 @@ mod tests {
 
         // IPv6 private/reserved
         assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::LOCALHOST))); // loopback
+
+        // Documentation networks
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+            192, 0, 2, 1
+        ))));
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+            198, 51, 100, 1
+        ))));
+        assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+            203, 0, 113, 1
+        ))));
+
+        // Unique Local IPv6 (fc00::/7)
+        assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+            0xfd00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+
+        // IPv4-mapped IPv6
+        assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+            0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001
+        ))));
+        assert!(!is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+            0, 0, 0, 0, 0, 0xffff, 0x0808, 0x0808
+        ))));
 
         // IPv6 public
         assert!(!is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
