@@ -88,13 +88,14 @@ impl MasterKey {
     /// Decrypt a blob produced by `encrypt`. The first 12 bytes are the nonce.
     /// Falls back to the previous key if the current key fails (rotation).
     pub fn decrypt(&self, blob: &[u8]) -> Result<String> {
-        if blob.len() <= NONCE_LEN {
+        if blob.len() < NONCE_LEN + 16 {
             return Err(CoreError::Internal(
-                "ciphertext blob too short to contain nonce".into(),
+                "ciphertext blob too short to contain nonce and tag".into(),
             ));
         }
         let (nonce_bytes, ct) = blob.split_at(NONCE_LEN);
-        let nonce = Nonce::try_from(nonce_bytes).expect("slice len is 12");
+        let nonce = Nonce::try_from(nonce_bytes)
+            .map_err(|_| CoreError::Internal("failed to parse nonce".into()))?;
 
         // Try current key first.
         if let Some(res) = try_decrypt(&self.current, &nonce, ct) {
@@ -102,11 +103,12 @@ impl MasterKey {
         }
 
         // Fall back to previous key (rotation).
-        if let Some(prev) = &self.previous
-            && let Some(res) = try_decrypt(prev, &nonce, ct)
-        {
-            tracing::debug!("decrypted with previous master key (rotation fallback)");
-            return res;
+        #[allow(clippy::collapsible_if)]
+        if let Some(prev) = &self.previous {
+            if let Some(res) = try_decrypt(prev, &nonce, ct) {
+                tracing::debug!("decrypted with previous master key (rotation fallback)");
+                return res;
+            }
         }
 
         Err(CoreError::Internal(
