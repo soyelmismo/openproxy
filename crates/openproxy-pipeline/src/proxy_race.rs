@@ -61,12 +61,17 @@ fn handle_proxy_race_winner(
     result: PipelineResult,
     win_proxy_id: String,
 ) -> PipelineResult {
-    let conn = pipeline.conn.lock();
-    let _ = openproxy_db::providers::update_current_proxy(
-        &conn,
-        &target.target.provider_id,
-        Some(&win_proxy_id),
-    );
+    let conn_arc = std::sync::Arc::clone(&pipeline.conn);
+    let provider_id = target.target.provider_id.clone();
+    let win_id = win_proxy_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = conn_arc.lock();
+        let _ = openproxy_db::providers::update_current_proxy(
+            &conn,
+            &provider_id,
+            Some(&win_id),
+        );
+    });
     tracing::info!(
         provider = %target.target.provider_id,
         proxy_id = %win_proxy_id,

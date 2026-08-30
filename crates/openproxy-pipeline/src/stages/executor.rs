@@ -212,12 +212,20 @@ fn check_client_cancellation(
     ))
 }
 
-fn resolve_target_proxy_mode(
+async fn resolve_target_proxy_mode(
     ctx: &PipelineContext,
     target: &crate::context::ResolvedTarget,
 ) -> (bool, String) {
-    let conn = ctx.pipeline.conn.lock();
-    let Ok(Some(prov)) = openproxy_db::providers::get(&conn, &target.target.provider_id) else {
+    let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
+    let provider_id = target.target.provider_id.clone();
+    let prov_opt = tokio::task::spawn_blocking(move || {
+        let conn = conn_arc.lock();
+        openproxy_db::providers::get(&conn, &provider_id).ok().flatten()
+    })
+    .await
+    .unwrap_or_default();
+
+    let Some(prov) = prov_opt else {
         return (false, String::new());
     };
     let is_incremental_mode = matches!(
@@ -297,15 +305,20 @@ async fn try_incremental_proxy_race(
     overall_attempt: &mut u8,
     target_local_retry_count: &mut u8,
 ) -> Option<PipelineResult> {
-    let candidate_proxies = {
-        let conn = ctx.pipeline.conn.lock();
+    let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
+    let provider_id = target.target.provider_id.clone();
+    let batch_size = *incremental_batch_size;
+    let candidate_proxies = tokio::task::spawn_blocking(move || {
+        let conn = conn_arc.lock();
         openproxy_db::free_proxies::get_candidate_proxies_for_provider(
             &conn,
-            &target.target.provider_id,
-            *incremental_batch_size,
+            &provider_id,
+            batch_size,
         )
         .unwrap_or_default()
-    };
+    })
+    .await
+    .unwrap_or_default();
 
     if candidate_proxies.len() < 2 {
         return None;
@@ -349,14 +362,15 @@ struct TargetRetryState {
 }
 
 impl TargetRetryState {
-    fn new(
+    async fn new(
         ctx: &PipelineContext,
         target: &crate::context::ResolvedTarget,
         race_size: usize,
         total_targets: usize,
     ) -> Self {
         let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
-        let (can_incremental_race, proxy_rotation_errors) = resolve_target_proxy_mode(ctx, target);
+        let (can_incremental_race, proxy_rotation_errors) =
+            resolve_target_proxy_mode(ctx, target).await;
         Self {
             policy,
             target_local_retry_count: 1,
@@ -598,7 +612,7 @@ async fn run_target_with_retries(
     total_targets: usize,
     overall_attempt: &mut u8,
 ) -> TargetStepResult {
-    let mut state = TargetRetryState::new(ctx, target, race_size, total_targets);
+    let mut state = TargetRetryState::new(ctx, target, race_size, total_targets).await;
     let mut result = execute_single_target(
         ctx,
         combo,
