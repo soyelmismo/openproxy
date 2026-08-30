@@ -400,9 +400,10 @@ impl ResponseAccumulator {
         {
             return None;
         }
-        String::from_utf8_lossy(&self.raw_response_body)
-            .lines()
-            .find_map(extract_error_from_line)
+        self.raw_response_body
+            .split(|&b| b == b'\n')
+            .map(String::from_utf8_lossy)
+            .find_map(|line| extract_error_from_line(&line))
     }
 
     fn append_delta_content_if_present(&mut self, payload: &str) {
