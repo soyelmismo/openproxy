@@ -726,27 +726,27 @@ impl SqliteModelRepository {
 
 impl ModelRepository for SqliteModelRepository {
     fn list_active(&self, provider: &ProviderId) -> Result<Vec<Model>> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.reader();
         list_active(&conn, provider)
     }
 
     fn list_active_all(&self) -> Result<Vec<Model>> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.reader();
         list_active_all(&conn)
     }
 
     fn list_all(&self) -> Result<Vec<Model>> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.reader();
         list_all(&conn)
     }
 
     fn get_by_row_id(&self, row_id: ModelRowId) -> Result<Option<Model>> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.reader();
         get_by_row_id(&conn, row_id)
     }
 
     fn find_active_by_name(&self, model_id: &str) -> Result<Option<Model>> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.reader();
         find_active_by_name(&conn, model_id)
     }
 
@@ -755,27 +755,27 @@ impl ModelRepository for SqliteModelRepository {
         provider: &ProviderId,
         model_id: &str,
     ) -> Result<Option<Model>> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.reader();
         find_active_by_provider_and_name(&conn, provider, model_id)
     }
 
     fn set_active(&self, id: ModelRowId, active: bool) -> Result<()> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         set_active(&conn, id, active)
     }
 
     fn set_active_bulk(&self, provider: &ProviderId, active: bool) -> Result<u64> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         set_active_bulk(&conn, provider, active)
     }
 
     fn set_test_status(&self, id: ModelRowId, status: i32) -> Result<()> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         set_test_status(&conn, id, status)
     }
 
     fn delete(&self, id: ModelRowId) -> Result<u64> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         delete(&conn, id)
     }
 
@@ -788,7 +788,7 @@ impl ModelRepository for SqliteModelRepository {
         ttl_seconds: i64,
         model_type: Option<&str>,
     ) -> Result<ModelRowId> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         create_custom(
             &conn,
             provider_id,
@@ -801,7 +801,7 @@ impl ModelRepository for SqliteModelRepository {
     }
 
     fn mark_expired(&self) -> Result<usize> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         mark_expired(&conn)
     }
 
@@ -811,12 +811,12 @@ impl ModelRepository for SqliteModelRepository {
         discovered: &[DiscoveredModel],
         ttl: Duration,
     ) -> Result<UpsertResult> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         upsert_many(&conn, provider, discovered, ttl)
     }
 
     fn apply_auto_activation(&self, provider: &ProviderId, keyword: Option<&str>) -> Result<u64> {
-        let conn = self.pool.open_connection()?;
+        let conn = self.pool.writer();
         apply_auto_activation(&conn, provider, keyword)
     }
 }

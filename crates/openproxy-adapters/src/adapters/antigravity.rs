@@ -372,8 +372,16 @@ async fn fetch_antigravity_models_from_endpoint(
 }
 
 static PLAN_CACHE: std::sync::LazyLock<
-    parking_lot::RwLock<std::collections::HashMap<String, String>>,
+    parking_lot::RwLock<std::collections::HashMap<String, (String, std::time::Instant)>>,
 > = std::sync::LazyLock::new(|| parking_lot::RwLock::new(std::collections::HashMap::new()));
+
+/// Prune expired entries from the Antigravity plan cache.
+pub fn prune_plan_cache() {
+    let now = std::time::Instant::now();
+    let max_age = std::time::Duration::from_secs(7200);
+    let mut cache = PLAN_CACHE.write();
+    cache.retain(|_, (_, ts)| now.duration_since(*ts) < max_age);
+}
 
 fn merge_summary_into_models_quota(
     models_quota: &mut openproxy_types::AccountQuota,
@@ -673,7 +681,10 @@ impl AntigravityAdapter {
         upstream: &Arc<UpstreamClient>,
         access_token: &str,
     ) -> Option<String> {
-        if let Some(plan) = PLAN_CACHE.read().get(access_token) {
+        let now = std::time::Instant::now();
+        if let Some((plan, ts)) = PLAN_CACHE.read().get(access_token)
+            && now.duration_since(*ts) < std::time::Duration::from_secs(7200)
+        {
             return Some(plan.clone());
         }
 
@@ -688,7 +699,7 @@ impl AntigravityAdapter {
             {
                 PLAN_CACHE
                     .write()
-                    .insert(access_token.to_string(), plan_name.clone());
+                    .insert(access_token.to_string(), (plan_name.clone(), now));
                 return Some(plan_name);
             }
         }

@@ -1,9 +1,10 @@
-//! staging table of free scraped/custom proxies + validation.
-
 use futures::StreamExt;
+use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use rusqlite::Connection;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+
+static SHARED_PROXY_CLIENT: LazyLock<Arc<UpstreamClient>> = LazyLock::new(UpstreamClient::new);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FreeProxy {
@@ -506,8 +507,8 @@ async fn fetch_upstream_json<T: serde::de::DeserializeOwned>(
     url: &str,
     name: &str,
 ) -> crate::error::Result<T> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest};
+    let client = &*SHARED_PROXY_CLIENT;
     let req = UpstreamRequest::get(url);
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     let res = client
@@ -621,7 +622,7 @@ async fn fetch_github_proxy_file(
 }
 
 async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let client = openproxy_adapters::upstream::UpstreamClient::new();
+    let client = &*SHARED_PROXY_CLIENT;
     let mut list = Vec::new();
     let sources: &[(&str, &str, &[&str])] = &[
         (
@@ -664,7 +665,7 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
     for &(src_name, url_template, protocols) in sources {
         for &proto in protocols {
             let url = url_template.replace("{}", proto);
-            let mut proxies = fetch_github_proxy_file(&client, src_name, proto, &url).await;
+            let mut proxies = fetch_github_proxy_file(client, src_name, proto, &url).await;
             list.append(&mut proxies);
         }
     }
@@ -756,8 +757,8 @@ struct GeonodeResponse {
 }
 
 async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest};
+    let client = &*SHARED_PROXY_CLIENT;
     let mut req = UpstreamRequest::get(
         "https://proxylist.geonode.com/api/proxy-list?limit=500&sort_by=lastChecked&sort_type=desc",
     );
@@ -1226,8 +1227,8 @@ pub async fn fetch_custom_proxy_source(
     url: &str,
     priority: i32,
 ) -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
-    let client = UpstreamClient::new();
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest};
+    let client = &*SHARED_PROXY_CLIENT;
     let req = UpstreamRequest::get(url);
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     let res = client
@@ -1367,7 +1368,7 @@ pub async fn test_proxy_connection(
     password: Option<&str>,
 ) -> Result<i64, String> {
     use openproxy_adapters::upstream::{
-        ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest,
+        ResolvedTimeouts, TimeoutProfile, UpstreamRequest,
     };
 
     let proxy_url = if let (Some(u), Some(p)) = (username, password) {
@@ -1376,7 +1377,7 @@ pub async fn test_proxy_connection(
         format!("{type}://{host}:{port}")
     };
 
-    let client = UpstreamClient::new();
+    let client = &*SHARED_PROXY_CLIENT;
     let mut req = UpstreamRequest::get(test_url);
     req.proxy = Some(proxy_url);
 

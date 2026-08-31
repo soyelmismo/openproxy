@@ -529,6 +529,33 @@ impl PredictiveRateLimiter {
         let key = Self::compute_key(combo_id, target_id);
         self.report_upstream_error_with_fingerprint_key(key, fingerprint, now_ms);
     }
+
+    /// Prunes idle and stale target entries across all shards.
+    pub fn prune_stale(&self, max_idle: std::time::Duration) -> usize {
+        let now_ms = Self::now_ms();
+        let max_idle_ms = max_idle.as_millis() as u64;
+        let mut pruned = 0;
+        for shard in &self.shards {
+            let mut map = shard.inner.write();
+            map.retain(|_, state| {
+                let is_idle = state.state == TargetRateState::Closed
+                    && state.in_flight == 0
+                    && (state.window_start_ms == 0
+                        || now_ms.saturating_sub(state.window_start_ms) > max_idle_ms)
+                    && (state.last_429_at_ms == 0
+                        || now_ms.saturating_sub(state.last_429_at_ms) > max_idle_ms)
+                    && (state.last_success_at_ms == 0
+                        || now_ms.saturating_sub(state.last_success_at_ms) > max_idle_ms);
+                if is_idle {
+                    pruned += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        pruned
+    }
 }
 
 #[cfg(test)]

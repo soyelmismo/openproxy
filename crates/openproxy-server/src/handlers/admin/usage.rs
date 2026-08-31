@@ -310,7 +310,11 @@ pub async fn usage_detail(
 
 async fn outbox_send(tx: &tokio::sync::mpsc::Sender<Box<str>>, val: serde_json::Value) {
     if let Ok(text) = json_text(&val) {
-        let _ = tx.send(text.into_boxed_str()).await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            tx.send(text.into_boxed_str()),
+        )
+        .await;
     }
 }
 

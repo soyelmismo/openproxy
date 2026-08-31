@@ -191,13 +191,6 @@ impl UpstreamConnectionPool {
     /// Drop entries whose `last_used_ms` is older than `max_age`
     /// (a wall-clock `Duration`, not a tick count). Called by the
     /// background sweep. Returns the number of entries evicted.
-    ///
-    /// MEDIUM-3 fix: the old `evict_older_than(max_tick_age: usize)`
-    /// used a tick count that was only bumped by `record_dial` /
-    /// `record_reuse`. Under low traffic, the tick barely advanced
-    /// and idle entries were NEVER evicted. The new design uses
-    /// `Instant` (monotonic, NTP-immune) so eviction is independent
-    /// of request volume.
     pub fn evict_older_than(&self, max_age: Duration) -> usize {
         let cutoff = now_ms().saturating_sub(max_age.as_millis() as u64);
         let mut evicted = 0;
@@ -210,6 +203,37 @@ impl UpstreamConnectionPool {
             }
         });
         evicted
+    }
+
+    /// Spawn the background eviction loop with a weak reference to `inner`.
+    /// Exits automatically when all strong `Arc` references to the pool are dropped.
+    pub fn spawn_eviction_loop(&self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let weak_inner = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let Some(inner) = weak_inner.upgrade() else {
+                    break;
+                };
+                let cutoff = now_ms().saturating_sub(Duration::from_mins(1).as_millis() as u64);
+                let mut evicted = 0;
+                inner.retain(|_, e| {
+                    if e.last_used_ms.load(Ordering::SeqCst) >= cutoff {
+                        true
+                    } else {
+                        evicted += 1;
+                        false
+                    }
+                });
+                if evicted > 0 {
+                    tracing::debug!(evicted, "upstream pool eviction sweep");
+                }
+            }
+        });
     }
 }
 

@@ -61,7 +61,11 @@ pub fn inject_model_and_serialize<T: Serialize>(
     SERIALIZE_BUF.with_borrow_mut(|buf| {
         buf.clear();
         serde_json::to_writer(&mut *buf, &val).map_err(|e| CoreError::Validation(e.to_string()))?;
-        Ok(Bytes::copy_from_slice(buf))
+        let bytes = Bytes::copy_from_slice(buf);
+        if buf.capacity() > 64 * 1024 {
+            buf.shrink_to(16 * 1024);
+        }
+        Ok(bytes)
     })
 }
 

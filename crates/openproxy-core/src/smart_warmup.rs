@@ -315,12 +315,14 @@ async fn ping_antigravity_model(
         .await
     {
         Ok(resp) => {
-            if resp.status.is_success() {
+            let status = resp.status;
+            let _ = resp.collect().await;
+            if status.is_success() {
                 true
             } else {
                 tracing::warn!(
                     "[SmartWarmup] Ping failed with status {} for {} on {}",
-                    resp.status,
+                    status,
                     model,
                     account_id
                 );

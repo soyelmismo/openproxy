@@ -243,10 +243,14 @@ impl AppState {
             },
         );
         let predictive_limiter = Arc::new(openproxy_pipeline::PredictiveRateLimiter::new());
+        let api_key_cache = Arc::new(dashmap::DashMap::new());
         spawn_memory_cleanup(
             &supervisor,
+            Arc::clone(&db_pool),
             Arc::clone(&selection_registry),
             circuit_breaker.clone(),
+            Arc::clone(&predictive_limiter),
+            Arc::clone(&api_key_cache),
         );
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
@@ -287,7 +291,7 @@ impl AppState {
             vacuum_status,
             background_tx,
             supervisor,
-            api_key_cache: Arc::new(dashmap::DashMap::new()),
+            api_key_cache,
         };
 
         Ok(state)
@@ -367,10 +371,14 @@ impl AppState {
             },
         );
         let predictive_limiter = Arc::new(openproxy_pipeline::PredictiveRateLimiter::new());
+        let api_key_cache = Arc::new(dashmap::DashMap::new());
         spawn_memory_cleanup(
             &supervisor,
+            Arc::clone(&db_pool),
             Arc::clone(&selection_registry),
             circuit_breaker.clone(),
+            Arc::clone(&predictive_limiter),
+            Arc::clone(&api_key_cache),
         );
 
         openproxy_core::notifications::init_broadcast();
@@ -408,7 +416,7 @@ impl AppState {
             vacuum_status,
             background_tx,
             supervisor,
-            api_key_cache: Arc::new(dashmap::DashMap::new()),
+            api_key_cache,
         }
     }
 
@@ -440,6 +448,21 @@ impl AppState {
         } else {
             self.api_key_cache.clear();
         }
+    }
+
+    /// Prune expired entries from the API key in-memory cache.
+    pub fn prune_api_key_cache(&self) -> usize {
+        let now = std::time::Instant::now();
+        let mut pruned = 0;
+        self.api_key_cache.retain(|_, (_, exp)| {
+            if now < *exp {
+                true
+            } else {
+                pruned += 1;
+                false
+            }
+        });
+        pruned
     }
 
     /// Borrow application services.
@@ -1012,12 +1035,18 @@ fn spawn_rate_limiter_cleanup(
 
 fn spawn_memory_cleanup(
     supervisor: &crate::background::BackgroundSupervisor,
+    db_pool: Arc<openproxy_db::DbPool>,
     selection_registry: Arc<openproxy_types::SelectionRegistry>,
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
+    predictive_limiter: Arc<openproxy_pipeline::PredictiveRateLimiter>,
+    api_key_cache: Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
 ) {
     supervisor.spawn(crate::background::MemoryCleanupService {
+        db_pool,
         selection_registry,
         circuit_breaker,
+        predictive_limiter,
+        api_key_cache,
     });
 }
 

@@ -305,7 +305,7 @@ impl UpstreamClient {
                     .pool_idle_timeout(std::time::Duration::from_secs(20))
                     .build(connector);
             let pool = Pool::new();
-            spawn_eviction_loop(Pool::clone(&pool));
+            pool.spawn_eviction_loop();
             Arc::new(Self {
                 pool,
                 transport: Arc::new(ProductionTransport { hyper }),
@@ -314,7 +314,7 @@ impl UpstreamClient {
         #[cfg(not(feature = "upstream-hyper"))]
         {
             let pool = Pool::new();
-            spawn_eviction_loop(Pool::clone(&pool));
+            pool.spawn_eviction_loop();
             Arc::new(Self { pool })
         }
     }
@@ -582,27 +582,6 @@ where
         timeout_err = &mut timeout_fut => Err(timeout_err),
         res = &mut send_fut => res.map_err(handle_dispatch_error),
     }
-}
-
-#[cfg(feature = "upstream-hyper")]
-fn spawn_eviction_loop(pool: Pool) {
-    // The eviction loop is a non-critical best-effort cleanup task.
-    // Skip it when no Tokio runtime is active — this is the case for
-    // `#[test]` (sync) call sites that build an `UpstreamClient` and
-    // drop it without running a Tokio reactor.
-    if tokio::runtime::Handle::try_current().is_err() {
-        return;
-    }
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            let evicted = pool.evict_older_than(std::time::Duration::from_mins(1));
-            if evicted > 0 {
-                tracing::debug!(evicted, "upstream pool eviction sweep");
-            }
-        }
-    });
 }
 
 #[cfg(feature = "upstream-hyper")]

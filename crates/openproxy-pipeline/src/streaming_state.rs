@@ -16,6 +16,7 @@ use crate::translation::OpenAIUsage;
 /// Maximum allowed length for accumulated tool call arguments string.
 /// Prevents unbounded memory growth from malicious or buggy upstream.
 const MAX_TOOL_CALL_ARGS_BYTES: usize = 1_048_576; // 1 MiB
+const MAX_TOOL_CALL_INDICES: usize = 256;
 
 #[derive(Default)]
 pub struct ToolCallAccumulator {
@@ -42,6 +43,9 @@ impl ToolCallAccumulator {
     /// correct behavior), this is a no-op — the fragment is returned
     /// as-is and the running total is updated.
     pub fn process<'a>(&mut self, index: u64, arguments: &'a str) -> &'a str {
+        if !self.args_by_index.contains_key(&index) && self.args_by_index.len() >= MAX_TOOL_CALL_INDICES {
+            return "";
+        }
         let prev = self.args_by_index.entry(index).or_default();
         let fragment = extract_argument_fragment(prev, arguments);
 

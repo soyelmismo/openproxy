@@ -131,10 +131,13 @@ impl BackgroundService for RateLimiterCleanupService {
     }
 }
 
-/// Periodically performs memory allocator trimming and cache eviction.
+/// Periodically performs memory allocator trimming, SQLite shrinking and cache eviction.
 pub struct MemoryCleanupService {
+    pub db_pool: Arc<openproxy_db::DbPool>,
     pub selection_registry: Arc<openproxy_types::SelectionRegistry>,
     pub circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
+    pub predictive_limiter: Arc<openproxy_pipeline::PredictiveRateLimiter>,
+    pub api_key_cache: Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
 }
 
 impl BackgroundService for MemoryCleanupService {
@@ -154,9 +157,19 @@ impl BackgroundService for MemoryCleanupService {
                         libmimalloc_sys::mi_collect(true);
                     }
                     slow_counter = slow_counter.wrapping_add(1);
-                    if slow_counter.is_multiple_of(10) {
+                    if slow_counter.is_multiple_of(5) {
+                        let now = std::time::Instant::now();
+                        self.api_key_cache.retain(|_, (_, exp)| now < *exp);
+                        openproxy_adapters::adapters::antigravity::prune_plan_cache();
                         let _ = self.selection_registry.prune_stale(Duration::from_hours(1));
                         let _ = self.circuit_breaker.prune_idle(Duration::from_hours(1));
+                        let _ = self.predictive_limiter.prune_stale(Duration::from_hours(1));
+                        let pool_clone = Arc::clone(&self.db_pool);
+                        let _ = tokio::task::spawn_blocking(move || {
+                            pool_clone.shrink_memory();
+                            pool_clone.checkpoint_wal();
+                        })
+                        .await;
                     }
                 }
             }

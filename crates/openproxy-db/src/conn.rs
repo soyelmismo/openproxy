@@ -93,7 +93,7 @@ impl DbPool {
 
         // Readers: open multiple handles on the same file to avoid mutex contention
         // on high-throughput API endpoints.
-        let num_readers = 16;
+        let num_readers = 4;
         let mut readers = Vec::with_capacity(num_readers);
         for i in 0..num_readers {
             let reader = open_and_configure_reader(path, flags, i)?;
@@ -238,6 +238,25 @@ impl DbPool {
         configure_connection(&conn)?;
         Ok(conn)
     }
+
+    /// Run PRAGMA shrink_memory on writer and all readers to release unneeded heap pages.
+    pub fn shrink_memory(&self) {
+        if let Some(w) = self.try_writer_for(std::time::Duration::from_millis(100)) {
+            let _ = w.execute_batch("PRAGMA shrink_memory;");
+        }
+        for r_mutex in self.readers.as_ref() {
+            if let Some(r) = r_mutex.try_lock_for(std::time::Duration::from_millis(50)) {
+                let _ = r.execute_batch("PRAGMA shrink_memory;");
+            }
+        }
+    }
+
+    /// Run PRAGMA wal_checkpoint(TRUNCATE) on writer.
+    pub fn checkpoint_wal(&self) {
+        if let Some(w) = self.try_writer_for(std::time::Duration::from_millis(500)) {
+            let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+        }
+    }
 }
 
 fn configure_temp_dir(conn: &Connection, path: &Path) {
@@ -274,8 +293,8 @@ fn configure_connection(conn: &Connection) -> Result<()> {
          PRAGMA busy_timeout = 5000; \
          PRAGMA synchronous = NORMAL; \
          PRAGMA wal_autocheckpoint = 1000; \
-         PRAGMA mmap_size = 8388608; \
-         PRAGMA cache_size = -2000; \
+         PRAGMA mmap_size = 4194304; \
+         PRAGMA cache_size = -1000; \
          PRAGMA temp_store = MEMORY;",
     )
     .map_err(crate::error::map_db_error)?;

@@ -162,11 +162,20 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Debug
                 msg_opt = rx.recv() => {
                     match msg_opt {
                         Some(entry) => {
-                            if let Ok(mut json) = serde_json::to_string(&entry) {
-                                json.push('\n');
-                                let _ = file.write_all(json.as_bytes()).await;
-                                let _ = file.flush().await;
+                            let mut batch = vec![entry];
+                            while batch.len() < 50 {
+                                match rx.try_recv() {
+                                    Ok(e) => batch.push(e),
+                                    Err(_) => break,
+                                }
                             }
+                            for item in batch {
+                                if let Ok(mut json) = serde_json::to_string(&item) {
+                                    json.push('\n');
+                                    let _ = file.write_all(json.as_bytes()).await;
+                                }
+                            }
+                            let _ = file.flush().await;
                         }
                         None => break,
                     }
