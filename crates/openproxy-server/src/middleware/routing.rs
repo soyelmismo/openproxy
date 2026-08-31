@@ -140,7 +140,11 @@ fn apply_auth_restrictions_to_plan(
 
     let has_restrictions = auth.key.blacklisted_providers.is_some()
         || auth.key.blacklisted_models.is_some()
-        || auth.key.allowed_models.as_ref().is_some_and(|a| !a.is_empty());
+        || auth
+            .key
+            .allowed_models
+            .as_ref()
+            .is_some_and(|a| !a.is_empty());
 
     if has_restrictions {
         filter_combo_targets_by_auth(state, targets, auth)?;
