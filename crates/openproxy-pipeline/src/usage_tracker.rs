@@ -213,7 +213,13 @@ impl UsageTracker {
             proxy_status,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
-        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
+        let request_headers = if self.is_recording() {
+            Some(crate::redact::redact_btreemap_sensitive(
+                req.request_headers.clone(),
+            ))
+        } else {
+            None
+        };
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
@@ -237,7 +243,7 @@ impl UsageTracker {
             .proxy_status(proxy_status)
             .is_proxy_rotated(err.is_proxy_rotated())
             .response_body_json(response_body_json)
-            .request_headers(Some(request_headers))
+            .request_headers(request_headers)
             .is_streaming(is_streaming)
             .stream_complete(stream_complete)
             .record()
