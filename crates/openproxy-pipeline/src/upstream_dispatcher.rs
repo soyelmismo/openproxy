@@ -860,13 +860,16 @@ impl UpstreamDispatcher {
         }
 
         let total_ms_now = started.elapsed().as_millis() as u64;
-        let request_headers_btm: std::collections::BTreeMap<String, String> =
-            crate::redact::redact_btreemap_sensitive(
+        let request_headers_btm = if self.tracker.is_recording() {
+            Some(crate::redact::redact_btreemap_sensitive(
                 headers
                     .iter()
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
                     .collect::<std::collections::BTreeMap<String, String>>(),
-            );
+            ))
+        } else {
+            None
+        };
         let resp_json = serde_json::to_value(&openai_response).unwrap_or_default();
         let usage_tuple =
             match crate::usage_tracker::UsageRecordBuilder::new(&self.tracker, req, combo, target)
@@ -885,7 +888,7 @@ impl UpstreamDispatcher {
                 .completion_tokens_opt(Some(completion_tokens))
                 .cached_tokens(None)
                 .response_body_json(Some(resp_json))
-                .request_headers(Some(request_headers_btm))
+                .request_headers(request_headers_btm)
                 .response_headers(None)
                 .is_streaming(false)
                 .stream_complete(true)
@@ -1053,14 +1056,17 @@ impl UpstreamDispatcher {
             .and_then(|d| d.cached_tokens);
 
         let total_ms_now = params.started.elapsed().as_millis() as u64;
-        let request_headers_btm: std::collections::BTreeMap<String, String> =
-            crate::redact::redact_btreemap_sensitive(
+        let request_headers_btm = if self.tracker.is_recording() {
+            Some(crate::redact::redact_btreemap_sensitive(
                 params
                     .headers
                     .iter()
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
                     .collect::<std::collections::BTreeMap<String, String>>(),
-            );
+            ))
+        } else {
+            None
+        };
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
             params.req,
@@ -1082,7 +1088,7 @@ impl UpstreamDispatcher {
         .completion_tokens_opt(completion_tokens)
         .cached_tokens(cached_tokens)
         .response_body_json(Some(args.response_body_raw))
-        .request_headers(Some(request_headers_btm))
+        .request_headers(request_headers_btm)
         .response_headers(args.response_headers)
         .is_streaming(false)
         .stream_complete(true)
