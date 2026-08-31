@@ -353,10 +353,7 @@ mod tests {
             extract_command("kubectl get pods"),
             Some("kubectl get pods".into())
         );
-        assert_eq!(
-            extract_command("docker ps -a"),
-            Some("docker ps -a".into())
-        );
+        assert_eq!(extract_command("docker ps -a"), Some("docker ps -a".into()));
     }
 
     #[test]
