@@ -63,18 +63,12 @@ pub fn compute_error_fingerprint(err: &openproxy_types::CoreError) -> u64 {
     match err {
         openproxy_types::CoreError::UpstreamError { status, body, .. } => {
             status.hash(&mut hasher);
-            let mut limit = body.len().min(64);
-            while limit > 0 && !body.is_char_boundary(limit) {
-                limit -= 1;
-            }
+            let limit = body.floor_char_boundary(64.min(body.len()));
             let prefix = &body[..limit];
             prefix.hash(&mut hasher);
         }
         openproxy_types::CoreError::UpstreamConnection(msg) => {
-            let mut limit = msg.len().min(64);
-            while limit > 0 && !msg.is_char_boundary(limit) {
-                limit -= 1;
-            }
+            let limit = msg.floor_char_boundary(64.min(msg.len()));
             let prefix = &msg[..limit];
             prefix.hash(&mut hasher);
         }
