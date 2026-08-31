@@ -1469,8 +1469,8 @@ function renderModal() {
   const log = attempt.row;
   const safeAttempt = { ...attempt, detail: undefined, row: undefined };
   const logObj = detailObj && log ? {
-    ...log,
     ...detailObj,
+    ...log,
     request_body_json: detailObj['request_body_json'] ?? log.request_body_json,
     response_body_json: detailObj['response_body_json'] ?? log.response_body_json,
     request_headers: detailObj['request_headers'] ?? log.request_headers,
@@ -1535,7 +1535,9 @@ export function closeLogDetailModal(e: Event | null): void {
 }
 
 export function updateOpenLogDetail(_row: LogDetailLog | null | undefined): void {
-  // No-op. The clockStore interval triggers `renderModal()` which pulls fresh data from `liveLogsStore`.
+  if (state.logs.selectedIdentity) {
+    renderModal();
+  }
 }
 
 // A row has complete detail if it carries a request body, a response
