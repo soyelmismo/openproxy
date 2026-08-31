@@ -338,4 +338,63 @@ mod tests {
         let text = "$ git status\nOn branch main\n";
         assert_eq!(extract_command(text), Some("git status".into()));
     }
+
+    #[test]
+    fn test_extract_command_known_prefixes() {
+        assert_eq!(
+            extract_command("cargo test --lib"),
+            Some("cargo test --lib".into())
+        );
+        assert_eq!(
+            extract_command("  $ npm install express"),
+            Some("npm install express".into())
+        );
+        assert_eq!(
+            extract_command("kubectl get pods"),
+            Some("kubectl get pods".into())
+        );
+        assert_eq!(
+            extract_command("docker ps -a"),
+            Some("docker ps -a".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_command_unknown_and_empty() {
+        assert_eq!(extract_command("echo hello world"), None);
+        assert_eq!(extract_command(""), None);
+        assert_eq!(extract_command("\n\n\n\n"), None);
+    }
+
+    #[test]
+    fn test_detector_git_diff() {
+        let text = "$ git diff\ndiff --git a/src/main.rs b/src/main.rs\n@@ -1,3 +1,3 @@\n";
+        let d = detect(text);
+        assert_eq!(d.id, "git-diff");
+        assert_eq!(d.confidence, 0.95);
+    }
+
+    #[test]
+    fn test_detector_docker_ps() {
+        let text = "CONTAINER ID   IMAGE     COMMAND   CREATED\n123456789abc   ubuntu    \"bash\"    2 hours ago\n";
+        let d = detect(text);
+        assert_eq!(d.id, "docker-ps");
+        assert_eq!(d.confidence, 0.70);
+    }
+
+    #[test]
+    fn test_detector_npm_test() {
+        let text = "$ npm test\nPASS src/index.test.ts\nTest Suites: 1 passed, 1 total\nTests: 2 passed, 2 total\n";
+        let d = detect(text);
+        assert_eq!(d.id, "npm-test");
+        assert_eq!(d.confidence, 0.95);
+    }
+
+    #[test]
+    fn test_detector_generic_error() {
+        let text = "Something failed\nerror: process exited with code 1\n";
+        let d = detect(text);
+        assert_eq!(d.id, "generic-error");
+        assert_eq!(d.confidence, 0.30);
+    }
 }
