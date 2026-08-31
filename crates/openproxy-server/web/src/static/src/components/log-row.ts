@@ -64,7 +64,7 @@ function buildLogRowCells(
   
   if (has("client")) {
     const isSkipped = attempt.stage === "predict_skipped" || attempt.terminalKind === "predict_skipped";
-    const isWinner = isSkipped ? false : (row ? row.client_response : (attempt.terminal ? false : true));
+    const isWinner = isSkipped ? false : (row ? row.client_response : (attempt.terminalKind ? attempt.terminalKind === "completed" : true));
     if (isWinner) {
       cells.push(html`<span class="log-client log-client--winner" title="Response delivered to client (winning attempt)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8.5l3.5 3.5L13 5.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`);
     } else {

@@ -743,14 +743,38 @@ impl ChunkProcessor<'_> {
     async fn handle_translated_done(
         &mut self,
         ctx: &StreamContext<'_>,
-        chunk: &mut crate::sse::UpstreamSseChunk,
+        mut chunk: crate::sse::UpstreamSseChunk,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
+        if chunk.usage.is_some() {
+            self.state.usage = chunk.usage.take();
+        }
         if chunk.stop_reason.is_some() {
             self.state.stop_reason = chunk.stop_reason.take();
         }
+        let json_str = chunk.into_json_string();
+
+        if let Some(a) = self.state.acc.as_mut() {
+            if let Some(u) = &self.state.usage {
+                a.set_usage(u.to_owned());
+            }
+            if let Some(sr) = &self.state.stop_reason {
+                a.set_stop_reason(sr);
+            }
+            a.append_openai_raw(&json_str);
+        }
+
         if let Some(cancel) = self.check_race_cancelled(ctx) {
             return Ok(cancel);
         }
+
+        let sse_frame = crate::sse::build_sse_frame(&json_str);
+        if let Err(e) = ctx.sink.send(sse_frame).await {
+            let fail_ctx = self.state.make_failure_context(ctx);
+            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
+                self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
+            )));
+        }
+
         if let Err(crate::race_sink::StreamSinkError::Lost) =
             ctx.sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
         {
@@ -826,9 +850,9 @@ impl ChunkProcessor<'_> {
         );
 
         match parsed {
-            Ok(Some(mut chunk)) => {
+            Ok(Some(chunk)) => {
                 if chunk.done {
-                    self.handle_translated_done(ctx, &mut chunk).await
+                    self.handle_translated_done(ctx, chunk).await
                 } else {
                     self.handle_translated_chunk(ctx, stream, chunk).await
                 }

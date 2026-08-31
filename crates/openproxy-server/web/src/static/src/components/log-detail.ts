@@ -1469,12 +1469,12 @@ function renderModal() {
   const log = attempt.row;
   const safeAttempt = { ...attempt, detail: undefined, row: undefined };
   const logObj = detailObj && log ? {
-    ...detailObj,
     ...log,
-    request_body_json: log.request_body_json ?? detailObj['request_body_json'],
-    response_body_json: log.response_body_json ?? detailObj['response_body_json'],
-    request_headers: log.request_headers ?? detailObj['request_headers'],
-    response_headers: log.response_headers ?? detailObj['response_headers'],
+    ...detailObj,
+    request_body_json: detailObj['request_body_json'] ?? log.request_body_json,
+    response_body_json: detailObj['response_body_json'] ?? log.response_body_json,
+    request_headers: detailObj['request_headers'] ?? log.request_headers,
+    response_headers: detailObj['response_headers'] ?? log.response_headers,
     stages: [safeAttempt],
     detail: undefined
   } : {
