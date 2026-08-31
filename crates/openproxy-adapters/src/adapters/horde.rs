@@ -581,11 +581,23 @@ impl HordeAdapter {
         None
     }
 
+    fn check_interrogate_forms_caption(status_json: &serde_json::Value) -> Option<String> {
+        let forms = status_json.get("forms")?.as_array()?;
+        Self::parse_form_result_caption(forms)
+    }
+
+    fn check_interrogate_result_caption(status_json: &serde_json::Value) -> Option<String> {
+        let result = status_json.get("result")?;
+        if let Some(s) = result.as_str() {
+            return Some(s.trim().to_string());
+        }
+        let caption = result.get("caption")?.as_str()?;
+        Some(caption.trim().to_string())
+    }
+
     /// Parse caption string from a Horde interrogate status response.
     pub fn parse_interrogate_status_caption(status_json: &serde_json::Value) -> Option<String> {
-        if let Some(forms) = status_json.get("forms").and_then(|v| v.as_array())
-            && let Some(cap) = Self::parse_form_result_caption(forms)
-        {
+        if let Some(cap) = Self::check_interrogate_forms_caption(status_json) {
             return Some(cap);
         }
 
@@ -593,13 +605,8 @@ impl HordeAdapter {
             return Some(caption.trim().to_string());
         }
 
-        if let Some(result) = status_json.get("result") {
-            if let Some(s) = result.as_str() {
-                return Some(s.trim().to_string());
-            }
-            if let Some(caption) = result.get("caption").and_then(|v| v.as_str()) {
-                return Some(caption.trim().to_string());
-            }
+        if let Some(cap) = Self::check_interrogate_result_caption(status_json) {
+            return Some(cap);
         }
 
         if let Some(gens) = status_json.get("generations").and_then(|v| v.as_array()) {
@@ -607,6 +614,18 @@ impl HordeAdapter {
         }
 
         None
+    }
+
+    fn any_form_done(status_json: &serde_json::Value) -> bool {
+        let Some(arr) = status_json.get("forms").and_then(|v| v.as_array()) else {
+            return false;
+        };
+        arr.iter().any(|f| {
+            f.get("state")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.eq_ignore_ascii_case("done"))
+                || f.get("result").is_some()
+        })
     }
 
     /// Check if interrogation status is done or faulted.
@@ -620,17 +639,7 @@ impl HordeAdapter {
                 .get("done")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
-            || status_json
-                .get("forms")
-                .and_then(|v| v.as_array())
-                .is_some_and(|arr| {
-                    arr.iter().any(|f| {
-                        f.get("state")
-                            .and_then(|v| v.as_str())
-                            .is_some_and(|s| s.eq_ignore_ascii_case("done"))
-                            || f.get("result").is_some()
-                    })
-                });
+            || Self::any_form_done(status_json);
         let is_faulted = state.eq_ignore_ascii_case("faulted")
             || status_json
                 .get("faulted")
@@ -1148,42 +1157,47 @@ fn extract_lora_and_ti_tags(raw_prompt: &str) -> (String, Vec<HordeLora>, Vec<Ho
 
     let mut cursor = 0;
     while cursor < raw_prompt.len() && raw_prompt.is_char_boundary(cursor) {
-        if let Some(start_idx) = raw_prompt[cursor..].find('<') {
-            let absolute_start = cursor + start_idx;
-            if !raw_prompt.is_char_boundary(absolute_start) {
-                without_tags.push_str(&raw_prompt[cursor..]);
-                break;
-            }
-            without_tags.push_str(&raw_prompt[cursor..absolute_start]);
-            if let Some(end_idx) = raw_prompt[absolute_start..].find('>') {
-                let absolute_end = absolute_start + end_idx;
-                if !raw_prompt.is_char_boundary(absolute_start + 1)
-                    || !raw_prompt.is_char_boundary(absolute_end)
-                    || !raw_prompt.is_char_boundary(absolute_end + 1)
-                {
-                    without_tags.push_str(&raw_prompt[absolute_start..]);
-                    break;
-                }
-                let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
-                let tag_trimmed = tag_content.trim();
+        let Some(start_idx) = raw_prompt[cursor..].find('<') else {
+            without_tags.push_str(&raw_prompt[cursor..]);
+            break;
+        };
 
-                if let Some(lora) = parse_lora_tag(tag_trimmed) {
-                    loras.push(lora);
-                } else if let Some(ti) = parse_ti_tag(tag_trimmed) {
-                    tis.push(ti);
-                } else {
-                    without_tags.push_str(&raw_prompt[absolute_start..=absolute_end]);
-                }
-                cursor = absolute_end + 1;
-            } else {
-                without_tags.push_str(&raw_prompt[absolute_start..]);
-                break;
-            }
-        } else {
+        let absolute_start = cursor + start_idx;
+        if !raw_prompt.is_char_boundary(absolute_start) {
             without_tags.push_str(&raw_prompt[cursor..]);
             break;
         }
+
+        without_tags.push_str(&raw_prompt[cursor..absolute_start]);
+
+        let Some(end_idx) = raw_prompt[absolute_start..].find('>') else {
+            without_tags.push_str(&raw_prompt[absolute_start..]);
+            break;
+        };
+
+        let absolute_end = absolute_start + end_idx;
+        if !raw_prompt.is_char_boundary(absolute_start + 1)
+            || !raw_prompt.is_char_boundary(absolute_end)
+            || !raw_prompt.is_char_boundary(absolute_end + 1)
+        {
+            without_tags.push_str(&raw_prompt[absolute_start..]);
+            break;
+        }
+
+        let tag_content = &raw_prompt[absolute_start + 1..absolute_end];
+        let tag_trimmed = tag_content.trim();
+
+        if let Some(lora) = parse_lora_tag(tag_trimmed) {
+            loras.push(lora);
+        } else if let Some(ti) = parse_ti_tag(tag_trimmed) {
+            tis.push(ti);
+        } else {
+            without_tags.push_str(&raw_prompt[absolute_start..=absolute_end]);
+        }
+
+        cursor = absolute_end + 1;
     }
+
     (without_tags, loras, tis)
 }
 
@@ -1383,50 +1397,50 @@ pub fn parse_prompt_directives(raw_prompt: &str) -> ParsedPromptDirectives {
 /// Clean up stray punctuation, multiple spaces, and dangling commas left after extracting directives.
 pub fn clean_residual_prompt(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
-    let mut in_sep = false;
-    let mut has_comma = false;
-    let mut has_trailing_space = false;
+    let mut pending_comma = false;
+    let mut pending_space = false;
 
     for c in s.chars() {
-        if c == ',' || c.is_whitespace() {
-            in_sep = true;
-            if c == ',' {
-                has_comma = true;
-                has_trailing_space = false;
-            } else {
-                has_trailing_space = true;
-            }
+        if c == ',' {
+            pending_comma = true;
+            pending_space = false;
+        } else if c.is_whitespace() {
+            pending_space = true;
         } else {
-            if in_sep {
-                if !result.is_empty() {
-                    if has_comma {
-                        result.push(',');
-                        if has_trailing_space {
-                            result.push(' ');
-                        }
-                    } else {
+            if !result.is_empty() {
+                if pending_comma {
+                    result.push(',');
+                    if pending_space {
                         result.push(' ');
                     }
+                } else if pending_space {
+                    result.push(' ');
                 }
-                in_sep = false;
-                has_comma = false;
-                has_trailing_space = false;
             }
             result.push(c);
+            pending_comma = false;
+            pending_space = false;
         }
     }
 
     result
 }
 
+#[allow(clippy::collapsible_if)]
+fn check_horde_quota_error(body: &serde_json::Value) -> Option<&str> {
+    if body.get("kudos").is_none() && body.get("username").is_none() {
+        if let Some(msg) = body.get("message").and_then(|v| v.as_str()) {
+            return Some(msg);
+        }
+    }
+    None
+}
+
 pub fn parse_horde_quota(
     body: &serde_json::Value,
     last_fetched_at: &str,
 ) -> openproxy_types::AccountQuota {
-    if let Some(msg) = body.get("message").and_then(|v| v.as_str())
-        && body.get("kudos").is_none()
-        && body.get("username").is_none()
-    {
+    if let Some(msg) = check_horde_quota_error(body) {
         return openproxy_types::AccountQuota {
             session_used: None,
             session_limit: None,
