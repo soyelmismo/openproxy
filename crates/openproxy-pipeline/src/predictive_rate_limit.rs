@@ -1,7 +1,7 @@
 use openproxy_types::combos::ComboTarget;
 use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use openproxy_types::providers::RateLimitScope;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -282,7 +282,7 @@ pub enum TargetReadiness {
 
 #[repr(align(64))]
 struct Shard {
-    inner: Mutex<HashMap<u64, TargetPredictiveState>>,
+    inner: RwLock<HashMap<u64, TargetPredictiveState>>,
 }
 
 pub struct PredictiveRateLimiter {
@@ -299,7 +299,7 @@ impl PredictiveRateLimiter {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| Shard {
-                inner: Mutex::new(HashMap::new()),
+                inner: RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -353,9 +353,15 @@ impl PredictiveRateLimiter {
     /// Evalúa la disponibilidad predictiva del target por clave sin modificar contadores.
     pub fn evaluate_key(&self, key: u64, now_ms: u64) -> TargetReadiness {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
-        let state = map.entry(key).or_default();
 
+        if let Some(state) = shard.inner.read().get(&key) {
+            let mut state_clone = state.clone();
+            state_clone.refresh(now_ms);
+            return state_clone.evaluate(now_ms);
+        }
+
+        let mut map = shard.inner.write();
+        let state = map.entry(key).or_default();
         state.refresh(now_ms);
         state.evaluate(now_ms)
     }
@@ -375,7 +381,7 @@ impl PredictiveRateLimiter {
     /// (Ready o Probe) y reserva 1 petición en vuelo y contador de ventana.
     pub fn acquire_key(&self, key: u64, now_ms: u64) -> bool {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
+        let mut map = shard.inner.write();
         let state = map.entry(key).or_default();
 
         state.refresh(now_ms);
@@ -398,7 +404,7 @@ impl PredictiveRateLimiter {
         now_ms: u64,
     ) -> bool {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
+        let mut map = shard.inner.write();
         let state = map.entry(key).or_default();
 
         state.refresh(now_ms);
@@ -421,7 +427,7 @@ impl PredictiveRateLimiter {
     /// Decrementa peticiones en vuelo por clave (en caso de cancelación o fallo temprano).
     pub fn release_in_flight_key(&self, key: u64) {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
+        let mut map = shard.inner.write();
         if let Some(state) = map.get_mut(&key) {
             state.in_flight = state.in_flight.saturating_sub(1);
         }
@@ -442,7 +448,7 @@ impl PredictiveRateLimiter {
         now_ms: u64,
     ) {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
+        let mut map = shard.inner.write();
         let state = map.entry(key).or_default();
 
         state.apply_success(remaining_header, reset_window_secs, now_ms);
@@ -464,7 +470,7 @@ impl PredictiveRateLimiter {
     /// Reporta HTTP 429 Too Many Requests por clave (Multiplicative Decrease / Burst Cap).
     pub fn report_rate_limited_key(&self, key: u64, retry_after_secs: Option<u64>, now_ms: u64) {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
+        let mut map = shard.inner.write();
         let state = map.entry(key).or_default();
 
         state.in_flight = state.in_flight.saturating_sub(1);
@@ -512,7 +518,7 @@ impl PredictiveRateLimiter {
         now_ms: u64,
     ) {
         let shard = self.shard_for(key);
-        let mut map = shard.inner.lock();
+        let mut map = shard.inner.write();
         let state = map.entry(key).or_default();
 
         state.report_upstream_error_with_fingerprint(fingerprint, now_ms);
@@ -625,7 +631,7 @@ mod tests {
         // learned_burst debe haber aumentado de 2 a 3
         let key = PredictiveRateLimiter::compute_key(combo, target);
         let shard = limiter.shard_for(key);
-        let map = shard.inner.lock();
+        let map = shard.inner.read();
         let state = map.get(&key).unwrap();
         assert_eq!(
             state.learned_burst, 3,
@@ -722,7 +728,7 @@ mod tests {
         let key = PredictiveRateLimiter::compute_key(combo, target);
         let shard = limiter.shard_for(key);
         let reset_at = {
-            let map = shard.inner.lock();
+            let map = shard.inner.read();
             let state = map.get(&key).unwrap();
             assert_eq!(
                 state.learned_burst, DEFAULT_BURST_CAPACITY,
@@ -763,7 +769,7 @@ mod tests {
         let key = PredictiveRateLimiter::compute_key(combo, target);
         let shard = limiter.shard_for(key);
         let reset_1 = {
-            let map = shard.inner.lock();
+            let map = shard.inner.read();
             map.get(&key).unwrap().reset_at_ms
         };
         let penalty_1 = reset_1 - now;
@@ -774,7 +780,7 @@ mod tests {
         limiter.report_upstream_error(combo, target, now);
 
         let reset_2 = {
-            let map = shard.inner.lock();
+            let map = shard.inner.read();
             map.get(&key).unwrap().reset_at_ms
         };
         let penalty_2 = reset_2 - now;

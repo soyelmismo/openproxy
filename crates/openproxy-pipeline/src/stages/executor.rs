@@ -220,7 +220,9 @@ async fn resolve_target_proxy_mode(
     let provider_id = target.target.provider_id.clone();
     let prov_opt = tokio::task::spawn_blocking(move || {
         let conn = conn_arc.lock();
-        openproxy_db::providers::get(&conn, &provider_id).ok().flatten()
+        openproxy_db::providers::get(&conn, &provider_id)
+            .ok()
+            .flatten()
     })
     .await
     .unwrap_or_default();

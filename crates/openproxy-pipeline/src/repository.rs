@@ -187,13 +187,9 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        if let Some(id) = openproxy_db::notifications::insert(
-            &conn,
-            kind,
-            payload,
-            dedup_key,
-            provider_id,
-        )? {
+        if let Some(id) =
+            openproxy_db::notifications::insert(&conn, kind, payload, dedup_key, provider_id)?
+        {
             let created_at = openproxy_db::notifications::get_created_at(&conn, id)?
                 .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
             drop(conn);
