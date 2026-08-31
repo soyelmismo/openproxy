@@ -128,7 +128,8 @@ pub struct AppState {
     /// Supervisor for managing background service lifecycles and graceful shutdown.
     supervisor: Arc<crate::background::BackgroundSupervisor>,
     /// In-memory cache for validated API keys (key_hash -> (Arc<ApiKey>, expires_at))
-    api_key_cache: Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
+    api_key_cache:
+        Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
 }
 
 /// VACUUM status reported to the dashboard. Updated by the background
@@ -412,7 +413,10 @@ impl AppState {
     }
 
     /// Retrieve an active API key from the fast in-memory cache if not expired.
-    pub fn get_cached_api_key(&self, key_hash: &str) -> Option<Arc<openproxy_core::api_keys::ApiKey>> {
+    pub fn get_cached_api_key(
+        &self,
+        key_hash: &str,
+    ) -> Option<Arc<openproxy_core::api_keys::ApiKey>> {
         let entry = self.api_key_cache.get(key_hash)?;
         if std::time::Instant::now() < entry.1 {
             Some(Arc::clone(&entry.0))
