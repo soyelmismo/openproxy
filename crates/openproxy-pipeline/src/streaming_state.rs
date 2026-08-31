@@ -43,7 +43,9 @@ impl ToolCallAccumulator {
     /// correct behavior), this is a no-op — the fragment is returned
     /// as-is and the running total is updated.
     pub fn process<'a>(&mut self, index: u64, arguments: &'a str) -> &'a str {
-        if !self.args_by_index.contains_key(&index) && self.args_by_index.len() >= MAX_TOOL_CALL_INDICES {
+        if !self.args_by_index.contains_key(&index)
+            && self.args_by_index.len() >= MAX_TOOL_CALL_INDICES
+        {
             return "";
         }
         let prev = self.args_by_index.entry(index).or_default();

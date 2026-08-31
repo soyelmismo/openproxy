@@ -1367,9 +1367,7 @@ pub async fn test_proxy_connection(
     username: Option<&str>,
     password: Option<&str>,
 ) -> Result<i64, String> {
-    use openproxy_adapters::upstream::{
-        ResolvedTimeouts, TimeoutProfile, UpstreamRequest,
-    };
+    use openproxy_adapters::upstream::{ResolvedTimeouts, TimeoutProfile, UpstreamRequest};
 
     let proxy_url = if let (Some(u), Some(p)) = (username, password) {
         format!("{type}://{u}:{p}@{host}:{port}")

@@ -137,7 +137,8 @@ pub struct MemoryCleanupService {
     pub selection_registry: Arc<openproxy_types::SelectionRegistry>,
     pub circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
     pub predictive_limiter: Arc<openproxy_pipeline::PredictiveRateLimiter>,
-    pub api_key_cache: Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
+    pub api_key_cache:
+        Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
 }
 
 impl BackgroundService for MemoryCleanupService {
