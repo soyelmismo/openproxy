@@ -372,8 +372,8 @@ async fn fetch_antigravity_models_from_endpoint(
 }
 
 static PLAN_CACHE: std::sync::LazyLock<
-    parking_lot::Mutex<std::collections::HashMap<String, String>>,
-> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+    parking_lot::RwLock<std::collections::HashMap<String, String>>,
+> = std::sync::LazyLock::new(|| parking_lot::RwLock::new(std::collections::HashMap::new()));
 
 fn merge_summary_into_models_quota(
     models_quota: &mut openproxy_types::AccountQuota,
@@ -673,7 +673,7 @@ impl AntigravityAdapter {
         upstream: &Arc<UpstreamClient>,
         access_token: &str,
     ) -> Option<String> {
-        if let Some(plan) = PLAN_CACHE.lock().get(access_token) {
+        if let Some(plan) = PLAN_CACHE.read().get(access_token) {
             return Some(plan.clone());
         }
 
@@ -687,7 +687,7 @@ impl AntigravityAdapter {
                 try_fetch_code_assist_plan(upstream, access_token, endpoint).await
             {
                 PLAN_CACHE
-                    .lock()
+                    .write()
                     .insert(access_token.to_string(), plan_name.clone());
                 return Some(plan_name);
             }
