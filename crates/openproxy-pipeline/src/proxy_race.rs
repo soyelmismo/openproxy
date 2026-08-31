@@ -66,11 +66,7 @@ fn handle_proxy_race_winner(
     let win_id = win_proxy_id.clone();
     tokio::task::spawn_blocking(move || {
         let conn = conn_arc.lock();
-        let _ = openproxy_db::providers::update_current_proxy(
-            &conn,
-            &provider_id,
-            Some(&win_id),
-        );
+        let _ = openproxy_db::providers::update_current_proxy(&conn, &provider_id, Some(&win_id));
     });
     tracing::info!(
         provider = %target.target.provider_id,
