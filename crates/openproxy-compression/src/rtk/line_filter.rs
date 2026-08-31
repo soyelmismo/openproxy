@@ -750,8 +750,8 @@ fn truncate_unicode_safe(s: &str, max_chars: usize) -> Cow<'_, str> {
     let Some(mut cut) = find_cut_byte(s, max_chars) else {
         return Cow::Borrowed(s);
     };
-    while cut > 0 && !s.is_char_boundary(cut) {
-        cut -= 1;
+    if !s.is_char_boundary(cut) {
+        cut = s.floor_char_boundary(cut);
     }
     if max_chars <= 3 {
         Cow::Borrowed(&s[..cut])
