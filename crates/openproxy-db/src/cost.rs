@@ -38,7 +38,7 @@ fn truncate_sanitized(sanitized: &str, max_len: usize) -> String {
     s
 }
 
-pub fn redact_error_msg(raw: &str) -> (String, String) {
+pub fn redact_error_msg(raw: &str) -> String {
     static RE_SK: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
     static RE_XAPIKEY: LazyLock<regex::Regex> =
@@ -51,18 +51,11 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
     let sanitized = RE_XAPIKEY.replace_all(&sanitized, "x-api-key: [REDACTED]");
     let sanitized = RE_BEARER.replace_all(&sanitized, "Authorization: Bearer [REDACTED]");
 
-    let result = truncate_sanitized(&sanitized, 2048);
-    (result.clone(), result)
+    truncate_sanitized(&sanitized, 2048)
 }
 
-fn prepare_usage_error_msg(error_msg: Option<&String>) -> (Option<String>, Option<String>) {
-    match error_msg {
-        Some(msg) => {
-            let (sanitized, redacted) = redact_error_msg(msg);
-            (Some(sanitized), Some(redacted))
-        }
-        None => (None, None),
-    }
+fn prepare_usage_error_msg(error_msg: Option<&String>) -> Option<String> {
+    error_msg.map(|msg| redact_error_msg(msg))
 }
 
 fn insert_usage_record(
@@ -166,8 +159,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         );
     }
     let (cost_usd, tps) = compute(price, input);
-    let (error_msg_for_db, error_msg_redacted_for_db) =
-        prepare_usage_error_msg(input.error_msg.as_ref());
+    let error_msg_for_db = prepare_usage_error_msg(input.error_msg.as_ref());
 
     let rowid = insert_usage_record(
         conn,
@@ -175,7 +167,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         cost_usd,
         tps,
         error_msg_for_db.as_deref(),
-        error_msg_redacted_for_db.as_deref(),
+        error_msg_for_db.as_deref(),
     )?;
 
     let row = RecentUsageRow {
@@ -197,7 +189,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         response_body_json: None,
         request_headers: None,
         response_headers: None,
-        error_message: error_msg_redacted_for_db,
+        error_message: error_msg_for_db,
         race_total: Some(input.race_total),
         race_attempts: Some(input.race_attempts),
         stop_reason: input.stop_reason.as_deref().map(str::to_owned),
@@ -396,24 +388,22 @@ mod tests {
     #[test]
     fn test_redact_error_msg() {
         let raw_msg = "Error connecting to sk-1234567890abcdef and x-api-key: my-secret-key and Authorization: Bearer my-bearer-token.";
-        let (for_db, redacted) = redact_error_msg(raw_msg);
+        let redacted = redact_error_msg(raw_msg);
 
-        assert!(!for_db.contains("sk-1234567890abcdef"));
-        assert!(for_db.contains("sk-[REDACTED]"));
+        assert!(!redacted.contains("sk-1234567890abcdef"));
+        assert!(redacted.contains("sk-[REDACTED]"));
 
-        assert!(!for_db.contains("my-secret-key"));
-        assert!(for_db.contains("x-api-key: [REDACTED]"));
+        assert!(!redacted.contains("my-secret-key"));
+        assert!(redacted.contains("x-api-key: [REDACTED]"));
 
-        assert!(!for_db.contains("my-bearer-token"));
-        assert!(for_db.contains("Authorization: Bearer [REDACTED]"));
-
-        assert_eq!(for_db, redacted);
+        assert!(!redacted.contains("my-bearer-token"));
+        assert!(redacted.contains("Authorization: Bearer [REDACTED]"));
 
         // Test truncation
         let long_msg = "a".repeat(2100);
-        let (for_db2, _) = redact_error_msg(&long_msg);
-        assert!(for_db2.ends_with("...[truncated]"));
-        assert!(for_db2.len() <= 2048 + 14); // 2048 + length of "...[truncated]"
+        let redacted2 = redact_error_msg(&long_msg);
+        assert!(redacted2.ends_with("...[truncated]"));
+        assert!(redacted2.len() <= 2048 + 14); // 2048 + length of "...[truncated]"
     }
 
     #[test]

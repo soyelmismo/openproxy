@@ -485,7 +485,7 @@ impl<'a> UsageRecordBuilder<'a> {
         };
         let error_str = self
             .err
-            .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()).0);
+            .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()));
         openproxy_types::emit_stage_event!(
             request_id: self.req.request_id,
             trace_id: self.trace_id,
