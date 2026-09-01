@@ -258,6 +258,19 @@ mod tests {
     }
 
     #[test]
+    fn test_antigravity_spoofer_default() {
+        let spoofer = AntigravitySpoofer::new();
+        assert!(spoofer.project_id.is_none());
+        let headers = spoofer.headers();
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "x-client-name" && v == "antigravity")
+        );
+        assert!(!headers.iter().any(|(k, _)| k == "x-goog-user-project"));
+    }
+
+    #[test]
     fn test_fx_spoofer() {
         let spoofer = FxSpoofer;
         let headers = spoofer.headers();
