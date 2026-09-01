@@ -47,6 +47,7 @@ fn fresh_db() -> Connection {
                  input_modalities_json  TEXT,
                  output_modalities_json TEXT,
                  model_id_normalized    TEXT,
+                 manually_disabled_at   TEXT,
                  UNIQUE(provider_id, model_id),
                  CHECK (target_format IN ('openai', 'anthropic', 'gemini', 'responses'))
              );
@@ -1062,8 +1063,22 @@ fn apply_auto_activation_with_keyword_matches_substring() {
     assert!(!active_ids.contains(&"gemini-pro"));
 }
 
+/// Pre-fix: this test asserted the *buggy* behavior — it expected
+/// `apply_auto_activation(None)` to flip three hand-disabled rows back
+/// to `active = 1`. That was exactly the regression we are fixing.
+///
+/// Post-fix (migration 000064 + `manually_disabled_at` discriminator):
+/// a row whose operator set `active = 0` within the 60-second recency
+/// window is immune to `apply_auto_activation`. The three rows stay
+/// `active = 0` because the new `AND manually_disabled_at IS NULL`
+/// filter excludes them.
+///
+/// The original happy path — "apply_auto_activation(None) activates
+/// rows the operator never touched" — is covered by
+/// `apply_auto_activation_acts_on_non_manually_disabled_within_60s`
+/// (test G).
 #[test]
-fn apply_auto_activation_with_no_keyword_enables_all() {
+fn apply_auto_activation_with_no_keyword_does_not_reactivate_manually_disabled() {
     let conn = fresh_db();
     let provider = ProviderId::new("provA");
     // Seed all three rows in a single `upsert_many` call so the
@@ -1087,8 +1102,22 @@ fn apply_auto_activation_with_no_keyword_enables_all() {
     assert_eq!(list_active(&conn, &provider).unwrap().len(), 0);
 
     let updated = apply_auto_activation(&conn, &provider, None).expect("apply none");
-    assert_eq!(updated, 3, "all three rows flipped back on");
-    assert_eq!(list_active(&conn, &provider).unwrap().len(), 3);
+    assert_eq!(
+        updated, 0,
+        "hand-disabled rows must NOT be re-activated by apply_auto_activation \
+             (manually_disabled_at IS NULL filter excludes them)"
+    );
+    // Belt-and-suspenders: every row still has `active = false` and a
+    // non-NULL `manually_disabled_at` timestamp.
+    assert_eq!(list_active(&conn, &provider).unwrap().len(), 0);
+    for m in list_all(&conn).unwrap() {
+        assert!(!m.active, "{} still hand-disabled", m.model_id.as_str());
+        assert!(
+            m.manually_disabled_at.is_some(),
+            "{} carries the manual-disable marker",
+            m.model_id.as_str()
+        );
+    }
 }
 
 #[test]
@@ -2394,4 +2423,596 @@ fn sync_and_upsert_preserves_manually_configured_model_type() {
         &*after_upsert.model_type, "image",
         "manual model_type override must be preserved across upsert_many"
     );
+}
+
+// ----------
+// manually_disabled_at regressions
+//
+// These tests pin the storage-layer behavior introduced by the
+// `manually_disabled_at` discriminator (migration 000064). The
+// discriminator replaces the previous `discovered_at >= -60 seconds`
+// window as the source of truth for "did the operator recently
+// touch this row's `active` bit?" — see
+// `docs/specs/manually-disabled-at-discriminator.md`.
+//
+// The writer-side rules being pinned:
+//   - set_active(id, false)  -> manually_disabled_at = datetime('now')
+//   - set_active(id, true)   -> manually_disabled_at = NULL
+//   - set_active_bulk(provider, false) -> non-custom rows only
+//   - set_active_bulk(provider, true)  -> non-custom rows only
+//   - upsert_discovered_models ON CONFLICT path -> no-op on
+//     manually_disabled_at and active. The only way to clear the
+//     stamp is an explicit set_active(id, true) or
+//     set_active_bulk(provider, true). Re-upserts of an existing
+//     row (which happen on every refresh while the upstream keeps
+//     listing the same model) never touch the operator's intent.
+//
+// The reader-side rules being pinned:
+//   - apply_auto_activation (both branches) filters
+//     `AND manually_disabled_at IS NULL`
+//   - A manually-disabled row stays disabled across any number of
+//     refresh + apply_auto_activation cycles. The only way to
+//     re-enable it is an explicit set_active(id, true) or
+//     set_active_bulk(provider, true). The upstream re-listing the
+//     same model does NOT re-evaluate the operator's intent.
+// ----------
+
+/// Read `models.manually_disabled_at` as raw UTC seconds since
+/// epoch, or `None` if the column is NULL. Lets the timestamp
+/// assertions compare integer seconds with a ±2s tolerance
+/// instead of comparing SQLite-formatted strings character-by-
+/// character. We use `CAST(... AS INTEGER)` because rusqlite's
+/// statement-driven type checker reports bare `strftime` calls as
+/// `Text`, which confuses `r.get::<_, i64>(0)`.
+fn manually_disabled_epoch(conn: &Connection, row_id: ModelRowId) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT CAST(strftime('%s', manually_disabled_at) AS INTEGER) \
+         FROM models WHERE id = ?1",
+        [row_id.0],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+}
+
+/// Current SQLite-side epoch seconds, for tolerance comparisons.
+/// Same CAST workaround as `manually_disabled_epoch`.
+fn now_epoch(conn: &Connection) -> i64 {
+    conn.query_row("SELECT CAST(strftime('%s', 'now') AS INTEGER)", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .expect("strftime now")
+}
+
+// A. set_active(false) stamps manually_disabled_at with a
+// timestamp inside ±2s of "now".
+#[test]
+fn set_active_false_sets_manually_disabled_at() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    upsert_many(
+        &conn,
+        &provider,
+        &[discovered("m1", TargetFormat::Openai)],
+        Duration::from_hours(1),
+    )
+    .expect("seed");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+
+    let before = now_epoch(&conn);
+    set_active(&conn, row_id, false).expect("set_active false");
+    let after = now_epoch(&conn);
+
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(
+        m.manually_disabled_at.is_some(),
+        "manually_disabled_at must be stamped on set_active(false)"
+    );
+    let stamped = manually_disabled_epoch(&conn, row_id)
+        .expect("read stamp")
+        .expect("stamp present");
+    assert!(
+        stamped >= before && stamped <= after + 2,
+        "manually_disabled_at epoch ({stamped}) must lie in [{before}, {after} + 2s] \
+             (got raw = {:?})",
+        m.manually_disabled_at.as_deref()
+    );
+    assert!(!m.active, "active flipped to false");
+}
+
+// B. set_active(true) clears manually_disabled_at.
+#[test]
+fn set_active_true_clears_manually_disabled_at() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    upsert_many(
+        &conn,
+        &provider,
+        &[discovered("m1", TargetFormat::Openai)],
+        Duration::from_hours(1),
+    )
+    .expect("seed");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+
+    set_active(&conn, row_id, false).expect("set_active false");
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(
+        m.manually_disabled_at.is_some(),
+        "pre-condition: stamp present after set_active(false)"
+    );
+
+    set_active(&conn, row_id, true).expect("set_active true");
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(
+        m.manually_disabled_at.is_none(),
+        "manually_disabled_at must be cleared on set_active(true) \
+             (got {:?})",
+        m.manually_disabled_at.as_deref()
+    );
+    assert!(m.active, "active flipped back to true");
+}
+
+// C. set_active_bulk(provider, false) stamps manually_disabled_at
+// on every non-custom row of the provider, and leaves custom rows
+// fully untouched.
+#[test]
+fn set_active_bulk_false_sets_manually_disabled_at() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    upsert_many(
+        &conn,
+        &provider,
+        &[
+            discovered("a", TargetFormat::Openai),
+            discovered("b", TargetFormat::Openai),
+            discovered("c", TargetFormat::Openai),
+        ],
+        Duration::from_hours(1),
+    )
+    .expect("seed 3 non-custom");
+    // Add a hand-curated row.
+    conn.execute(
+        "INSERT INTO models (provider_id, model_id, display_name, target_format, \
+             expires_at, custom, active) \
+         VALUES ('provA', 'z', 'Z', 'openai', datetime('now', '+1 hour'), 1, 1)",
+        [],
+    )
+    .expect("insert custom");
+
+    let before = now_epoch(&conn);
+    let updated = set_active_bulk(&conn, &provider, false).expect("set_active_bulk false");
+    let after = now_epoch(&conn);
+    assert_eq!(updated, 3, "3 non-custom rows touched");
+
+    for id in ["a", "b", "c"] {
+        let row_id = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == id)
+            .expect("present")
+            .row_id;
+        let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+        assert!(!m.active, "non-custom {id} -> active=0");
+        assert!(m.manually_disabled_at.is_some(), "non-custom {id} stamped");
+        let stamped = manually_disabled_epoch(&conn, row_id)
+            .expect("read")
+            .expect("stamp");
+        assert!(
+            stamped >= before && stamped <= after + 2,
+            "non-custom {id} stamp ({stamped}) outside [{before}, {after}+2s]"
+        );
+    }
+
+    // Custom row was not touched at all.
+    let z = list_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.model_id.as_str() == "z")
+        .expect("present");
+    assert!(z.active, "custom row stays active");
+    assert!(
+        z.manually_disabled_at.is_none(),
+        "custom row was not stamped (active bit untouched, so no stamp either)"
+    );
+}
+
+// D. set_active_bulk(provider, true) clears manually_disabled_at
+// on every non-custom row.
+#[test]
+fn set_active_bulk_true_clears_manually_disabled_at() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    upsert_many(
+        &conn,
+        &provider,
+        &[discovered("m1", TargetFormat::Openai)],
+        Duration::from_hours(1),
+    )
+    .expect("seed");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+
+    set_active(&conn, row_id, false).expect("disable first");
+    assert!(
+        get_by_row_id(&conn, row_id)
+            .unwrap()
+            .expect("present")
+            .manually_disabled_at
+            .is_some(),
+        "pre-condition: stamp set"
+    );
+
+    let updated = set_active_bulk(&conn, &provider, true).expect("bulk enable");
+    assert_eq!(updated, 1, "1 non-custom row flipped");
+
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(m.active, "active back to true");
+    assert!(
+        m.manually_disabled_at.is_none(),
+        "manually_disabled_at must be cleared by set_active_bulk(true)"
+    );
+}
+
+// E. The exact bug the user reported:
+//   refresh discovers a model -> operator disables it by hand ->
+//   upstream lists the SAME model again on a later refresh ->
+//   apply_auto_activation must NOT reactivate the row.
+//
+// Contract: the `upsert_many` ON CONFLICT branch (which fires when
+// the upstream re-lists an existing model) deliberately does NOT
+// touch `manually_disabled_at` or `active`. Only the INSERT branch
+// (truly-new models) creates rows eligible for auto-activation.
+// `apply_auto_activation` further filters by
+// `AND manually_disabled_at IS NULL`, so a hand-disabled model
+// survives any number of refreshes until the operator explicitly
+// re-enables it via `set_active(id, true)` or `set_active_bulk(..., true)`.
+#[test]
+fn refresh_does_not_reactivate_manually_disabled_model() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    let m1 = discovered("m1", TargetFormat::Openai);
+
+    // 1. First refresh: model is discovered (INSERT branch).
+    upsert_many(
+        &conn,
+        &provider,
+        std::slice::from_ref(&m1),
+        Duration::from_hours(1),
+    )
+    .expect("first upsert");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+
+    // 2. Operator hand-disables.
+    set_active(&conn, row_id, false).expect("disable");
+    let stamp = {
+        let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+        assert!(m.manually_disabled_at.is_some(), "pre-condition: stamp set");
+        assert!(!m.active, "pre-condition: active=0");
+        m.manually_disabled_at
+            .as_deref()
+            .expect("stamp present")
+            .to_string()
+    };
+
+    // 3. Second refresh within the 60s window. The upstream still
+    // lists the same model, so we hit the ON CONFLICT DO UPDATE
+    // branch. Per contract, this branch must NOT touch
+    // `manually_disabled_at` or `active`.
+    upsert_many(
+        &conn,
+        &provider,
+        std::slice::from_ref(&m1),
+        Duration::from_hours(1),
+    )
+    .expect("second upsert");
+
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert_eq!(
+        m.manually_disabled_at.as_deref(),
+        Some(stamp.as_ref()),
+        "ON CONFLICT must preserve manually_disabled_at unchanged"
+    );
+    assert!(
+        !m.active,
+        "ON CONFLICT must not flip the hand-set active=false"
+    );
+
+    // 4. apply_auto_activation sees manually_disabled_at IS NOT NULL
+    // and therefore skips the row, even within the 60s window.
+    let updated = apply_auto_activation(&conn, &provider, None).expect("apply");
+    assert_eq!(
+        updated, 0,
+        "apply_auto_activation must not reactivate a hand-disabled row"
+    );
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(
+        !m.active,
+        "active stays false after refresh + auto-activation cycle"
+    );
+    assert!(
+        m.manually_disabled_at.is_some(),
+        "manually_disabled_at stays set after auto-activation"
+    );
+}
+
+// F. apply_auto_activation(None) skips a row whose
+// `manually_disabled_at` is set, even within the 60s recency
+// window.
+#[test]
+fn apply_auto_activation_skips_manually_disabled_within_60s() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+
+    upsert_many(
+        &conn,
+        &provider,
+        &[discovered("m1", TargetFormat::Openai)],
+        Duration::from_hours(1),
+    )
+    .expect("seed");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+
+    // Immediately hand-disable: no re-upsert, no clock-skew tricks.
+    set_active(&conn, row_id, false).expect("disable");
+
+    let updated = apply_auto_activation(&conn, &provider, None).expect("apply none");
+    assert_eq!(
+        updated, 0,
+        "apply_auto_activation must skip the row even though discovered_at is fresh \
+             (manually_disabled_at filter excludes it)"
+    );
+
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(!m.active, "row stays disabled");
+    assert!(m.manually_disabled_at.is_some(), "stamp is intact");
+}
+
+// G. apply_auto_activation(None) DOES flip a row to active when
+// the operator has not touched it (regression of the happy path).
+#[test]
+fn apply_auto_activation_acts_on_non_manually_disabled_within_60s() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+
+    upsert_many(
+        &conn,
+        &provider,
+        &[discovered("m1", TargetFormat::Openai)],
+        Duration::from_hours(1),
+    )
+    .expect("seed");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+    // Sanity: the row starts at active=1 (schema default) and
+    // manually_disabled_at is NULL (the upsert left it NULL).
+    let pre = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(pre.active, "pre-condition: active=1");
+    assert!(
+        pre.manually_disabled_at.is_none(),
+        "pre-condition: no manual-disable stamp"
+    );
+
+    // Force active=0 by hand WITHOUT setting manually_disabled_at
+    // (mirrors the pre-fix degenerate case: a row sitting at
+    // active=0 with no operator intent recorded).
+    conn.execute(
+        "UPDATE models SET active = 0, manually_disabled_at = NULL WHERE id = ?1",
+        [row_id.0],
+    )
+    .expect("force inactive without manual stamp");
+
+    let updated = apply_auto_activation(&conn, &provider, None).expect("apply none");
+    assert_eq!(
+        updated, 1,
+        "row eligible (no manual stamp) -> flipped to active"
+    );
+
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(m.active, "row activated");
+    assert!(
+        m.manually_disabled_at.is_none(),
+        "no manual-disable stamp created by auto-activation"
+    );
+}
+
+// H. apply_auto_activation(Some("m")) — keyword that WOULD
+// otherwise match — must still skip a manually-disabled row.
+#[test]
+fn apply_auto_activation_keyword_skips_manually_disabled_within_60s() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+
+    upsert_many(
+        &conn,
+        &provider,
+        &[discovered("matchable", TargetFormat::Openai)],
+        Duration::from_hours(1),
+    )
+    .expect("seed");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+    set_active(&conn, row_id, false).expect("disable");
+
+    let updated = apply_auto_activation(&conn, &provider, Some("matchable")).expect("apply kw");
+    assert_eq!(
+        updated, 0,
+        "keyword that would match is still blocked by the manually_disabled_at filter"
+    );
+
+    let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(!m.active, "row stays disabled despite keyword match");
+    assert!(m.manually_disabled_at.is_some(), "stamp intact");
+}
+
+// I. End-to-end pin of the persistence contract: a hand-disabled
+// model that is then re-listed by the upstream (re-upsert) stays
+// disabled across any number of refresh + apply_auto_activation
+// cycles. The ONLY ways to re-enable a manually-disabled row are:
+//   (a) operator calls set_active(id, true), or
+//   (b) operator calls set_active_bulk(provider, true).
+// Re-upserts (ON CONFLICT path) never touch `manually_disabled_at`
+// or `active`.
+#[test]
+fn manually_disabled_model_survives_arbitrary_refresh_cycles() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    let m1 = discovered("m1", TargetFormat::Openai);
+
+    // Refresh #1: model discovered.
+    upsert_many(
+        &conn,
+        &provider,
+        std::slice::from_ref(&m1),
+        Duration::from_hours(1),
+    )
+    .expect("refresh 1");
+    let row_id = list_all(&conn).unwrap()[0].row_id;
+
+    // Operator hand-disables.
+    set_active(&conn, row_id, false).expect("disable");
+    let pre = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(!pre.active, "active flipped to 0");
+    assert!(
+        pre.manually_disabled_at.is_some(),
+        "stamp recorded by set_active(false)"
+    );
+
+    // 5 refresh + apply_auto_activation cycles. Each cycle must
+    // leave active=false and manually_disabled_at intact.
+    for cycle in 1..=5 {
+        upsert_many(
+            &conn,
+            &provider,
+            std::slice::from_ref(&m1),
+            Duration::from_hours(1),
+        )
+        .expect("refresh");
+
+        let updated = apply_auto_activation(&conn, &provider, None).expect("apply");
+        assert_eq!(updated, 0, "cycle {cycle}: no row reactivated");
+
+        let m = get_by_row_id(&conn, row_id).unwrap().expect("present");
+        assert!(!m.active, "cycle {cycle}: active stays false");
+        assert!(
+            m.manually_disabled_at.is_some(),
+            "cycle {cycle}: stamp stays set"
+        );
+    }
+
+    // Operator explicitly re-enables.
+    set_active(&conn, row_id, true).expect("re-enable");
+    let after_enable = get_by_row_id(&conn, row_id).unwrap().expect("present");
+    assert!(after_enable.active, "operator re-enable flips active=true");
+    assert!(
+        after_enable.manually_disabled_at.is_none(),
+        "operator re-enable clears the manual-disable stamp"
+    );
+}
+
+// J. Keyword-based auto-activation contract for new models that do
+// NOT match the keyword. Pins the behaviour described by the UI
+// text "Models whose ID contains this string are auto-enabled on
+// refresh. Empty = enable all new models":
+//
+//   - On the same refresh that discovers the model, the keyword
+//     filter's `CASE WHEN model_id LIKE ... THEN 1 ELSE 0 END`
+//     auto-disables any new model whose `model_id` does not contain
+//     the keyword. The model lands at `active = 0,
+//     manually_disabled_at = NULL` (NULL because the operator never
+//     touched it; the CASE is auto-activation, not manual intent).
+//
+//   - On every subsequent refresh that re-lists the same model,
+//     `upsert_many` does NOT touch `active` or `manually_disabled_at`,
+//     and `apply_auto_activation`'s 60-second recency window either
+//     re-applies the CASE (within the window) or skips the row
+//     (after the window). In both sub-cases the final
+//     `active` value matches what the CASE would have produced for
+//     a fresh discovery: matching → 1, non-matching → 0. There is
+//     no path that flips a non-matching model back to 1 across an
+//     arbitrary refresh sequence.
+//
+//   - A model that DOES match the keyword lands at `active = 1` on
+//     the discovery refresh. It also stays that way across later
+//     refreshes.
+//
+// We assert the invariant on `active` itself rather than on the
+// `updated` counter (which depends on whether rows are inside the
+// 60-second window at the moment of each call — a timing detail).
+#[test]
+fn apply_auto_activation_keyword_persists_non_matching_disable_across_refreshes() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("provA");
+    let m_match = discovered("vendor/model-free-001", TargetFormat::Openai);
+    let m_nomatch = discovered("vendor/model-paid-001", TargetFormat::Openai);
+
+    // Refresh #1: both models are newly discovered.
+    upsert_many(
+        &conn,
+        &provider,
+        &[m_match.clone(), m_nomatch.clone()],
+        Duration::from_hours(1),
+    )
+    .expect("refresh 1");
+
+    // Same-refresh auto-activation with keyword "free-".
+    let _ = apply_auto_activation(&conn, &provider, Some("free-")).expect("apply");
+
+    fn row(conn: &Connection, id: &str) -> openproxy_types::models::Model {
+        let row_id = list_all(conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == id)
+            .unwrap_or_else(|| panic!("row {id} not found"))
+            .row_id;
+        get_by_row_id(conn, row_id).unwrap().expect("present")
+    }
+
+    let r_match = row(&conn, "vendor/model-free-001");
+    let r_nomatch = row(&conn, "vendor/model-paid-001");
+
+    assert!(r_match.active, "matching row lands at active=true");
+    assert!(
+        r_match.manually_disabled_at.is_none(),
+        "auto-activation does not stamp manually_disabled_at"
+    );
+    assert!(
+        !r_nomatch.active,
+        "non-matching row lands at active=false via CASE ELSE branch"
+    );
+    assert!(
+        r_nomatch.manually_disabled_at.is_none(),
+        "non-matching auto-disable is NOT a manual intent; stamp stays NULL"
+    );
+
+    // 5 subsequent refreshes. The invariant is on the post-cycle
+    // `active` value: matching stays true, non-matching stays false.
+    // The exact `updated` count from apply_auto_activation varies
+    // with timing (whether each cycle lands inside or outside the
+    // 60s recency window) and is not part of the contract.
+    for cycle in 2..=6 {
+        upsert_many(
+            &conn,
+            &provider,
+            &[m_match.clone(), m_nomatch.clone()],
+            Duration::from_hours(1),
+        )
+        .expect("refresh");
+
+        let _ = apply_auto_activation(&conn, &provider, Some("free-")).expect("apply");
+
+        let r_match = row(&conn, "vendor/model-free-001");
+        let r_nomatch = row(&conn, "vendor/model-paid-001");
+
+        assert!(
+            r_match.active,
+            "cycle {cycle}: matching row stays active across refreshes"
+        );
+        assert!(
+            r_match.manually_disabled_at.is_none(),
+            "cycle {cycle}: no manual stamp on matching row"
+        );
+        assert!(
+            !r_nomatch.active,
+            "cycle {cycle}: non-matching row stays disabled across refreshes"
+        );
+        assert!(
+            r_nomatch.manually_disabled_at.is_none(),
+            "cycle {cycle}: non-matching row keeps NULL stamp (auto-disable, not manual)"
+        );
+    }
 }

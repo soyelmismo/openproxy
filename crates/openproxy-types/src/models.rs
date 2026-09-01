@@ -23,6 +23,38 @@ pub struct Model {
     pub target_format: TargetFormat,
     pub active: bool,
     pub custom: bool,
+    /// Timestamp (UTC, ISO-ish) of the most recent operator-driven
+    /// `set_active(id, false)`. `None` ⇒ the row is eligible for
+    /// `apply_auto_activation` on the next refresh. See migration 000064.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub manually_disabled_at: Option<Box<str>>,
+}
+
+impl Default for Model {
+    fn default() -> Self {
+        Self {
+            row_id: ModelRowId(0),
+            provider_id: ProviderId(String::new()),
+            model_id: ModelId(String::new()),
+            display_name: None,
+            discovered_at: Box::<str>::default(),
+            expires_at: None,
+            timeout_overrides_json: None,
+            last_test_at: None,
+            context_length: None,
+            max_output_tokens: None,
+            capabilities_json: None,
+            family: None,
+            model_type: Box::<str>::default(),
+            input_modalities_json: None,
+            output_modalities_json: None,
+            last_test_status: None,
+            target_format: TargetFormat::Openai,
+            active: false,
+            custom: false,
+            manually_disabled_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

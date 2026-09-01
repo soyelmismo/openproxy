@@ -385,6 +385,7 @@ mod tests {
             model_type: "chat".into(),
             input_modalities_json: None,
             output_modalities_json: None,
+            ..Default::default()
         }
     }
 

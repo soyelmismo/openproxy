@@ -248,6 +248,7 @@ mod tests {
                 last_test_status: None,
                 last_test_at: None,
                 custom: false,
+                ..Default::default()
             },
             api_key: "dummy".to_string(),
             api_key_label: None,

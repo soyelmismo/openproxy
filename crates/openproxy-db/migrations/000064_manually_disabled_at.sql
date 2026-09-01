@@ -1,0 +1,33 @@
+-- 000064: replace the temporal 60s discriminator with a state column.
+--
+-- Cross-ref: see 000011_only_new_models_in_auto_activate.sql for the
+-- previous "discovered_at >= datetime('now', '-60 seconds')" heuristic,
+-- which was unable to distinguish human intent from auto-discovery.
+--
+-- Contract of `models.manually_disabled_at` (TEXT, NULLable, ISO-ish UTC):
+--   NULL      => the operator has NOT touched this row's `active` to false
+--                since the last auto-activation. Eligible for re-activation
+--                on the next apply_auto_activation.
+--   NOT NULL  => the operator set `active = 0` on this row. The row is
+--                immune to apply_auto_activation permanently, until the
+--                operator re-enables it via set_active(id, true) or
+--                set_active_bulk(provider, true). No refresh upstream ever
+--                clears this stamp: only an explicit human action does.
+--
+-- Writers (single source of truth):
+--   - set_active(id, true)   -> manually_disabled_at = NULL
+--   - set_active(id, false)  -> manually_disabled_at = datetime('now')
+--   - set_active_bulk(provider, true)   -> manually_disabled_at = NULL (custom = 0)
+--   - set_active_bulk(provider, false)  -> manually_disabled_at = datetime('now') (custom = 0)
+--   - upsert_discovered_models ON CONFLICT path -> NO-OP (preserves the existing
+--     value). Only the INSERT branch (truly-new upstream model) creates rows
+--     with manually_disabled_at = NULL by default.
+--
+-- Readers:
+--   - apply_auto_activation (both branches) AND manually_disabled_at IS NULL
+--   - query_newly_active_models (both branches) AND manually_disabled_at IS NULL
+--
+-- Existing rows: existing 0 rows have manually_disabled_at = NULL by design,
+-- so this migration is purely additive — no backfill needed.
+
+ALTER TABLE models ADD COLUMN manually_disabled_at TEXT;

@@ -2062,6 +2062,7 @@ mod wiring_tests {
             target_format: openproxy_types::TargetFormat::Openai,
             active: true,
             custom: false,
+            ..Default::default()
         };
 
         let target = ComboTarget {

@@ -32,6 +32,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
         model_type: @box_str_default(16, "chat"),
         input_modalities_json: @opt_box_str(17),
         output_modalities_json: @opt_box_str(18),
+        manually_disabled_at: @opt_box_str(19),
     })
 }
 
@@ -43,7 +44,8 @@ crate::def_table_select!(
      last_test_status, last_test_at, custom, \
      context_length, max_output_tokens, capabilities_json, \
      family, model_type, input_modalities_json, \
-     output_modalities_json"
+     output_modalities_json, \
+     manually_disabled_at"
 );
 
 crate::def_table_select!(model_auto_active_select, "models", "model_id, display_name");
@@ -117,13 +119,17 @@ pub fn mark_expired(conn: &Connection) -> Result<usize> {
 
 pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()> {
     let bit = i64::from(active);
-    crate::db_update_field!(
-        conn,
-        "models",
-        active = bit,
-        WHERE id = id.0,
-        format!("update active for model {}", id.0)
-    )?;
+    conn.execute(
+        "UPDATE models \
+         SET active = ?1, \
+             manually_disabled_at = CASE WHEN ?1 = 1 THEN NULL ELSE datetime('now') END \
+         WHERE id = ?2",
+        params![bit, id.0],
+    )
+    .map_err(map_db_error_ctx(format!(
+        "update active for model {}",
+        id.0
+    )))?;
     Ok(())
 }
 
@@ -131,7 +137,10 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
     let bit = i64::from(active);
     let n = conn
         .execute(
-            "UPDATE models SET active = ?1 WHERE provider_id = ?2 AND custom = 0",
+            "UPDATE models \
+             SET active = ?1, \
+                 manually_disabled_at = CASE WHEN ?1 = 1 THEN NULL ELSE datetime('now') END \
+             WHERE provider_id = ?2 AND custom = 0",
             params![bit, provider.as_str()],
         )
         .map_err(map_db_error_ctx(format!("set_active_bulk for {provider}")))?;
@@ -355,6 +364,7 @@ fn query_newly_active_models(
                 "WHERE provider_id = ?1 AND custom = 0 \
                  AND discovered_at >= datetime('now', '-60 seconds') \
                  AND active = 0 \
+                 AND manually_disabled_at IS NULL \
                  AND model_id LIKE '%' || ?2 || '%'"
             ),
             params![provider.as_str(), k],
@@ -366,7 +376,8 @@ fn query_newly_active_models(
             model_auto_active_select!(
                 "WHERE provider_id = ?1 AND custom = 0 \
                  AND discovered_at >= datetime('now', '-60 seconds') \
-                 AND active = 0"
+                 AND active = 0 \
+                 AND manually_disabled_at IS NULL"
             ),
             params![provider.as_str()],
             |r| crate::map_row_tuple!(r => (0, 1)),
@@ -386,14 +397,16 @@ fn update_models_active_status(
               SET active = CASE WHEN model_id LIKE '%' || ?1 || '%' THEN 1 ELSE 0 END \
               WHERE provider_id = ?2 \
                 AND custom = 0 \
-                AND discovered_at >= datetime('now', '-60 seconds')",
+                AND discovered_at >= datetime('now', '-60 seconds') \
+                AND manually_disabled_at IS NULL",
             params![k, provider.as_str()],
         ),
         None => tx.execute(
             "UPDATE models SET active = 1 \
               WHERE provider_id = ?1 \
                 AND custom = 0 \
-                AND discovered_at >= datetime('now', '-60 seconds')",
+                AND discovered_at >= datetime('now', '-60 seconds') \
+                AND manually_disabled_at IS NULL",
             params![provider.as_str()],
         ),
     }
