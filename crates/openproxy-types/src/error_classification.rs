@@ -35,3 +35,16 @@ impl UpstreamErrorClass {
         )
     }
 }
+
+impl std::fmt::Display for UpstreamErrorClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Generic => "generic",
+            Self::ValidationRequired => "validation_required",
+            Self::PermissionDenied => "permission_denied",
+            Self::ResourceExhausted => "resource_exhausted",
+            Self::MalformedToolCall => "malformed_tool_call",
+        };
+        f.write_str(s)
+    }
+}
