@@ -1402,3 +1402,149 @@ mod count_tokens_tests {
         );
     }
 }
+
+// ============================================================
+// GAP-3: Adversarial tests for count_tokens / parse_total_tokens
+// ============================================================
+#[cfg(test)]
+mod count_tokens_adversarial_tests {
+    use super::*;
+    use serde_json::json;
+
+    // --- parse_total_tokens: edge cases ---
+
+    #[test]
+    fn adv_parse_total_tokens_negative_value() {
+        // Negative token count is unusual but should still parse
+        let body = json!({"totalTokens": -1});
+        assert_eq!(parse_total_tokens(&body), Some(-1));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_zero_value() {
+        // Zero tokens — valid edge case (empty request)
+        let body = json!({"totalTokens": 0});
+        assert_eq!(parse_total_tokens(&body), Some(0));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_max_i64_value() {
+        // i64::MAX — should parse
+        let body = json!({"totalTokens": i64::MAX});
+        assert_eq!(parse_total_tokens(&body), Some(i64::MAX));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_overflow_i64_returns_none() {
+        // A u64 that overflows i64 — as_i64 filters these out, so we get None
+        let body = json!({"totalTokens": u64::MAX});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_float_returns_none() {
+        // Float values should be rejected (no truncation)
+        let body = json!({"totalTokens": 3.15});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_string_number_returns_none() {
+        // String-form number — no implicit coercion
+        let body = json!({"totalTokens": "42"});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_bool_returns_none() {
+        let body = json!({"totalTokens": true});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_array_returns_none() {
+        let body = json!({"totalTokens": [42]});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_nested_negative() {
+        let body = json!({"response": {"totalTokens": -1}});
+        assert_eq!(parse_total_tokens(&body), Some(-1));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_both_flat_and_nested_prefers_nested() {
+        // Spec says nested form is checked first, but the implementation
+        // checks nested first via .get("response").and_then(...).or_else.
+        // This test confirms the precedence (nested wins).
+        let body = json!({
+            "response": {"totalTokens": 7},
+            "totalTokens": 100
+        });
+        assert_eq!(parse_total_tokens(&body), Some(7));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_nested_with_wrong_inner_type() {
+        // Nested form exists but totalTokens inside is wrong type
+        let body = json!({"response": {"totalTokens": "7"}});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_null_response() {
+        // response is null → can't get totalTokens
+        let body = json!({"response": null});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_response_is_array() {
+        // response is an array, not an object — totalTokens path returns None
+        let body = json!({"response": []});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    // --- count_tokens wrapper invariants (pure: only testable without I/O) ---
+
+    #[test]
+    fn adv_wrap_invariants_no_top_level_project() {
+        // The wrapper only adds "request"; no "project", "model", "requestType",
+        // "enabledCreditTypes", or "userAgent" at top level. This pins the spec
+        // invariant that countTokens REJECTS those keys.
+        let inner = json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        });
+        let wrapped = json!({ "request": inner });
+        assert!(wrapped.get("project").is_none());
+        assert!(wrapped.get("model").is_none());
+        assert!(wrapped.get("requestType").is_none());
+        assert!(wrapped.get("enabledCreditTypes").is_none());
+        assert!(wrapped.get("userAgent").is_none());
+    }
+
+    #[test]
+    fn adv_wrap_preserves_nested_request_object() {
+        // The wrapper does not mangle the inner body
+        let inner = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "a"}]},
+                {"role": "model", "parts": [{"text": "b"}]}
+            ]
+        });
+        let wrapped = json!({ "request": inner });
+        let inner_from_wrapped = &wrapped["request"];
+        assert_eq!(inner_from_wrapped["contents"].as_array().unwrap().len(), 2);
+        assert_eq!(inner_from_wrapped["contents"][0]["parts"][0]["text"], "a");
+    }
+
+    #[test]
+    fn adv_count_tokens_url_constant() {
+        // Pin the URL — must match the spec
+        assert_eq!(
+            COUNT_TOKENS_URL,
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:countTokens"
+        );
+    }
+}

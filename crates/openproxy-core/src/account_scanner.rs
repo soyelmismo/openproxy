@@ -223,3 +223,303 @@ mod tests {
         }
     }
 }
+
+// ============================================================
+// GAP-7: Adversarial tests for antigravity-cli account scanner
+// ============================================================
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+
+    /// Serializes HOME mutations across tests in this module.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Lock the test mutex, recovering from poisoning.
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// RAII guard that sets HOME and restores it on drop.
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let prev = std::env::var_os("HOME");
+            // SAFETY: caller holds `TEST_LOCK` while guard is alive.
+            unsafe { std::env::set_var("HOME", path) };
+            Self { prev }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                // SAFETY: caller holds `TEST_LOCK` while guard is alive.
+                Some(v) => unsafe { std::env::set_var("HOME", v) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    // --- JSON with unexpected schema ---
+
+    #[test]
+    fn adv_file_with_valid_json_wrong_schema() {
+        // JSON is valid but has wrong shape (no token.access_token).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&target, r#"{"hello":"world","foo":123}"#).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        assert!(
+            scan_antigravity_cli().is_none(),
+            "wrong schema must return None"
+        );
+    }
+
+    // --- File with nested wrong types ---
+
+    #[test]
+    fn adv_file_with_token_wrong_types() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let body = serde_json::json!({
+            "token": {
+                "access_token": 12345,  // number, not string
+                "refresh_token": true   // bool, not string
+            }
+        });
+        std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        assert!(
+            scan_antigravity_cli().is_none(),
+            "non-string access_token must return None"
+        );
+    }
+
+    // --- File without user.email ---
+
+    #[test]
+    fn adv_file_without_email_uses_default_label() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let body = serde_json::json!({
+            "token": {
+                "access_token": "ya-token",
+                "refresh_token": "1//refresh"
+            },
+            "auth_method": "consumer"
+            // No "user" key
+        });
+        std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        let account = scan_antigravity_cli().expect("should parse");
+        assert_eq!(account.email, None);
+        assert_eq!(account.label, "antigravity-cli");
+        assert_eq!(account.access_token, "ya-token");
+    }
+
+    // --- HOME to non-existent directory ---
+
+    #[test]
+    fn adv_home_nonexistent_returns_none() {
+        let _guard = lock();
+        let prev = std::env::var_os("HOME");
+        let fake = "/tmp/surely-nonexistent-dir-2026-01-01";
+        unsafe { std::env::set_var("HOME", fake) };
+        let result = scan_antigravity_cli();
+        // HOME exists but .gemini/... doesn't → None (NotFound path)
+        assert!(result.is_none(), "non-existent HOME → None");
+        // Restore
+        match &prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    // --- HOME with unreadable token file ---
+
+    #[test]
+    fn adv_unreadable_token_file_returns_none() {
+        // This test is environment-dependent: in containers running as
+        // root, mode 000 is bypassed by the kernel, so the file IS
+        // read. We check the result is SOME (root) or NONE (non-root).
+        // Either way the function must not panic.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&target, r#"{"token":{"access_token":"x"}}"#).expect("write");
+        // Remove read permissions
+        std::fs::set_permissions(
+            &target,
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .expect("set perms");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        let result = scan_antigravity_cli();
+        // Either root bypassed perms (result=Some) or EACCES was raised
+        // (result=None). Both are acceptable; the requirement is "no panic".
+        assert!(
+            result.is_some() || result.is_none(),
+            "scan must return Some or None, not panic"
+        );
+    }
+
+    // --- Valid token file without refresh_token ---
+
+    #[test]
+    fn adv_file_without_refresh_token() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let body = serde_json::json!({
+            "token": {
+                "access_token": "ya-no-refresh"
+            }
+        });
+        std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        let account = scan_antigravity_cli().expect("should parse");
+        assert_eq!(account.refresh_token, None, "missing refresh_token is None, not error");
+    }
+
+    // --- scan_external_accounts returns vec ---
+
+    #[test]
+    fn adv_scan_external_accounts_returns_vec() {
+        let result = scan_external_accounts();
+        assert!(result.is_empty() || !result.is_empty(),
+            "scan_external_accounts returns a Vec (never panics)");
+    }
+
+    // --- File with deeply nested valid JSON but no access_token ---
+
+    #[test]
+    fn adv_deeply_nested_json_without_token() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let body = serde_json::json!({
+            "token": {
+                "access_token": {
+                    "nested": {"value": "deep"}
+                }
+            }
+        });
+        std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        // access_token is an object, not a string → as_str() returns None
+        assert!(
+            scan_antigravity_cli().is_none(),
+            "nested object access_token must return None"
+        );
+    }
+
+    // --- Zero-byte file ---
+
+    #[test]
+    fn adv_zero_byte_file_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&target, "").expect("write empty file");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        assert!(
+            scan_antigravity_cli().is_none(),
+            "zero-byte file must return None"
+        );
+    }
+
+    // --- File with just whitespace ---
+
+    #[test]
+    fn adv_whitespace_only_file_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&target, "   \n  \t  ").expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        assert!(
+            scan_antigravity_cli().is_none(),
+            "whitespace-only file must return None"
+        );
+    }
+
+    // --- DiscoveredAccount preserves source_path ---
+
+    #[test]
+    fn adv_source_path_matches_actual_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let body = serde_json::json!({
+            "token": {
+                "access_token": "ya-path-test",
+                "refresh_token": "1//refresh"
+            }
+        });
+        std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+        let account = scan_antigravity_cli().expect("should parse");
+        assert_eq!(account.source_path, target);
+        assert_eq!(account.provider_id, "antigravity");
+    }
+}

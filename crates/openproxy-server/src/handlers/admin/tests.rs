@@ -16,6 +16,41 @@ use openproxy_db as core_db;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::config::TimeoutsConfig;
 use std::path::PathBuf;
+
+/// Module-level lock + RAII guard for HOME mutation, shared by all
+/// `scan_accounts` endpoint tests. `scan_accounts` calls
+/// `scan_external_accounts` inside `spawn_blocking`, which reads `HOME`
+/// from the env. We must hold the lock + HOME across the `.await` of
+/// `app.oneshot()` so HOME is consistent for the duration of the scan.
+///
+/// Uses `tokio::sync::Mutex` to satisfy AGENTS §4.3 (no `std` lock held
+/// across `.await`) and the `clippy::await_holding_lock` lint. The mutex
+/// only protects HOME (a global env var, not a DB or repo), so contention
+/// is low and only test fixtures pay the cost.
+static SCAN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct HomeGuard {
+    prev: Option<std::ffi::OsString>,
+}
+
+impl HomeGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let prev = std::env::var_os("HOME");
+        // SAFETY: caller holds `SCAN_TEST_LOCK` while guard is alive.
+        unsafe { std::env::set_var("HOME", path) };
+        Self { prev }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            // SAFETY: caller holds `SCAN_TEST_LOCK` while guard is alive.
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+}
 use tower::ServiceExt;
 
 fn tempdir() -> PathBuf {
@@ -1163,31 +1198,9 @@ async fn auth_bypass_sentinel_1_rejects_non_loopback() {
 
 #[tokio::test]
 async fn test_scan_endpoint_dry_run_does_not_create() {
-    // Same TEST_LOCK + HomeGuard used by `account_scanner::tests`. Defining
-    // it locally here keeps each module's test mutex self-contained.
-    static SCAN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct HomeGuard {
-        prev: Option<std::ffi::OsString>,
-    }
-    impl HomeGuard {
-        fn set(_lock: &std::sync::MutexGuard<'_, ()>, path: &std::path::Path) -> Self {
-            let prev = std::env::var_os("HOME");
-            // SAFETY: caller holds `SCAN_TEST_LOCK` while guard is alive.
-            unsafe { std::env::set_var("HOME", path) };
-            Self { prev }
-        }
-    }
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                // SAFETY: caller holds `SCAN_TEST_LOCK` while guard is alive.
-                Some(v) => unsafe { std::env::set_var("HOME", v) },
-                None => unsafe { std::env::remove_var("HOME") },
-            }
-        }
-    }
-
+    // Module-level SCAN_TEST_LOCK + HomeGuard are used so HOME is held
+    // for the entire duration of the async scan (HOME is read by the
+    // spawn_blocking thread inside the handler).
     let tmp = tempfile::tempdir().expect("tempdir");
     let (state, plaintext) = make_state_with_key(tmp.path()).await;
 
@@ -1200,32 +1213,28 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
         seed::seed_builtin_providers(&w).expect("seed builtins");
     }
 
-    // Plant an antigravity-cli token file under HOME. The lock + HomeGuard
-    // must be released BEFORE the async `oneshot().await` below — AGENTS
-    // §4.3 prohibits holding a mutex guard across an `.await`.
-    let token_path = {
-        let lock_guard = SCAN_TEST_LOCK.lock().expect("test lock poisoned");
-        let _home = HomeGuard::set(&lock_guard, tmp.path());
-        let token_path = tmp
-            .path()
-            .join(".gemini")
-            .join("antigravity-cli")
-            .join("antigravity-oauth-token");
-        std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
-        let body = serde_json::json!({
-            "token": {
-                "access_token": "ya-dry-run-access",
-                "refresh_token": "1//dry-run-refresh",
-                "expiry": "2099-01-01T00:00:00Z",
-                "token_type": "Bearer"
-            },
-            "auth_method": "consumer",
-            "user": { "email": "dryrun@example.com" }
-        });
-        std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
-        token_path
-        // `_home` and `lock_guard` drop here, releasing TEST_LOCK and HOME.
-    };
+    // Plant an antigravity-cli token file under HOME.
+    let token_path = tmp
+        .path()
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+    let body = serde_json::json!({
+        "token": {
+            "access_token": "ya-dry-run-access",
+            "refresh_token": "1//dry-run-refresh",
+            "expiry": "2099-01-01T00:00:00Z",
+            "token_type": "Bearer"
+        },
+        "auth_method": "consumer",
+        "user": { "email": "dryrun@example.com" }
+    });
+    std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    // Acquire lock + set HOME; hold for entire test.
+    let _lock_guard = SCAN_TEST_LOCK.lock().await;
+    let _home = HomeGuard::set(tmp.path());
 
     let app = Router::new()
         .route("/admin/accounts/scan", post(crate::handlers::admin::accounts::scan_accounts))
@@ -1281,4 +1290,208 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
     // Use token_path so the binding is not dead code (kept for clarity if
     // a future test in this module wants to assert against the fixture).
     let _ = token_path;
+}
+
+// ============================================================
+
+// ============================================================
+// GAP-7: Adversarial endpoint tests for POST /admin/api/accounts/scan
+// ============================================================
+
+#[tokio::test]
+async fn adv_scan_endpoint_empty_body_defaults() {
+    // Empty JSON object `{}` — auto_import=false (default), dry_run=false (default).
+    // The endpoint scans and returns scanned entries without importing
+    // (because auto_import defaults to false).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+
+    {
+        let w = state.db_pool().writer();
+        seed::seed_builtin_providers(&w).expect("seed builtins");
+    }
+
+    let token_path = tmp
+        .path()
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+    let body = serde_json::json!({
+        "token": {
+            "access_token": "ya-adv-endpoint",
+            "refresh_token": "1//adv-endpoint-refresh",
+            "expiry": "2099-01-01T00:00:00Z"
+        },
+        "auth_method": "consumer",
+        "user": {"email": "adv@example.com"}
+    });
+    std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let _lock_guard = SCAN_TEST_LOCK.lock().await;
+    let _home = HomeGuard::set(tmp.path());
+
+    let mut router = axum::Router::new();
+    router = router.route(
+        "/admin/accounts/scan",
+        axum::routing::post(crate::handlers::admin::accounts::scan_accounts),
+    );
+    let app = router.with_state(state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/accounts/scan")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r"{}"))
+        .expect("build req");
+
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("handler hung")
+        .expect("oneshot");
+
+    assert_eq!(resp.status(), StatusCode::OK, "empty body must return 200");
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+        .await
+        .expect("read body");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body_bytes).expect("json");
+
+    let imported = parsed["imported"]
+        .as_array()
+        .expect("imported is an array");
+    assert!(
+        imported.is_empty(),
+        "empty body defaults must not import, got {parsed}"
+    );
+}
+
+#[tokio::test]
+async fn adv_scan_endpoint_malformed_json_body_returns_4xx() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+
+    let mut router = axum::Router::new();
+    router = router.route(
+        "/admin/accounts/scan",
+        axum::routing::post(crate::handlers::admin::accounts::scan_accounts),
+    );
+    let app = router.with_state(state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/accounts/scan")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from("{ not json"))
+        .expect("build req");
+
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("hung")
+        .expect("oneshot");
+
+    assert!(
+        resp.status().is_client_error(),
+        "malformed JSON must return 4xx, got: {}",
+        resp.status()
+    );
+}
+
+#[tokio::test]
+async fn adv_scan_endpoint_with_dry_run_true_and_auto_import_true() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+
+    {
+        let w = state.db_pool().writer();
+        seed::seed_builtin_providers(&w).expect("seed builtins");
+    }
+
+    let token_path = tmp
+        .path()
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+    let body = serde_json::json!({
+        "token": {
+            "access_token": "ya-dry-run-both",
+            "refresh_token": "1//dry-run-both-refresh"
+        }
+    });
+    std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let _lock_guard = SCAN_TEST_LOCK.lock().await;
+    let _home = HomeGuard::set(tmp.path());
+
+    let mut router = axum::Router::new();
+    router = router.route(
+        "/admin/accounts/scan",
+        axum::routing::post(crate::handlers::admin::accounts::scan_accounts),
+    );
+    let app = router.with_state(state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/accounts/scan")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"dry_run": true, "auto_import": true}"#))
+        .expect("build req");
+
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("hung")
+        .expect("oneshot");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+        .await
+        .expect("body");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body_bytes).expect("json");
+
+    let imported = parsed["imported"]
+        .as_array()
+        .expect("imported is an array");
+    assert!(
+        imported.is_empty(),
+        "dry_run=true must win over auto_import=true, got {parsed}"
+    );
+}
+
+#[tokio::test]
+async fn adv_scan_endpoint_array_body_returns_4xx() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+
+    let mut router = axum::Router::new();
+    router = router.route(
+        "/admin/accounts/scan",
+        axum::routing::post(crate::handlers::admin::accounts::scan_accounts),
+    );
+    let app = router.with_state(state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/accounts/scan")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from("[1, 2, 3]"))
+        .expect("build req");
+
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("hung")
+        .expect("oneshot");
+
+    assert!(
+        resp.status().is_client_error(),
+        "array body must return 4xx, got: {}",
+        resp.status()
+    );
 }

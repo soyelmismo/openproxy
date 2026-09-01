@@ -263,3 +263,264 @@ mod tests {
         assert_eq!(openai.messages[0].role, "user");
     }
 }
+
+// ============================================================
+// GAP-2: Adversarial tests for Responses handler translation
+// ============================================================
+#[cfg(test)]
+mod responses_adversarial_tests {
+    use openproxy_types::{ResponsesInputItem, ResponsesRequest};
+    use serde_json::json;
+
+    // --- Unknown input item types ---
+
+    #[test]
+    fn adv_unknown_item_type_is_dropped() {
+        let payload = json!({
+            "model": "gpt-x",
+            "input": [
+                {"type": "reasoning"},
+                {"type": "image_generation"},
+                {"type": "weird_new_type", "data": "something"}
+            ]
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("deserialization should succeed");
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        assert!(openai.messages.is_empty(), "all unknown items must be dropped");
+    }
+
+    #[test]
+    fn adv_10000_input_items_all_produce_messages() {
+        // 10000 items — a memory/CPU stress test.
+        let input: Vec<serde_json::Value> = (0..10_000)
+            .map(|i| {
+                json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": format!("msg {i}")
+                })
+            })
+            .collect();
+        let payload = json!({
+            "model": "gpt-x",
+            "input": input
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("deserialization should succeed");
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        assert_eq!(openai.messages.len(), 10_000);
+    }
+
+    // --- Instructions edge cases ---
+
+    #[test]
+    fn adv_very_long_instructions_preserved() {
+        // 10MB of instructions text.
+        let big = "A".repeat(10_000_000);
+        let req = ResponsesRequest {
+            model: "gpt-x".to_string(),
+            instructions: Some(big),
+            input: vec![],
+            tools: None,
+            tool_choice: None,
+            stream: false,
+            previous_response_id: None,
+            extra: json!({}).as_object().unwrap().clone(),
+        };
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        assert_eq!(openai.messages.len(), 1);
+        assert_eq!(openai.messages[0].role, "system");
+        let content = openai.messages[0]
+            .content
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(content.len(), 10_000_000);
+    }
+
+    // --- previous_response_id edge cases ---
+
+    #[test]
+    fn adv_previous_response_id_non_uuid_preserved_in_extra() {
+        // previous_response_id is a string, so it will be parsed into
+        // ResponsesRequest. The handler logs a warning but proceeds.
+        let payload = json!({
+            "model": "gpt-x",
+            "input": [],
+            "previous_response_id": "not-a-uuid-!!!@#$%"
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("deserialization should succeed");
+        assert_eq!(req.previous_response_id.as_deref(), Some("not-a-uuid-!!!@#$%"));
+    }
+
+    #[test]
+    fn adv_previous_response_id_number_type() {
+        // previous_response_id as a number (non-string) — serde should
+        // fail because the field type is Option<String>.
+        let payload = json!({
+            "model": "gpt-x",
+            "input": [],
+            "previous_response_id": 12345
+        });
+        let result = serde_json::from_value::<ResponsesRequest>(payload);
+        assert!(result.is_err(), "numeric previous_response_id must fail to deserialize");
+    }
+
+    // --- function_call without preceding FunctionCall ---
+
+    #[test]
+    fn adv_function_call_output_without_matching_function_call() {
+        // FunctionCallOutput without a preceding FunctionCall with matching call_id.
+        // The auth middleware's sanitize_tool_calls will drop the orphan tool message.
+        let req = ResponsesRequest {
+            model: "gpt-x".to_string(),
+            instructions: None,
+            input: vec![ResponsesInputItem::FunctionCallOutput {
+                call_id: "call_orphan".to_string(),
+                output: "result".to_string(),
+            }],
+            tools: None,
+            tool_choice: None,
+            stream: false,
+            previous_response_id: None,
+            extra: json!({}).as_object().unwrap().clone(),
+        };
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        // The translate function produces the tool message; sanitize_tool_calls
+        // in the middleware is responsible for dropping orphans.
+        // In the raw translation, the tool message is produced.
+        assert_eq!(openai.messages.len(), 1);
+        assert_eq!(openai.messages[0].role, "tool");
+        assert_eq!(openai.messages[0].tool_call_id.as_deref(), Some("call_orphan"));
+    }
+
+    // --- Duplicate function_call_output with same call_id ---
+
+    #[test]
+    fn adv_duplicate_function_call_output_same_call_id() {
+        // Two FunctionCallOutput with the same call_id → both translated.
+        // sanitize_tool_calls will keep only the first match.
+        let req = ResponsesRequest {
+            model: "gpt-x".to_string(),
+            instructions: None,
+            input: vec![
+                ResponsesInputItem::FunctionCall {
+                    call_id: "call_1".to_string(),
+                    name: "do_thing".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                ResponsesInputItem::FunctionCallOutput {
+                    call_id: "call_1".to_string(),
+                    output: "first".to_string(),
+                },
+                ResponsesInputItem::FunctionCallOutput {
+                    call_id: "call_1".to_string(),
+                    output: "second".to_string(),
+                },
+            ],
+            tools: None,
+            tool_choice: None,
+            stream: false,
+            previous_response_id: None,
+            extra: json!({}).as_object().unwrap().clone(),
+        };
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        // The translation produces all 3 messages (1 assistant + 2 tool).
+        // The sanitize step in middleware will handle the duplicates.
+        assert_eq!(openai.messages.len(), 3);
+        assert_eq!(openai.messages[0].role, "assistant");
+        assert_eq!(openai.messages[1].role, "tool");
+        assert_eq!(openai.messages[2].role, "tool");
+    }
+
+    // --- Content as Parts (array of objects) ---
+
+    #[test]
+    fn adv_message_content_parts_preserved() {
+        let payload = json!({
+            "model": "gpt-x",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "hello"},
+                    {"type": "input_image", "url": "https://example.com/img.png"}
+                ]
+            }]
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("deserialization should succeed");
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        assert_eq!(openai.messages.len(), 1);
+        // Parts are preserved as a JSON array
+        let content = openai.messages[0].content.as_ref().unwrap();
+        assert!(content.is_array(), "Parts content must be a JSON array");
+        assert_eq!(content.as_array().unwrap().len(), 2);
+    }
+
+    // --- Deserialization of minimal payload ---
+
+    #[test]
+    fn adv_deserialization_minimal_payload() {
+        let payload = json!({
+            "model": "gpt-x",
+            "input": []
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("minimal payload must deserialize");
+        assert_eq!(req.model, "gpt-x");
+        assert!(req.input.is_empty());
+        assert!(!req.stream);
+        assert!(req.previous_response_id.is_none());
+        assert!(req.tools.is_none());
+        assert!(req.tool_choice.is_none());
+    }
+
+    #[test]
+    fn adv_deserialization_missing_model_fails() {
+        let payload = json!({"input": []});
+        let result = serde_json::from_value::<ResponsesRequest>(payload);
+        assert!(result.is_err(), "missing model field must fail deserialization");
+    }
+
+    // --- stream flag forwarded ---
+
+    #[test]
+    fn adv_stream_true_forwarded() {
+        let payload = json!({
+            "model": "gpt-x",
+            "input": [],
+            "stream": true
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("deserialize");
+        assert!(req.stream);
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        assert!(openai.stream);
+    }
+
+    // --- Mixed input types ---
+
+    #[test]
+    fn adv_mixed_input_types_preserve_order() {
+        let payload = json!({
+            "model": "gpt-x",
+            "input": [
+                {"type": "message", "role": "user", "content": "q1"},
+                {"type": "function_call", "call_id": "c1", "name": "fn1", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "a1"},
+                {"type": "message", "role": "user", "content": "q2"}
+            ]
+        });
+        let req: ResponsesRequest =
+            serde_json::from_value(payload).expect("deserialize");
+        let openai = crate::middleware::auth::translate_responses_to_openai(&req);
+        assert_eq!(openai.messages.len(), 4);
+        assert_eq!(openai.messages[0].role, "user");
+        assert_eq!(openai.messages[1].role, "assistant");
+        assert_eq!(openai.messages[2].role, "tool");
+        assert_eq!(openai.messages[3].role, "user");
+    }
+}

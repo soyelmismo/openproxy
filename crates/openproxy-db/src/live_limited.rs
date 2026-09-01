@@ -225,3 +225,301 @@ mod tests {
         let _ = CoreError::Validation("witness".into());
     }
 }
+
+// ============================================================
+// GAP-6: Adversarial tests for live_limited_models
+// ============================================================
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+    use crate::migrations;
+    use openproxy_types::ids::{AccountId, ModelId};
+    use rusqlite::Connection;
+
+    fn fresh_db() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open in-memory");
+        migrations::run(&mut conn).expect("migrations");
+        conn.execute(
+            "INSERT INTO providers(id, name, base_url, auth_type, format) \
+             VALUES ('antigravity', 'Antigravity', 'https://x', 'oauth', 'openai')",
+            [],
+        )
+        .expect("seed provider");
+        conn.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a1')",
+            [],
+        )
+        .expect("seed account");
+        conn
+    }
+
+    // --- mark_limited with various until_ts formats ---
+
+    #[test]
+    fn adv_mark_limited_rfc3339_with_offset() {
+        // Timestamp with timezone offset (not UTC) — the comparison
+        // logic should still work or gracefully fail to false.
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+        // In the future (Pacific +12)
+        let until = "2099-12-31T23:59:59+12:00";
+        mark_limited(&conn, aid, &mid, until, "RESOURCE_EXHAUSTED").expect("mark");
+        // is_limited should still work — parse_timestamp converts +12:00 → UTC
+        assert!(
+            is_limited(&conn, aid, &mid).expect("is_limited"),
+            "future timestamp with +12:00 offset should be active"
+        );
+    }
+
+    #[test]
+    fn adv_mark_limited_with_garbage_until_ts() {
+        // Garbage string as until_ts — the DB accepts any string,
+        // but is_limited() treats unparseable as inactive (defensive).
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+        mark_limited(&conn, aid, &mid, "not-a-date-at-all", "RESOURCE_EXHAUSTED").expect("mark");
+        assert!(
+            !is_limited(&conn, aid, &mid).expect("is_limited"),
+            "garbage until_ts must be treated as inactive"
+        );
+        // But has_row must still be true (row exists even with garbage).
+        assert!(
+            has_row(&conn, aid, &mid).expect("has_row"),
+            "row with garbage until_ts still exists"
+        );
+    }
+
+    #[test]
+    fn adv_mark_limited_with_empty_until_ts() {
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+        mark_limited(&conn, aid, &mid, "", "RESOURCE_EXHAUSTED").expect("mark");
+        assert!(
+            !is_limited(&conn, aid, &mid).expect("is_limited"),
+            "empty until_ts must be treated as inactive"
+        );
+    }
+
+    // --- clear_for_account edge cases ---
+
+    #[test]
+    fn adv_clear_for_account_unknown_account_returns_zero() {
+        let conn = fresh_db();
+        // AccountId(999) does not exist — no FK violation (just no rows).
+        assert_eq!(
+            clear_for_account(&conn, AccountId(999)).expect("clear"),
+            0
+        );
+    }
+
+    #[test]
+    fn adv_clear_for_account_mixed_expired_and_active() {
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let m1 = ModelId::new("gemini-2.5");
+        let m2 = ModelId::new("gemini-1.5");
+        let m3 = ModelId::new("gemini-pro");
+
+        let expired = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        let active = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+
+        mark_limited(&conn, aid, &m1, &expired, "RESOURCE_EXHAUSTED").expect("m1");
+        mark_limited(&conn, aid, &m2, &active, "RESOURCE_EXHAUSTED").expect("m2");
+        mark_limited(&conn, aid, &m3, &expired, "RESOURCE_EXHAUSTED").expect("m3");
+
+        let n = clear_for_account(&conn, aid).expect("clear");
+        assert_eq!(n, 2, "only expired rows deleted");
+
+        // Active row survives
+        assert!(
+            is_limited(&conn, aid, &m2).expect("m2 still active"),
+            "active row must survive clear"
+        );
+        // Expired rows gone
+        assert!(
+            !is_limited(&conn, aid, &m1).expect("m1 gone"),
+            "expired m1 must be deleted"
+        );
+        assert!(!has_row(&conn, aid, &m1).expect("m1 row gone"));
+        assert!(
+            !has_row(&conn, aid, &m3).expect("m3 row gone"),
+            "expired m3 must be deleted"
+        );
+    }
+
+    // --- mark_limited upserts on conflict ---
+
+    #[test]
+    fn adv_mark_limited_upsert_overwrites() {
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+
+        let t1 = (chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339();
+        let t2 = (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339();
+
+        mark_limited(&conn, aid, &mid, &t1, "REASON_A").expect("mark t1");
+        mark_limited(&conn, aid, &mid, &t2, "REASON_B").expect("mark t2 (upsert)");
+
+        // Should be t2's row now.
+        let row: String = conn
+            .query_row(
+                "SELECT until_ts FROM live_limited_models WHERE account_id = ?1 AND model_id = ?2",
+                params![aid.0, mid.as_str()],
+                |r| r.get(0),
+            )
+            .expect("read back");
+        assert_eq!(row, t2, "upsert must overwrite until_ts");
+    }
+
+    // --- ON DELETE CASCADE works for multiple rows ---
+
+    #[test]
+    fn adv_cascade_delete_clears_multiple_rows() {
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let m1 = ModelId::new("model-a");
+        let m2 = ModelId::new("model-b");
+        let m3 = ModelId::new("model-c");
+        let until = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+
+        mark_limited(&conn, aid, &m1, &until, "X").expect("m1");
+        mark_limited(&conn, aid, &m2, &until, "X").expect("m2");
+        mark_limited(&conn, aid, &m3, &until, "X").expect("m3");
+
+        assert!(has_row(&conn, aid, &m1).expect("all exist"));
+        assert!(has_row(&conn, aid, &m2).expect("all exist"));
+        assert!(has_row(&conn, aid, &m3).expect("all exist"));
+
+        conn.execute("DELETE FROM accounts WHERE id = 1", [])
+            .expect("delete account");
+
+        assert!(!has_row(&conn, aid, &m1).expect("cascade m1"));
+        assert!(!has_row(&conn, aid, &m2).expect("cascade m2"));
+        assert!(!has_row(&conn, aid, &m3).expect("cascade m3"));
+    }
+
+    // --- is_limited on non-existent (account, model) ---
+
+    #[test]
+    fn adv_is_limited_nonexistent_returns_false() {
+        let conn = fresh_db();
+        assert!(
+            !is_limited(&conn, AccountId(1), &ModelId::new("nonexistent"))
+                .expect("no panic"),
+            "non-existent pair must be false"
+        );
+    }
+
+    // --- Multiple models on same account ---
+
+    #[test]
+    fn adv_different_models_independent_limited_state() {
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let m1 = ModelId::new("model-a");
+        let m2 = ModelId::new("model-b");
+
+        let until = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        mark_limited(&conn, aid, &m1, &until, "X").expect("m1");
+
+        assert!(
+            is_limited(&conn, aid, &m1).expect("m1 limited"),
+            "m1 should be limited"
+        );
+        assert!(
+            !is_limited(&conn, aid, &m2).expect("m2 not limited"),
+            "m2 should NOT be limited"
+        );
+    }
+
+    // --- clear_for_account only affects one account ---
+
+    #[test]
+    fn adv_clear_for_account_does_not_cross_accounts() {
+        let conn = fresh_db();
+        let a1 = AccountId(1);
+        // Create a second account
+        conn.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a2')",
+            [],
+        )
+        .expect("seed a2");
+        let a2 = AccountId(2);
+
+        let mid = ModelId::new("gemini-2.5");
+        let until = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+
+        mark_limited(&conn, a1, &mid, &until, "X").expect("mark a1");
+        mark_limited(&conn, a2, &mid, &until, "X").expect("mark a2");
+
+        let n = clear_for_account(&conn, a1).expect("clear a1");
+        assert_eq!(n, 1, "only a1's expired row should be deleted, got {n}");
+
+        // a1 is gone, a2 is still there (even though expired too)
+        assert!(!has_row(&conn, a1, &mid).expect("a1 gone"));
+        assert!(
+            has_row(&conn, a2, &mid).expect("a2 still present"),
+            "clear_for_account must not cross account boundaries"
+        );
+    }
+
+    // --- mark_limited on non-existent account (FK violation) ---
+
+    #[test]
+    fn adv_mark_limited_nonexistent_account_fails() {
+        let conn = fresh_db();
+        let aid = AccountId(999);
+        let mid = ModelId::new("model-x");
+        let until = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        let result = mark_limited(&conn, aid, &mid, &until, "X");
+        assert!(
+            result.is_err(),
+            "mark_limited on non-existent account must fail (FK constraint)"
+        );
+    }
+
+    // --- until_ts boundary: exactly now ---
+
+    #[test]
+    fn adv_until_ts_exactly_now_is_expired() {
+        // "until_ts <= now" → if until_ts equals now, the row is expired.
+        // We can't guarantee exact timing, but we use a timestamp in the past
+        // to test the boundary condition.
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+        let until = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        mark_limited(&conn, aid, &mid, &until, "X").expect("mark");
+        // 1 second in the past → should be expired
+        assert!(!is_limited(&conn, aid, &mid).expect("1s-past is expired"));
+    }
+
+    // --- Stress: mark_limited same (account, model) many times ---
+
+    #[test]
+    fn adv_mark_limited_same_pair_stress() {
+        let conn = fresh_db();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+
+        for i in 0..100 {
+            let until = (chrono::Utc::now()
+                + chrono::Duration::minutes(i))
+                .to_rfc3339();
+            mark_limited(&conn, aid, &mid, &until, "X").expect("mark");
+        }
+        // UPSERT means only 1 row exists, with the latest until_ts.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM live_limited_models WHERE account_id = ?1 AND model_id = ?2",
+                params![aid.0, mid.as_str()],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1, "UPSERT must keep exactly 1 row, got {count}");
+    }
+}
