@@ -138,7 +138,7 @@ fn map_horde_cluster_model(
 
     let (family, out_mods, m_type): (_, Box<[String]>, _) = if is_image {
         (
-            Some(infer_horde_family(&name)),
+            Some(infer_horde_family(&name).to_string()),
             vec!["image".into()].into(),
             "image",
         )
@@ -922,24 +922,31 @@ fn clean_image_str(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn infer_horde_family(model_name: &str) -> String {
-    let lower = model_name.to_lowercase();
-    if lower.contains("flux") {
-        "flux".to_string()
-    } else if lower.contains("sdxl") || lower.contains("xl") {
-        "sdxl".to_string()
-    } else if lower.contains("pony") {
-        "pony".to_string()
-    } else if lower.contains("stable_diffusion")
-        || lower.contains("sd 1.5")
-        || lower.contains("sd15")
-    {
-        "sd15".to_string()
-    } else if lower.contains("dreamshaper") {
-        "dreamshaper".to_string()
-    } else {
-        "diffusion".to_string()
+fn infer_horde_family(model_name: &str) -> &'static str {
+    const PATTERNS: &[(&str, &str)] = &[
+        ("flux", "flux"),
+        ("sdxl", "sdxl"),
+        ("xl", "sdxl"),
+        ("pony", "pony"),
+        ("stable_diffusion", "sd15"),
+        ("sd 1.5", "sd15"),
+        ("sd15", "sd15"),
+        ("dreamshaper", "dreamshaper"),
+    ];
+
+    let bytes = model_name.as_bytes();
+    for &(pattern, family) in PATTERNS {
+        let p_bytes = pattern.as_bytes();
+        if bytes.len() >= p_bytes.len()
+            && bytes
+                .windows(p_bytes.len())
+                .any(|w| w.eq_ignore_ascii_case(p_bytes))
+        {
+            return family;
+        }
     }
+
+    "diffusion"
 }
 
 pub const MIN_HORDE_DIMENSION: u32 = 64;
