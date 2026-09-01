@@ -673,8 +673,13 @@ fn translate_simple_text_response(
         .and_then(|s| s.as_str())
         .or_else(|| response_body_raw.get("content").and_then(|s| s.as_str()))
         .unwrap_or("");
+
+    let mut id = String::with_capacity(48);
+    use std::fmt::Write;
+    let _ = write!(&mut id, "chatcmpl_{}", uuid::Uuid::new_v4());
+
     OpenAIResponse {
-        id: format!("chatcmpl_{}", uuid::Uuid::new_v4()),
+        id,
         object: "chat.completion".to_string(),
         created: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -847,7 +852,14 @@ impl UpstreamDispatcher {
             }
         };
 
-        let response_id = format!("chatcmpl_{}", uuid::Uuid::new_v4().simple());
+        let mut response_id = String::with_capacity(48);
+        use std::fmt::Write;
+        let _ = write!(
+            &mut response_id,
+            "chatcmpl_{}",
+            uuid::Uuid::new_v4().simple()
+        );
+
         let created = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -904,18 +916,16 @@ impl UpstreamDispatcher {
                     "finish_reason": "stop"
                 }]
             });
-            let _ = sink
-                .send(bytes::Bytes::from(format!(
-                    "data: {}\n\n",
-                    serde_json::to_string(&chunk1).unwrap_or_default()
-                )))
-                .await;
-            let _ = sink
-                .send(bytes::Bytes::from(format!(
-                    "data: {}\n\n",
-                    serde_json::to_string(&chunk2).unwrap_or_default()
-                )))
-                .await;
+            let chunk1_str = serde_json::to_string(&chunk1).unwrap_or_default();
+            let mut buf1 = String::with_capacity(chunk1_str.len() + 8);
+            use std::fmt::Write;
+            let _ = write!(&mut buf1, "data: {chunk1_str}\n\n");
+            let _ = sink.send(bytes::Bytes::from(buf1)).await;
+
+            let chunk2_str = serde_json::to_string(&chunk2).unwrap_or_default();
+            let mut buf2 = String::with_capacity(chunk2_str.len() + 8);
+            let _ = write!(&mut buf2, "data: {chunk2_str}\n\n");
+            let _ = sink.send(bytes::Bytes::from(buf2)).await;
             let _ = sink.send(crate::pipeline::SSE_DONE_BYTES).await;
         }
 
@@ -1825,7 +1835,10 @@ impl UpstreamDispatcher {
                 .await;
         }
 
-        let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+        let mut chunk_id = String::with_capacity(48);
+        use std::fmt::Write;
+        let _ = write!(&mut chunk_id, "chatcmpl-{}", uuid::Uuid::new_v4());
+
         let created = chrono::Utc::now().timestamp() as u64;
         let model_name = model.model_id.as_str().to_string();
 
