@@ -1,27 +1,25 @@
-# openproxy — Architecture
+# openproxy: Architecture
 
 ## 1. Vision and Principles
 
-**openproxy** is a headless, minimal LLM proxy/router written in Rust. It is inspired by
-OmniRoute but deliberately stripped of non-essential machinery. It accepts OpenAI-compatible
+**openproxy** is a headless LLM proxy and router written in Rust. It accepts OpenAI-compatible
 chat completion requests, routes them across multiple upstream providers and accounts, and
-exposes operational telemetry. The dashboard SPA is embedded into the server binary at
-compile time via `rust-embed`, so a single `openproxy` binary serves both the API and the
-admin UI on the same port.
+exposes operational telemetry. The dashboard SPA compiles directly into the server binary
+via `rust-embed`, serving both the API and the admin UI on a single port.
 
 ### Guiding principles
 
 1. **Single binary by default.** The server runs as one self-contained binary that serves
    the OpenAI-compatible API, the admin REST API, and the dashboard SPA on the same port.
 2. **Bloat is a bug.** Every feature must justify its weight. We start with three providers
-   and two routing strategies. Nothing more.
-3. **Live discovery, no hardcoding.** Models are fetched from upstream at runtime. Adding a
-   new model does not require a recompile.
-4. **Explicit over implicit.** Timeouts, retries, headers, and costs are all named
-   constants or config — never magic numbers buried in code.
-5. **Observable.** Every request carries a `request_id` / `trace_id` from edge to provider
-   and is logged with structured fields.
-6. **Composable crates.** The workspace is split so that the server has zero coupling to
+   and two routing strategies.
+3. **Live discovery, no hardcoding.** Models fetch from upstream at runtime. Adding a
+   new model does not require recompilation.
+4. **Explicit over implicit.** Timeouts, retries, headers, and costs are named
+   constants or config, not magic numbers buried in code.
+5. **Observable.** Every request carries a `request_id` and `trace_id` from edge to provider
+   and logs structured fields.
+6. **Composable crates.** The workspace splits cleanly: the server has zero coupling to
    any UI; the UI has zero coupling to provider internals.
 7. **Deterministic streaming.** SSE is byte-passthrough with translation at the boundary,
    and each chunk is traceable.
@@ -68,10 +66,10 @@ admin UI on the same port.
                        └────────────────┘  └────────────────────┘
 
    The dashboard SPA (lit-html + TypeScript, in `crates/openproxy-server/web/`)
-   is compiled to a JS bundle by `pnpm build` (esbuild) and embedded into the
-   `openproxy-server` binary via `rust-embed` at compile time — there is no
-   separate `openproxy-web` crate anymore. The optional `openproxy-api-client`
-   crate remains for external automation scripts that want a typed wrapper
+   compiles to a JS bundle via `pnpm build` (esbuild) and embeds into the
+   `openproxy-server` binary via `rust-embed` at compile time. There is no
+   separate web crate. The optional `openproxy-api-client`
+   crate remains for external automation scripts that need a typed wrapper
    around the admin REST API.
 
 ## 3. Crate Boundaries and Responsibilities
@@ -207,7 +205,7 @@ that OpenCode Zen's mixed format can dispatch per model without leaking the
 4. Add a unit-test fixture: a sample request, expected translated request, expected
    translated response.
 
-No reflection, no runtime plugin loading — Rust's type system is the registry.
+No reflection or runtime plugin loading: Rust's type system serves as the registry.
 
 ## 6. Translation Layer
 
@@ -356,24 +354,22 @@ Propagation rules:
 ## 10. Dashboard Integration
 
 The dashboard SPA is part of the `openproxy-server` binary. The frontend source tree
-(lit-html + TypeScript) lives in `crates/openproxy-server/web/` and is bundled into a
-single `app.js` by `pnpm build` (esbuild). The bundle and the rest of the static tree
-(`index.html`, `callback.html`, CSS, fonts, i18n JSON) are embedded into the server
+(lit-html + TypeScript) lives in `crates/openproxy-server/web/` and bundles into a
+single `app.js` via `pnpm build` (esbuild). The bundle and the static assets
+(`index.html`, `callback.html`, CSS, fonts, i18n JSON) embed into the server
 binary at compile time via `rust-embed` (see `crates/openproxy-server/src/admin_ui.rs`).
 
 - A single `cargo build --release -p openproxy-server` produces a binary that serves
-  BOTH the API (`/v1/*`, `/admin/api/*`) and the dashboard SPA (`/admin/*`) on the same
-  port — no second process, no second port, no proxy hop.
-- The build pipeline requires a Node 22 + pnpm toolchain to run `pnpm build` BEFORE
+  both the API (`/v1/*`, `/admin/api/*`) and the dashboard SPA (`/admin/*`) on the same
+  port without a second process or reverse proxy.
+- The build pipeline requires Node 22 and pnpm to run `pnpm build` before
   `cargo build` (because `rust-embed` bakes the `dist/` tree into the binary). The
-  Dockerfile and `.github/workflows/ci.yml` orchestrate this; on a fresh clone,
-  `cargo build` would still succeed because the rest of the static tree
-  (HTML, CSS, fonts, i18n) is checked in and `rust-embed` only walks what
-  exists on disk.
+  Dockerfile and `.github/workflows/ci.yml` orchestrate this. On a fresh clone,
+  `cargo build` still succeeds because the static tree
+  (HTML, CSS, fonts, i18n) is tracked in git.
 - The dashboard has **no direct access** to SQLite or provider adapters. Every action
-  goes through the server's admin REST API (typed on the Rust side by the optional
-  `openproxy-api-client` crate, which external automation can also consume).
-- Auth: the dashboard presents an admin API key prompt; the key is stored in the
-  browser's `localStorage` and sent as `Authorization: Bearer <key>` on every
-  `/admin/api/*` request. The `/admin/ws` WebSocket does its own auth via a `?token=`
-  query parameter (browsers can't set headers on WS handshakes).
+  goes through the server admin REST API.
+- Auth: the dashboard presents an admin API key prompt. The key is stored in browser
+  `localStorage` and sent as `Authorization: Bearer <key>` on every
+  `/admin/api/*` request. The `/admin/ws` WebSocket authenticates via a `?token=`
+  query parameter because browsers cannot set custom headers on WebSocket handshakes.

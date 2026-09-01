@@ -1,6 +1,6 @@
 # openproxy ⚡
 
-**A fast, self-hosted LLM gateway that unifies, races, and fallback-chains multiple AI providers behind a single OpenAI-compatible API.**
+**Self-hosted LLM gateway that unifies, races, and failovers across multiple AI providers behind a single OpenAI-compatible API.**
 
 [![CI](https://github.com/soyelmismo/openproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/soyelmismo/openproxy/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/soyelmismo/openproxy)](https://github.com/soyelmismo/openproxy/releases)
@@ -31,12 +31,12 @@
 
 ## Why openproxy?
 
-- **Parallel Racing:** Query multiple providers simultaneously — the first valid response streams back to your client instantly while losing requests are cancelled.
-- **Combos (Intelligent Fallbacks):** Chain models and accounts together (`strict`, `round_robin`, `p2c`, `least_used`). If provider A hits a 429 rate limit or outage, openproxy automatically fails over to provider B with zero downtime.
-- **Zero SaaS / 100% Self-Hosted:** Single binary with an embedded real-time web dashboard and SQLite database. No external databases, no cloud subscriptions, no tracking.
-- **Universal Wire Translation:** Transparently translates requests and SSE streams between OpenAI (`/chat/completions`), Anthropic (`/messages`), and Google Gemini formats.
-- **Built-in Proxy Engine & Cooldowns:** Built-in free proxies scraping, health testing, and persistent per-provider rate-limit cooldowns.
-- **Instant Client Compatibility:** Point any OpenAI-compatible client (**Cursor, Cline, Roo Code, Continue, Claude Code, LiteLLM, LangChain**) to openproxy with a single base-URL change.
+- **Parallel Racing:** Query multiple providers in parallel. Stream the first valid response to your client and cancel losing requests.
+- **Combos (Fallback Routing):** Chain models and accounts (`strict`, `round_robin`, `p2c`, `least_used`). If provider A hits rate limits or errors, openproxy fails over to provider B.
+- **Self-Hosted:** Single binary with embedded SQLite and a web dashboard. No external databases, cloud accounts, or telemetry.
+- **Protocol Translation:** Translates requests and SSE streams between OpenAI (`/chat/completions`), Anthropic (`/messages`), and Google Gemini formats.
+- **Proxy Engine & Cooldowns:** Scrapes upstream proxies, runs health checks, and enforces persistent per-provider rate-limit backoffs.
+- **Drop-in Compatibility:** Point any OpenAI-compatible client (**Cursor, Cline, Roo Code, Continue, Claude Code, LiteLLM, LangChain**) to openproxy by updating the base URL.
 
 ---
 
@@ -46,16 +46,16 @@
 
 ## Key Features
 
-- **⚡ Universal OpenAI-Compatible API** — Standard `POST /v1/chat/completions` (streaming SSE & non-streaming) and `GET /v1/models`.
-- **🔌 Multi-Provider Support** — Built-in native adapters for **OpenRouter, MiniMax, OpenCode (Zen & Go), Ollama Cloud, Nous Research, NVIDIA NIM, Kilocode, Gemini (AI Studio + Cloud Code), Antigravity (+ CLI), Kiro, and Cloudflare Workers AI**, plus custom provider endpoints at runtime.
-- **🏁 Parallel Races** — Launch $N$ targets concurrently; first token wins, losing requests abort cleanly within configurable grace periods.
-- **🔄 Smart Combos & Load Balancing** — Group providers, models, and accounts into virtual models with weighted routing, power-of-two-choices (`p2c`), and nested sub-combos.
-- **🛡️ Circuit Breakers & Cooldowns** — Automatic fault detection with configurable per-account and per-target backoff cooldowns.
-- **🌐 Proxy Rotation & IP Throttling Protection** — Automatic proxy health tracking and isolated per-provider cooldowns upon 429 rate limits.
-- **📊 Real-Time Embedded Dashboard** — High-performance web UI (TypeScript + Lit + uPlot) bundled directly into the binary at `/admin`. Live WebSocket activity feed, throughput metrics, latency percentiles ($p50/p95/p99$), and cost tracking.
-- **🔔 Notifications Tray** — Real-time discovery alerts for newly available models, auto-activation rules, and drag-and-drop model-to-combo assignment.
-- **🔐 Secret Encryption at Rest** — All upstream API keys and OAuth tokens are securely encrypted using **AES-256-GCM** with zero plaintext leakage.
-- **🗜️ Payload Compression (Lite & RTK)** — Optional intelligent system-prompt deduplication and CLI tool output compaction (`git`, `cargo`, `npm`, `docker`) to reduce token usage and cost.
+- **⚡ OpenAI-Compatible API:** `POST /v1/chat/completions` (streaming SSE and non-streaming) and `GET /v1/models`.
+- **🔌 Multi-Provider Support:** Built-in adapters for OpenRouter, MiniMax, OpenCode (Zen & Go), Ollama Cloud, Nous Research, NVIDIA NIM, Kilocode, Gemini (AI Studio + Cloud Code), Antigravity (+ CLI), Kiro, Cloudflare Workers AI, and custom endpoints.
+- **🏁 Parallel Races:** Launch $N$ targets concurrently. First token wins; losing requests abort within configurable grace periods.
+- **🔄 Combos & Load Balancing:** Group providers, models, and accounts into virtual models with weighted routing, power-of-two-choices (`p2c`), and nested sub-combos.
+- **🛡️ Circuit Breakers & Cooldowns:** Fault detection with configurable per-account and per-target backoff cooldowns.
+- **🌐 Proxy Rotation & Rate-Limit Isolation:** Proxy health tracking and isolated per-provider cooldowns on HTTP 429 responses.
+- **📊 Embedded Dashboard:** Web UI (TypeScript + Lit + uPlot) bundled in the binary at `/admin`. Live WebSocket feed, throughput metrics, latency percentiles ($p50/p95/p99$), and cost tracking.
+- **🔔 Notifications:** Alerts for discovered models, auto-activation rules, and drag-and-drop assignment to combos.
+- **🔐 Encrypted Storage:** Upstream API keys and OAuth tokens are encrypted at rest with AES-256-GCM.
+- **🗜️ Payload Compression (Lite & RTK):** System-prompt deduplication and CLI output compaction (`git`, `cargo`, `npm`, `docker`) to reduce token usage.
 
 ---
 
@@ -124,7 +124,7 @@ cargo build --release -p openproxy-server
 ./target/release/openproxy --config config.toml
 ```
 
-The web dashboard will be available at `http://127.0.0.1:8787/admin`.
+The dashboard is available at `http://127.0.0.1:8787/admin`.
 
 ---
 
@@ -156,12 +156,12 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) — System architecture, routing pipeline, and internals.
-- [`docs/mvp-spec.md`](docs/mvp-spec.md) — Specifications for endpoints, schema, and security models.
-- [`docs/roadmap.md`](docs/roadmap.md) — Post-MVP roadmap and planned capabilities.
+- [`docs/architecture.md`](docs/architecture.md): System architecture, routing pipeline, and internals.
+- [`docs/mvp-spec.md`](docs/mvp-spec.md): Endpoint specifications, schema, and security models.
+- [`docs/roadmap.md`](docs/roadmap.md): Post-MVP roadmap and planned capabilities.
 
 ---
 
 ## License
 
-openproxy is open-source software licensed under the [GNU General Public License v3.0](LICENSE).
+Licensed under the [GNU General Public License v3.0](LICENSE).

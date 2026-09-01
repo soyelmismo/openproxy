@@ -1,4 +1,4 @@
-# openproxy — MVP Specification
+# openproxy: MVP Specification
 
 ## 1. Scope
 
@@ -16,7 +16,7 @@
 - Structured logging with `request_id` and `trace_id`.
 - SQLite storage with a versioned migration runner.
 - Optional admin API and dashboard (feature-gated).
-- Headless by default — server runs without a UI.
+- Headless by default: server runs without a UI.
 
 ### Out of scope (MVP) & Implementation Status
 - [x] **Tool calling & function-calling translation**: Implemented (bidirectional schema mapping and translation for tool calls between OpenAI, Anthropic, and Gemini).
@@ -67,11 +67,11 @@ combo system resolves it.
 
 **Passthrough rules.** Field forwarding depends on the resolved `target_format`:
 
-- **OpenRouter (`target_format = openai`):** passthrough — fields not listed in the
+- **OpenRouter (`target_format = openai`):** passthrough. Fields not listed in the
   OpenAI Chat Completions schema (e.g. `top_k`, `repetition_penalty`, provider-specific
   knobs) are forwarded to the upstream request as-is.
 - **OpenAI → Anthropic (e.g. MiniMax Coding, OpenCode Zen Claude):** strict
-  allowlist — only the 8 fields listed below are translated; everything else is
+  allowlist. Only the 8 fields listed below are translated; everything else is
   dropped with a debug log:
   `model`, `messages`, `stream`, `temperature`, `top_p`, `max_tokens`, `stop`,
   `user`.
@@ -946,7 +946,7 @@ The MVP is "done" when **all** of the following hold:
    `round_robin` cycles through eligible targets.
 6. With two accounts registered for the same provider, the engine alternates
    accounts under `round_robin` within that provider.
-7. A `usage` row is written for every request — successful or not — with non-null
+7. A `usage` row is written for every request (successful or not) with non-null
    `request_id`, `status_code`, `total_ms`, and token counts when available.
 8. Forcing an upstream timeout (via a stub that hangs > `idle_chunk_ms`) produces an
    HTTP 504 with `Retry-After` and a `usage` row with `status_code = 504`.
@@ -963,7 +963,7 @@ The MVP is "done" when **all** of the following hold:
 12. All unit, integration, and property tests pass under `cargo test --workspace`
     in CI.
 13. Every `usage` row persists `connect_ms`, `ttft_ms`, `total_ms`, and
-    `tokens_per_sec` for each request — successful or not — and the per-phase
+    `tokens_per_sec` for each request (successful or not) and the per-phase
     percentiles are exposed via `GET /v1/admin/usage/latency`.
 14. A combo with `race_size = 2` and two healthy targets: the first response
     wins, the loser is cancelled in under 500ms, both rows exist in `usage`
@@ -1009,35 +1009,35 @@ The MVP is "done" when **all** of the following hold:
 The MVP is broken into six phases. Each phase ends with a green `cargo test` and a
 demoable artifact.
 
-### Phase 0 — Workspace skeleton (½ day)
+### Phase 0: Workspace skeleton (½ day)
 - Create the workspace `Cargo.toml` and the four crate skeletons with empty `lib.rs` /
   `main.rs`.
 - Verify the dependency DAG compiles.
 - CI: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace`.
 
-### Phase 1 — Storage and migrations (1 day)
+### Phase 1: Storage and migrations (1 day)
 - Implement `openproxy-core::storage` (rusqlite pool, migration runner).
 - Add all tables from §8 plus the migration files.
 - Add storage tests: schema round-trip, migration idempotence, FK enforcement.
 
-### Phase 2 — Provider adapters (2 days)
+### Phase 2: Provider adapters (2 days)
 - Implement the `ProviderAdapter` trait and the three MVP providers.
 - Implement the `OpenAIToOpenAI` and `OpenAIToAnthropic` translators.
 - Implement SSE normalizers for both formats.
 - Unit tests with golden traces; integration tests with a wiremock-style stub.
 
-### Phase 3 — HTTP server and combo engine (2 days)
+### Phase 3: HTTP server and combo engine (2 days)
 - axum router: `POST /v1/chat/completions`, `GET /v1/models`.
 - Combo engine: priority and round_robin, with account rotation.
 - Wire timeout model and `request_id` / `trace_id` propagation.
 - Integration tests covering streaming, timeouts, rate-limits, combo misses.
 
-### Phase 4 — Cost and analytics (1 day)
+### Phase 4: Cost and analytics (1 day)
 - Pricing tables; per-request cost computation.
 - Analytics queries (§7) on a read-only connection.
 - Admin endpoints under `/v1/admin/*` with bearer-key auth.
 
-### Phase 5 — Polish and release (1 day)
+### Phase 5: Polish and release (1 day)
 - Structured logging, configuration loading, env overrides.
 - Documentation: this file, `architecture.md`, `README.md` quickstart.
 - Final acceptance pass against §12; tag `v0.1.0`.
