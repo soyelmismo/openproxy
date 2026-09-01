@@ -166,6 +166,14 @@ pub struct GeminiRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub safety_settings: Option<Vec<GeminiSafetySetting>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<GeminiTool>>,
+    #[serde(
+        default,
+        rename = "toolConfig",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_config: Option<GeminiToolConfig>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -198,6 +206,51 @@ pub struct GeminiGenerationConfig {
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct GeminiFunctionDeclaration {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Parameters schema (JSON Schema, will be cleaned before serialization).
+    /// Serialized as `parameters` in JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct GeminiTool {
+    /// Always-present wrapper for function-calling toolset.
+    #[serde(default, rename = "functionDeclarations", skip_serializing_if = "Vec::is_empty")]
+    pub function_declarations: Vec<GeminiFunctionDeclaration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GeminiFunctionCallingMode {
+    Auto,
+    None,
+    Any,
+}
+
+/// Function-calling configuration; mirrors `FunctionCallingConfig` in the
+/// Gemini v1beta API.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GeminiFunctionCallingConfig {
+    pub mode: GeminiFunctionCallingMode,
+    #[serde(
+        default,
+        rename = "allowedFunctionNames",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allowed_function_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GeminiToolConfig {
+    #[serde(rename = "functionCallingConfig")]
+    pub function_calling_config: GeminiFunctionCallingConfig,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -439,7 +492,189 @@ fn partition_messages_for_gemini(
     (system_instruction, contents)
 }
 
+/// Translate OpenAI-format `tools` + `tool_choice` into Gemini
+/// `functionDeclarations` + `toolConfig`.
+///
+/// Returns `(None, None)` when there is nothing to send upstream,
+/// preserving byte-identical output for the existing happy-path.
+pub fn translate_openai_tools_to_gemini(
+    tools: Option<&[serde_json::Value]>,
+    tool_choice: Option<&serde_json::Value>,
+) -> (Option<Vec<GeminiTool>>, Option<GeminiToolConfig>) {
+    // 1. tools vacío / ausente → return (None, None). Garantiza que el
+    //    JSON upstream sea byte-idéntico al pre-fix: sin `tools` ni
+    //    `toolConfig`. (Una request con tools pero sin tool_choice
+    //    explícito cae al branch de abajo, donde tool_choice_to_config
+    //    sí emite `Some(Auto)` para que Gemini reciba directrices de
+    //    function-calling.)
+    let Some(tools) = tools else {
+        return (None, None);
+    };
+    if tools.is_empty() {
+        return (None, None);
+    }
+
+    // 2. Mapear cada tool a GeminiFunctionDeclaration
+    let declarations: Vec<GeminiFunctionDeclaration> = tools
+        .iter()
+        .filter_map(map_openai_tool_to_declaration)
+        .collect();
+
+    if declarations.is_empty() {
+        // Todas las tools fueron filtradas (e.g. todas sin name) → no enviar
+        // nada upstream para evitar 400.
+        return (None, None);
+    }
+
+    // 3. Mapear tool_choice
+    let tool_config = Some(tool_choice_to_config(tool_choice));
+
+    (
+        Some(vec![GeminiTool {
+            function_declarations: declarations,
+        }]),
+        tool_config,
+    )
+}
+
+/// Extrae `{name, description, parameters}` de un tool OpenAI flat
+/// (`{"type":"function","function":{...}}`) o nested (`{name,...}`).
+///
+/// Si `parameters` está presente pero **no es un JSON object** (p.ej.
+/// `null`, `"foo"`, `42`, `[1,2,3]`, `true`), **se omite la tool**
+/// completa con `tracing::warn!` — Gemini rechaza `parameters` que no
+/// sean `Value::Object` con HTTP 400, por lo que es preferible skippear
+/// la tool a propagar el error de upstream.
+fn map_openai_tool_to_declaration(
+    tool: &serde_json::Value,
+) -> Option<GeminiFunctionDeclaration> {
+    let obj = tool.as_object()?;
+
+    // Nested form (compat): {name, description, parameters}
+    if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+        let parameters = match obj.get("parameters") {
+            Some(p) if !p.is_object() => {
+                tracing::warn!(
+                    tool_name = name,
+                    param_type = ?p,
+                    "openai_to_gemini: tool `parameters` is not a JSON object; skipping tool to avoid Gemini 400"
+                );
+                return None;
+            }
+            Some(p) => {
+                let mut p = p.clone();
+                openproxy_types::schema_cleaner::clean_json_schema(&mut p);
+                Some(p)
+            }
+            None => None,
+        };
+        return Some(GeminiFunctionDeclaration {
+            name: name.to_string(),
+            description: obj
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parameters,
+        });
+    }
+
+    // Flat form: {type:"function", function:{name, description, parameters}}
+    let func = obj.get("function")?.as_object()?;
+    let name = func.get("name")?.as_str()?;
+    let parameters = match func.get("parameters") {
+        Some(p) if !p.is_object() => {
+            tracing::warn!(
+                tool_name = name,
+                param_type = ?p,
+                "openai_to_gemini: tool `parameters` is not a JSON object; skipping tool to avoid Gemini 400"
+            );
+            return None;
+        }
+        Some(p) => {
+            let mut p = p.clone();
+            openproxy_types::schema_cleaner::clean_json_schema(&mut p);
+            Some(p)
+        }
+        None => None,
+    };
+    Some(GeminiFunctionDeclaration {
+        name: name.to_string(),
+        description: func
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        parameters,
+    })
+}
+
+/// Mapea el OpenAI `tool_choice` a `GeminiToolConfig`.
+///
+/// - `None` o ausente → `Auto` (Gemini default)
+/// - `"none"` → `None` (sin function calling)
+/// - `"required"` o `"any"` → `Any`
+/// - `"auto"` → `Auto`
+/// - `{"type":"function","function":{"name":"foo"}}` → `Any` con
+///   `allowed_function_names=["foo"]`
+/// - Cualquier otro objeto → `Auto` (fallback defensivo)
+///
+/// No retorna `Option`: todas las variantes del OpenAI `tool_choice`
+/// se mapean a una config válida de Gemini. El wrapper `Option<...>` en
+/// `translate_openai_tools_to_gemini` sirve para la rama de "no tools",
+/// donde omitimos `toolConfig` por completo.
+fn tool_choice_to_config(tool_choice: Option<&serde_json::Value>) -> GeminiToolConfig {
+    let Some(tc) = tool_choice else {
+        return GeminiToolConfig {
+            function_calling_config: GeminiFunctionCallingConfig {
+                mode: GeminiFunctionCallingMode::Auto,
+                allowed_function_names: None,
+            },
+        };
+    };
+
+    // String form
+    if let Some(s) = tc.as_str() {
+        let mode = match s {
+            "none" => GeminiFunctionCallingMode::None,
+            "required" | "any" => GeminiFunctionCallingMode::Any,
+            _ => GeminiFunctionCallingMode::Auto, // "auto" or unknown
+        };
+        return GeminiToolConfig {
+            function_calling_config: GeminiFunctionCallingConfig {
+                mode,
+                allowed_function_names: None,
+            },
+        };
+    }
+
+    // Object form: {type:"function", function:{name:"foo"}}
+    if let Some(obj) = tc.as_object()
+        && let Some(func) = obj.get("function").and_then(|v| v.as_object())
+        && let Some(name) = func.get("name").and_then(|v| v.as_str())
+    {
+        return GeminiToolConfig {
+            function_calling_config: GeminiFunctionCallingConfig {
+                mode: GeminiFunctionCallingMode::Any,
+                allowed_function_names: Some(vec![name.to_string()]),
+            },
+        };
+    }
+
+    // Objeto mal formado o tipo inesperado → fallback Auto sin allowlist
+    GeminiToolConfig {
+        function_calling_config: GeminiFunctionCallingConfig {
+            mode: GeminiFunctionCallingMode::Auto,
+            allowed_function_names: None,
+        },
+    }
+}
+
 /// Convert an OpenAI-format chat completion request to Gemini format.
+///
+/// Translates `req.tools` into `GeminiTool.functionDeclarations` and
+/// `req.tool_choice` into `GeminiToolConfig.functionCallingConfig`.
+/// When neither field is set, the upstream JSON is byte-identical to
+/// pre-translation output (new fields are `Option<...>` with
+/// `skip_serializing_if`).
 pub fn openai_to_gemini(
     req: &openproxy_types::OpenAIRequest,
     override_messages: &[openproxy_types::OpenAIMessage],
@@ -453,11 +688,16 @@ pub fn openai_to_gemini(
         stop_sequences: req.stop.clone(),
     };
 
+    let (tools, tool_config) =
+        translate_openai_tools_to_gemini(req.tools.as_deref(), req.tool_choice.as_ref());
+
     GeminiRequest {
         contents,
         system_instruction,
         generation_config: Some(generation_config),
         safety_settings: Some(build_default_gemini_safety_settings()),
+        tools,
+        tool_config,
     }
 }
 
@@ -770,5 +1010,271 @@ mod tests {
                 .as_deref(),
             Some("System prompt 1\n\nSystem prompt 2")
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_translation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_translate_openai_tools_flat_format() {
+        let tool = json!({
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"}
+                    }
+                }
+            }
+        });
+        let (tools, _config) = translate_openai_tools_to_gemini(Some(&[tool]), None);
+        let tools = tools.expect("expected tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].function_declarations.len(), 1);
+        let decl = &tools[0].function_declarations[0];
+        assert_eq!(decl.name, "get_weather");
+        assert_eq!(decl.description.as_deref(), Some("Get current weather"));
+        let params = decl.parameters.as_ref().expect("parameters present");
+        assert_eq!(params["type"], "object");
+        assert_eq!(params["properties"]["city"]["type"], "string");
+    }
+
+    #[test]
+    fn test_translate_openai_tools_nested_format() {
+        let tool = json!({
+            "name": "lookup",
+            "description": "Look up data",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"}
+                }
+            }
+        });
+        let (tools, _config) = translate_openai_tools_to_gemini(Some(&[tool]), None);
+        let tools = tools.expect("expected tools");
+        assert_eq!(tools.len(), 1);
+        let decl = &tools[0].function_declarations[0];
+        assert_eq!(decl.name, "lookup");
+        assert_eq!(decl.description.as_deref(), Some("Look up data"));
+        assert_eq!(decl.parameters.as_ref().unwrap()["type"], "object");
+    }
+
+    #[test]
+    fn test_tool_choice_string_modes() {
+        let dummy_tool = vec![json!({
+            "type": "function",
+            "function": {"name": "noop"}
+        })];
+
+        // "none"
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("none")));
+        let cfg = cfg.unwrap();
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::None
+        ));
+
+        // "required"
+        let (_, cfg) =
+            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("required")));
+        let cfg = cfg.unwrap();
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Any
+        ));
+
+        // "auto"
+        let (_, cfg) =
+            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("auto")));
+        let cfg = cfg.unwrap();
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Auto
+        ));
+
+        // "any" (synonym for required)
+        let (_, cfg) =
+            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("any")));
+        let cfg = cfg.unwrap();
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Any
+        ));
+
+        // unknown string → fallback Auto
+        let (_, cfg) =
+            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("unknown_mode")));
+        let cfg = cfg.unwrap();
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Auto
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_object_with_function_name() {
+        let dummy_tool = vec![json!({
+            "type": "function",
+            "function": {"name": "noop"}
+        })];
+        let tc = json!({
+            "type": "function",
+            "function": {"name": "foo"}
+        });
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&tc));
+        let cfg = cfg.unwrap();
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Any
+        ));
+        assert_eq!(
+            cfg.function_calling_config.allowed_function_names,
+            Some(vec!["foo".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_clean_json_schema_in_parameters() {
+        // Parameters with $defs and $ref — should be flattened by clean_json_schema.
+        let tool = json!({
+            "type": "function",
+            "function": {
+                "name": "addr",
+                "parameters": {
+                    "$defs": {
+                        "Address": {
+                            "type": "object",
+                            "properties": {
+                                "city": {"type": "string"}
+                            }
+                        }
+                    },
+                    "type": "object",
+                    "properties": {
+                        "home": {"$ref": "#/$defs/Address"}
+                    }
+                }
+            }
+        });
+        let (tools, _config) = translate_openai_tools_to_gemini(Some(&[tool]), None);
+        let decl = &tools.unwrap()[0].function_declarations[0];
+        let params = decl.parameters.as_ref().unwrap();
+        assert_eq!(params["properties"]["home"]["type"], "object");
+        assert_eq!(
+            params["properties"]["home"]["properties"]["city"]["type"],
+            "string"
+        );
+        assert!(params.get("$defs").is_none());
+    }
+
+    #[test]
+    fn test_tools_empty_or_none_returns_none() {
+        // tools = None → (None, None)
+        let (tools, cfg) = translate_openai_tools_to_gemini(None, None);
+        assert!(tools.is_none());
+        assert!(cfg.is_none());
+
+        // tools = Some(&[]) → (None, None)
+        let (tools, cfg) = translate_openai_tools_to_gemini(Some(&[]), None);
+        assert!(tools.is_none());
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn test_tool_without_name_is_skipped() {
+        // First tool missing name, second one valid.
+        let tools_in = vec![
+            json!({"type": "function", "function": {"description": "no name"}}),
+            json!({"type": "function", "function": {"name": "valid"}}),
+        ];
+        let (tools, _cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
+        let tools = tools.expect("expected tools");
+        assert_eq!(tools[0].function_declarations.len(), 1);
+        assert_eq!(tools[0].function_declarations[0].name, "valid");
+
+        // All tools invalid → (None, None)
+        let tools_in = vec![
+            json!({"type": "function", "function": {"description": "no name"}}),
+            json!("not-an-object"),
+        ];
+        let (tools, cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
+        assert!(tools.is_none());
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn test_no_tools_means_no_tool_config() {
+        // tools=None → (None, None): byte-identical al payload pre-fix.
+        let (tools, cfg) = translate_openai_tools_to_gemini(None, None);
+        assert!(tools.is_none());
+        assert!(cfg.is_none());
+
+        // Serialize a GeminiRequest con tools=None para confirmar que
+        // el JSON upstream no contiene `tools` ni `toolConfig` —
+        // garantía de backward-compat estricta.
+        let req = openproxy_types::OpenAIRequest::default();
+        let gemini_req = openai_to_gemini(&req, &[]);
+        let serialized = serde_json::to_string(&gemini_req).unwrap();
+        assert!(
+            !serialized.contains("\"tools\""),
+            "no tools in upstream JSON: {serialized}"
+        );
+        assert!(
+            !serialized.contains("\"toolConfig\""),
+            "no toolConfig in upstream JSON: {serialized}"
+        );
+    }
+
+    #[test]
+    fn test_non_object_parameters_skips_tool() {
+        // Tool 0 has non-object parameters → skipped (warning logged, not asserted).
+        // Tool 1 has valid parameters → kept.
+        let tools_in = vec![
+            json!({
+                "type": "function",
+                "function": {"name": "bad", "parameters": "not-an-object"}
+            }),
+            json!({
+                "type": "function",
+                "function": {
+                    "name": "ok",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            }),
+        ];
+        let (tools, _cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
+        let tools = tools.expect("expected tools");
+        assert_eq!(tools[0].function_declarations.len(), 1);
+        assert_eq!(tools[0].function_declarations[0].name, "ok");
+
+        // All tools have non-object parameters → (None, None).
+        let tools_in = vec![json!({
+            "type": "function",
+            "function": {"name": "only_bad", "parameters": null}
+        })];
+        let (tools, cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
+        assert!(tools.is_none());
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn test_missing_parameters_is_not_a_warning() {
+        // Tool with no `parameters` key at all — should be kept with parameters=None.
+        let tools_in = vec![json!({
+            "type": "function",
+            "function": {"name": "no_params"}
+        })];
+        let (tools, _cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
+        let tools = tools.expect("expected tools");
+        assert_eq!(tools[0].function_declarations.len(), 1);
+        assert_eq!(tools[0].function_declarations[0].name, "no_params");
+        assert!(tools[0].function_declarations[0].parameters.is_none());
     }
 }
