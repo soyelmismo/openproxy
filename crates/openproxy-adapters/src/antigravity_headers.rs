@@ -210,6 +210,51 @@ pub fn insert_bearer(req: &mut crate::upstream::UpstreamRequest, token: &str) {
         .insert(http::header::AUTHORIZATION, build_bearer_header(token));
 }
 
+/// POST JSON to a Google Cloud Code endpoint with Bearer auth and
+/// Antigravity client-identity headers.
+///
+/// Returns the raw response body bytes on a 2xx status. On failure,
+/// returns a formatted `String` error of the form
+/// `"{url} <context>: {upstream-error-or-status-body}"`.
+///
+/// Generic over the body type so callers can pass `serde_json::Value`,
+/// a typed struct, or anything else `Serialize`.
+pub async fn oauth_post_json<T: serde::Serialize>(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    url: &str,
+    body: &T,
+    access_token: &str,
+    timeout: crate::upstream::TimeoutProfile,
+) -> Result<bytes::Bytes, String> {
+    let body_bytes =
+        serde_json::to_vec(body).map_err(|e| format!("{url} serialize: {e}"))?;
+
+    let mut req =
+        crate::upstream::UpstreamRequest::post_json(url, bytes::Bytes::from(body_bytes));
+    insert_bearer(&mut req, access_token);
+    inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream
+        .call(req, timeout, cancel)
+        .await
+        .map_err(|e| format!("{url} call: {e}"))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default())
+                .into_owned();
+        return Err(format!("{url} status {status}: {body_str}"));
+    }
+
+    resp.collect()
+        .await
+        .map_err(|e| format!("{url} collect: {e}"))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +357,73 @@ mod tests {
         assert_eq!(s.len(), "Bearer ".len() + token.len());
         assert!(s.starts_with("Bearer "));
         assert!(s.ends_with(token));
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn oauth_post_json_propagates_4xx() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(401, "auth required").await;
+        let body = serde_json::json!({ "request": {} });
+        let res = oauth_post_json(
+            &upstream,
+            "https://example.test/countTokens",
+            &body,
+            "fake-token",
+            crate::upstream::TimeoutProfile::Chat,
+        )
+        .await;
+        let err = res.expect_err("must error on 401");
+        assert!(err.contains("401"), "msg must mention status: {err}");
+        assert!(err.contains("auth required"), "body must be in msg: {err}");
+        assert!(err.contains("countTokens"), "msg must mention the url: {err}");
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn oauth_post_json_returns_body_on_2xx() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(200, r#"{"ok":true}"#).await;
+        let body = serde_json::json!({ "metadata": {} });
+        let res = oauth_post_json(
+            &upstream,
+            "https://example.test/loadCodeAssist",
+            &body,
+            "fake-token",
+            crate::upstream::TimeoutProfile::OAuth,
+        )
+        .await
+        .expect("2xx must return body");
+        assert_eq!(std::str::from_utf8(&res).unwrap(), r#"{"ok":true}"#);
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn oauth_post_json_serializes_correctly() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(200, "{}").await;
+        let body = serde_json::json!({
+            "projectId": "p1",
+            "metadata": {"ideType": "ANTIGRAVITY"},
+            "tier": "free-tier",
+        });
+        let _ = oauth_post_json(
+            &upstream,
+            "https://example.test/onboardUser",
+            &body,
+            "fake-token",
+            crate::upstream::TimeoutProfile::OAuth,
+        )
+        .await
+        .expect("complex body must serialize");
     }
 }

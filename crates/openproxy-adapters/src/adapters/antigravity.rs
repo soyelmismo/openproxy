@@ -1035,41 +1035,18 @@ pub async fn count_tokens(
     body: &serde_json::Value,
 ) -> std::result::Result<i64, String> {
     let wrapped = serde_json::json!({ "request": body });
-    let body_bytes = serde_json::to_vec(&wrapped)
-        .map_err(|e| format!("antigravity countTokens serialize: {e}"))?;
-
-    let mut req = crate::upstream::UpstreamRequest::post_json(
+    let body_bytes = crate::antigravity_headers::oauth_post_json(
+        upstream,
         COUNT_TOKENS_URL,
-        bytes::Bytes::from(body_bytes),
-    );
-    crate::antigravity_headers::insert_bearer(&mut req, access_token);
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = crate::upstream::CancellationToken::new();
-    let resp = upstream
-        .call(req, crate::upstream::TimeoutProfile::Chat, cancel)
-        .await
-        .map_err(|e| format!("antigravity countTokens: {e}"))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
-        return Err(format!(
-            "antigravity countTokens status {status}: {body_str}"
-        ));
-    }
-
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| format!("antigravity countTokens read: {e}"))?;
+        &wrapped,
+        access_token,
+        crate::upstream::TimeoutProfile::Chat,
+    )
+    .await?;
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("antigravity countTokens parse: {e}"))?;
-
+        .map_err(|e| format!("{COUNT_TOKENS_URL} parse: {e}"))?;
     parse_total_tokens(&value)
-        .ok_or_else(|| "antigravity countTokens: missing totalTokens".to_string())
+        .ok_or_else(|| format!("{COUNT_TOKENS_URL}: missing totalTokens"))
 }
 
 /// Call `loadCodeAssist` and extract `projectId` (or `None` when
@@ -1080,41 +1057,17 @@ pub async fn load_code_assist(
     metadata: &serde_json::Value,
 ) -> std::result::Result<Option<String>, String> {
     let body = serde_json::json!({ "metadata": metadata });
-    let body_bytes = serde_json::to_vec(&body)
-        .map_err(|e| format!("antigravity loadCodeAssist serialize: {e}"))?;
-
-    let mut req = crate::upstream::UpstreamRequest::post_json(
+    let body_bytes = crate::antigravity_headers::oauth_post_json(
+        upstream,
         LOAD_CODE_ASSIST_URL,
-        bytes::Bytes::from(body_bytes),
-    );
-    crate::antigravity_headers::insert_bearer(&mut req, access_token);
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = crate::upstream::CancellationToken::new();
-    let resp = upstream
-        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| format!("antigravity loadCodeAssist: {e}"))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
-        return Err(format!(
-            "antigravity loadCodeAssist status {status}: {body_str}"
-        ));
-    }
-
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| format!("antigravity loadCodeAssist read: {e}"))?;
-
+        &body,
+        access_token,
+        crate::upstream::TimeoutProfile::OAuth,
+    )
+    .await?;
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("antigravity loadCodeAssist parse: {e}"))?;
-
-    let project_id = value
+        .map_err(|e| format!("{LOAD_CODE_ASSIST_URL} parse: {e}"))?;
+    Ok(value
         .get("cloudaicompanionProject")
         .and_then(|v| v.as_str())
         .map(std::string::ToString::to_string)
@@ -1124,9 +1077,7 @@ pub async fn load_code_assist(
                 .and_then(|v| v.get("id"))
                 .and_then(|v| v.as_str())
                 .map(std::string::ToString::to_string)
-        });
-
-    Ok(project_id)
+        }))
 }
 
 /// Call `onboardUser` and return `Ok(Some(project_id))` on success,
@@ -1142,48 +1093,22 @@ pub async fn onboard_user(
         "metadata": metadata,
         "tier": "free-tier",
     });
-    let body_bytes =
-        serde_json::to_vec(&body).map_err(|e| format!("antigravity onboardUser serialize: {e}"))?;
-
-    let mut req = crate::upstream::UpstreamRequest::post_json(
+    let body_bytes = crate::antigravity_headers::oauth_post_json(
+        upstream,
         ONBOARD_USER_URL,
-        bytes::Bytes::from(body_bytes),
-    );
-    crate::antigravity_headers::insert_bearer(&mut req, access_token);
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = crate::upstream::CancellationToken::new();
-    let resp = upstream
-        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| format!("antigravity onboardUser: {e}"))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
-        return Err(format!(
-            "antigravity onboardUser status {status}: {body_str}"
-        ));
-    }
-
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| format!("antigravity onboardUser read: {e}"))?;
-
+        &body,
+        access_token,
+        crate::upstream::TimeoutProfile::OAuth,
+    )
+    .await?;
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("antigravity onboardUser parse: {e}"))?;
-
-    let project_id = value
+        .map_err(|e| format!("{ONBOARD_USER_URL} parse: {e}"))?;
+    Ok(value
         .get("cloudaicompanionProject")
         .and_then(|v| v.get("id"))
         .and_then(|v| v.as_str())
         .or_else(|| value.get("projectId").and_then(|v| v.as_str()))
-        .map(std::string::ToString::to_string);
-
-    Ok(project_id)
+        .map(std::string::ToString::to_string))
 }
 
 fn patch_part_thought_signature(part: &mut serde_json::Value) {
