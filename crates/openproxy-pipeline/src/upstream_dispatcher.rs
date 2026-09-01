@@ -1978,9 +1978,9 @@ mod wiring_tests {
     use std::sync::atomic::AtomicU64;
 
     /// Build a minimal in-memory-ish DB+pool pair compatible with
-    /// `UpstreamDispatcher::new`. Mirrors the helper in `tests.rs`
-    /// (kept local because `tests.rs` is not currently included as a
-    /// module from `lib.rs`).
+    /// `UpstreamDispatcher::new`. Mirrors the helper that previously
+    /// lived in `tests.rs` (removed because that file was never
+    /// included as a module from `lib.rs`).
     fn fresh_pool() -> (
         openproxy_db::DbPool,
         std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
