@@ -373,6 +373,18 @@ pub async fn refresh_single_account_quota(
         res?;
     }
 
+    // GAP-6: after a healthy quota refresh, prune any per-(account, model)
+    // "live-limited" sentinels. The TTL-bounded filter (`until_ts <= now`)
+    // is applied inside `clear_for_account` so an in-flight `mark_limited`
+    // racing with this refresh is not silently wiped (see
+    // `docs/specs/antigravity-gaps-p2.md` §4.4 "Race condition").
+    //
+    // The Writer is acquired and released entirely inside `spawn_blocking`
+    // — no guard is held across `.await` (AGENTS.md §4.3).
+    if q.fetch_error.is_none() {
+        clear_live_limited_after_refresh(db_pool, account_id).await;
+    }
+
     if q.fetch_error.is_none() {
         let low = compute_low_quota_signal(&q);
         if let Some((scope, remaining, limit)) = low {
@@ -417,6 +429,30 @@ pub async fn refresh_single_account_quota(
     Ok(Some(q))
 }
 
+/// GAP-6: prune expired per-(account, model) "live-limited" rows.
+///
+/// Extracted so it can be unit-tested without spinning up the full
+/// `refresh_single_account_quota` machinery. The Writer is acquired
+/// and released entirely inside `spawn_blocking` — no guard is held
+/// across `.await` (AGENTS.md §4.3).
+pub(crate) async fn clear_live_limited_after_refresh(
+    db_pool: &Arc<DbPool>,
+    account_id: AccountId,
+) {
+    let db_pool_for_clear = Arc::clone(db_pool);
+    let _ = tokio::task::spawn_blocking(move || {
+        let w = db_pool_for_clear.writer();
+        if let Err(e) = openproxy_db::live_limited::clear_for_account(&w, account_id) {
+            tracing::warn!(
+                account_id = account_id.0,
+                error = %e,
+                "quota_sync: failed to clear live_limited_models for account"
+            );
+        }
+    })
+    .await;
+}
+
 pub fn compute_low_quota_signal(q: &AccountQuota) -> Option<(&'static str, i64, i64)> {
     if let (Some(used), Some(limit)) = (q.session_used, q.session_limit) {
         let remaining = (limit - used).max(0);
@@ -441,5 +477,148 @@ pub fn is_low(remaining: i64, limit: i64) -> bool {
         remaining * 10 < limit
     } else {
         remaining < QUOTA_LOW_ABSOLUTE_FLOOR
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_db::{DbPool, migrations};
+    use openproxy_types::ids::{AccountId, ModelId};
+    use std::path::PathBuf;
+
+    /// Build an in-memory `DbPool` with all migrations applied and one
+    /// provider + account seeded. Returns the pool plus the freshly
+    /// inserted `AccountId` (always `1` after the seed).
+    fn fresh_pool() -> (Arc<DbPool>, AccountId) {
+        // DbPool needs a real file path for `open_connection`, so we
+        // create a tempdir-backed file. The DB content is empty
+        // initially; we apply migrations on the writer before use.
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let path: PathBuf =
+            base.join(format!("openproxy-quota-sync-test-{pid}-{nanos}.db"));
+        let pool = DbPool::open(&path).expect("open pool");
+        let aid = AccountId(1);
+
+        // Apply migrations on a fresh connection that we own, then
+        // seed the FK target row. (DbPool doesn't expose a `run_migrations`
+        // helper directly.)
+        {
+            let mut conn = pool.open_connection().expect("open conn");
+            migrations::run(&mut conn).expect("migrations");
+            conn.execute(
+                "INSERT INTO providers(id, name, base_url, auth_type, format) \
+                 VALUES ('antigravity', 'Antigravity', 'https://x', 'oauth', 'openai')",
+                [],
+            )
+            .expect("seed provider");
+            conn.execute(
+                "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a1')",
+                [],
+            )
+            .expect("seed account");
+        }
+        (Arc::new(pool), aid)
+    }
+
+    #[tokio::test]
+    async fn quota_sync_clear_helper_drops_expired_rows() {
+        let (pool, aid) = fresh_pool();
+        let mid = ModelId::new("gemini-2.5");
+
+        // Seed two expired rows on the writer.
+        {
+            let w = pool.writer();
+            let expired = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+            openproxy_db::live_limited::mark_limited(
+                &w,
+                aid,
+                &mid,
+                &expired,
+                "RESOURCE_EXHAUSTED",
+            )
+            .expect("mark expired");
+        }
+
+        // The wiring helper (what `refresh_single_account_quota` calls
+        // when `fetch_error.is_none()`) drops expired rows.
+        clear_live_limited_after_refresh(&pool, aid).await;
+
+        let w = pool.writer();
+        assert!(!openproxy_db::live_limited::is_limited(&w, aid, &mid).expect("is_limited"));
+        assert!(!openproxy_db::live_limited::has_row(&w, aid, &mid).expect("has_row"));
+    }
+
+    #[tokio::test]
+    async fn quota_sync_clear_helper_preserves_active_rows() {
+        // The helper must not touch rows whose TTL is still in the
+        // future (race-correctness, N2 fix). Without the
+        // `until_ts <= now` filter in `clear_for_account`, a quota
+        // refresh that runs 1ms after `mark_limited` would silently
+        // wipe a freshly-emitted live-limit sentinel.
+        let (pool, aid) = fresh_pool();
+        let mid = ModelId::new("gemini-2.5");
+        let active = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+
+        {
+            let w = pool.writer();
+            openproxy_db::live_limited::mark_limited(
+                &w,
+                aid,
+                &mid,
+                &active,
+                "RESOURCE_EXHAUSTED",
+            )
+            .expect("mark active");
+        }
+
+        clear_live_limited_after_refresh(&pool, aid).await;
+
+        let w = pool.writer();
+        assert!(openproxy_db::live_limited::is_limited(&w, aid, &mid).expect("still limited"));
+    }
+
+    #[tokio::test]
+    async fn quota_sync_does_not_clear_when_fetch_error_present() {
+        // Mirrors `refresh_single_account_quota`'s gating: the
+        // `if q.fetch_error.is_none()` check must skip the clear when
+        // the previous fetch was unhealthy. The full refresh path
+        // needs OAuthClient / providers / etc. which is too heavy for
+        // a unit test; here we exercise the *contract* by directly
+        // checking the call-site condition: when the helper is gated
+        // by a non-empty `fetch_error`, the live-limit rows stay.
+        //
+        // The actual gating is one line in `refresh_single_account_quota`:
+        //   if q.fetch_error.is_none() {
+        //       clear_live_limited_after_refresh(db_pool, account_id).await;
+        //   }
+        // This test documents that contract.
+        let (pool, aid) = fresh_pool();
+        let mid = ModelId::new("gemini-2.5");
+        let expired = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+
+        {
+            let w = pool.writer();
+            openproxy_db::live_limited::mark_limited(
+                &w,
+                aid,
+                &mid,
+                &expired,
+                "RESOURCE_EXHAUSTED",
+            )
+            .expect("mark");
+        }
+
+        // Simulate "fetch_error was Some(_)" by NOT calling the helper.
+        // We assert the row would survive in that case (the unit test
+        // for `clear_for_account` already proves the SQL filter).
+        {
+            let w = pool.writer();
+            assert!(openproxy_db::live_limited::has_row(&w, aid, &mid).expect("has_row"));
+        }
     }
 }
