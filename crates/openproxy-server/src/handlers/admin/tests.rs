@@ -1153,3 +1153,123 @@ async fn auth_bypass_sentinel_1_rejects_non_loopback() {
         "authenticate_admin_ws should reject non-loopback IPs even with bypass"
     );
 }
+
+// ---- GAP-7: POST /admin/api/accounts/scan ----
+//
+// Test 3 of the GAP-7 acceptance criteria: dry_run must NOT create
+// accounts in the DB. Reuses the `make_state_with_key` harness and the
+// `static TEST_LOCK` pattern from `account_scanner::tests` to serialize
+// HOME mutations.
+
+#[tokio::test]
+async fn test_scan_endpoint_dry_run_does_not_create() {
+    // Same TEST_LOCK + HomeGuard used by `account_scanner::tests`. Defining
+    // it locally here keeps each module's test mutex self-contained.
+    static SCAN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+    impl HomeGuard {
+        fn set(_lock: &std::sync::MutexGuard<'_, ()>, path: &std::path::Path) -> Self {
+            let prev = std::env::var_os("HOME");
+            // SAFETY: caller holds `SCAN_TEST_LOCK` while guard is alive.
+            unsafe { std::env::set_var("HOME", path) };
+            Self { prev }
+        }
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                // SAFETY: caller holds `SCAN_TEST_LOCK` while guard is alive.
+                Some(v) => unsafe { std::env::set_var("HOME", v) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+
+    // Seed the built-in `antigravity` provider so `accounts.create`
+    // doesn't trip a FK constraint when dry_run=false path is exercised
+    // (we test dry_run=true here, but seeding mirrors what a real admin
+    // box looks like).
+    {
+        let w = state.db_pool().writer();
+        seed::seed_builtin_providers(&w).expect("seed builtins");
+    }
+
+    // Plant an antigravity-cli token file under HOME.
+    let lock_guard = SCAN_TEST_LOCK.lock().expect("test lock poisoned");
+    let _home = HomeGuard::set(&lock_guard, tmp.path());
+    let token_path = tmp
+        .path()
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+    let body = serde_json::json!({
+        "token": {
+            "access_token": "ya-dry-run-access",
+            "refresh_token": "1//dry-run-refresh",
+            "expiry": "2099-01-01T00:00:00Z",
+            "token_type": "Bearer"
+        },
+        "auth_method": "consumer",
+        "user": { "email": "dryrun@example.com" }
+    });
+    std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let app = Router::new()
+        .route("/admin/accounts/scan", post(crate::handlers::admin::accounts::scan_accounts))
+        .with_state(state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/accounts/scan")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"dry_run": true, "auto_import": false}"#))
+        .expect("build req");
+
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("scan handler hung for >5s")
+        .expect("oneshot");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "dry_run must return 200"
+    );
+
+    let body = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+        .await
+        .expect("body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+
+    let scanned = parsed["scanned"]
+        .as_array()
+        .expect("scanned is an array");
+    assert!(
+        !scanned.is_empty(),
+        "dry_run must echo discovered entries; got {parsed}"
+    );
+    let imported = parsed["imported"]
+        .as_array()
+        .expect("imported is an array");
+    assert!(
+        imported.is_empty(),
+        "dry_run must not import; got {parsed}"
+    );
+
+    // DB invariant: NO accounts were created.
+    let account_count: i64 = state
+        .db_pool()
+        .with_conn(|c| c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap());
+    assert_eq!(
+        account_count, 0,
+        "dry_run must not create accounts in DB"
+    );
+}
