@@ -36,3 +36,5 @@ package-lock.json
 # runtime artifacts
 data/
 .reports/
+*.rs.orig
+*.rs.patch

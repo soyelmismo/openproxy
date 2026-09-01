@@ -3005,4 +3005,29 @@ mod atomesus_sse_tests {
             Some(1000)
         );
     }
+
+    #[test]
+    fn parse_sse_data_line_edge_cases() {
+        // Empty payloads
+        assert_eq!(parse_sse_data_line(""), None);
+        assert_eq!(parse_sse_data_line("data: "), None);
+
+        // Multibyte UTF-8 boundaries
+        let utf8_line = "data: {\"content\": \"こんにちは\"}";
+        assert_eq!(
+            parse_sse_data_line(utf8_line),
+            Some("{\"content\": \"こんにちは\"}")
+        );
+
+        // Malformed JSON (handled gracefully because it just extracts the data string)
+        let malformed_line = "data: {\"content\": \"malformed";
+        assert_eq!(
+            parse_sse_data_line(malformed_line),
+            Some("{\"content\": \"malformed")
+        );
+
+        // Edge cases with colons
+        let multi_colon = "data: :data:hello";
+        assert_eq!(parse_sse_data_line(multi_colon), Some(":data:hello"));
+    }
 }
