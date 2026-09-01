@@ -1200,26 +1200,32 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
         seed::seed_builtin_providers(&w).expect("seed builtins");
     }
 
-    // Plant an antigravity-cli token file under HOME.
-    let lock_guard = SCAN_TEST_LOCK.lock().expect("test lock poisoned");
-    let _home = HomeGuard::set(&lock_guard, tmp.path());
-    let token_path = tmp
-        .path()
-        .join(".gemini")
-        .join("antigravity-cli")
-        .join("antigravity-oauth-token");
-    std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
-    let body = serde_json::json!({
-        "token": {
-            "access_token": "ya-dry-run-access",
-            "refresh_token": "1//dry-run-refresh",
-            "expiry": "2099-01-01T00:00:00Z",
-            "token_type": "Bearer"
-        },
-        "auth_method": "consumer",
-        "user": { "email": "dryrun@example.com" }
-    });
-    std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
+    // Plant an antigravity-cli token file under HOME. The lock + HomeGuard
+    // must be released BEFORE the async `oneshot().await` below — AGENTS
+    // §4.3 prohibits holding a mutex guard across an `.await`.
+    let token_path = {
+        let lock_guard = SCAN_TEST_LOCK.lock().expect("test lock poisoned");
+        let _home = HomeGuard::set(&lock_guard, tmp.path());
+        let token_path = tmp
+            .path()
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("antigravity-oauth-token");
+        std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+        let body = serde_json::json!({
+            "token": {
+                "access_token": "ya-dry-run-access",
+                "refresh_token": "1//dry-run-refresh",
+                "expiry": "2099-01-01T00:00:00Z",
+                "token_type": "Bearer"
+            },
+            "auth_method": "consumer",
+            "user": { "email": "dryrun@example.com" }
+        });
+        std::fs::write(&token_path, serde_json::to_vec(&body).unwrap()).unwrap();
+        token_path
+        // `_home` and `lock_guard` drop here, releasing TEST_LOCK and HOME.
+    };
 
     let app = Router::new()
         .route("/admin/accounts/scan", post(crate::handlers::admin::accounts::scan_accounts))
@@ -1272,4 +1278,7 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
         account_count, 0,
         "dry_run must not create accounts in DB"
     );
+    // Use token_path so the binding is not dead code (kept for clarity if
+    // a future test in this module wants to assert against the fixture).
+    let _ = token_path;
 }
