@@ -781,3 +781,93 @@ mod gap6_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gap4_tests {
+    //! GAP-4 — upstream error classification integration tests.
+
+    use super::*;
+    use crate::error_classification::{UpstreamErrorClass, is_hard_skip_error};
+    use openproxy_types::CoreError;
+
+    #[test]
+    fn hard_skip_403_validation_required_is_not_retryable() {
+        let err = CoreError::upstream_error_with_skip(
+            403,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"error":"VALIDATION_REQUIRED"}"#,
+            false,
+            true,
+        );
+        assert!(err.is_hard_skip());
+        assert!(is_hard_skip_error(&err));
+        assert!(!RetryPolicy::is_retryable(&err, false));
+    }
+
+    #[test]
+    fn hard_skip_400_malformed_tool_call_is_not_retryable() {
+        let err = CoreError::upstream_error_with_skip(
+            400,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"error":{"code":2013,"message":"function name or parameters is empty"}}"#,
+            false,
+            true,
+        );
+        assert!(err.is_hard_skip());
+        assert!(!RetryPolicy::is_retryable(&err, false));
+    }
+
+    #[test]
+    fn hard_skip_403_permission_denied_is_not_retryable() {
+        let err = CoreError::upstream_error_with_skip(
+            403,
+            "antigravity",
+            "gemini-2.5",
+            "API_KEY_INVALID",
+            false,
+            true,
+        );
+        assert!(err.is_hard_skip());
+        assert!(!RetryPolicy::is_retryable(&err, false));
+    }
+
+    #[test]
+    fn generic_500_is_still_retryable() {
+        let err = CoreError::upstream_error(500, "antigravity", "gemini-2.5", "boom", false);
+        assert!(!err.is_hard_skip());
+        assert!(RetryPolicy::is_retryable(&err, false));
+    }
+
+    #[test]
+    fn hard_skip_classification_is_stable() {
+        let cases: &[(u16, &str, UpstreamErrorClass)] = &[
+            (403, r#"{"error":"VALIDATION_REQUIRED"}"#, UpstreamErrorClass::ValidationRequired),
+            (403, "PERMISSION_DENIED", UpstreamErrorClass::PermissionDenied),
+            (403, "API_KEY_INVALID", UpstreamErrorClass::PermissionDenied),
+            (429, r#"{"reason":"RESOURCE_EXHAUSTED"}"#, UpstreamErrorClass::ResourceExhausted),
+            (400, "function name or parameters is empty", UpstreamErrorClass::MalformedToolCall),
+            (500, "upstream down", UpstreamErrorClass::Generic),
+            (403, "", UpstreamErrorClass::Generic),
+        ];
+        for (status, body, expected) in cases {
+            let class = crate::error_classification::classify_upstream_error(*status, body);
+            assert_eq!(class, *expected, "status={status} body={body:?}");
+        }
+    }
+
+    #[test]
+    fn hard_skip_400_2013_marker_only() {
+        let err = CoreError::upstream_error_with_skip(
+            400,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"error":{"code":2013,"message":"oops"}}"#,
+            false,
+            true,
+        );
+        assert!(err.is_hard_skip());
+        assert!(!RetryPolicy::is_retryable(&err, false));
+    }
+}
