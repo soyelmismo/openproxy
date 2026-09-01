@@ -307,28 +307,36 @@ fn test_is_upstream_health_issue() {
         provider: "test".to_string(),
         model: "m".to_string(),
         body: "error".to_string(),
-        is_proxy_rotated: false
+        is_proxy_rotated: false,
+        class: openproxy_types::UpstreamErrorClass::Generic,
+        is_hard_skip: false,
     }));
     assert!(is_upstream_health_issue(&CoreError::UpstreamError {
         status: 503,
         provider: "test".to_string(),
         model: "m".to_string(),
         body: "error".to_string(),
-        is_proxy_rotated: false
+        is_proxy_rotated: false,
+        class: openproxy_types::UpstreamErrorClass::Generic,
+        is_hard_skip: false,
     }));
     assert!(!is_upstream_health_issue(&CoreError::UpstreamError {
         status: 400,
         provider: "test".to_string(),
         model: "m".to_string(),
         body: "error".to_string(),
-        is_proxy_rotated: false
+        is_proxy_rotated: false,
+        class: openproxy_types::UpstreamErrorClass::Generic,
+        is_hard_skip: false,
     }));
     assert!(!is_upstream_health_issue(&CoreError::UpstreamError {
         status: 404,
         provider: "test".to_string(),
         model: "m".to_string(),
         body: "error".to_string(),
-        is_proxy_rotated: false
+        is_proxy_rotated: false,
+        class: openproxy_types::UpstreamErrorClass::Generic,
+        is_hard_skip: false,
     }));
 
     // Other errors

@@ -437,6 +437,8 @@ async fn call_oauth_endpoint(
             model: "<oauth>".into(),
             body: String::from_utf8_lossy(&body).to_string(),
             is_proxy_rotated: false,
+            class: openproxy_types::UpstreamErrorClass::Generic,
+            is_hard_skip: false,
         });
     }
     Ok(body)

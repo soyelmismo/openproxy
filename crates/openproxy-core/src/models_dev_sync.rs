@@ -391,6 +391,8 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
             model: "<sync>".into(),
             body: text.to_string(),
             is_proxy_rotated: false,
+            class: openproxy_types::UpstreamErrorClass::Generic,
+            is_hard_skip: false,
         });
     }
 

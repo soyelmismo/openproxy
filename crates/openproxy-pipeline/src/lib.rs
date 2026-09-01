@@ -15,6 +15,7 @@ pub use streaming_state::ReasoningNormalizer;
 pub mod circuit_breaker;
 pub mod context;
 pub mod credentials;
+pub mod error_classification;
 pub mod execution;
 pub mod formatting;
 pub mod load_balancing;

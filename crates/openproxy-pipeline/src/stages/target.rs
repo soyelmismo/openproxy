@@ -5,6 +5,7 @@ use crate::timeouts;
 use crate::timeouts::ModelTimeoutOverrides;
 use crate::{FailureContext, PipelineResult};
 use openproxy_types::error::CoreError;
+use std::sync::Arc;
 
 macro_rules! fail_stage {
     ($ctx:expr, $target:expr, $err:expr, $model:expr) => {
@@ -407,6 +408,57 @@ async fn try_lazy_fetch_antigravity_project(
     }
 }
 
+/// GAP-6 helper: pure decision. Returns `true` if the error body
+/// matches `429 RESOURCE_EXHAUSTED` (the trigger condition for the
+/// `live_limited_models` insert). Extracted so it can be unit-tested
+/// without spinning up a full `Pipeline`.
+fn should_mark_live_limited(err: &CoreError) -> bool {
+    let CoreError::UpstreamError { status, body, .. } = err else {
+        return false;
+    };
+    *status == 429 && body.contains("RESOURCE_EXHAUSTED")
+}
+
+/// GAP-6 helper: persist a live-limit sentinel for
+/// `(account_id, model_id)` when the error body says
+/// `429 RESOURCE_EXHAUSTED`. Independent of GAP-4: the trigger
+/// decision is made on `(status, body)` directly.
+///
+/// The Writer lock is released inside the `spawn_blocking` closure
+/// before the function returns; we never hold it across an `.await`
+/// (AGENTS.md §4.3). The `handle` is `drop`ped explicitly so
+/// `clippy::let_underscore_future` is satisfied (fire-and-forget).
+fn mark_live_limited_inner(
+    conn_arc: Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    aid: openproxy_types::ids::AccountId,
+    model_id: &openproxy_types::ids::ModelId,
+    err: &CoreError,
+) {
+    if !should_mark_live_limited(err) {
+        return;
+    }
+    let model_id = model_id.clone();
+    let handle = tokio::task::spawn_blocking(move || {
+        let conn = conn_arc.lock();
+        let until = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        if let Err(e) = openproxy_db::live_limited::mark_limited(
+            &conn,
+            aid,
+            &model_id,
+            &until,
+            "RESOURCE_EXHAUSTED",
+        ) {
+            tracing::warn!(
+                account_id = aid.0,
+                model = %model_id.as_str(),
+                error = %e,
+                "failed to mark live_limited_models from circuit breaker"
+            );
+        }
+    });
+    std::mem::drop(handle);
+}
+
 fn update_circuit_breaker_on_result(
     pipeline: &crate::Pipeline,
     target: &openproxy_types::ComboTarget,
@@ -422,12 +474,41 @@ fn update_circuit_breaker_on_result(
         target.model_row_id,
     );
 
+    // GAP-6: persist a per-(account, model) "live-limited" sentinel so
+    // future routing can skip this combo on the model even when the
+    // breaker decision below records a success (e.g. the catch-all
+    // `_ => record_success(key)` arm for non-retryable errors, or
+    // GAP-4's `hard_skip` arm once it lands).
+    //
+    // We classify the body directly with a substring check on
+    // `429 RESOURCE_EXHAUSTED` so this code path is independent of
+    // GAP-4's `UpstreamErrorClass::ResourceExhausted` enum (which
+    // lives in `openproxy-pipeline::error_classification` and is
+    // expected to land in a separate commit).
+    //
+    // Fire-and-forget: the Writer lock is acquired and released
+    // entirely inside `spawn_blocking` — no guard held across
+    // `.await` (AGENTS.md §4.3).
+    if let Some(err) = &result.error {
+        mark_live_limited_inner(Arc::clone(&pipeline.conn), aid, &model.model_id, err);
+    }
+
     match &result.error {
         Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)) => {
             tracing::debug!(
                 account_id = aid.0,
                 "client cancelled; leaving circuit breaker untouched"
             );
+        }
+        // GAP-4: hard-skip errors are request-shaped; record a success
+        // so the breaker stays calm.
+        Some(e) if e.is_hard_skip() => {
+            tracing::debug!(
+                account_id = aid.0,
+                class = ?e.upstream_error_class(),
+                "non-account error class; recording success to keep circuit breaker calm"
+            );
+            pipeline.circuit_breaker.record_success(key);
         }
         Some(e) if RetryPolicy::is_retryable(e, pipeline.config.idle_chunk_retryable) => {
             let outcome = pipeline.circuit_breaker.record_failure_outcome(key);
@@ -561,5 +642,142 @@ impl PipelineStage for CustomAdapterStage {
         };
 
         next.execute(ctx).await
+    }
+}
+
+#[cfg(test)]
+mod gap6_tests {
+    //! GAP-6 — live-limited sentinel wiring tests.
+    //!
+    //! Covers the pure decision (`should_mark_live_limited`) plus an
+    //! end-to-end mini integration test of `mark_live_limited_inner`
+    //! driving the live_limited_models SQLite table.
+
+    use super::*;
+    use openproxy_db::{DbPool, migrations};
+    use openproxy_types::error::CoreError;
+    use openproxy_types::ids::{AccountId, ModelId};
+    use std::path::PathBuf;
+
+    fn fresh_pool(tag: &str) -> DbPool {
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let path: PathBuf = base.join(format!(
+            "openproxy-pipeline-gap6-{tag}-{pid}-{nanos}.db"
+        ));
+        let pool = DbPool::open(&path).expect("open pool");
+        let mut conn = pool.open_connection().expect("open conn");
+        migrations::run(&mut conn).expect("migrations");
+        conn.execute(
+            "INSERT INTO providers(id, name, base_url, auth_type, format) \
+             VALUES ('antigravity', 'Antigravity', 'https://x', 'oauth', 'openai')",
+            [],
+        )
+        .expect("seed provider");
+        conn.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a1')",
+            [],
+        )
+        .expect("seed account");
+        pool
+    }
+
+    /// `should_mark_live_limited` returns `true` only for `429`
+    /// bodies containing `RESOURCE_EXHAUSTED`. All other shapes
+    /// (other statuses, missing marker, non-`UpstreamError` variants)
+    /// return `false`.
+    #[test]
+    fn should_mark_live_limited_only_for_429_resource_exhausted() {
+        // Positive case.
+        let yes = CoreError::upstream_error(
+            429,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"reason":"RESOURCE_EXHAUSTED"}"#,
+            false,
+        );
+        assert!(should_mark_live_limited(&yes));
+
+        // Wrong status.
+        let wrong_status = CoreError::upstream_error(
+            503,
+            "antigravity",
+            "gemini-2.5",
+            "RESOURCE_EXHAUSTED",
+            false,
+        );
+        assert!(!should_mark_live_limited(&wrong_status));
+
+        // Right status, wrong body.
+        let wrong_body = CoreError::upstream_error(
+            429,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"reason":"rate_limited"}"#,
+            false,
+        );
+        assert!(!should_mark_live_limited(&wrong_body));
+
+        // Not an UpstreamError variant.
+        let not_upstream = CoreError::RateLimited {
+            provider: "antigravity".to_string(),
+            retry_after_ms: 1000,
+            is_proxy_rotated: false,
+        };
+        assert!(!should_mark_live_limited(&not_upstream));
+    }
+
+    /// End-to-end: `mark_live_limited_inner` actually writes a row
+    /// to the SQLite writer when the body matches.
+    #[tokio::test(flavor = "current_thread")]
+    async fn mark_live_limited_inner_inserts_a_row() {
+        let pool = fresh_pool("insert");
+        let conn_arc = pool.writer_arc();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+        let err = CoreError::upstream_error(
+            429,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"reason":"RESOURCE_EXHAUSTED"}"#,
+            false,
+        );
+
+        mark_live_limited_inner(Arc::clone(&conn_arc), aid, &mid, &err);
+
+        // Give the spawn_blocking time to flush. `current_thread`
+        // runtime makes this deterministic.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let guard = pool.writer();
+        assert!(
+            openproxy_db::live_limited::is_limited(&guard, aid, &mid).expect("is_limited"),
+            "row should be present after mark_live_limited_inner"
+        );
+    }
+
+    /// `mark_live_limited_inner` is a no-op when the body doesn't
+    /// match `429 RESOURCE_EXHAUSTED`. We use a `500` body to
+    /// exercise the early-return branch.
+    #[tokio::test(flavor = "current_thread")]
+    async fn mark_live_limited_inner_skips_non_matching_bodies() {
+        let pool = fresh_pool("skip");
+        let conn_arc = pool.writer_arc();
+        let aid = AccountId(1);
+        let mid = ModelId::new("gemini-2.5");
+        let err = CoreError::upstream_error(500, "antigravity", "gemini-2.5", "boom", false);
+
+        mark_live_limited_inner(Arc::clone(&conn_arc), aid, &mid, &err);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let guard = pool.writer();
+        assert!(
+            !openproxy_db::live_limited::has_row(&guard, aid, &mid).expect("has_row"),
+            "no row should be inserted for non-matching bodies"
+        );
     }
 }

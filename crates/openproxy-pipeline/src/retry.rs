@@ -67,6 +67,9 @@ impl RetryPolicy {
             RateLimited {
                 is_proxy_rotated, ..
             } => *is_proxy_rotated,
+            UpstreamError {
+                is_hard_skip: true, ..
+            } => false,
             UpstreamError { status, .. } => *status != 429,
             Cancelled(_) | RaceLost => false,
             _ => true,

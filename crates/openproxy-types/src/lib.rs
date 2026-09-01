@@ -8,6 +8,8 @@ pub use time::now_ms;
 
 pub mod config;
 pub mod error;
+pub mod error_classification;
+pub use error_classification::UpstreamErrorClass;
 pub mod ids;
 pub mod message;
 pub mod providers;

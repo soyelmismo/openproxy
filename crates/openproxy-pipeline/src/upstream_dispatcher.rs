@@ -546,6 +546,50 @@ impl UpstreamDispatcher {
         }
 
         let err = if is_rate_limited_status {
+            // GAP-6: if the body says RESOURCE_EXHAUSTED, mark this
+            // (account, model) pair as live-limited for 5 minutes.
+            // Fire-and-forget; we don't want to block the dispatch
+            // path on a SQLite write. The `conn_clone` follows the
+            // existing pattern in `check_and_trigger_proxy_rotation`
+            // (upstream_dispatcher.rs:215-219).
+            //
+            // Note: when GAP-4 lands and `UpstreamErrorClass` is wired
+            // into the error construction, this can be tightened to
+            // `class == UpstreamErrorClass::ResourceExhausted`. Until
+            // then we match the body string directly (case-sensitive
+            // substring, matching the antigravity wire format).
+            if status_code == 429
+                && body_str.contains("RESOURCE_EXHAUSTED")
+                && let Some(aid) = target.account_id
+            {
+                let model_id = dctx.model.model_id.clone();
+                let conn_clone = Arc::clone(&self.conn);
+                let handle = tokio::task::spawn_blocking(move || {
+                    let conn = conn_clone.lock();
+                    let until = (chrono::Utc::now()
+                        + chrono::Duration::minutes(5))
+                    .to_rfc3339();
+                    if let Err(e) = openproxy_db::live_limited::mark_limited(
+                        &conn,
+                        aid,
+                        &model_id,
+                        &until,
+                        "RESOURCE_EXHAUSTED",
+                    ) {
+                        tracing::warn!(
+                            account_id = aid.0,
+                            model = %model_id.as_str(),
+                            error = %e,
+                            "failed to mark live_limited_models"
+                        );
+                    }
+                });
+                // Fire-and-forget; we don't want to block the dispatch
+                // path on the SQLite write. `drop` the handle to make
+                // the intent explicit (AGENTS.md §3.3 fire-and-forget
+                // pattern + clippy::let_underscore_future).
+                std::mem::drop(handle);
+            }
             CoreError::RateLimited {
                 provider: target.provider_id.to_string(),
                 retry_after_ms: retry_ms,
@@ -563,6 +607,12 @@ impl UpstreamDispatcher {
                     "MiniMax 2013 error: tool_call/tool_result mismatch."
                 );
             }
+            // GAP-4: classify the body and propagate the result so the
+            // circuit breaker knows not to penalize request-shape errors
+            // (see `error_classification::classify_upstream_error`).
+            // NOTE: GAP-4's classification wiring is intentionally left
+            // untouched here. GAP-6 only adds the `mark_limited` side
+            // effect in the 429 branch above and is independent.
             CoreError::upstream_error(
                 status_code,
                 target.provider_id.to_string(),
