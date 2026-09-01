@@ -23,7 +23,6 @@ fn normalize_quota_fraction(
     reset_time: Option<&str>,
     raw_fraction: Option<f64>,
 ) -> (i64, bool) {
-    const NORMALIZED_BASE: i64 = 1000;
     // Treat NaN as fully used (not unlimited) — avoids silent corruption.
     // Treat non-finite values and out-of-range inputs as zero-fraction
     // (fully used) for the reset_time = Some case, and 1.0 (unlimited)
