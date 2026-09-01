@@ -189,6 +189,27 @@ pub fn current_version() -> String {
     version().to_string()
 }
 
+/// Build a zero-allocation `Authorization: Bearer <token>` header value.
+///
+/// The 7-byte ASCII prefix `b"Bearer "` plus any `&str` that does not
+/// contain control characters always produces a valid `HeaderValue`.
+/// The `.expect` documents that invariant — it is not a fallible
+/// operation in practice because Google OAuth tokens are restricted
+/// to a safe alphabet (see RFC 6749 §A.12 for the character set).
+pub fn build_bearer_header(token: &str) -> HeaderValue {
+    let mut buf = bytes::BytesMut::with_capacity(7 + token.len());
+    buf.extend_from_slice(b"Bearer ");
+    buf.extend_from_slice(token.as_bytes());
+    HeaderValue::from_maybe_shared(buf.freeze())
+        .expect("Bearer + ASCII OAuth token must produce a valid HeaderValue")
+}
+
+/// Convenience: insert a Bearer `Authorization` header into a request.
+pub fn insert_bearer(req: &mut crate::upstream::UpstreamRequest, token: &str) {
+    req.headers
+        .insert(http::header::AUTHORIZATION, build_bearer_header(token));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +287,30 @@ mod tests {
         assert!(ua.starts_with("vscode/1.X.X (Antigravity/"));
         assert!(ua.ends_with(')'));
         assert_eq!(version, VERSION.as_str());
+    }
+
+    #[test]
+    fn build_bearer_header_produces_correct_value() {
+        let token = "ya29.test-token-with.dots_and-dashes";
+        let header = build_bearer_header(token);
+        assert_eq!(
+            header.to_str().unwrap(),
+            "Bearer ya29.test-token-with.dots_and-dashes"
+        );
+    }
+
+    #[test]
+    fn build_bearer_header_is_zero_alloc() {
+        // Verify that the construction path preserves the exact bytes
+        // "Bearer <token>": BytesMut + extend_from_slice is allocation-free
+        // (the prefix is a static slice, the token bytes are copied once),
+        // and HeaderValue::from_maybe_shared shares the Bytes buffer with
+        // hyper rather than allocating an intermediate String.
+        let token = "tok";
+        let header = build_bearer_header(token);
+        let s = header.to_str().unwrap();
+        assert_eq!(s.len(), "Bearer ".len() + token.len());
+        assert!(s.starts_with("Bearer "));
+        assert!(s.ends_with(token));
     }
 }

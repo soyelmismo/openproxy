@@ -376,12 +376,7 @@ async fn fetch_antigravity_models_from_endpoint(
     endpoint: &str,
 ) -> Option<Vec<DiscoveredModel>> {
     let mut req = UpstreamRequest::post_json(endpoint, Bytes::from_static(b"{}"));
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + api_key.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(api_key.as_bytes());
-    if let Ok(v) = HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    crate::antigravity_headers::insert_bearer(&mut req, api_key);
     req.headers.insert(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
@@ -459,12 +454,7 @@ async fn try_fetch_models_quota_endpoint(
     endpoint: &str,
 ) -> Option<openproxy_types::AccountQuota> {
     let mut req = UpstreamRequest::post_json(endpoint, bytes::Bytes::from_static(b"{}"));
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    crate::antigravity_headers::insert_bearer(&mut req, access_token);
     req.headers.insert(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/json"),
@@ -549,12 +539,7 @@ async fn try_fetch_code_assist_plan(
 ) -> Option<String> {
     let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
     let mut req = UpstreamRequest::post_json(endpoint, payload);
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    crate::antigravity_headers::insert_bearer(&mut req, access_token);
     req.headers.insert(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/json"),
@@ -620,12 +605,7 @@ impl AntigravityAdapter {
         let mut last_err: Option<CoreError> = None;
         for url in &endpoints {
             let mut req = UpstreamRequest::post_json(*url, bytes::Bytes::from_static(b"{}"));
-            let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-            __auth_val.extend_from_slice(b"Bearer ");
-            __auth_val.extend_from_slice(access_token.as_bytes());
-            if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
+            crate::antigravity_headers::insert_bearer(&mut req, access_token);
             req.headers.insert(
                 http::header::CONTENT_TYPE,
                 http::HeaderValue::from_static("application/json"),
@@ -1070,12 +1050,7 @@ pub async fn count_tokens(
         COUNT_TOKENS_URL,
         bytes::Bytes::from(body_bytes),
     );
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    crate::antigravity_headers::insert_bearer(&mut req, access_token);
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
     req.is_streaming = false;
 
@@ -1120,12 +1095,7 @@ pub async fn load_code_assist(
         LOAD_CODE_ASSIST_URL,
         bytes::Bytes::from(body_bytes),
     );
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    crate::antigravity_headers::insert_bearer(&mut req, access_token);
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
     req.is_streaming = false;
 
@@ -1187,12 +1157,7 @@ pub async fn onboard_user(
         ONBOARD_USER_URL,
         bytes::Bytes::from(body_bytes),
     );
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    crate::antigravity_headers::insert_bearer(&mut req, access_token);
     crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
     req.is_streaming = false;
 
