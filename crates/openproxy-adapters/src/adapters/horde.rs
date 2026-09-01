@@ -508,7 +508,7 @@ impl HordeAdapter {
 
         let payload = HordeInterrogatePayload {
             forms: forms_vec,
-            source_image: clean_image_str(source_image),
+            source_image: clean_image_str(source_image).into_owned(),
         };
 
         let vec = serde_json::to_vec(&payload).map_err(|e| {
@@ -868,7 +868,9 @@ fn extract_image_from_content(content: &serde_json::Value) -> Option<String> {
     match content {
         serde_json::Value::Array(parts) => parts.iter().find_map(extract_image_from_part),
         serde_json::Value::Object(map) => extract_image_from_json_map(map),
-        serde_json::Value::String(s) if is_image_url_or_data(s) => Some(clean_image_str(s)),
+        serde_json::Value::String(s) if is_image_url_or_data(s) => {
+            Some(clean_image_str(s).into_owned())
+        }
         _ => None,
     }
 }
@@ -882,12 +884,12 @@ fn extract_image_from_json_map(map: &serde_json::Map<String, serde_json::Value>)
     // 1. type == "image_url" -> image_url.url or image_url string
     if let Some(img_url_val) = map.get("image_url") {
         if let Some(url_str) = img_url_val.as_str() {
-            return Some(clean_image_str(url_str));
+            return Some(clean_image_str(url_str).into_owned());
         }
         if let Some(url_obj) = img_url_val.as_object()
             && let Some(url_str) = url_obj.get("url").and_then(|v| v.as_str())
         {
-            return Some(clean_image_str(url_str));
+            return Some(clean_image_str(url_str).into_owned());
         }
     }
 
@@ -895,28 +897,28 @@ fn extract_image_from_json_map(map: &serde_json::Map<String, serde_json::Value>)
     if let Some(source) = map.get("source").and_then(|v| v.as_object())
         && let Some(data) = source.get("data").and_then(|v| v.as_str())
     {
-        return Some(clean_image_str(data));
+        return Some(clean_image_str(data).into_owned());
     }
 
     // 3. input_image / image -> image string / data
     if let Some(img) = map.get("image").and_then(|v| v.as_str()) {
-        return Some(clean_image_str(img));
+        return Some(clean_image_str(img).into_owned());
     }
     if let Some(img) = map.get("source_image").and_then(|v| v.as_str()) {
-        return Some(clean_image_str(img));
+        return Some(clean_image_str(img).into_owned());
     }
 
     None
 }
 
-fn clean_image_str(s: &str) -> String {
+fn clean_image_str(s: &str) -> std::borrow::Cow<'_, str> {
     let trimmed = s.trim();
     if trimmed.starts_with("data:image/")
         && let Some((_header, data)) = trimmed.split_once(',')
     {
-        data.trim().to_string()
+        std::borrow::Cow::Owned(data.trim().to_string())
     } else {
-        trimmed.to_string()
+        std::borrow::Cow::Borrowed(trimmed)
     }
 }
 
