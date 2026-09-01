@@ -267,11 +267,7 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "x-client-name" && v == "antigravity")
         );
-        assert!(
-            !headers
-                .iter()
-                .any(|(k, _)| k == "x-goog-user-project")
-        );
+        assert!(!headers.iter().any(|(k, _)| k == "x-goog-user-project"));
     }
 
     #[test]
