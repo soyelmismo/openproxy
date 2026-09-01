@@ -27,6 +27,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::stream::Stream;
+use openproxy_pipeline::ResponseExt;
 use openproxy_pipeline::{Pipeline, PipelineRequest};
 use openproxy_types::TargetFormat;
 use openproxy_types::ids::ApiKeyId;
@@ -168,7 +169,7 @@ async fn run_pipeline(
     handle_sync_response(pipeline, prepared.req, prepared.done_tx).await
 }
 
-fn handle_streaming_response(
+pub(crate) fn handle_streaming_response(
     pipeline: Pipeline,
     req: PipelineRequest,
     done_tx: tokio::sync::oneshot::Sender<()>,
@@ -196,7 +197,7 @@ fn handle_streaming_response(
         .into_response()
 }
 
-async fn handle_sync_response(
+pub(crate) async fn handle_sync_response(
     pipeline: Pipeline,
     req: PipelineRequest,
     done_tx: tokio::sync::oneshot::Sender<()>,
@@ -239,6 +240,56 @@ async fn handle_sync_response(
             );
             json!({
                 "error": {"code": "internal", "message": "no response from pipeline"}
+            })
+        }
+    };
+
+    Ok(Json(body_value).into_response())
+}
+
+/// N1 (GAP-2): non-streaming Responses path. Mirrors
+/// [`handle_sync_response`] but wraps the final `OpenAIResponse` in
+/// the OpenAI Responses envelope (`{object: "response", output: [...]}`)
+/// expected by `POST /v1/responses` clients.
+///
+/// MUST be invoked from `responses_completions` (not
+/// `handle_sync_response`) — using the chat path on a Responses
+/// endpoint would silently ship a chat-completion JSON shape to the
+/// client and break the wire contract.
+pub(crate) async fn handle_sync_response_responses(
+    pipeline: Pipeline,
+    req: PipelineRequest,
+    done_tx: tokio::sync::oneshot::Sender<()>,
+) -> Result<axum::response::Response, ApiError> {
+    let started = Instant::now();
+    let result = pipeline.run(req).await;
+    let _ = done_tx.send(());
+    let elapsed_ms = started.elapsed().as_millis();
+
+    if let Some(err) = result.error {
+        let status =
+            StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        tracing::debug!(
+            status = status.as_u16(),
+            attempts = result.attempts,
+            elapsed_ms,
+            error = %err,
+            "responses_completions: error from pipeline"
+        );
+        return Err(ApiError(err));
+    }
+
+    let body_value = match result.final_response {
+        Some(resp) => resp.to_responses_envelope(),
+        None => {
+            tracing::warn!(
+                attempts = result.attempts,
+                elapsed_ms,
+                "responses_completions: pipeline returned neither error nor response"
+            );
+            json!({
+                "object": "response",
+                "error": { "code": "internal", "message": "no response from pipeline" }
             })
         }
     };

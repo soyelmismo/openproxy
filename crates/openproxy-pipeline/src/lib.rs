@@ -27,6 +27,7 @@ pub mod quotas;
 pub mod racing;
 pub use proxy_race::run_proxy_race;
 pub mod repository;
+pub mod response_ext;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
 pub mod redact;
@@ -45,6 +46,7 @@ pub mod usage_tracker;
 pub mod worker;
 
 pub use openproxy_types::schema_cleaner;
+pub use response_ext::ResponseExt;
 
 #[cfg(test)]
 mod repository_tests;

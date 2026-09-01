@@ -371,6 +371,98 @@ fn inject_deepseek_reasoning_if_needed(parsed: &mut openproxy_types::OpenAIReque
     }
 }
 
+/// Translate a Responses-protocol request body into the internal
+/// OpenAIRequest shape the pipeline consumes. Mirrors the logic in
+/// `handlers::responses::translate_responses_to_openai` but is
+/// invoked from `auth_middleware` so the routing layer can resolve
+/// the combo using the synthetic OpenAI payload.
+pub(crate) fn translate_responses_to_openai(req: &openproxy_types::ResponsesRequest) -> openproxy_types::OpenAIRequest {
+    use openproxy_types::{OpenAIMessage, ResponsesInputItem};
+
+    let mut messages: Vec<OpenAIMessage> = Vec::with_capacity(req.input.len() + 1);
+
+    if let Some(instructions) = req.instructions.as_deref()
+        && !instructions.is_empty()
+    {
+        messages.push(OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(instructions.to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        });
+    }
+
+    for item in &req.input {
+        match item {
+            ResponsesInputItem::Message { role, content } => {
+                let content_value = match content {
+                    openproxy_types::ResponsesContent::Plain(s) => {
+                        Some(serde_json::Value::String(s.clone()))
+                    }
+                    openproxy_types::ResponsesContent::Parts(parts) => {
+                        Some(serde_json::Value::Array(parts.clone()))
+                    }
+                };
+                messages.push(OpenAIMessage {
+                    role: role.clone(),
+                    content: content_value,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                });
+            }
+            ResponsesInputItem::FunctionCall { call_id, name, arguments } => {
+                let tool_call = serde_json::json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": arguments }
+                });
+                messages.push(OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: Some(vec![tool_call]),
+                    extra: serde_json::Map::new(),
+                });
+            }
+            ResponsesInputItem::FunctionCallOutput { call_id, output } => {
+                messages.push(OpenAIMessage {
+                    role: "tool".to_string(),
+                    content: Some(serde_json::Value::String(output.clone())),
+                    name: None,
+                    tool_call_id: Some(call_id.clone()),
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                });
+            }
+            ResponsesInputItem::Unknown => {
+                tracing::debug!(
+                    "POST /v1/responses auth_middleware: unknown input item dropped"
+                );
+            }
+        }
+    }
+
+    openproxy_types::OpenAIRequest {
+        model: req.model.clone(),
+        messages,
+        tools: req.tools.clone(),
+        tool_choice: req.tool_choice.clone(),
+        user: None,
+        extra: req.extra.clone(),
+        temperature: None,
+        max_tokens: None,
+        top_p: None,
+        top_k: None,
+        stream: req.stream,
+        stop: None,
+    }
+}
+
 async fn read_request_body_capped(
     body: axum::body::Body,
     limit: usize,
@@ -398,6 +490,9 @@ pub async fn auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, crate::error::ApiError> {
     let (mut parts, body) = req.into_parts();
+    let is_responses = parts.uri.path() == "/v1/responses"
+        || parts.uri.path().starts_with("/v1/responses?");
+
     let auth_result = authenticate(&state, &parts.headers)?;
 
     let bytes = match read_request_body_capped(body, 32 * 1024 * 1024).await {
@@ -405,8 +500,23 @@ pub async fn auth_middleware(
         Err(resp) => return Ok(*resp),
     };
 
-    let mut parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?;
+    let mut parsed: openproxy_types::OpenAIRequest = if is_responses {
+        let responses_req: openproxy_types::ResponsesRequest =
+            serde_json::from_slice(&bytes).map_err(|e| {
+                crate::error::ApiError(openproxy_types::CoreError::Parse(format!(
+                    "Invalid Responses request: {e}"
+                )))
+            })?;
+        if responses_req.model.trim().is_empty() {
+            return Err(ApiError(CoreError::Validation(
+                "model is required".into(),
+            )));
+        }
+        translate_responses_to_openai(&responses_req)
+    } else {
+        serde_json::from_slice(&bytes)
+            .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?
+    };
 
     sanitize_tool_calls(&mut parsed.messages);
     inject_deepseek_reasoning_if_needed(&mut parsed);

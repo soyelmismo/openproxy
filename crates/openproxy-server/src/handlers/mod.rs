@@ -28,6 +28,7 @@ pub mod embeddings;
 pub mod images;
 pub mod messages;
 pub mod models;
+pub mod responses;
 pub mod tokenize;
 
 use crate::state::AppState;
@@ -66,6 +67,7 @@ pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
     let v1_routes = axum::Router::new()
         .merge(models::router())
         .merge(messages::router(state))
+        .merge(responses::router(state))
         .merge(embeddings::router())
         .merge(tokenize::router())
         .nest("/chat", chat::router(state))
