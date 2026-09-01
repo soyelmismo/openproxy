@@ -69,11 +69,7 @@ pub fn clear_for_account(conn: &Connection, account_id: AccountId) -> Result<usi
 /// `until_ts` is still in the future. A row whose `until_ts` we
 /// cannot parse is treated as inactive (defensive — better to let a
 /// request through than to permanently exclude).
-pub fn is_limited(
-    conn: &Connection,
-    account_id: AccountId,
-    model_id: &ModelId,
-) -> Result<bool> {
+pub fn is_limited(conn: &Connection, account_id: AccountId, model_id: &ModelId) -> Result<bool> {
     let row: Option<String> = conn
         .query_row(
             &format!(
@@ -97,11 +93,7 @@ pub fn is_limited(
 /// `true` if there is any row for `(account_id, model_id)`, regardless
 /// of whether the `until_ts` has passed. Used by callers that need the
 /// raw "exists" signal (e.g. observability / debugging).
-pub fn has_row(
-    conn: &Connection,
-    account_id: AccountId,
-    model_id: &ModelId,
-) -> Result<bool> {
+pub fn has_row(conn: &Connection, account_id: AccountId, model_id: &ModelId) -> Result<bool> {
     let n: i64 = conn
         .query_row(
             &format!(
@@ -309,10 +301,7 @@ mod adversarial_tests {
     fn adv_clear_for_account_unknown_account_returns_zero() {
         let conn = fresh_db();
         // AccountId(999) does not exist — no FK violation (just no rows).
-        assert_eq!(
-            clear_for_account(&conn, AccountId(999)).expect("clear"),
-            0
-        );
+        assert_eq!(clear_for_account(&conn, AccountId(999)).expect("clear"), 0);
     }
 
     #[test]
@@ -408,8 +397,7 @@ mod adversarial_tests {
     fn adv_is_limited_nonexistent_returns_false() {
         let conn = fresh_db();
         assert!(
-            !is_limited(&conn, AccountId(1), &ModelId::new("nonexistent"))
-                .expect("no panic"),
+            !is_limited(&conn, AccountId(1), &ModelId::new("nonexistent")).expect("no panic"),
             "non-existent pair must be false"
         );
     }
@@ -507,9 +495,7 @@ mod adversarial_tests {
         let mid = ModelId::new("gemini-2.5");
 
         for i in 0..100 {
-            let until = (chrono::Utc::now()
-                + chrono::Duration::minutes(i))
-                .to_rfc3339();
+            let until = (chrono::Utc::now() + chrono::Duration::minutes(i)).to_rfc3339();
             mark_limited(&conn, aid, &mid, &until, "X").expect("mark");
         }
         // UPSERT means only 1 row exists, with the latest until_ts.

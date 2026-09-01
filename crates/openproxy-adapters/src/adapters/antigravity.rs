@@ -19,10 +19,7 @@ const NORMALIZED_BASE: i64 = 1000;
 /// - `raw_fraction = None` and `reset_time = None`: treats remaining as 1.0
 ///   (unlimited bucket).
 /// - `raw_fraction >= 1.0` and `reset_time = None`: unlimited → used = 0.
-fn normalize_quota_fraction(
-    reset_time: Option<&str>,
-    raw_fraction: Option<f64>,
-) -> (i64, bool) {
+fn normalize_quota_fraction(reset_time: Option<&str>, raw_fraction: Option<f64>) -> (i64, bool) {
     // Treat NaN as fully used (not unlimited) — avoids silent corruption.
     // Treat non-finite values and out-of-range inputs as zero-fraction
     // (fully used) for the reset_time = Some case, and 1.0 (unlimited)
@@ -385,9 +382,7 @@ async fn fetch_antigravity_models_from_endpoint(
 ) -> Option<Vec<DiscoveredModel>> {
     let mut req = UpstreamRequest::post_json(endpoint, Bytes::from_static(b"{}"));
     if let Err(e) = crate::antigravity_headers::insert_bearer(&mut req, api_key) {
-        tracing::warn!(
-            "antigravity build bearer header for {endpoint}: {e} — skipping endpoint"
-        );
+        tracing::warn!("antigravity build bearer header for {endpoint}: {e} — skipping endpoint");
         return None;
     }
     req.headers.insert(
@@ -701,9 +696,8 @@ fn parse_model_quota_detail(
         .get("remainingFraction")
         .and_then(serde_json::Value::as_f64);
     let (used, _) = normalize_quota_fraction(reset_time.as_deref(), raw_fraction);
-    let remaining_fraction = raw_fraction.unwrap_or_else(|| {
-        if reset_time.is_some() { 0.0 } else { 1.0 }
-    });
+    let remaining_fraction =
+        raw_fraction.unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
 
     Some(openproxy_types::ModelQuotaDetail {
         model_id: model_id.to_string(),
@@ -1023,8 +1017,7 @@ pub async fn count_tokens(
     .await?;
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| format!("{COUNT_TOKENS_URL} parse: {e}"))?;
-    parse_total_tokens(&value)
-        .ok_or_else(|| format!("{COUNT_TOKENS_URL}: missing totalTokens"))
+    parse_total_tokens(&value).ok_or_else(|| format!("{COUNT_TOKENS_URL}: missing totalTokens"))
 }
 
 /// Call `loadCodeAssist` and extract `projectId` (or `None` when
@@ -1462,7 +1455,10 @@ mod count_tokens_tests {
         assert_eq!(wrapped.get("model"), None);
         assert_eq!(wrapped.get("requestType"), None);
         assert_eq!(wrapped.get("enabledCreditTypes"), None);
-        assert_eq!(wrapped["request"]["contents"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            wrapped["request"]["contents"].as_array().map(Vec::len),
+            Some(1)
+        );
     }
 
     #[test]

@@ -566,9 +566,7 @@ impl UpstreamDispatcher {
                 let conn_clone = Arc::clone(&self.conn);
                 let handle = tokio::task::spawn_blocking(move || {
                     let conn = conn_clone.lock();
-                    let until = (chrono::Utc::now()
-                        + chrono::Duration::minutes(5))
-                    .to_rfc3339();
+                    let until = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
                     if let Err(e) = openproxy_db::live_limited::mark_limited(
                         &conn,
                         aid,
@@ -2005,9 +2003,7 @@ mod wiring_tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-wiring-test-{pid}-{nanos}-{n}"
-        ));
+        let dir = std::env::temp_dir().join(format!("openproxy-wiring-test-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("wiring.db");
         let pool = openproxy_db::DbPool::open(&path).expect("open pool");
@@ -2118,7 +2114,8 @@ mod wiring_tests {
             cooldown_secs: 60,
             cooldown_max_secs: 3600,
             cooldown_factor: 2,
-            repo: std::sync::Arc::clone(&repo) as std::sync::Arc<dyn crate::repository::PipelineRepository>,
+            repo: std::sync::Arc::clone(&repo)
+                as std::sync::Arc<dyn crate::repository::PipelineRepository>,
         };
         let cfg = crate::PipelineConfig {
             defaults: crate::timeouts::Timeouts::from_config(

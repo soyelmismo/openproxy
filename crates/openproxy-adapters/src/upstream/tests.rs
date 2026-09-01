@@ -1199,8 +1199,9 @@ pub mod tests_helper {
     impl tower_service::Service<http::Uri> for SingleResponseConnector {
         type Response = TokioIo<tokio::net::TcpStream>;
         type Error = Box<dyn std::error::Error + Send + Sync>;
-        type Future =
-            std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+        type Future = std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+        >;
 
         fn poll_ready(
             &mut self,
@@ -1260,9 +1261,7 @@ pub mod tests_helper {
     /// Use this to exercise callers that hit multiple endpoints and
     /// need different responses per endpoint (e.g.
     /// `fetch_with_fallback`).
-    pub async fn build_mock_upstream_routing<F>(
-        handler: F,
-    ) -> Arc<UpstreamClient>
+    pub async fn build_mock_upstream_routing<F>(handler: F) -> Arc<UpstreamClient>
     where
         F: Fn(&str) -> (u16, String) + Send + Sync + 'static,
     {
@@ -1278,8 +1277,7 @@ pub mod tests_helper {
                         // Read enough to capture the request line.
                         let mut buf = vec![0u8; 4096];
                         let n = tcp.read(&mut buf).await.unwrap_or(0);
-                        let req_str =
-                            String::from_utf8_lossy(&buf[..n]).into_owned();
+                        let req_str = String::from_utf8_lossy(&buf[..n]).into_owned();
                         // Extract request-target from "POST <target> HTTP/1.1"
                         let target = req_str
                             .lines()
@@ -1288,11 +1286,9 @@ pub mod tests_helper {
                             .unwrap_or("")
                             .to_string();
                         let (status, body) = handler(&target);
-                        let status_line = format!(
-                            "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\n"
-                        );
-                        let body_header =
-                            format!("content-length: {}\r\n\r\n", body.len());
+                        let status_line =
+                            format!("HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\n");
+                        let body_header = format!("content-length: {}\r\n\r\n", body.len());
                         let _ = tcp.write_all(status_line.as_bytes()).await;
                         let _ = tcp.write_all(body_header.as_bytes()).await;
                         let _ = tcp.write_all(body.as_bytes()).await;

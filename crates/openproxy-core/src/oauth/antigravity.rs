@@ -144,17 +144,13 @@ fn bump_invalid_grant_counter(account_id: AccountId) -> u32 {
     // (BUG-1).
     let previous = counter
         .value()
-        .fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |current| {
-                if current >= ANTIGRAVITY_INVALID_GRANT_THRESHOLD {
-                    Some(current)
-                } else {
-                    Some(current + 1)
-                }
-            },
-        )
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            if current >= ANTIGRAVITY_INVALID_GRANT_THRESHOLD {
+                Some(current)
+            } else {
+                Some(current + 1)
+            }
+        })
         // `fetch_update` only returns `Err` if the closure returns
         // `None`, which we never do. Mapping the (impossible) error
         // branch to the threshold is purely defensive.
@@ -1011,25 +1007,23 @@ mod adversarial_retry_tests {
         clear_counter(acc_b);
 
         // Fail account A
-        let _ = drive_invalid_grant_retry(
-            acc_a,
-            || async { Err(invalid_grant_err()) },
-            |_| {},
-        )
-        .await;
+        let _ =
+            drive_invalid_grant_retry(acc_a, || async { Err(invalid_grant_err()) }, |_| {}).await;
         assert!(INVALID_GRANT_COUNTERS.contains_key(&acc_a.0));
 
         // Succeed on account B — should NOT clear account A's counter
         let _ = drive_invalid_grant_retry(
             acc_b,
-            || async { Ok(crate::oauth::TokenResponse {
-                access_token: "ok".into(),
-                token_type: "Bearer".into(),
-                expires_in: None,
-                refresh_token: None,
-                scope: None,
-                id_token: None,
-            }) },
+            || async {
+                Ok(crate::oauth::TokenResponse {
+                    access_token: "ok".into(),
+                    token_type: "Bearer".into(),
+                    expires_in: None,
+                    refresh_token: None,
+                    scope: None,
+                    id_token: None,
+                })
+            },
             |_| {},
         )
         .await;
@@ -1153,7 +1147,10 @@ mod adversarial_retry_tests {
 
         // At least 0 attempts ran (timeout may have been instant).
         let c = calls.load(Ordering::Relaxed);
-        assert!(c >= 1, "at least one attempt must have run before instant cancel, got {c}");
+        assert!(
+            c >= 1,
+            "at least one attempt must have run before instant cancel, got {c}"
+        );
 
         // Counter bounded.
         let val = get_counter_val(account_id);
@@ -1177,28 +1174,40 @@ mod adversarial_retry_tests {
         let _ = drive_invalid_grant_retry(
             account_id,
             || async { Err(invalid_grant_err()) },
-            |_| { unhealthy.store(true, Ordering::Relaxed); },
+            |_| {
+                unhealthy.store(true, Ordering::Relaxed);
+            },
         )
         .await;
-        assert!(unhealthy.load(Ordering::Relaxed), "on_unhealthy should have fired");
-        assert_eq!(get_counter_val(account_id), ANTIGRAVITY_INVALID_GRANT_THRESHOLD);
+        assert!(
+            unhealthy.load(Ordering::Relaxed),
+            "on_unhealthy should have fired"
+        );
+        assert_eq!(
+            get_counter_val(account_id),
+            ANTIGRAVITY_INVALID_GRANT_THRESHOLD
+        );
 
         // Second call: success → counter must be cleared
         let _ = drive_invalid_grant_retry(
             account_id,
-            || async { Ok(crate::oauth::TokenResponse {
-                access_token: "ok".into(),
-                token_type: "Bearer".into(),
-                expires_in: None,
-                refresh_token: None,
-                scope: None,
-                id_token: None,
-            }) },
+            || async {
+                Ok(crate::oauth::TokenResponse {
+                    access_token: "ok".into(),
+                    token_type: "Bearer".into(),
+                    expires_in: None,
+                    refresh_token: None,
+                    scope: None,
+                    id_token: None,
+                })
+            },
             |_| {},
         )
         .await;
-        assert!(!INVALID_GRANT_COUNTERS.contains_key(&account_id.0),
-            "counter must be cleared after success");
+        assert!(
+            !INVALID_GRANT_COUNTERS.contains_key(&account_id.0),
+            "counter must be cleared after success"
+        );
 
         clear_counter(account_id);
     }
@@ -1210,12 +1219,8 @@ mod adversarial_retry_tests {
         let account_id = AccountId(11_007);
         clear_counter(account_id);
 
-        let _ = drive_invalid_grant_retry(
-            account_id,
-            || async { Err(network_err()) },
-            |_| {},
-        )
-        .await;
+        let _ =
+            drive_invalid_grant_retry(account_id, || async { Err(network_err()) }, |_| {}).await;
 
         assert!(
             !INVALID_GRANT_COUNTERS.contains_key(&account_id.0),
@@ -1236,12 +1241,17 @@ mod adversarial_retry_tests {
         let _ = drive_invalid_grant_retry(
             account_id,
             || async { Err(invalid_grant_err()) },
-            |_| { calls.fetch_add(1, Ordering::Relaxed); },
+            |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+            },
         )
         .await;
 
-        assert_eq!(calls.load(Ordering::Relaxed), 1,
-            "on_unhealthy must fire exactly once");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "on_unhealthy must fire exactly once"
+        );
         clear_counter(account_id);
     }
 
@@ -1267,13 +1277,18 @@ mod adversarial_retry_tests {
             let _ = drive_invalid_grant_retry(
                 account_id,
                 || async { Err(invalid_grant_err()) },
-                |_| { unhealthy_count.fetch_add(1, Ordering::Relaxed); },
+                |_| {
+                    unhealthy_count.fetch_add(1, Ordering::Relaxed);
+                },
             )
             .await;
         }
 
-        assert_eq!(unhealthy_count.load(Ordering::Relaxed), 5,
-            "on_unhealthy fires once per call (5 calls → 5 callbacks)");
+        assert_eq!(
+            unhealthy_count.load(Ordering::Relaxed),
+            5,
+            "on_unhealthy fires once per call (5 calls → 5 callbacks)"
+        );
 
         // Counter stays capped — does NOT grow past threshold.
         let val = get_counter_val(account_id);

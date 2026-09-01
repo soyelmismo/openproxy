@@ -234,13 +234,10 @@ pub async fn oauth_post_json<T: serde::Serialize>(
     access_token: &str,
     timeout: crate::upstream::TimeoutProfile,
 ) -> Result<bytes::Bytes, String> {
-    let body_bytes =
-        serde_json::to_vec(body).map_err(|e| format!("{url} serialize: {e}"))?;
+    let body_bytes = serde_json::to_vec(body).map_err(|e| format!("{url} serialize: {e}"))?;
 
-    let mut req =
-        crate::upstream::UpstreamRequest::post_json(url, bytes::Bytes::from(body_bytes));
-    insert_bearer(&mut req, access_token)
-        .map_err(|e| format!("{url} build bearer header: {e}"))?;
+    let mut req = crate::upstream::UpstreamRequest::post_json(url, bytes::Bytes::from(body_bytes));
+    insert_bearer(&mut req, access_token).map_err(|e| format!("{url} build bearer header: {e}"))?;
     inject_antigravity_headers(&mut req.headers, None);
     req.is_streaming = false;
 
@@ -253,8 +250,7 @@ pub async fn oauth_post_json<T: serde::Serialize>(
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
         let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default())
-                .into_owned();
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
         return Err(format!("{url} status {status}: {body_str}"));
     }
 
@@ -299,7 +295,6 @@ where
     }
     Err(last_err.unwrap_or_else(|| format!("{context}: all endpoints failed")))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -425,7 +420,10 @@ mod tests {
         let err = res.expect_err("must error on 401");
         assert!(err.contains("401"), "msg must mention status: {err}");
         assert!(err.contains("auth required"), "body must be in msg: {err}");
-        assert!(err.contains("countTokens"), "msg must mention the url: {err}");
+        assert!(
+            err.contains("countTokens"),
+            "msg must mention the url: {err}"
+        );
     }
 
     #[cfg(feature = "upstream-hyper")]
@@ -522,15 +520,9 @@ mod tests {
         // connections (fetch_with_fallback iterates over 2 endpoints
         // and would otherwise get connection-refused on the 2nd).
         let upstream: Arc<crate::upstream::UpstreamClient> =
-            mock_helper::build_mock_upstream_routing(|_path| {
-                (503, "down".to_string())
-            })
-            .await;
+            mock_helper::build_mock_upstream_routing(|_path| (503, "down".to_string())).await;
 
-        let endpoints = [
-            "https://a.test/foo",
-            "https://b.test/foo",
-        ];
+        let endpoints = ["https://a.test/foo", "https://b.test/foo"];
 
         let res: Result<serde_json::Value, _> = fetch_with_fallback(
             &upstream,
@@ -594,7 +586,10 @@ mod tests {
         .await;
         let err = res.expect_err("non-JSON body must fail to parse");
         assert!(err.contains("parse"), "msg must mention parse: {err}");
-        assert!(err.contains("test-parse"), "msg must mention context: {err}");
+        assert!(
+            err.contains("test-parse"),
+            "msg must mention context: {err}"
+        );
     }
 }
 
@@ -678,15 +673,17 @@ mod adversarial_dedup_tests {
         let token = std::str::from_utf8(&bytes).expect("valid utf8");
         let header = build_bearer_header(token).expect("valid utf8 at byte level");
         assert!(
-            header.as_bytes().windows(3).any(|w| w == [0xE2, 0x80, 0xAE]),
+            header
+                .as_bytes()
+                .windows(3)
+                .any(|w| w == [0xE2, 0x80, 0xAE]),
             "U+202E bytes preserved verbatim"
         );
     }
 
     #[test]
     fn build_bearer_header_high_bit_latin1_accepted_at_byte_level() {
-        let header =
-            build_bearer_header("abc\u{00C0}def").expect("latin1 is valid at byte level");
+        let header = build_bearer_header("abc\u{00C0}def").expect("latin1 is valid at byte level");
         assert!(header.as_bytes().windows(2).any(|w| w == [0xC3, 0x80]));
         assert!(header.to_str().is_err());
     }
@@ -725,7 +722,11 @@ mod adversarial_dedup_tests {
         );
         insert_bearer(&mut req, "first").expect("ascii token is valid");
         insert_bearer(&mut req, "second").expect("ascii token is valid");
-        let values: Vec<_> = req.headers.get_all(http::header::AUTHORIZATION).iter().collect();
+        let values: Vec<_> = req
+            .headers
+            .get_all(http::header::AUTHORIZATION)
+            .iter()
+            .collect();
         assert_eq!(values.len(), 1, "insert must replace, not append");
         assert_eq!(values[0].to_str().unwrap(), "Bearer second");
     }
@@ -737,7 +738,11 @@ mod adversarial_dedup_tests {
         insert_bearer(&mut req, "tok").expect("ascii token is valid");
         assert_eq!(req.headers.len(), 1);
         assert_eq!(
-            req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
+            req.headers
+                .get(http::header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "Bearer tok"
         );
     }
@@ -753,11 +758,22 @@ mod adversarial_dedup_tests {
             http::HeaderValue::from_static("custom-value"),
         );
         insert_bearer(&mut req, "tok").expect("ascii token is valid");
-        assert_eq!(req.headers.len(), 3, "Authorization + Content-Type + x-custom");
-        assert_eq!(req.headers.get(http::header::CONTENT_TYPE).unwrap(), "application/json");
+        assert_eq!(
+            req.headers.len(),
+            3,
+            "Authorization + Content-Type + x-custom"
+        );
+        assert_eq!(
+            req.headers.get(http::header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
         assert_eq!(req.headers.get("x-custom").unwrap(), "custom-value");
         assert_eq!(
-            req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
+            req.headers
+                .get(http::header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "Bearer tok"
         );
     }
@@ -783,9 +799,13 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(200, "{}").await;
         let res = oauth_post_json(
-            &upstream, "", &serde_json::json!({}), "tok",
+            &upstream,
+            "",
+            &serde_json::json!({}),
+            "tok",
             crate::upstream::TimeoutProfile::Chat,
-        ).await;
+        )
+        .await;
         assert!(res.is_err(), "empty url must produce an error, got Ok");
     }
 
@@ -797,15 +817,21 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_routing(|_path| {
                 (200, r#"{"echoed":true}"#.to_string())
-            }).await;
+            })
+            .await;
         let body = serde_json::json!({ "fraction": f64::NAN });
         let raw = serde_json::to_vec(&body).expect("NaN must serialize (as null)");
         let raw_str = std::str::from_utf8(&raw).unwrap();
         assert!(raw_str.contains(r#""fraction":null"#));
         let res = oauth_post_json(
-            &upstream, "https://example.test/x", &body, "tok",
+            &upstream,
+            "https://example.test/x",
+            &body,
+            "tok",
             crate::upstream::TimeoutProfile::Chat,
-        ).await.expect("NaN-as-null body must succeed end-to-end");
+        )
+        .await
+        .expect("NaN-as-null body must succeed end-to-end");
         assert_eq!(&res[..], br#"{"echoed":true}"#);
     }
 
@@ -830,10 +856,13 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(503, "service down").await;
         let res = oauth_post_json(
-            &upstream, "https://example.test/v1internal:foo",
-            &serde_json::json!({}), "tok",
+            &upstream,
+            "https://example.test/v1internal:foo",
+            &serde_json::json!({}),
+            "tok",
             crate::upstream::TimeoutProfile::Chat,
-        ).await;
+        )
+        .await;
         let err = res.expect_err("503 must error");
         assert!(err.contains("503"));
         assert!(err.contains("service down"));
@@ -848,10 +877,13 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(400, "abc\0def").await;
         let res = oauth_post_json(
-            &upstream, "https://example.test/x",
-            &serde_json::json!({}), "tok",
+            &upstream,
+            "https://example.test/x",
+            &serde_json::json!({}),
+            "tok",
             crate::upstream::TimeoutProfile::Chat,
-        ).await;
+        )
+        .await;
         let err = res.expect_err("400 must error");
         assert!(err.contains("400"));
     }
@@ -864,10 +896,14 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(200, "").await;
         let res = oauth_post_json(
-            &upstream, "https://example.test/x",
-            &serde_json::json!({}), "tok",
+            &upstream,
+            "https://example.test/x",
+            &serde_json::json!({}),
+            "tok",
             crate::upstream::TimeoutProfile::Chat,
-        ).await.expect("2xx must succeed even with empty body");
+        )
+        .await
+        .expect("2xx must succeed even with empty body");
         assert!(res.is_empty(), "empty body -> empty bytes");
     }
 
@@ -884,14 +920,21 @@ mod adversarial_dedup_tests {
             handles.push(tokio::spawn(async move {
                 let body = serde_json::json!({});
                 oauth_post_json(
-                    &upstream, "https://example.test/x", &body, "tok",
+                    &upstream,
+                    "https://example.test/x",
+                    &body,
+                    "tok",
                     crate::upstream::TimeoutProfile::Chat,
-                ).await
+                )
+                .await
             }));
         }
         let joined = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            for h in handles { let _ = h.await; }
-        }).await;
+            for h in handles {
+                let _ = h.await;
+            }
+        })
+        .await;
         assert!(joined.is_ok(), "concurrent calls must not hang");
     }
 
@@ -905,9 +948,14 @@ mod adversarial_dedup_tests {
         let big: String = "x".repeat(1024);
         let body = serde_json::json!({ "blob": big });
         let res = oauth_post_json(
-            &upstream, "https://example.test/x", &body, "tok",
+            &upstream,
+            "https://example.test/x",
+            &body,
+            "tok",
             crate::upstream::TimeoutProfile::Chat,
-        ).await.expect("1 KiB body must succeed");
+        )
+        .await
+        .expect("1 KiB body must succeed");
         assert_eq!(&res[..], b"{}");
     }
 
@@ -925,15 +973,24 @@ mod adversarial_dedup_tests {
             mock_helper::build_mock_upstream_routing(move |_path| {
                 let n = counter_c.fetch_add(1, Ordering::SeqCst) + 1;
                 (503, format!("err-{n}"))
-            }).await;
+            })
+            .await;
         let endpoints = [
-            "https://a.test/1", "https://a.test/2", "https://a.test/3",
-            "https://a.test/4", "https://a.test/5",
+            "https://a.test/1",
+            "https://a.test/2",
+            "https://a.test/3",
+            "https://a.test/4",
+            "https://a.test/5",
         ];
         let res: Result<serde_json::Value, _> = fetch_with_fallback(
-            &upstream, &endpoints, &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, "all-fail",
-        ).await;
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "all-fail",
+        )
+        .await;
         let err = res.expect_err("all 5xx must fail");
         assert!(err.contains("err-5"), "msg must be the last error: {err}");
         assert_eq!(counter.load(Ordering::SeqCst), 5);
@@ -950,14 +1007,24 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_routing(move |_path| {
                 let n = counter_c.fetch_add(1, Ordering::SeqCst);
-                if n == 0 { (401, "auth required".to_string()) }
-                else { (200, r#"{"v":42}"#.to_string()) }
-            }).await;
+                if n == 0 {
+                    (401, "auth required".to_string())
+                } else {
+                    (200, r#"{"v":42}"#.to_string())
+                }
+            })
+            .await;
         let endpoints = ["https://a.test/1", "https://a.test/2"];
         let res: serde_json::Value = fetch_with_fallback(
-            &upstream, &endpoints, &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, "ctx",
-        ).await.expect("must fall back");
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "ctx",
+        )
+        .await
+        .expect("must fall back");
         assert_eq!(res["v"], 42);
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
@@ -971,9 +1038,14 @@ mod adversarial_dedup_tests {
             mock_helper::build_mock_upstream_returning_status(200, "<html>nope</html>").await;
         let endpoints = ["https://a.test/only"];
         let res: Result<serde_json::Value, _> = fetch_with_fallback(
-            &upstream, &endpoints, &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, "my-ctx",
-        ).await;
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "my-ctx",
+        )
+        .await;
         let err = res.expect_err("must fail to parse");
         assert!(err.contains("my-ctx"));
         assert!(err.contains("parse"));
@@ -990,11 +1062,19 @@ mod adversarial_dedup_tests {
         let nasty = "ctx{x}:100%\u{1F608}";
         let endpoints = ["https://a.test/x"];
         let res: Result<serde_json::Value, _> = fetch_with_fallback(
-            &upstream, &endpoints, &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, nasty,
-        ).await;
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            nasty,
+        )
+        .await;
         let err = res.expect_err("must fail");
-        assert!(err.contains(nasty), "context must be preserved verbatim: {err}");
+        assert!(
+            err.contains(nasty),
+            "context must be preserved verbatim: {err}"
+        );
     }
 
     #[cfg(feature = "upstream-hyper")]
@@ -1005,9 +1085,14 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(200, "{}").await;
         let res: Result<serde_json::Value, _> = fetch_with_fallback(
-            &upstream, &[], &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, "ctx-empty",
-        ).await;
+            &upstream,
+            &[],
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "ctx-empty",
+        )
+        .await;
         let err = res.expect_err("empty slice must fail");
         assert_eq!(err, "ctx-empty: all endpoints failed");
     }
@@ -1024,14 +1109,20 @@ mod adversarial_dedup_tests {
             mock_helper::build_mock_upstream_routing(move |_path| {
                 counter_c.fetch_add(1, Ordering::SeqCst);
                 (200, r#"{"ok":true}"#.to_string())
-            }).await;
-        let endpoints = [
-            "https://a.test/v1internal:foo?emoji=%F0%9F%94%91&name=hello%20world&rtl=%E2%80%AE",
-        ];
+            })
+            .await;
+        let endpoints =
+            ["https://a.test/v1internal:foo?emoji=%F0%9F%94%91&name=hello%20world&rtl=%E2%80%AE"];
         let res: serde_json::Value = fetch_with_fallback(
-            &upstream, &endpoints, &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, "unicode-ctx",
-        ).await.expect("unicode URL must succeed");
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "unicode-ctx",
+        )
+        .await
+        .expect("unicode URL must succeed");
         assert_eq!(res["ok"], true);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
@@ -1042,14 +1133,16 @@ mod adversarial_dedup_tests {
         use crate::upstream::tests_helper as mock_helper;
         use std::sync::Arc;
         let upstream: Arc<crate::upstream::UpstreamClient> =
-            mock_helper::build_mock_upstream_routing(|_path| {
-                (503, "down".to_string())
-            }).await;
+            mock_helper::build_mock_upstream_routing(|_path| (503, "down".to_string())).await;
         let endpoints = ["https://a.test/1", "https://a.test/2"];
         let body = serde_json::json!({});
         let fut = fetch_with_fallback::<_, serde_json::Value>(
-            &upstream, &endpoints, &body, "tok",
-            crate::upstream::TimeoutProfile::Quota, "drop-ctx",
+            &upstream,
+            &endpoints,
+            &body,
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "drop-ctx",
         );
         drop(fut);
     }
@@ -1061,18 +1154,39 @@ mod adversarial_dedup_tests {
         use std::sync::Arc;
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(
-                200, r#"{"id":"abc","count":7,"nested":{"flag":true}}"#,
-            ).await;
+                200,
+                r#"{"id":"abc","count":7,"nested":{"flag":true}}"#,
+            )
+            .await;
         let endpoints = ["https://a.test/only"];
         #[derive(serde::Deserialize, Debug, PartialEq)]
-        struct Outer { id: String, count: u32, nested: Inner }
+        struct Outer {
+            id: String,
+            count: u32,
+            nested: Inner,
+        }
         #[derive(serde::Deserialize, Debug, PartialEq)]
-        struct Inner { flag: bool }
+        struct Inner {
+            flag: bool,
+        }
         let res: Outer = fetch_with_fallback(
-            &upstream, &endpoints, &serde_json::json!({}), "tok",
-            crate::upstream::TimeoutProfile::Quota, "struct-ctx",
-        ).await.expect("must succeed");
-        assert_eq!(res, Outer { id: "abc".to_string(), count: 7, nested: Inner { flag: true } });
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "struct-ctx",
+        )
+        .await
+        .expect("must succeed");
+        assert_eq!(
+            res,
+            Outer {
+                id: "abc".to_string(),
+                count: 7,
+                nested: Inner { flag: true }
+            }
+        );
     }
 
     #[cfg(feature = "upstream-hyper")]
@@ -1083,15 +1197,31 @@ mod adversarial_dedup_tests {
         let upstream: Arc<crate::upstream::UpstreamClient> =
             mock_helper::build_mock_upstream_returning_status(200, r#"{"ok":true}"#).await;
         #[derive(serde::Serialize)]
-        struct Req<'a> { metadata: Metadata<'a> }
+        struct Req<'a> {
+            metadata: Metadata<'a>,
+        }
         #[derive(serde::Serialize)]
-        struct Metadata<'a> { ide_type: &'a str, platform: &'a str }
-        let body = Req { metadata: Metadata { ide_type: "ANTIGRAVITY", platform: "linux" } };
+        struct Metadata<'a> {
+            ide_type: &'a str,
+            platform: &'a str,
+        }
+        let body = Req {
+            metadata: Metadata {
+                ide_type: "ANTIGRAVITY",
+                platform: "linux",
+            },
+        };
         let endpoints = ["https://a.test/only"];
         let res: serde_json::Value = fetch_with_fallback(
-            &upstream, &endpoints, &body, "tok",
-            crate::upstream::TimeoutProfile::Quota, "typed-body-ctx",
-        ).await.expect("must succeed");
+            &upstream,
+            &endpoints,
+            &body,
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "typed-body-ctx",
+        )
+        .await
+        .expect("must succeed");
         assert_eq!(res["ok"], true);
     }
 }

@@ -24,11 +24,7 @@ use openproxy_types::ids::AccountId;
 use serde::Serialize;
 use std::sync::Arc;
 
-use crate::{
-    error::ApiError,
-    middleware::auth::ParsedChatRequest,
-    state::AppState,
-};
+use crate::{error::ApiError, middleware::auth::ParsedChatRequest, state::AppState};
 
 /// Build the `/v1` sub-router containing only `POST /tokenize`.
 ///
@@ -83,9 +79,7 @@ pub async fn tokenize(
 ) -> Result<Response, ApiError> {
     let req = parsed_req.parsed.as_ref().clone();
     if req.model.is_empty() {
-        return Err(ApiError(CoreError::Validation(
-            "model is required".into(),
-        )));
+        return Err(ApiError(CoreError::Validation("model is required".into())));
     }
 
     // 1. Resolve routing + expand rotation + decrypt access_token, all
@@ -266,8 +260,13 @@ mod tests {
     /// The plaintext API key is seeded into the pool so requests can
     /// authenticate via `Authorization: Bearer <key>`. Tests that need
     /// to verify the 401 path should send no Authorization header.
-    async fn make_tokenize_test_app(
-    ) -> (AppState, Router, Arc<core_db::DbPool>, openproxy_db::MasterKey, String) {
+    async fn make_tokenize_test_app() -> (
+        AppState,
+        Router,
+        Arc<core_db::DbPool>,
+        openproxy_db::MasterKey,
+        String,
+    ) {
         let dir = tempdir();
         let pool = Arc::new(core_db::DbPool::open(&dir.join("tokenize.db")).expect("open"));
         {
@@ -283,16 +282,16 @@ mod tests {
         insert_api_key(&pool, &plaintext);
 
         let mk = openproxy_db::MasterKey::generate();
-        let adapters_registry = Arc::new(RwLock::new(Arc::new(
-            adapters::builtin_adapters(),
-        )));
+        let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),
             Arc::clone(&pool),
             Arc::new(mk.clone()),
             adapters_registry,
         );
-        let app: Router = Router::new().merge(router(&state)).with_state(state.clone());
+        let app: Router = Router::new()
+            .merge(router(&state))
+            .with_state(state.clone());
         (state, app, pool, mk, plaintext)
     }
 
@@ -437,10 +436,8 @@ mod tests {
         // Structural pin: the route builder compiles with an AppState.
         // AppState::for_test requires a Tokio runtime because of the
         // background channel inside, so the test is `#[tokio::test]`.
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-tokenize-struct-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-tokenize-struct-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let pool = Arc::new(core_db::DbPool::open(&dir.join("struct.db")).expect("open"));
         {
@@ -448,9 +445,7 @@ mod tests {
             core_db::migrations::run(&mut w).expect("migrations");
         }
         let mk = openproxy_db::MasterKey::generate();
-        let adapters_registry = Arc::new(RwLock::new(Arc::new(
-            adapters::builtin_adapters(),
-        )));
+        let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),
             pool,
@@ -475,12 +470,12 @@ mod tokenize_adversarial_tests {
     use std::{path::PathBuf, sync::Arc};
     use tower::ServiceExt;
 
+    use crate::state::AppState;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
-        Router,
     };
-    use crate::state::AppState;
     use serde_json::json;
 
     fn tempdir() -> PathBuf {
@@ -494,8 +489,13 @@ mod tokenize_adversarial_tests {
         dir
     }
 
-    async fn make_test_app(
-    ) -> (AppState, Router, Arc<core_db::DbPool>, openproxy_db::MasterKey, String) {
+    async fn make_test_app() -> (
+        AppState,
+        Router,
+        Arc<core_db::DbPool>,
+        openproxy_db::MasterKey,
+        String,
+    ) {
         let dir = tempdir();
         let pool = Arc::new(core_db::DbPool::open(&dir.join("tokenize.db")).expect("open"));
         {
@@ -511,23 +511,20 @@ mod tokenize_adversarial_tests {
         insert_api_key(&pool, &plaintext);
 
         let mk = openproxy_db::MasterKey::generate();
-        let adapters_registry = Arc::new(RwLock::new(Arc::new(
-            adapters::builtin_adapters(),
-        )));
+        let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),
             Arc::clone(&pool),
             Arc::new(mk.clone()),
             adapters_registry,
         );
-        let app: Router = Router::new().merge(super::router(&state)).with_state(state.clone());
+        let app: Router = Router::new()
+            .merge(super::router(&state))
+            .with_state(state.clone());
         (state, app, pool, mk, plaintext)
     }
 
-    fn seed_antigravity_model(
-        state: &AppState,
-        model_id: &str,
-    ) {
+    fn seed_antigravity_model(state: &AppState, model_id: &str) {
         let w = state.db_pool().writer();
         let provider = ProviderId::new("antigravity");
         providers::create(
@@ -582,7 +579,9 @@ mod tokenize_adversarial_tests {
                     .uri("/tokenize")
                     .header("content-type", "application/json")
                     .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(r#"{"messages":[{"role":"user","content":"hi"}]}"#))
+                    .body(Body::from(
+                        r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+                    ))
                     .expect("build"),
             )
             .await
@@ -702,7 +701,10 @@ mod tokenize_adversarial_tests {
             c.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))
                 .unwrap()
         });
-        assert!(count >= 1, "at least one provider should exist after seeding");
+        assert!(
+            count >= 1,
+            "at least one provider should exist after seeding"
+        );
     }
 
     #[tokio::test]

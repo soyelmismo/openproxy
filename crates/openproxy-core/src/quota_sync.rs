@@ -435,10 +435,7 @@ pub async fn refresh_single_account_quota(
 /// `refresh_single_account_quota` machinery. The Writer is acquired
 /// and released entirely inside `spawn_blocking` — no guard is held
 /// across `.await` (AGENTS.md §4.3).
-pub(crate) async fn clear_live_limited_after_refresh(
-    db_pool: &Arc<DbPool>,
-    account_id: AccountId,
-) {
+pub(crate) async fn clear_live_limited_after_refresh(db_pool: &Arc<DbPool>, account_id: AccountId) {
     let db_pool_for_clear = Arc::clone(db_pool);
     let _ = tokio::task::spawn_blocking(move || {
         let w = db_pool_for_clear.writer();
@@ -499,8 +496,7 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let path: PathBuf =
-            base.join(format!("openproxy-quota-sync-test-{pid}-{nanos}.db"));
+        let path: PathBuf = base.join(format!("openproxy-quota-sync-test-{pid}-{nanos}.db"));
         let pool = DbPool::open(&path).expect("open pool");
         let aid = AccountId(1);
 
@@ -534,14 +530,8 @@ mod tests {
         {
             let w = pool.writer();
             let expired = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
-            openproxy_db::live_limited::mark_limited(
-                &w,
-                aid,
-                &mid,
-                &expired,
-                "RESOURCE_EXHAUSTED",
-            )
-            .expect("mark expired");
+            openproxy_db::live_limited::mark_limited(&w, aid, &mid, &expired, "RESOURCE_EXHAUSTED")
+                .expect("mark expired");
         }
 
         // The wiring helper (what `refresh_single_account_quota` calls
@@ -566,14 +556,8 @@ mod tests {
 
         {
             let w = pool.writer();
-            openproxy_db::live_limited::mark_limited(
-                &w,
-                aid,
-                &mid,
-                &active,
-                "RESOURCE_EXHAUSTED",
-            )
-            .expect("mark active");
+            openproxy_db::live_limited::mark_limited(&w, aid, &mid, &active, "RESOURCE_EXHAUSTED")
+                .expect("mark active");
         }
 
         clear_live_limited_after_refresh(&pool, aid).await;
@@ -603,14 +587,8 @@ mod tests {
 
         {
             let w = pool.writer();
-            openproxy_db::live_limited::mark_limited(
-                &w,
-                aid,
-                &mid,
-                &expired,
-                "RESOURCE_EXHAUSTED",
-            )
-            .expect("mark");
+            openproxy_db::live_limited::mark_limited(&w, aid, &mid, &expired, "RESOURCE_EXHAUSTED")
+                .expect("mark");
         }
 
         // Simulate "fetch_error was Some(_)" by NOT calling the helper.

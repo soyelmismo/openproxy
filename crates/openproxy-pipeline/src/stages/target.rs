@@ -665,9 +665,7 @@ mod gap6_tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let path: PathBuf = base.join(format!(
-            "openproxy-pipeline-gap6-{tag}-{pid}-{nanos}.db"
-        ));
+        let path: PathBuf = base.join(format!("openproxy-pipeline-gap6-{tag}-{pid}-{nanos}.db"));
         let pool = DbPool::open(&path).expect("open pool");
         let mut conn = pool.open_connection().expect("open conn");
         migrations::run(&mut conn).expect("migrations");
@@ -843,11 +841,27 @@ mod gap4_tests {
     #[test]
     fn hard_skip_classification_is_stable() {
         let cases: &[(u16, &str, UpstreamErrorClass)] = &[
-            (403, r#"{"error":"VALIDATION_REQUIRED"}"#, UpstreamErrorClass::ValidationRequired),
-            (403, "PERMISSION_DENIED", UpstreamErrorClass::PermissionDenied),
+            (
+                403,
+                r#"{"error":"VALIDATION_REQUIRED"}"#,
+                UpstreamErrorClass::ValidationRequired,
+            ),
+            (
+                403,
+                "PERMISSION_DENIED",
+                UpstreamErrorClass::PermissionDenied,
+            ),
             (403, "API_KEY_INVALID", UpstreamErrorClass::PermissionDenied),
-            (429, r#"{"reason":"RESOURCE_EXHAUSTED"}"#, UpstreamErrorClass::ResourceExhausted),
-            (400, "function name or parameters is empty", UpstreamErrorClass::MalformedToolCall),
+            (
+                429,
+                r#"{"reason":"RESOURCE_EXHAUSTED"}"#,
+                UpstreamErrorClass::ResourceExhausted,
+            ),
+            (
+                400,
+                "function name or parameters is empty",
+                UpstreamErrorClass::MalformedToolCall,
+            ),
             (500, "upstream down", UpstreamErrorClass::Generic),
             (403, "", UpstreamErrorClass::Generic),
         ];

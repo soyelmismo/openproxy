@@ -377,19 +377,16 @@ pub async fn scan_accounts(
     //    `resolve_or_create_oauth_account` (handlers/admin/oauth.rs).
     let mut imported = Vec::with_capacity(discovered.len());
     for entry in discovered {
-        let id = s
-            .services()
-            .accounts
-            .create(
-                s.master_key().as_ref(),
-                core_admin::CreateAccountInput {
-                    provider_id: entry.provider_id.clone(),
-                    api_key: None, // OAuth: el token va en store_oauth_tokens
-                    label: Some(entry.label.clone()),
-                    priority: Some(100),
-                    extra_config_json: None,
-                },
-            )?;
+        let id = s.services().accounts.create(
+            s.master_key().as_ref(),
+            core_admin::CreateAccountInput {
+                provider_id: entry.provider_id.clone(),
+                api_key: None, // OAuth: el token va en store_oauth_tokens
+                label: Some(entry.label.clone()),
+                priority: Some(100),
+                extra_config_json: None,
+            },
+        )?;
 
         // Almacena los tokens OAuth leídos del archivo (espejo del path
         // OAuth post-exchange). El writer guard se libera al salir del

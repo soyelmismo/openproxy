@@ -216,7 +216,11 @@ pub struct GeminiFunctionDeclaration {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct GeminiTool {
     /// Always-present wrapper for function-calling toolset.
-    #[serde(default, rename = "functionDeclarations", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "functionDeclarations",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub function_declarations: Vec<GeminiFunctionDeclaration>,
 }
 
@@ -539,9 +543,7 @@ pub fn translate_openai_tools_to_gemini(
 /// completa con `tracing::warn!` — Gemini rechaza `parameters` que no
 /// sean `Value::Object` con HTTP 400, por lo que es preferible skippear
 /// la tool a propagar el error de upstream.
-fn map_openai_tool_to_declaration(
-    tool: &serde_json::Value,
-) -> Option<GeminiFunctionDeclaration> {
+fn map_openai_tool_to_declaration(tool: &serde_json::Value) -> Option<GeminiFunctionDeclaration> {
     let obj = tool.as_object()?;
 
     // Nested form (compat): {name, description, parameters}
@@ -802,14 +804,11 @@ pub fn deserialize_gemini_response(
     response_body: &serde_json::Value,
 ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
     let gemini_resp: GeminiResponse =
-        <GeminiResponse as serde::Deserialize>::deserialize(response_body)
-            .map_err(|e| {
-                openproxy_types::error::CoreError::Parse(format!("parse gemini response: {e}"))
-            })?;
+        <GeminiResponse as serde::Deserialize>::deserialize(response_body).map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!("parse gemini response: {e}"))
+        })?;
     Ok(gemini_to_openai(&gemini_resp))
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -1115,8 +1114,7 @@ mod tool_translation_tests {
         ));
 
         // "auto"
-        let (_, cfg) =
-            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("auto")));
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("auto")));
         let cfg = cfg.unwrap();
         assert!(matches!(
             cfg.function_calling_config.mode,
@@ -1124,8 +1122,7 @@ mod tool_translation_tests {
         ));
 
         // "any" (synonym for required)
-        let (_, cfg) =
-            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("any")));
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("any")));
         let cfg = cfg.unwrap();
         assert!(matches!(
             cfg.function_calling_config.mode,
@@ -1335,8 +1332,7 @@ mod tool_translation_tests {
                 "total_token_count": 8
             }
         });
-        let resp =
-            deserialize_gemini_response(&body).expect("happy path must deserialize");
+        let resp = deserialize_gemini_response(&body).expect("happy path must deserialize");
         assert_eq!(
             resp.choices[0].message.content.as_ref(),
             Some(&json!("hi there"))
@@ -1488,11 +1484,13 @@ mod tool_translation_adversarial_tests {
     #[test]
     fn adv_tool_choice_invalid_string_falls_back_to_auto() {
         let dummy_tool = vec![json!({"type":"function","function":{"name":"x"}})];
-        let (_, cfg) =
-            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("banana")));
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!("banana")));
         let cfg = cfg.unwrap();
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "unknown string tool_choice must fall back to Auto"
         );
     }
@@ -1503,11 +1501,13 @@ mod tool_translation_adversarial_tests {
         // Implementation: tc.as_str() returns None, tc.as_object() returns None,
         // so it falls through to the Auto fallback.
         let dummy_tool = vec![json!({"type":"function","function":{"name":"x"}})];
-        let (_, cfg) =
-            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!(42)));
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!(42)));
         let cfg = cfg.unwrap();
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "numeric tool_choice must fall back to Auto"
         );
     }
@@ -1515,11 +1515,13 @@ mod tool_translation_adversarial_tests {
     #[test]
     fn adv_tool_choice_array_falls_back_to_auto() {
         let dummy_tool = vec![json!({"type":"function","function":{"name":"x"}})];
-        let (_, cfg) =
-            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!(["auto"])));
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!(["auto"])));
         let cfg = cfg.unwrap();
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "array tool_choice must fall back to Auto"
         );
     }
@@ -1527,11 +1529,13 @@ mod tool_translation_adversarial_tests {
     #[test]
     fn adv_tool_choice_bool_falls_back_to_auto() {
         let dummy_tool = vec![json!({"type":"function","function":{"name":"x"}})];
-        let (_, cfg) =
-            translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!(true)));
+        let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&json!(true)));
         let cfg = cfg.unwrap();
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "bool tool_choice must fall back to Auto"
         );
     }
@@ -1544,7 +1548,10 @@ mod tool_translation_adversarial_tests {
         let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&tc));
         let cfg = cfg.unwrap();
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "object without function field must fall back to Auto"
         );
     }
@@ -1557,7 +1564,10 @@ mod tool_translation_adversarial_tests {
         let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&tc));
         let cfg = cfg.unwrap();
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "function without name must fall back to Auto"
         );
     }
@@ -1570,9 +1580,10 @@ mod tool_translation_adversarial_tests {
         let tc = json!({"type": "function", "function": {"name": big_name}});
         let (_, cfg) = translate_openai_tools_to_gemini(Some(&dummy_tool), Some(&tc));
         let cfg = cfg.unwrap();
-        assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Any)
-        );
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Any
+        ));
         let names = cfg.function_calling_config.allowed_function_names.unwrap();
         assert_eq!(names[0].len(), 10_000);
     }
@@ -1612,7 +1623,10 @@ mod tool_translation_adversarial_tests {
         })];
         let (tools, _cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
         let tools = tools.expect("expected tools");
-        let params = tools[0].function_declarations[0].parameters.as_ref().unwrap();
+        let params = tools[0].function_declarations[0]
+            .parameters
+            .as_ref()
+            .unwrap();
         assert_eq!(params["properties"]["color"]["enum"][0], "red");
         assert_eq!(params["properties"]["color"]["enum"][1], "green");
         assert_eq!(params["properties"]["color"]["enum"][2], "blue");
@@ -1637,9 +1651,10 @@ mod tool_translation_adversarial_tests {
         assert_eq!(tools[0].function_declarations[999].name, "tool_0999");
         // tool_choice should default to Auto
         let cfg = cfg.unwrap();
-        assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto)
-        );
+        assert!(matches!(
+            cfg.function_calling_config.mode,
+            GeminiFunctionCallingMode::Auto
+        ));
     }
 
     // --- Non-object tool values ---
@@ -1691,7 +1706,10 @@ mod tool_translation_adversarial_tests {
         let (_, cfg) = translate_openai_tools_to_gemini(Some(&tools_in), None);
         let cfg = cfg.expect("tool_config should be Some when tools present");
         assert!(
-            matches!(cfg.function_calling_config.mode, GeminiFunctionCallingMode::Auto),
+            matches!(
+                cfg.function_calling_config.mode,
+                GeminiFunctionCallingMode::Auto
+            ),
             "no explicit tool_choice with tools → Auto"
         );
     }
@@ -1770,8 +1788,8 @@ mod adversarial_serialize_gemini {
         let req = OpenAIRequest::default();
         let res = serialize_gemini_request(&req, &[]);
         let bytes = res.expect("empty request must serialize");
-        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-            .expect("output must be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("output must be valid JSON");
         assert!(parsed.get("contents").is_some());
         assert!(parsed["contents"].as_array().unwrap().is_empty());
     }
@@ -1782,7 +1800,9 @@ mod adversarial_serialize_gemini {
             .map(|i| OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(serde_json::Value::String(format!("msg {i}"))),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             })
             .collect();
@@ -1791,10 +1811,8 @@ mod adversarial_serialize_gemini {
             messages: vec![],
             ..Default::default()
         };
-        let bytes = serialize_gemini_request(&req, &messages)
-            .expect("10k messages must serialize");
-        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-            .expect("must round-trip");
+        let bytes = serialize_gemini_request(&req, &messages).expect("10k messages must serialize");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("must round-trip");
         assert_eq!(parsed["contents"].as_array().unwrap().len(), 10_000);
         assert_eq!(parsed["contents"][0]["parts"][0]["text"], "msg 0");
         assert_eq!(parsed["contents"][9_999]["parts"][0]["text"], "msg 9999");
@@ -1806,16 +1824,18 @@ mod adversarial_serialize_gemini {
         let messages = vec![OpenAIMessage {
             role: "user".to_string(),
             content: Some(serde_json::Value::String(content.to_string())),
-            name: None, tool_call_id: None, tool_calls: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
             extra: serde_json::Map::new(),
         }];
         let req = OpenAIRequest::default();
-        let bytes = serialize_gemini_request(&req, &messages)
-            .expect("extreme unicode must serialize");
-        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-            .expect("must round-trip");
+        let bytes =
+            serialize_gemini_request(&req, &messages).expect("extreme unicode must serialize");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("must round-trip");
         let out = parsed["contents"][0]["parts"][0]["text"]
-            .as_str().expect("text must be a string");
+            .as_str()
+            .expect("text must be a string");
         assert_eq!(out, content, "byte-for-byte preservation");
     }
 
@@ -1831,7 +1851,9 @@ mod adversarial_serialize_gemini {
         });
         let messages = vec![OpenAIMessage {
             role: "assistant".to_string(),
-            content: None, name: None, tool_call_id: None,
+            content: None,
+            name: None,
+            tool_call_id: None,
             tool_calls: Some(vec![tool_call]),
             extra: serde_json::Map::new(),
         }];
@@ -1844,8 +1866,7 @@ mod adversarial_serialize_gemini {
         };
         let bytes = serialize_gemini_request(&req, &messages)
             .expect("circular ref must not panic and must serialize");
-        let _: serde_json::Value = serde_json::from_slice(&bytes)
-            .expect("must round-trip");
+        let _: serde_json::Value = serde_json::from_slice(&bytes).expect("must round-trip");
     }
 
     #[test]
@@ -1861,8 +1882,7 @@ mod adversarial_serialize_gemini {
         let messages: Vec<OpenAIMessage> = vec![];
         let res = serialize_gemini_request(&req, &messages)
             .expect("non-object tool elements must serialize");
-        let parsed: serde_json::Value = serde_json::from_slice(&res)
-            .expect("must round-trip");
+        let parsed: serde_json::Value = serde_json::from_slice(&res).expect("must round-trip");
         let funcs = &parsed["tools"][0]["functionDeclarations"];
         assert!(funcs.is_array());
         assert_eq!(funcs.as_array().unwrap().len(), 1);
@@ -1875,7 +1895,9 @@ mod adversarial_serialize_gemini {
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(serde_json::json!({"complex": [1, 2, 3]})),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             }],
             ..Default::default()
@@ -1895,7 +1917,9 @@ mod adversarial_deserialize_gemini {
         let body: serde_json::Value = serde_json::Value::Null;
         let res = deserialize_gemini_response(&body);
         match res {
-            Ok(resp) => { let _: OpenAIResponse = resp; }
+            Ok(resp) => {
+                let _: OpenAIResponse = resp;
+            }
             Err(_) => { /* acceptable: serde fails */ }
         }
     }
@@ -1925,9 +1949,12 @@ mod adversarial_deserialize_gemini {
     #[test]
     fn deserialize_gemini_response_empty_candidates_emits_one_empty_choice() {
         let body: serde_json::Value = serde_json::json!({"candidates": []});
-        let resp = deserialize_gemini_response(&body)
-            .expect("empty candidates must succeed");
-        assert_eq!(resp.choices.len(), 1, "gemini_to_openai always emits one choice");
+        let resp = deserialize_gemini_response(&body).expect("empty candidates must succeed");
+        assert_eq!(
+            resp.choices.len(),
+            1,
+            "gemini_to_openai always emits one choice"
+        );
         let content = resp.choices[0].message.content.as_ref();
         if let Some(c) = content {
             assert!(c.as_str().is_none_or(str::is_empty));
@@ -1957,9 +1984,11 @@ mod adversarial_deserialize_gemini {
                 "finishReason": "STOP"
             }]
         });
-        let resp = deserialize_gemini_response(&body)
-            .expect("10 MiB body must deserialize");
-        let out = resp.choices[0].message.content.as_ref()
+        let resp = deserialize_gemini_response(&body).expect("10 MiB body must deserialize");
+        let out = resp.choices[0]
+            .message
+            .content
+            .as_ref()
             .and_then(|v| v.as_str())
             .expect("content must be a string");
         assert_eq!(out.len(), 10 * 1024 * 1024, "no bytes dropped");
@@ -1990,11 +2019,16 @@ mod adversarial_deserialize_gemini {
             }));
         }
         let body: serde_json::Value = serde_json::json!({"candidates": candidates});
-        let resp = deserialize_gemini_response(&body)
-            .expect("1000 candidates must deserialize");
+        let resp = deserialize_gemini_response(&body).expect("1000 candidates must deserialize");
         assert_eq!(resp.choices.len(), 1);
         assert_eq!(
-            resp.choices[0].message.content.as_ref().unwrap().as_str().unwrap(),
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "hi"
         );
     }

@@ -57,10 +57,7 @@ pub enum ResponsesInputItem {
         arguments: String,
     },
     /// Tool-side function result (re-injected to restore tool results).
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
+    FunctionCallOutput { call_id: String, output: String },
     /// Forward-compatible: new item types the proxy doesn't know
     /// about are dropped (with a debug log).
     #[serde(other)]

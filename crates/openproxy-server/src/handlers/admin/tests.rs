@@ -1237,7 +1237,10 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
     let _home = HomeGuard::set(tmp.path());
 
     let app = Router::new()
-        .route("/admin/accounts/scan", post(crate::handlers::admin::accounts::scan_accounts))
+        .route(
+            "/admin/accounts/scan",
+            post(crate::handlers::admin::accounts::scan_accounts),
+        )
         .with_state(state.clone());
 
     let req = Request::builder()
@@ -1253,40 +1256,27 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
         .expect("scan handler hung for >5s")
         .expect("oneshot");
 
-    assert_eq!(
-        resp.status(),
-        StatusCode::OK,
-        "dry_run must return 200"
-    );
+    assert_eq!(resp.status(), StatusCode::OK, "dry_run must return 200");
 
     let body = axum::body::to_bytes(resp.into_body(), 16 * 1024)
         .await
         .expect("body");
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
 
-    let scanned = parsed["scanned"]
-        .as_array()
-        .expect("scanned is an array");
+    let scanned = parsed["scanned"].as_array().expect("scanned is an array");
     assert!(
         !scanned.is_empty(),
         "dry_run must echo discovered entries; got {parsed}"
     );
-    let imported = parsed["imported"]
-        .as_array()
-        .expect("imported is an array");
-    assert!(
-        imported.is_empty(),
-        "dry_run must not import; got {parsed}"
-    );
+    let imported = parsed["imported"].as_array().expect("imported is an array");
+    assert!(imported.is_empty(), "dry_run must not import; got {parsed}");
 
     // DB invariant: NO accounts were created.
-    let account_count: i64 = state
-        .db_pool()
-        .with_conn(|c| c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap());
-    assert_eq!(
-        account_count, 0,
-        "dry_run must not create accounts in DB"
-    );
+    let account_count: i64 = state.db_pool().with_conn(|c| {
+        c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+            .unwrap()
+    });
+    assert_eq!(account_count, 0, "dry_run must not create accounts in DB");
     // Use token_path so the binding is not dead code (kept for clarity if
     // a future test in this module wants to assert against the fixture).
     let _ = token_path;
@@ -1356,12 +1346,9 @@ async fn adv_scan_endpoint_empty_body_defaults() {
     let body_bytes = axum::body::to_bytes(resp.into_body(), 16 * 1024)
         .await
         .expect("read body");
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&body_bytes).expect("json");
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).expect("json");
 
-    let imported = parsed["imported"]
-        .as_array()
-        .expect("imported is an array");
+    let imported = parsed["imported"].as_array().expect("imported is an array");
     assert!(
         imported.is_empty(),
         "empty body defaults must not import, got {parsed}"
@@ -1452,12 +1439,9 @@ async fn adv_scan_endpoint_with_dry_run_true_and_auto_import_true() {
     let body_bytes = axum::body::to_bytes(resp.into_body(), 16 * 1024)
         .await
         .expect("body");
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&body_bytes).expect("json");
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).expect("json");
 
-    let imported = parsed["imported"]
-        .as_array()
-        .expect("imported is an array");
+    let imported = parsed["imported"].as_array().expect("imported is an array");
     assert!(
         imported.is_empty(),
         "dry_run=true must win over auto_import=true, got {parsed}"

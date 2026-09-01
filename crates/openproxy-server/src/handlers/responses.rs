@@ -60,8 +60,7 @@ pub async fn responses_completions(
         .unwrap_or_default();
 
     let token_inner = auth_token;
-    let api_key_id: Option<openproxy_types::ids::ApiKeyId> =
-        token_inner.as_ref().map(|r| r.key_id);
+    let api_key_id: Option<openproxy_types::ids::ApiKeyId> = token_inner.as_ref().map(|r| r.key_id);
 
     let pipeline = PipelineRunner::build_pipeline(&state);
     let is_stream = resolved_route.openai_req.stream;
@@ -91,12 +90,8 @@ pub async fn responses_completions(
             prepared.stream_rx,
         ));
     }
-    crate::handlers::chat::handle_sync_response_responses(
-        pipeline,
-        prepared.req,
-        prepared.done_tx,
-    )
-    .await
+    crate::handlers::chat::handle_sync_response_responses(pipeline, prepared.req, prepared.done_tx)
+        .await
 }
 
 #[cfg(test)]
@@ -153,10 +148,7 @@ mod tests {
             openai.messages[0].content.as_ref().and_then(|v| v.as_str()),
             Some("pong")
         );
-        assert_eq!(
-            openai.messages[0].tool_call_id.as_deref(),
-            Some("c1")
-        );
+        assert_eq!(openai.messages[0].tool_call_id.as_deref(), Some("c1"));
     }
 
     #[test]
@@ -287,7 +279,10 @@ mod responses_adversarial_tests {
         let req: ResponsesRequest =
             serde_json::from_value(payload).expect("deserialization should succeed");
         let openai = crate::middleware::auth::translate_responses_to_openai(&req);
-        assert!(openai.messages.is_empty(), "all unknown items must be dropped");
+        assert!(
+            openai.messages.is_empty(),
+            "all unknown items must be dropped"
+        );
     }
 
     #[test]
@@ -352,7 +347,10 @@ mod responses_adversarial_tests {
         });
         let req: ResponsesRequest =
             serde_json::from_value(payload).expect("deserialization should succeed");
-        assert_eq!(req.previous_response_id.as_deref(), Some("not-a-uuid-!!!@#$%"));
+        assert_eq!(
+            req.previous_response_id.as_deref(),
+            Some("not-a-uuid-!!!@#$%")
+        );
     }
 
     #[test]
@@ -365,7 +363,10 @@ mod responses_adversarial_tests {
             "previous_response_id": 12345
         });
         let result = serde_json::from_value::<ResponsesRequest>(payload);
-        assert!(result.is_err(), "numeric previous_response_id must fail to deserialize");
+        assert!(
+            result.is_err(),
+            "numeric previous_response_id must fail to deserialize"
+        );
     }
 
     // --- function_call without preceding FunctionCall ---
@@ -393,7 +394,10 @@ mod responses_adversarial_tests {
         // In the raw translation, the tool message is produced.
         assert_eq!(openai.messages.len(), 1);
         assert_eq!(openai.messages[0].role, "tool");
-        assert_eq!(openai.messages[0].tool_call_id.as_deref(), Some("call_orphan"));
+        assert_eq!(
+            openai.messages[0].tool_call_id.as_deref(),
+            Some("call_orphan")
+        );
     }
 
     // --- Duplicate function_call_output with same call_id ---
@@ -482,7 +486,10 @@ mod responses_adversarial_tests {
     fn adv_deserialization_missing_model_fails() {
         let payload = json!({"input": []});
         let result = serde_json::from_value::<ResponsesRequest>(payload);
-        assert!(result.is_err(), "missing model field must fail deserialization");
+        assert!(
+            result.is_err(),
+            "missing model field must fail deserialization"
+        );
     }
 
     // --- stream flag forwarded ---
@@ -494,8 +501,7 @@ mod responses_adversarial_tests {
             "input": [],
             "stream": true
         });
-        let req: ResponsesRequest =
-            serde_json::from_value(payload).expect("deserialize");
+        let req: ResponsesRequest = serde_json::from_value(payload).expect("deserialize");
         assert!(req.stream);
         let openai = crate::middleware::auth::translate_responses_to_openai(&req);
         assert!(openai.stream);
@@ -514,8 +520,7 @@ mod responses_adversarial_tests {
                 {"type": "message", "role": "user", "content": "q2"}
             ]
         });
-        let req: ResponsesRequest =
-            serde_json::from_value(payload).expect("deserialize");
+        let req: ResponsesRequest = serde_json::from_value(payload).expect("deserialize");
         let openai = crate::middleware::auth::translate_responses_to_openai(&req);
         assert_eq!(openai.messages.len(), 4);
         assert_eq!(openai.messages[0].role, "user");

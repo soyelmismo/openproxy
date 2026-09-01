@@ -237,10 +237,7 @@ mod adversarial_tests {
     fn adv_400_body_with_both_2013_and_permission_denied() {
         // Both markers in body, status=400 → MalformedToolCall wins (400 checked first)
         assert_eq!(
-            classify_upstream_error(
-                400,
-                r#"{"error":"2013 PERMISSION_DENIED"}"#,
-            ),
+            classify_upstream_error(400, r#"{"error":"2013 PERMISSION_DENIED"}"#,),
             UpstreamErrorClass::MalformedToolCall
         );
     }
@@ -316,9 +313,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_is_hard_skip_explicitly_set_true() {
-        let err = CoreError::upstream_error_with_skip(
-            403, "p", "m", "anything", false, true,
-        );
+        let err = CoreError::upstream_error_with_skip(403, "p", "m", "anything", false, true);
         assert!(is_hard_skip_error(&err));
     }
 

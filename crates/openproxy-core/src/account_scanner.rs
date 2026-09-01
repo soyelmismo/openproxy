@@ -170,7 +170,10 @@ mod tests {
         let _home = HomeGuard::set(tmp.path());
 
         let found = scan_external_accounts();
-        let agy: Vec<_> = found.iter().filter(|a| a.provider_id == "antigravity").collect();
+        let agy: Vec<_> = found
+            .iter()
+            .filter(|a| a.provider_id == "antigravity")
+            .collect();
         assert_eq!(agy.len(), 1, "expected exactly one antigravity entry");
         assert_eq!(agy[0].label, "antigravity-cli@alice@example.com");
         assert_eq!(agy[0].access_token, "ya-test-access");
@@ -376,11 +379,8 @@ mod adversarial_tests {
         std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
         std::fs::write(&target, r#"{"token":{"access_token":"x"}}"#).expect("write");
         // Remove read permissions
-        std::fs::set_permissions(
-            &target,
-            std::os::unix::fs::PermissionsExt::from_mode(0o000),
-        )
-        .expect("set perms");
+        std::fs::set_permissions(&target, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .expect("set perms");
 
         let _guard = lock();
         let _home = HomeGuard::set(tmp.path());
@@ -414,7 +414,10 @@ mod adversarial_tests {
         let _guard = lock();
         let _home = HomeGuard::set(tmp.path());
         let account = scan_antigravity_cli().expect("should parse");
-        assert_eq!(account.refresh_token, None, "missing refresh_token is None, not error");
+        assert_eq!(
+            account.refresh_token, None,
+            "missing refresh_token is None, not error"
+        );
     }
 
     // --- scan_external_accounts returns vec ---
@@ -422,8 +425,10 @@ mod adversarial_tests {
     #[test]
     fn adv_scan_external_accounts_returns_vec() {
         let result = scan_external_accounts();
-        assert!(result.is_empty() || !result.is_empty(),
-            "scan_external_accounts returns a Vec (never panics)");
+        assert!(
+            result.is_empty() || !result.is_empty(),
+            "scan_external_accounts returns a Vec (never panics)"
+        );
     }
 
     // --- File with deeply nested valid JSON but no access_token ---
