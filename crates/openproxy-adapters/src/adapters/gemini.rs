@@ -123,10 +123,7 @@ impl ProviderAdapter for GeminiAdapter {
         messages: &[openproxy_types::OpenAIMessage],
         _stream: bool,
     ) -> std::result::Result<bytes::Bytes, CoreError> {
-        let gemini_req = openai_to_gemini(req, messages);
-        serde_json::to_vec(&gemini_req)
-            .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Parse(format!("serialize gemini request: {e}")))
+        serialize_gemini_request(req, messages)
     }
 
     fn translate_non_streaming_response(
@@ -134,10 +131,7 @@ impl ProviderAdapter for GeminiAdapter {
         _target_format: TargetFormat,
         response_body: serde_json::Value,
     ) -> std::result::Result<openproxy_types::OpenAIResponse, CoreError> {
-        let gemini_resp: GeminiResponse =
-            <GeminiResponse as serde::Deserialize>::deserialize(&response_body)
-                .map_err(|e| CoreError::Parse(format!("parse gemini response: {e}")))?;
-        Ok(gemini_to_openai(&gemini_resp))
+        deserialize_gemini_response(&response_body)
     }
 }
 
@@ -787,6 +781,36 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
     }
 }
 
+/// Serialize an OpenAI chat request into Gemini wire-format bytes.
+///
+/// Used by both `GeminiAdapter` and `AntigravityAdapter` (which wraps
+/// Gemini requests in an Antigravity envelope in `wrap_request_body`).
+pub fn serialize_gemini_request(
+    req: &openproxy_types::OpenAIRequest,
+    messages: &[openproxy_types::OpenAIMessage],
+) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+    let gemini_req = openai_to_gemini(req, messages);
+    serde_json::to_vec(&gemini_req)
+        .map(bytes::Bytes::from)
+        .map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!("serialize gemini request: {e}"))
+        })
+}
+
+/// Deserialize a Gemini response JSON value into an OpenAIResponse.
+pub fn deserialize_gemini_response(
+    response_body: &serde_json::Value,
+) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
+    let gemini_resp: GeminiResponse =
+        <GeminiResponse as serde::Deserialize>::deserialize(response_body)
+            .map_err(|e| {
+                openproxy_types::error::CoreError::Parse(format!("parse gemini response: {e}"))
+            })?;
+    Ok(gemini_to_openai(&gemini_resp))
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1276,6 +1300,52 @@ mod tool_translation_tests {
         assert_eq!(tools[0].function_declarations.len(), 1);
         assert_eq!(tools[0].function_declarations[0].name, "no_params");
         assert!(tools[0].function_declarations[0].parameters.is_none());
+    }
+
+    #[test]
+    fn test_serialize_gemini_request_happy_path() {
+        let req = openproxy_types::OpenAIRequest::default();
+        let messages = vec![openproxy_types::OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!("hello")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }];
+        let bytes = serialize_gemini_request(&req, &messages).expect("happy path must serialize");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+        assert_eq!(parsed["contents"][0]["role"], "user");
+        assert_eq!(parsed["contents"][0]["parts"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn test_deserialize_gemini_response_happy_path() {
+        // NOTE: GeminiResponse/GeminiCandidate/GeminiUsageMetadata deserialize
+        // with snake_case field names (no container-level `rename_all`), so the
+        // JSON keys here match the struct fields exactly.
+        let body = json!({
+            "candidates": [{
+                "content": {"parts": [{"text": "hi there"}], "role": "model"},
+                "finish_reason": "STOP"
+            }],
+            "usage_metadata": {
+                "prompt_token_count": 5,
+                "candidates_token_count": 3,
+                "total_token_count": 8
+            }
+        });
+        let resp =
+            deserialize_gemini_response(&body).expect("happy path must deserialize");
+        assert_eq!(
+            resp.choices[0].message.content.as_ref(),
+            Some(&json!("hi there"))
+        );
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
+        let usage = resp.usage.expect("usage must be mapped");
+        assert_eq!(usage.prompt_tokens, 5);
+        assert_eq!(usage.completion_tokens, 3);
+        assert_eq!(usage.total_tokens, 8);
     }
 }
 
