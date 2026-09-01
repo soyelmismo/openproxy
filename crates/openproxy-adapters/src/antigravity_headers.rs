@@ -254,6 +254,43 @@ pub async fn oauth_post_json<T: serde::Serialize>(
         .map_err(|e| format!("{url} collect: {e}"))
 }
 
+/// Iterate over `endpoints` and POST JSON to each in order with Bearer
+/// auth + Antigravity headers. Returns the first successful (2xx)
+/// response body parsed into `R`. Returns the last error if all
+/// endpoints fail (or `"{context}: all endpoints failed"` if
+/// `endpoints` is empty).
+///
+/// **Does NOT** translate `UpstreamError::Cancel` into
+/// `CoreError::Cancelled` — the caller must handle cancellation
+/// semantics separately if needed (see
+/// `AntigravityAdapter::fetch_antigravity_user_quota_local`).
+pub async fn fetch_with_fallback<T, R>(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    endpoints: &[&str],
+    body: &T,
+    access_token: &str,
+    timeout: crate::upstream::TimeoutProfile,
+    context: &str,
+) -> std::result::Result<R, String>
+where
+    T: serde::Serialize,
+    R: serde::de::DeserializeOwned,
+{
+    let mut last_err: Option<String> = None;
+    for url in endpoints {
+        match oauth_post_json(upstream, url, body, access_token, timeout).await {
+            Ok(body_bytes) => {
+                return serde_json::from_slice(&body_bytes)
+                    .map_err(|e| format!("{context} parse {url}: {e}"));
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| format!("{context}: all endpoints failed")))
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -425,5 +462,129 @@ mod tests {
         )
         .await
         .expect("complex body must serialize");
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn fetch_with_fallback_tries_next_on_error() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_routing(|path| {
+                if path.contains("daily-cloudcode") {
+                    (401, "auth required".to_string())
+                } else {
+                    (200, r#"{"id":"fallback-ok"}"#.to_string())
+                }
+            })
+            .await;
+
+        let endpoints = [
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:foo",
+            "https://cloudcode-pa.googleapis.com/v1internal:foo",
+        ];
+
+        #[derive(serde::Deserialize, Debug, PartialEq)]
+        struct Resp {
+            id: String,
+        }
+
+        let res: Resp = fetch_with_fallback(
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "test",
+        )
+        .await
+        .expect("must fallback to second endpoint");
+        assert_eq!(res.id, "fallback-ok");
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn fetch_with_fallback_returns_last_error_on_all_failure() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        // Use the routing helper so the listener accepts multiple
+        // connections (fetch_with_fallback iterates over 2 endpoints
+        // and would otherwise get connection-refused on the 2nd).
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_routing(|_path| {
+                (503, "down".to_string())
+            })
+            .await;
+
+        let endpoints = [
+            "https://a.test/foo",
+            "https://b.test/foo",
+        ];
+
+        let res: Result<serde_json::Value, _> = fetch_with_fallback(
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "test",
+        )
+        .await;
+        let err = res.expect_err("all 503 must fail");
+        assert!(err.contains("503"));
+        assert!(err.contains("down"));
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn fetch_with_fallback_empty_endpoints_returns_error() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(200, "{}").await;
+
+        let res: Result<serde_json::Value, _> = fetch_with_fallback(
+            &upstream,
+            &[],
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "test-empty",
+        )
+        .await;
+        let err = res.expect_err("empty slice must fail");
+        assert!(err.contains("all endpoints failed"), "msg: {err}");
+        assert!(err.contains("test-empty"), "msg: {err}");
+    }
+
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn fetch_with_fallback_propagates_parse_error() {
+        // W4 fix: a 2xx response with a non-JSON body must surface
+        // as a parse error, NOT as success. The helper must not
+        // blindly accept whatever bytes the upstream returned.
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(200, "not-json-at-all").await;
+
+        let endpoints = ["https://a.test/foo"];
+
+        let res: Result<serde_json::Value, _> = fetch_with_fallback(
+            &upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            "tok",
+            crate::upstream::TimeoutProfile::Quota,
+            "test-parse",
+        )
+        .await;
+        let err = res.expect_err("non-JSON body must fail to parse");
+        assert!(err.contains("parse"), "msg must mention parse: {err}");
+        assert!(err.contains("test-parse"), "msg must mention context: {err}");
     }
 }

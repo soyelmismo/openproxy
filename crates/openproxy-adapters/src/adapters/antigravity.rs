@@ -440,32 +440,6 @@ fn resolve_final_plan_name(
     Some("Free".to_string())
 }
 
-async fn try_fetch_models_quota_endpoint(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    endpoint: &str,
-) -> Option<openproxy_types::AccountQuota> {
-    let mut req = UpstreamRequest::post_json(endpoint, bytes::Bytes::from_static(b"{}"));
-    crate::antigravity_headers::insert_bearer(&mut req, access_token);
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-    let cancel = CancellationToken::new();
-    let resp = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .ok()?;
-    if !resp.status.is_success() {
-        return None;
-    }
-    let body = resp.collect().await.ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    parse_antigravity_models_response(&json).ok()
-}
-
 fn extract_tier_from_load_code_assist(json: &serde_json::Value) -> Option<&str> {
     let paid = json
         .pointer("/paidTier/name")
@@ -522,34 +496,6 @@ fn classify_antigravity_plan_name(t: &str) -> String {
         }
     }
     t.to_string()
-}
-
-async fn try_fetch_code_assist_plan(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    endpoint: &str,
-) -> Option<String> {
-    let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
-    let mut req = UpstreamRequest::post_json(endpoint, payload);
-    crate::antigravity_headers::insert_bearer(&mut req, access_token);
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-    let cancel = CancellationToken::new();
-    let resp = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .ok()?;
-    if !resp.status.is_success() {
-        return None;
-    }
-    let body = resp.collect().await.ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    let tier = extract_tier_from_load_code_assist(&json)?;
-    Some(classify_antigravity_plan_name(tier))
 }
 
 impl AntigravityAdapter {
@@ -664,18 +610,17 @@ impl AntigravityAdapter {
             "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
             "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         ];
-
-        for endpoint in endpoints {
-            if let Some(quota) =
-                try_fetch_models_quota_endpoint(upstream, access_token, endpoint).await
-            {
-                return Ok(quota);
-            }
-        }
-
-        Err(CoreError::UpstreamConnection(
-            "all fetchAvailableModels endpoints failed".into(),
-        ))
+        let json: serde_json::Value = crate::antigravity_headers::fetch_with_fallback(
+            upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            access_token,
+            TimeoutProfile::Quota,
+            "antigravity fetchAvailableModels quota",
+        )
+        .await
+        .map_err(CoreError::UpstreamConnection)?;
+        parse_antigravity_models_response(&json)
     }
 
     async fn fetch_antigravity_subscription_plan_local(
@@ -695,18 +640,25 @@ impl AntigravityAdapter {
             "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
         ];
 
-        for endpoint in endpoints {
-            if let Some(plan_name) =
-                try_fetch_code_assist_plan(upstream, access_token, endpoint).await
-            {
-                PLAN_CACHE
-                    .write()
-                    .insert(access_token.to_string(), (plan_name.clone(), now));
-                return Some(plan_name);
-            }
-        }
+        let payload = serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } });
 
-        None
+        let json: serde_json::Value = crate::antigravity_headers::fetch_with_fallback(
+            upstream,
+            &endpoints,
+            &payload,
+            access_token,
+            TimeoutProfile::Quota,
+            "antigravity loadCodeAssist",
+        )
+        .await
+        .ok()?;
+
+        let tier = extract_tier_from_load_code_assist(&json)?;
+        let plan = classify_antigravity_plan_name(tier);
+        PLAN_CACHE
+            .write()
+            .insert(access_token.to_string(), (plan.clone(), now));
+        Some(plan)
     }
 }
 

@@ -1251,4 +1251,58 @@ pub mod tests_helper {
         let connector = SingleResponseConnector { addr };
         UpstreamClient::for_test_with_connector(connector, None)
     }
+
+    /// Build an `UpstreamClient` that routes based on the request URL
+    /// target (path). The handler receives the request target — the
+    /// part after the host, as parsed from the first line of the HTTP
+    /// request — and returns `(status, body)` to send back.
+    ///
+    /// Use this to exercise callers that hit multiple endpoints and
+    /// need different responses per endpoint (e.g.
+    /// `fetch_with_fallback`).
+    pub async fn build_mock_upstream_routing<F>(
+        handler: F,
+    ) -> Arc<UpstreamClient>
+    where
+        F: Fn(&str) -> (u16, String) + Send + Sync + 'static,
+    {
+        use std::sync::Arc;
+        let handler = Arc::new(handler);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut tcp, _peer)) = listener.accept().await {
+                    let handler = Arc::clone(&handler);
+                    tokio::spawn(async move {
+                        // Read enough to capture the request line.
+                        let mut buf = vec![0u8; 4096];
+                        let n = tcp.read(&mut buf).await.unwrap_or(0);
+                        let req_str =
+                            String::from_utf8_lossy(&buf[..n]).into_owned();
+                        // Extract request-target from "POST <target> HTTP/1.1"
+                        let target = req_str
+                            .lines()
+                            .next()
+                            .and_then(|l| l.split_whitespace().nth(1))
+                            .unwrap_or("")
+                            .to_string();
+                        let (status, body) = handler(&target);
+                        let status_line = format!(
+                            "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\n"
+                        );
+                        let body_header =
+                            format!("content-length: {}\r\n\r\n", body.len());
+                        let _ = tcp.write_all(status_line.as_bytes()).await;
+                        let _ = tcp.write_all(body_header.as_bytes()).await;
+                        let _ = tcp.write_all(body.as_bytes()).await;
+                        let _ = tcp.flush().await;
+                    });
+                }
+            }
+        });
+
+        let connector = SingleResponseConnector { addr };
+        UpstreamClient::for_test_with_connector(connector, None)
+    }
 }
