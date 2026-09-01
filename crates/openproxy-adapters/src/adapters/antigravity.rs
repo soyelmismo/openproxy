@@ -6,6 +6,36 @@ use super::{
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
 
+/// Base scale for quota normalization: remaining fractions (0.0..=1.0)
+/// are mapped onto an integer 0..=1000 scale so quota math can be done
+/// in `i64` end-to-end.
+const NORMALIZED_BASE: i64 = 1000;
+
+/// Normalize a raw `remainingFraction` (0.0..=1.0) into a `(used, is_unlimited)`
+/// tuple using a base-1000 normalized scale.
+///
+/// - `raw_fraction = None` and `reset_time = Some`: treats remaining as 0
+///   (the bucket will reset at `reset_time` but no current value reported).
+/// - `raw_fraction = None` and `reset_time = None`: treats remaining as 1.0
+///   (unlimited bucket).
+/// - `raw_fraction >= 1.0` and `reset_time = None`: unlimited → used = 0.
+fn normalize_quota_fraction(
+    reset_time: Option<&str>,
+    raw_fraction: Option<f64>,
+) -> (i64, bool) {
+    let remaining_fraction = raw_fraction.unwrap_or_else(|| {
+        if reset_time.is_some() { 0.0 } else { 1.0 }
+    });
+    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
+    let used = if is_unlimited {
+        0
+    } else {
+        NORMALIZED_BASE.saturating_sub(remaining)
+    };
+    (used, is_unlimited)
+}
+
 crate::define_jump_map! {
     /// Jump map for Antigravity physical model translation.
     pub fn map_antigravity_physical_model(model: &str) -> &str {
@@ -712,25 +742,18 @@ fn parse_model_quota_detail(
     model_id: &str,
     model_data: &serde_json::Value,
 ) -> Option<openproxy_types::ModelQuotaDetail> {
-    const NORMALIZED_BASE: i64 = 1000;
     let quota_info = model_data.get("quotaInfo")?;
     let reset_time = quota_info
         .get("resetTime")
         .and_then(|r| r.as_str())
         .map(String::from);
-
-    let remaining_fraction = quota_info
+    let raw_fraction = quota_info
         .get("remainingFraction")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
-
-    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-    let used = if is_unlimited {
-        0
-    } else {
-        NORMALIZED_BASE.saturating_sub(remaining)
-    };
+        .and_then(serde_json::Value::as_f64);
+    let (used, _) = normalize_quota_fraction(reset_time.as_deref(), raw_fraction);
+    let remaining_fraction = raw_fraction.unwrap_or_else(|| {
+        if reset_time.is_some() { 0.0 } else { 1.0 }
+    });
 
     Some(openproxy_types::ModelQuotaDetail {
         model_id: model_id.to_string(),
@@ -788,26 +811,15 @@ fn parse_quota_bucket(
     group_plan: Option<&str>,
     bucket: &serde_json::Value,
 ) -> AntigravityQuotaBucket {
-    const NORMALIZED_BASE: i64 = 1000;
     let reset_time = bucket
         .get("resetTime")
         .and_then(|r| r.as_str())
         .map(String::from);
     let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
-
-    let remaining_fraction = bucket
+    let raw_fraction = bucket
         .get("remainingFraction")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
-
-    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-    let used = if is_unlimited {
-        0
-    } else {
-        NORMALIZED_BASE.saturating_sub(remaining)
-    };
-
+        .and_then(serde_json::Value::as_f64);
+    let (used, _) = normalize_quota_fraction(reset_time.as_deref(), raw_fraction);
     let is_weekly = window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
 
     AntigravityQuotaBucket {
@@ -837,8 +849,6 @@ fn extract_quota_buckets(
 fn parse_antigravity_user_quota_summary(
     body: &serde_json::Value,
 ) -> Result<openproxy_types::AccountQuota> {
-    const NORMALIZED_BASE: i64 = 1000;
-
     let groups = body
         .get("groups")
         .and_then(|g| g.as_array())
@@ -1319,6 +1329,36 @@ mod user_quota_tests {
         assert_eq!(result.weekly_used.unwrap(), 500);
         assert_eq!(result.session_limit.unwrap(), 1000);
         assert_eq!(result.session_used.unwrap(), 200);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_unlimited() {
+        // No reset time + fraction >= 1.0 → unlimited: used must be 0.
+        assert_eq!(normalize_quota_fraction(None, Some(1.0)), (0, true));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_with_reset_no_fraction() {
+        // Reset time present but no fraction reported → remaining 0 → used = base.
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), None),
+            (1000, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_no_reset_with_fraction() {
+        // 0.5 remaining on a base-1000 scale → used = 500.
+        assert_eq!(normalize_quota_fraction(None, Some(0.5)), (500, false));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_with_reset_with_fraction() {
+        // 0.3 remaining → used = 700, and a reset time never means unlimited.
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(0.3)),
+            (700, false)
+        );
     }
 }
 
