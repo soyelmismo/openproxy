@@ -89,31 +89,17 @@ fn collect_all_defs(value: &Value, defs: &mut serde_json::Map<String, Value>) {
     }
 }
 
-fn resolve_ref_path(
-    map: &mut serde_json::Map<String, Value>,
-    defs: &serde_json::Map<String, Value>,
-    ref_path: &str,
-    depth: usize,
-) {
-    let ref_name = ref_path.split('/').next_back().unwrap_or(ref_path);
-    if let Some(Value::Object(def_map)) = defs.get(ref_name) {
-        for (k, v) in def_map {
-            if !map.contains_key(k) {
-                map.insert(k.clone(), v.clone());
-            }
-        }
-        flatten_refs(map, defs, depth + 1);
-    } else {
-        map.insert("type".to_string(), serde_json::json!("string"));
-        if !map.contains_key("description") {
-            map.insert(
-                "description".to_string(),
-                Value::String(String::with_capacity(32 + ref_path.len())),
-            );
-        }
-        if let Some(Value::String(s)) = map.get_mut("description")
-            && !s.contains(ref_path)
-        {
+fn fallback_unresolved_ref(map: &mut serde_json::Map<String, Value>, ref_path: &str) {
+    map.insert("type".to_string(), serde_json::json!("string"));
+    if !map.contains_key("description") {
+        map.insert(
+            "description".to_string(),
+            Value::String(String::with_capacity(32 + ref_path.len())),
+        );
+    }
+    #[allow(clippy::collapsible_if)]
+    if let Some(Value::String(s)) = map.get_mut("description") {
+        if !s.contains(ref_path) {
             if !s.is_empty() {
                 s.push(' ');
             }
@@ -121,6 +107,27 @@ fn resolve_ref_path(
             let _ = write!(s, "(Unresolved $ref: {ref_path})");
         }
     }
+}
+
+fn resolve_ref_path(
+    map: &mut serde_json::Map<String, Value>,
+    defs: &serde_json::Map<String, Value>,
+    ref_path: &str,
+    depth: usize,
+) {
+    let ref_name = ref_path.split('/').next_back().unwrap_or(ref_path);
+
+    let Some(Value::Object(def_map)) = defs.get(ref_name) else {
+        fallback_unresolved_ref(map, ref_path);
+        return;
+    };
+
+    for (k, v) in def_map {
+        if !map.contains_key(k) {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    flatten_refs(map, defs, depth + 1);
 }
 
 fn flatten_refs_in_children(
@@ -510,40 +517,49 @@ fn normalize_enum_items(map: &mut serde_json::Map<String, Value>) {
     }
 }
 
+fn is_standard_keyword(k: &str) -> bool {
+    matches!(
+        k,
+        "type" | "description" | "properties" | "required" | "items" | "enum" | "title"
+    )
+}
+
+fn has_standard_keyword(map: &serde_json::Map<String, Value>) -> bool {
+    map.keys().any(|k| is_standard_keyword(k.as_str()))
+}
+
+fn is_not_schema_payload(map: &serde_json::Map<String, Value>) -> bool {
+    map.contains_key("functionCall") || map.contains_key("functionResponse")
+}
+
+fn ensure_object_properties(map: &mut serde_json::Map<String, Value>) {
+    if map.get("type").and_then(|t| t.as_str()) == Some("object") && !map.contains_key("properties")
+    {
+        map.insert("properties".to_string(), serde_json::json!({}));
+    }
+}
+
 fn sanitize_schema_fields(
     map: &mut serde_json::Map<String, Value>,
     is_schema_node: bool,
     depth: usize,
 ) -> bool {
-    let has_standard_keyword = map.keys().any(|k| {
-        matches!(
-            k.as_str(),
-            "type" | "description" | "properties" | "required" | "items" | "enum" | "title"
-        )
-    });
-    let is_not_schema_payload =
-        map.contains_key("functionCall") || map.contains_key("functionResponse");
-    if is_schema_node && !has_standard_keyword && !map.is_empty() && !is_not_schema_payload {
+    let has_std_kw = has_standard_keyword(map);
+    let is_not_payload = is_not_schema_payload(map);
+
+    if is_schema_node && !has_std_kw && !map.is_empty() && !is_not_payload {
         wrap_bare_properties_node(map, depth);
     }
 
-    let looks_like_schema = (is_schema_node || has_standard_keyword) && !is_not_schema_payload;
+    let looks_like_schema = (is_schema_node || has_std_kw) && !is_not_payload;
     if !looks_like_schema {
         return false;
     }
 
     move_constraints_to_description(map);
-    map.retain(|k, _| {
-        matches!(
-            k.as_str(),
-            "type" | "description" | "properties" | "required" | "items" | "enum" | "title"
-        )
-    });
+    map.retain(|k, _| is_standard_keyword(k.as_str()));
 
-    if map.get("type").and_then(|t| t.as_str()) == Some("object") && !map.contains_key("properties")
-    {
-        map.insert("properties".to_string(), serde_json::json!({}));
-    }
+    ensure_object_properties(map);
 
     sanitize_required_fields(map);
     let is_effectively_nullable = normalize_type_field(map);
@@ -557,29 +573,52 @@ fn sanitize_schema_fields(
     is_effectively_nullable
 }
 
+fn merge_sub_properties(
+    sub_map: &mut serde_json::Map<String, Value>,
+    merged_properties: &mut serde_json::Map<String, Value>,
+) {
+    let Some(Value::Object(props)) = sub_map.remove("properties") else {
+        return;
+    };
+    for (k, v) in props {
+        merged_properties.insert(k, v);
+    }
+}
+
+fn merge_sub_required(
+    sub_map: &mut serde_json::Map<String, Value>,
+    merged_required: &mut std::collections::HashSet<String>,
+) {
+    let Some(Value::Array(reqs)) = sub_map.remove("required") else {
+        return;
+    };
+    for req in reqs {
+        if let Value::String(s) = req {
+            merged_required.insert(s);
+        }
+    }
+}
+
+fn merge_sub_other_fields(
+    sub_map: serde_json::Map<String, Value>,
+    other_fields: &mut serde_json::Map<String, Value>,
+) {
+    for (k, v) in sub_map {
+        if k != "allOf" && !other_fields.contains_key(&k) {
+            other_fields.insert(k, v);
+        }
+    }
+}
+
 fn merge_all_of_sub_schema(
     mut sub_map: serde_json::Map<String, Value>,
     merged_properties: &mut serde_json::Map<String, Value>,
     merged_required: &mut std::collections::HashSet<String>,
     other_fields: &mut serde_json::Map<String, Value>,
 ) {
-    if let Some(Value::Object(props)) = sub_map.remove("properties") {
-        for (k, v) in props {
-            merged_properties.insert(k, v);
-        }
-    }
-    if let Some(Value::Array(reqs)) = sub_map.remove("required") {
-        for req in reqs {
-            if let Value::String(s) = req {
-                merged_required.insert(s);
-            }
-        }
-    }
-    for (k, v) in sub_map {
-        if k != "allOf" && !other_fields.contains_key(&k) {
-            other_fields.insert(k, v);
-        }
-    }
+    merge_sub_properties(&mut sub_map, merged_properties);
+    merge_sub_required(&mut sub_map, merged_required);
+    merge_sub_other_fields(sub_map, other_fields);
 }
 
 fn merge_into_existing_properties(
