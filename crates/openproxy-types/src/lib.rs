@@ -13,6 +13,7 @@ pub mod message;
 pub mod providers;
 
 pub mod quota;
+pub mod schema_cleaner;
 
 pub mod accounts;
 pub mod capabilities;

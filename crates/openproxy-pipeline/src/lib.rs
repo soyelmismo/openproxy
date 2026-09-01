@@ -43,7 +43,7 @@ pub mod upstream_dispatcher;
 pub mod usage_tracker;
 pub mod worker;
 
-pub mod schema_cleaner;
+pub use openproxy_types::schema_cleaner;
 
 #[cfg(test)]
 mod repository_tests;
