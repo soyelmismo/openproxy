@@ -17,6 +17,9 @@ data.db*
 .shannon/
 .hermes/
 
+# Internal specs (working docs, not for remote)
+docs/specs/
+
 # Temporary analysis & scratch text files
 ci_result.txt
 desc.txt
@@ -36,3 +39,5 @@ package-lock.json
 # runtime artifacts
 data/
 .reports/
+*.rs.orig
+*.rs.patch

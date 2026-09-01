@@ -15,6 +15,7 @@ pub use streaming_state::ReasoningNormalizer;
 pub mod circuit_breaker;
 pub mod context;
 pub mod credentials;
+pub mod error_classification;
 pub mod execution;
 pub mod formatting;
 pub mod load_balancing;
@@ -26,6 +27,7 @@ pub mod quotas;
 pub mod racing;
 pub use proxy_race::run_proxy_race;
 pub mod repository;
+pub mod response_ext;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
 pub mod redact;
@@ -43,7 +45,8 @@ pub mod upstream_dispatcher;
 pub mod usage_tracker;
 pub mod worker;
 
-pub mod schema_cleaner;
+pub use openproxy_types::schema_cleaner;
+pub use response_ext::ResponseExt;
 
 #[cfg(test)]
 mod repository_tests;

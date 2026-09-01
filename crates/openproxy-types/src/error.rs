@@ -87,6 +87,8 @@ pub enum CoreError {
         model: String,
         body: String,
         is_proxy_rotated: bool,
+        class: crate::UpstreamErrorClass,
+        is_hard_skip: bool,
     },
 
     #[error("upstream connection error: {0}")]
@@ -148,6 +150,49 @@ impl CoreError {
             model: model.into(),
             body: body.into(),
             is_proxy_rotated,
+            class: crate::UpstreamErrorClass::Generic,
+            is_hard_skip: false,
+        }
+    }
+
+    #[inline]
+    pub fn upstream_error_with_skip(
+        status: u16,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        body: impl Into<String>,
+        is_proxy_rotated: bool,
+        is_hard_skip: bool,
+    ) -> Self {
+        CoreError::UpstreamError {
+            status,
+            provider: provider.into(),
+            model: model.into(),
+            body: body.into(),
+            is_proxy_rotated,
+            class: crate::UpstreamErrorClass::Generic,
+            is_hard_skip,
+        }
+    }
+
+    #[inline]
+    pub fn upstream_error_classified(
+        status: u16,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        body: impl Into<String>,
+        is_proxy_rotated: bool,
+        class: crate::UpstreamErrorClass,
+    ) -> Self {
+        let is_hard_skip = class.is_hard_skip();
+        CoreError::UpstreamError {
+            status,
+            provider: provider.into(),
+            model: model.into(),
+            body: body.into(),
+            is_proxy_rotated,
+            class,
+            is_hard_skip,
         }
     }
 
@@ -176,6 +221,24 @@ impl CoreError {
                 is_proxy_rotated, ..
             } => *is_proxy_rotated,
             _ => false,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn is_hard_skip(&self) -> bool {
+        match self {
+            CoreError::UpstreamError { is_hard_skip, .. } => *is_hard_skip,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn upstream_error_class(&self) -> Option<crate::UpstreamErrorClass> {
+        match self {
+            CoreError::UpstreamError { class, .. } => Some(*class),
+            _ => None,
         }
     }
 
@@ -275,6 +338,8 @@ impl CoreError {
                 model: "<see message>".to_string(),
                 body: message.to_string(),
                 is_proxy_rotated: false,
+                class: crate::UpstreamErrorClass::Generic,
+                is_hard_skip: false,
             }),
             "rate_limited" => Some(CoreError::RateLimited {
                 provider: "<see message>".to_string(),
@@ -464,6 +529,8 @@ mod tests {
                 model: "model".into(),
                 body: "err".into(),
                 is_proxy_rotated: true,
+                class: crate::UpstreamErrorClass::Generic,
+                is_hard_skip: false,
             }
             .is_proxy_rotated()
         );
@@ -475,6 +542,8 @@ mod tests {
                 model: "model".into(),
                 body: "err".into(),
                 is_proxy_rotated: false,
+                class: crate::UpstreamErrorClass::Generic,
+                is_hard_skip: false,
             }
             .is_proxy_rotated()
         );
@@ -498,5 +567,77 @@ mod tests {
         );
 
         assert!(!CoreError::Auth("x".into()).is_proxy_rotated());
+    }
+
+    #[test]
+    fn test_is_hard_skip_defaults_to_false() {
+        let legacy = CoreError::upstream_error(400, "p", "m", "x", false);
+        assert!(!legacy.is_hard_skip());
+    }
+
+    #[test]
+    fn test_is_hard_skip_explicit() {
+        let hard_skip = CoreError::upstream_error_with_skip(
+            403,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"error":"VALIDATION_REQUIRED"}"#,
+            false,
+            true,
+        );
+        assert!(hard_skip.is_hard_skip());
+
+        let generic = CoreError::upstream_error_with_skip(
+            500,
+            "antigravity",
+            "gemini-2.5",
+            "boom",
+            false,
+            false,
+        );
+        assert!(!generic.is_hard_skip());
+    }
+
+    #[test]
+    fn test_upstream_error_classified_sets_class_and_hard_skip() {
+        let v = CoreError::upstream_error_classified(
+            403,
+            "antigravity",
+            "gemini-2.5",
+            r#"{"error":"VALIDATION_REQUIRED"}"#,
+            false,
+            crate::UpstreamErrorClass::ValidationRequired,
+        );
+        assert!(v.is_hard_skip());
+        assert_eq!(
+            v.upstream_error_class(),
+            Some(crate::UpstreamErrorClass::ValidationRequired)
+        );
+
+        let g = CoreError::upstream_error_classified(
+            500,
+            "antigravity",
+            "gemini-2.5",
+            "boom",
+            false,
+            crate::UpstreamErrorClass::Generic,
+        );
+        assert!(!g.is_hard_skip());
+    }
+
+    #[test]
+    fn test_is_hard_skip_false_for_non_upstream() {
+        assert!(!CoreError::Auth("x".into()).is_hard_skip());
+        assert!(!CoreError::Validation("x".into()).is_hard_skip());
+        assert!(
+            !CoreError::RateLimited {
+                provider: "p".into(),
+                retry_after_ms: 1000,
+                is_proxy_rotated: false,
+            }
+            .is_hard_skip()
+        );
+        assert!(!CoreError::Internal("x".into()).is_hard_skip());
+        assert_eq!(CoreError::Auth("x".into()).upstream_error_class(), None);
     }
 }

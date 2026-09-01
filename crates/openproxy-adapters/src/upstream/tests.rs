@@ -1164,3 +1164,145 @@ async fn headers_timeout_fires_on_silent_http_server() {
          request hung (the 'keep-alive' bug)"
     );
 }
+
+// ----------
+// Reusable mock helpers
+//
+// These live at the end of `tests.rs` so they're compiled only with
+// the test harness (the file is `cfg(test)` already). Other unit
+// tests in the crate (e.g. `adapters::antigravity::count_tokens`)
+// import them via `crate::upstream::tests_helper` — re-exported from
+// `mod.rs` only when `cfg(test)` is active.
+// ----------
+
+#[cfg(feature = "upstream-hyper")]
+pub mod tests_helper {
+    //! Mock upstream helpers shared across unit tests.
+
+    use std::sync::Arc;
+
+    use hyper_util::rt::TokioIo;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::UpstreamClient;
+
+    /// A minimal HTTP/1.1 connector that handles a single connection
+    /// by connecting to a local TCP listener. The listener writes a
+    /// canned response (status + body) regardless of what the client
+    /// sent.
+    #[derive(Clone)]
+    pub struct SingleResponseConnector {
+        addr: std::net::SocketAddr,
+    }
+
+    impl tower_service::Service<http::Uri> for SingleResponseConnector {
+        type Response = TokioIo<tokio::net::TcpStream>;
+        type Error = Box<dyn std::error::Error + Send + Sync>;
+        type Future =
+            std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _uri: http::Uri) -> Self::Future {
+            let addr = self.addr;
+            Box::pin(async move {
+                let tcp = tokio::net::TcpStream::connect(addr).await?;
+                Ok(TokioIo::new(tcp))
+            })
+        }
+    }
+
+    /// Build an `UpstreamClient` that always responds with the given
+    /// `status` and `body`, regardless of the request shape. Use this
+    /// to exercise the upstream's *response-handling* paths without
+    /// needing a real upstream.
+    ///
+    /// The helper spawns a local TCP listener that accepts a single
+    /// connection, reads the request (drains it), and writes the
+    /// canned HTTP/1.1 response. Returns an `Arc<UpstreamClient>`
+    /// wired to that listener.
+    pub async fn build_mock_upstream_returning_status(
+        status: u16,
+        body: &str,
+    ) -> Arc<UpstreamClient> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body_bytes = body.as_bytes().to_vec();
+        let body_header = format!("content-length: {}\r\n\r\n", body_bytes.len());
+        let status_line = format!("HTTP/1.1 {status} OK\r\ncontent-type: text/plain\r\n");
+        tokio::spawn(async move {
+            if let Ok((mut tcp, _peer)) = listener.accept().await {
+                // Drain the request so the kernel doesn't RST us.
+                let mut buf = vec![0u8; 4096];
+                let _ = tcp.read(&mut buf).await;
+                let _ = tcp.write_all(status_line.as_bytes()).await;
+                let _ = tcp.write_all(body_header.as_bytes()).await;
+                let _ = tcp.write_all(&body_bytes).await;
+                let _ = tcp.flush().await;
+            }
+        });
+
+        let connector = SingleResponseConnector { addr };
+        UpstreamClient::for_test_with_connector(connector, None)
+    }
+
+    /// Build an `UpstreamClient` that routes based on the request URL
+    /// target (path). The handler receives the request target — the
+    /// part after the host, as parsed from the first line of the HTTP
+    /// request — and returns `(status, body)` to send back.
+    ///
+    /// Use this to exercise callers that hit multiple endpoints and
+    /// need different responses per endpoint (e.g.
+    /// `fetch_with_fallback`).
+    pub async fn build_mock_upstream_routing<F>(
+        handler: F,
+    ) -> Arc<UpstreamClient>
+    where
+        F: Fn(&str) -> (u16, String) + Send + Sync + 'static,
+    {
+        use std::sync::Arc;
+        let handler = Arc::new(handler);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut tcp, _peer)) = listener.accept().await {
+                    let handler = Arc::clone(&handler);
+                    tokio::spawn(async move {
+                        // Read enough to capture the request line.
+                        let mut buf = vec![0u8; 4096];
+                        let n = tcp.read(&mut buf).await.unwrap_or(0);
+                        let req_str =
+                            String::from_utf8_lossy(&buf[..n]).into_owned();
+                        // Extract request-target from "POST <target> HTTP/1.1"
+                        let target = req_str
+                            .lines()
+                            .next()
+                            .and_then(|l| l.split_whitespace().nth(1))
+                            .unwrap_or("")
+                            .to_string();
+                        let (status, body) = handler(&target);
+                        let status_line = format!(
+                            "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\n"
+                        );
+                        let body_header =
+                            format!("content-length: {}\r\n\r\n", body.len());
+                        let _ = tcp.write_all(status_line.as_bytes()).await;
+                        let _ = tcp.write_all(body_header.as_bytes()).await;
+                        let _ = tcp.write_all(body.as_bytes()).await;
+                        let _ = tcp.flush().await;
+                    });
+                }
+            }
+        });
+
+        let connector = SingleResponseConnector { addr };
+        UpstreamClient::for_test_with_connector(connector, None)
+    }
+}

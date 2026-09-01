@@ -369,6 +369,8 @@ pub fn map_upstream_status_error(
             model: model.to_string(),
             body: body_msg,
             is_proxy_rotated: false,
+            class: openproxy_types::UpstreamErrorClass::Generic,
+            is_hard_skip: false,
         },
     }
 }

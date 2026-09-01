@@ -12,6 +12,8 @@ pub mod routing;
 
 pub mod accounts;
 
+pub mod account_scanner;
+
 pub mod admin;
 pub mod analytics;
 pub mod audio;

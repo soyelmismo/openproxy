@@ -17,4 +17,5 @@ thiserror = { workspace = true }
 bytes = "1"
 chrono.workspace = true
 tokio = { workspace = true }
+tracing = { workspace = true }
 

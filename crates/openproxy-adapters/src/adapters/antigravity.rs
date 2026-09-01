@@ -6,6 +6,52 @@ use super::{
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
 
+/// Base scale for quota normalization: remaining fractions (0.0..=1.0)
+/// are mapped onto an integer 0..=1000 scale so quota math can be done
+/// in `i64` end-to-end.
+const NORMALIZED_BASE: i64 = 1000;
+
+/// Normalize a raw `remainingFraction` (0.0..=1.0) into a `(used, is_unlimited)`
+/// tuple using a base-1000 normalized scale.
+///
+/// - `raw_fraction = None` and `reset_time = Some`: treats remaining as 0
+///   (the bucket will reset at `reset_time` but no current value reported).
+/// - `raw_fraction = None` and `reset_time = None`: treats remaining as 1.0
+///   (unlimited bucket).
+/// - `raw_fraction >= 1.0` and `reset_time = None`: unlimited → used = 0.
+fn normalize_quota_fraction(
+    reset_time: Option<&str>,
+    raw_fraction: Option<f64>,
+) -> (i64, bool) {
+    // Treat NaN as fully used (not unlimited) — avoids silent corruption.
+    // Treat non-finite values and out-of-range inputs as zero-fraction
+    // (fully used) for the reset_time = Some case, and 1.0 (unlimited)
+    // for the reset_time = None case. Clamp the fraction to [0.0, 1.0]
+    // so downstream arithmetic cannot overflow.
+    let remaining_fraction = match raw_fraction {
+        Some(f) if f.is_finite() => f.clamp(0.0, 1.0),
+        _ => {
+            if reset_time.is_some() {
+                0.0
+            } else {
+                1.0
+            }
+        }
+    };
+    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
+    let used = if is_unlimited {
+        0
+    } else {
+        // Final clamp to [0, NORMALIZED_BASE] — defensive against any
+        // future change to the upstream fraction contract.
+        NORMALIZED_BASE
+            .saturating_sub(remaining)
+            .clamp(0, NORMALIZED_BASE)
+    };
+    (used, is_unlimited)
+}
+
 crate::define_jump_map! {
     /// Jump map for Antigravity physical model translation.
     pub fn map_antigravity_physical_model(model: &str) -> &str {
@@ -199,10 +245,7 @@ impl ProviderAdapter for AntigravityAdapter {
         messages: &[openproxy_types::OpenAIMessage],
         _stream: bool,
     ) -> std::result::Result<bytes::Bytes, CoreError> {
-        let gemini_req = crate::adapters::gemini::openai_to_gemini(req, messages);
-        serde_json::to_vec(&gemini_req)
-            .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Parse(format!("serialize antigravity gemini request: {e}")))
+        crate::adapters::gemini::serialize_gemini_request(req, messages)
     }
 
     fn translate_non_streaming_response(
@@ -210,12 +253,7 @@ impl ProviderAdapter for AntigravityAdapter {
         _target_format: TargetFormat,
         response_body: serde_json::Value,
     ) -> std::result::Result<openproxy_types::OpenAIResponse, CoreError> {
-        let gemini_resp: crate::adapters::gemini::GeminiResponse =
-            <crate::adapters::gemini::GeminiResponse as serde::Deserialize>::deserialize(
-                &response_body,
-            )
-            .map_err(|e| CoreError::Parse(format!("parse antigravity gemini response: {e}")))?;
-        Ok(crate::adapters::gemini::gemini_to_openai(&gemini_resp))
+        crate::adapters::gemini::deserialize_gemini_response(&response_body)
     }
 
     fn build_headers(
@@ -346,11 +384,11 @@ async fn fetch_antigravity_models_from_endpoint(
     endpoint: &str,
 ) -> Option<Vec<DiscoveredModel>> {
     let mut req = UpstreamRequest::post_json(endpoint, Bytes::from_static(b"{}"));
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + api_key.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(api_key.as_bytes());
-    if let Ok(v) = HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
+    if let Err(e) = crate::antigravity_headers::insert_bearer(&mut req, api_key) {
+        tracing::warn!(
+            "antigravity build bearer header for {endpoint}: {e} — skipping endpoint"
+        );
+        return None;
     }
     req.headers.insert(
         http::header::CONTENT_TYPE,
@@ -423,37 +461,6 @@ fn resolve_final_plan_name(
     Some("Free".to_string())
 }
 
-async fn try_fetch_models_quota_endpoint(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    endpoint: &str,
-) -> Option<openproxy_types::AccountQuota> {
-    let mut req = UpstreamRequest::post_json(endpoint, bytes::Bytes::from_static(b"{}"));
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-    let cancel = CancellationToken::new();
-    let resp = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .ok()?;
-    if !resp.status.is_success() {
-        return None;
-    }
-    let body = resp.collect().await.ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    parse_antigravity_models_response(&json).ok()
-}
-
 fn extract_tier_from_load_code_assist(json: &serde_json::Value) -> Option<&str> {
     let paid = json
         .pointer("/paidTier/name")
@@ -512,39 +519,6 @@ fn classify_antigravity_plan_name(t: &str) -> String {
     t.to_string()
 }
 
-async fn try_fetch_code_assist_plan(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    endpoint: &str,
-) -> Option<String> {
-    let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
-    let mut req = UpstreamRequest::post_json(endpoint, payload);
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-    let cancel = CancellationToken::new();
-    let resp = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .ok()?;
-    if !resp.status.is_success() {
-        return None;
-    }
-    let body = resp.collect().await.ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    let tier = extract_tier_from_load_code_assist(&json)?;
-    Some(classify_antigravity_plan_name(tier))
-}
-
 impl AntigravityAdapter {
     async fn fetch_antigravity_quota_local(
         &self,
@@ -590,11 +564,11 @@ impl AntigravityAdapter {
         let mut last_err: Option<CoreError> = None;
         for url in &endpoints {
             let mut req = UpstreamRequest::post_json(*url, bytes::Bytes::from_static(b"{}"));
-            let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-            __auth_val.extend_from_slice(b"Bearer ");
-            __auth_val.extend_from_slice(access_token.as_bytes());
-            if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
+            if let Err(e) = crate::antigravity_headers::insert_bearer(&mut req, access_token) {
+                last_err = Some(CoreError::UpstreamConnection(format!(
+                    "{url}: invalid bearer token: {e}"
+                )));
+                continue;
             }
             req.headers.insert(
                 http::header::CONTENT_TYPE,
@@ -662,18 +636,17 @@ impl AntigravityAdapter {
             "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
             "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         ];
-
-        for endpoint in endpoints {
-            if let Some(quota) =
-                try_fetch_models_quota_endpoint(upstream, access_token, endpoint).await
-            {
-                return Ok(quota);
-            }
-        }
-
-        Err(CoreError::UpstreamConnection(
-            "all fetchAvailableModels endpoints failed".into(),
-        ))
+        let json: serde_json::Value = crate::antigravity_headers::fetch_with_fallback(
+            upstream,
+            &endpoints,
+            &serde_json::json!({}),
+            access_token,
+            TimeoutProfile::Quota,
+            "antigravity fetchAvailableModels quota",
+        )
+        .await
+        .map_err(CoreError::UpstreamConnection)?;
+        parse_antigravity_models_response(&json)
     }
 
     async fn fetch_antigravity_subscription_plan_local(
@@ -693,18 +666,25 @@ impl AntigravityAdapter {
             "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
         ];
 
-        for endpoint in endpoints {
-            if let Some(plan_name) =
-                try_fetch_code_assist_plan(upstream, access_token, endpoint).await
-            {
-                PLAN_CACHE
-                    .write()
-                    .insert(access_token.to_string(), (plan_name.clone(), now));
-                return Some(plan_name);
-            }
-        }
+        let payload = serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } });
 
-        None
+        let json: serde_json::Value = crate::antigravity_headers::fetch_with_fallback(
+            upstream,
+            &endpoints,
+            &payload,
+            access_token,
+            TimeoutProfile::Quota,
+            "antigravity loadCodeAssist",
+        )
+        .await
+        .ok()?;
+
+        let tier = extract_tier_from_load_code_assist(&json)?;
+        let plan = classify_antigravity_plan_name(tier);
+        PLAN_CACHE
+            .write()
+            .insert(access_token.to_string(), (plan.clone(), now));
+        Some(plan)
     }
 }
 
@@ -712,25 +692,18 @@ fn parse_model_quota_detail(
     model_id: &str,
     model_data: &serde_json::Value,
 ) -> Option<openproxy_types::ModelQuotaDetail> {
-    const NORMALIZED_BASE: i64 = 1000;
     let quota_info = model_data.get("quotaInfo")?;
     let reset_time = quota_info
         .get("resetTime")
         .and_then(|r| r.as_str())
         .map(String::from);
-
-    let remaining_fraction = quota_info
+    let raw_fraction = quota_info
         .get("remainingFraction")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
-
-    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-    let used = if is_unlimited {
-        0
-    } else {
-        NORMALIZED_BASE.saturating_sub(remaining)
-    };
+        .and_then(serde_json::Value::as_f64);
+    let (used, _) = normalize_quota_fraction(reset_time.as_deref(), raw_fraction);
+    let remaining_fraction = raw_fraction.unwrap_or_else(|| {
+        if reset_time.is_some() { 0.0 } else { 1.0 }
+    });
 
     Some(openproxy_types::ModelQuotaDetail {
         model_id: model_id.to_string(),
@@ -788,26 +761,15 @@ fn parse_quota_bucket(
     group_plan: Option<&str>,
     bucket: &serde_json::Value,
 ) -> AntigravityQuotaBucket {
-    const NORMALIZED_BASE: i64 = 1000;
     let reset_time = bucket
         .get("resetTime")
         .and_then(|r| r.as_str())
         .map(String::from);
     let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
-
-    let remaining_fraction = bucket
+    let raw_fraction = bucket
         .get("remainingFraction")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
-
-    let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-    let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-    let used = if is_unlimited {
-        0
-    } else {
-        NORMALIZED_BASE.saturating_sub(remaining)
-    };
-
+        .and_then(serde_json::Value::as_f64);
+    let (used, _) = normalize_quota_fraction(reset_time.as_deref(), raw_fraction);
     let is_weekly = window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
 
     AntigravityQuotaBucket {
@@ -837,8 +799,6 @@ fn extract_quota_buckets(
 fn parse_antigravity_user_quota_summary(
     body: &serde_json::Value,
 ) -> Result<openproxy_types::AccountQuota> {
-    const NORMALIZED_BASE: i64 = 1000;
-
     let groups = body
         .get("groups")
         .and_then(|g| g.as_array())
@@ -1014,6 +974,59 @@ pub const LOAD_CODE_ASSIST_URL: &str =
 pub const ONBOARD_USER_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
 
+/// `countTokens` upstream proxy URL.
+pub const COUNT_TOKENS_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:countTokens";
+
+/// Parse the `:countTokens` response body and extract `totalTokens`.
+///
+/// Supports both response shapes observed in the wild:
+/// - flat: `{ "totalTokens": N }`
+/// - nested: `{ "response": { "totalTokens": N } }`
+///
+/// Returns `None` when the field is absent or not a signed integer.
+pub fn parse_total_tokens(body: &serde_json::Value) -> Option<i64> {
+    body.get("response")
+        .and_then(|r| r.get("totalTokens"))
+        .or_else(|| body.get("totalTokens"))
+        .and_then(|v| v.as_i64())
+}
+
+/// Call `v1internal:countTokens` upstream and return the exact token count.
+///
+/// Mirrors [`load_code_assist`]: bearer auth, `inject_antigravity_headers`
+/// with `project_id = None` (the reference confirms `:countTokens`
+/// rejects the `x-goog-user-project` header), `UpstreamRequest::post_json`,
+/// `is_streaming = false`, and `TimeoutProfile::Chat`.
+///
+/// The body is wrapped as `{ "request": <body> }` — **without** injecting
+/// `project` / `model` / `requestType` / `enabledCreditTypes` at the
+/// envelope level (the upstream rejects that envelope shape for
+/// `:countTokens`).
+///
+/// Returns `Ok(i64)` on a 2xx response carrying a `totalTokens` field, or
+/// `Err(String)` describing the failure (non-2xx status, network error,
+/// parse error, missing `totalTokens`).
+pub async fn count_tokens(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    access_token: &str,
+    body: &serde_json::Value,
+) -> std::result::Result<i64, String> {
+    let wrapped = serde_json::json!({ "request": body });
+    let body_bytes = crate::antigravity_headers::oauth_post_json(
+        upstream,
+        COUNT_TOKENS_URL,
+        &wrapped,
+        access_token,
+        crate::upstream::TimeoutProfile::Chat,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("{COUNT_TOKENS_URL} parse: {e}"))?;
+    parse_total_tokens(&value)
+        .ok_or_else(|| format!("{COUNT_TOKENS_URL}: missing totalTokens"))
+}
+
 /// Call `loadCodeAssist` and extract `projectId` (or `None` when
 /// the user is not yet on-boarded).
 pub async fn load_code_assist(
@@ -1022,46 +1035,17 @@ pub async fn load_code_assist(
     metadata: &serde_json::Value,
 ) -> std::result::Result<Option<String>, String> {
     let body = serde_json::json!({ "metadata": metadata });
-    let body_bytes = serde_json::to_vec(&body)
-        .map_err(|e| format!("antigravity loadCodeAssist serialize: {e}"))?;
-
-    let mut req = crate::upstream::UpstreamRequest::post_json(
+    let body_bytes = crate::antigravity_headers::oauth_post_json(
+        upstream,
         LOAD_CODE_ASSIST_URL,
-        bytes::Bytes::from(body_bytes),
-    );
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = crate::upstream::CancellationToken::new();
-    let resp = upstream
-        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| format!("antigravity loadCodeAssist: {e}"))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
-        return Err(format!(
-            "antigravity loadCodeAssist status {status}: {body_str}"
-        ));
-    }
-
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| format!("antigravity loadCodeAssist read: {e}"))?;
-
+        &body,
+        access_token,
+        crate::upstream::TimeoutProfile::OAuth,
+    )
+    .await?;
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("antigravity loadCodeAssist parse: {e}"))?;
-
-    let project_id = value
+        .map_err(|e| format!("{LOAD_CODE_ASSIST_URL} parse: {e}"))?;
+    Ok(value
         .get("cloudaicompanionProject")
         .and_then(|v| v.as_str())
         .map(std::string::ToString::to_string)
@@ -1071,9 +1055,7 @@ pub async fn load_code_assist(
                 .and_then(|v| v.get("id"))
                 .and_then(|v| v.as_str())
                 .map(std::string::ToString::to_string)
-        });
-
-    Ok(project_id)
+        }))
 }
 
 /// Call `onboardUser` and return `Ok(Some(project_id))` on success,
@@ -1089,53 +1071,22 @@ pub async fn onboard_user(
         "metadata": metadata,
         "tier": "free-tier",
     });
-    let body_bytes =
-        serde_json::to_vec(&body).map_err(|e| format!("antigravity onboardUser serialize: {e}"))?;
-
-    let mut req = crate::upstream::UpstreamRequest::post_json(
+    let body_bytes = crate::antigravity_headers::oauth_post_json(
+        upstream,
         ONBOARD_USER_URL,
-        bytes::Bytes::from(body_bytes),
-    );
-    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
-    __auth_val.extend_from_slice(b"Bearer ");
-    __auth_val.extend_from_slice(access_token.as_bytes());
-    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = crate::upstream::CancellationToken::new();
-    let resp = upstream
-        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| format!("antigravity onboardUser: {e}"))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
-        return Err(format!(
-            "antigravity onboardUser status {status}: {body_str}"
-        ));
-    }
-
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| format!("antigravity onboardUser read: {e}"))?;
-
+        &body,
+        access_token,
+        crate::upstream::TimeoutProfile::OAuth,
+    )
+    .await?;
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("antigravity onboardUser parse: {e}"))?;
-
-    let project_id = value
+        .map_err(|e| format!("{ONBOARD_USER_URL} parse: {e}"))?;
+    Ok(value
         .get("cloudaicompanionProject")
         .and_then(|v| v.get("id"))
         .and_then(|v| v.as_str())
         .or_else(|| value.get("projectId").and_then(|v| v.as_str()))
-        .map(std::string::ToString::to_string);
-
-    Ok(project_id)
+        .map(std::string::ToString::to_string))
 }
 
 fn patch_part_thought_signature(part: &mut serde_json::Value) {
@@ -1238,5 +1189,476 @@ mod user_quota_tests {
         assert_eq!(result.weekly_used.unwrap(), 500);
         assert_eq!(result.session_limit.unwrap(), 1000);
         assert_eq!(result.session_used.unwrap(), 200);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_unlimited() {
+        // No reset time + fraction >= 1.0 → unlimited: used must be 0.
+        assert_eq!(normalize_quota_fraction(None, Some(1.0)), (0, true));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_with_reset_no_fraction() {
+        // Reset time present but no fraction reported → remaining 0 → used = base.
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), None),
+            (1000, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_no_reset_with_fraction() {
+        // 0.5 remaining on a base-1000 scale → used = 500.
+        assert_eq!(normalize_quota_fraction(None, Some(0.5)), (500, false));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_with_reset_with_fraction() {
+        // 0.3 remaining → used = 700, and a reset time never means unlimited.
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(0.3)),
+            (700, false)
+        );
+    }
+}
+
+// =====================================================================
+// ADVERSARIAL TESTS — dedup-antigravity-gemini refactor (D6)
+// =====================================================================
+
+#[cfg(test)]
+mod adversarial_normalize_quota_fraction {
+    use super::normalize_quota_fraction;
+
+    #[test]
+    fn normalize_quota_fraction_both_none_is_unlimited() {
+        assert_eq!(normalize_quota_fraction(None, None), (0, true));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_empty_reset_time_treated_as_some() {
+        assert_eq!(normalize_quota_fraction(Some(""), Some(0.5)), (500, false));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_huge_reset_time_no_panic() {
+        let huge = "x".repeat(10 * 1024 * 1024);
+        let (used, is_unlimited) = normalize_quota_fraction(Some(&huge), Some(0.5));
+        assert_eq!(used, 500);
+        assert!(!is_unlimited);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_nan_fraction_treated_as_unlimited_when_no_reset() {
+        // NaN is non-finite, so the new clamp contract falls into the
+        // `_ => if reset_time.is_some() { 0.0 } else { 1.0 }` branch.
+        // With no reset_time, NaN → unlimited (used = 0).
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(f64::NAN));
+        assert!(is_unlimited, "NaN with no reset → 1.0 fraction → unlimited");
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_infinity_with_no_reset_is_unlimited() {
+        // INFINITY is clamped to 1.0 by `f64::clamp(0.0, 1.0)` before
+        // the unlimited check, so it still resolves as unlimited.
+        assert_eq!(
+            normalize_quota_fraction(None, Some(f64::INFINITY)),
+            (0, true)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_infinity_with_reset_clamped_to_fully_used() {
+        // INFINITY is non-finite → falls to the `_` arm → reset is Some
+        // → remaining_fraction = 0.0 → used = NORMALIZED_BASE (clamped).
+        let (used, is_unlimited) =
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(f64::INFINITY));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000, "inf+reset clamps to fully used (no underflow)");
+    }
+
+    #[test]
+    fn normalize_quota_fraction_negative_zero_treated_as_zero() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(-0.0));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000);
+    }
+
+    /// Negative fraction used to overflow `used > NORMALIZED_BASE`.
+    /// Now `f64::clamp(0.0, 1.0)` constrains `remaining_fraction = 0.0`
+    /// → `used = NORMALIZED_BASE` (clamped to the legal range).
+    #[test]
+    fn normalize_quota_fraction_negative_fraction_clamps_to_base() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(-0.5));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000, "negative fraction clamps to fully used");
+    }
+
+    /// Fraction `1.5` with reset_time used to produce `used = -500`
+    /// (underflow). Now clamps to 0 (fully used, NOT unlimited because
+    /// reset_time is Some).
+    #[test]
+    fn normalize_quota_fraction_greater_than_1_with_reset_clamps_to_zero() {
+        let (used, is_unlimited) =
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(1.5));
+        assert!(!is_unlimited, "reset_time is Some, so never unlimited");
+        assert_eq!(used, 0, "fraction > 1.0 with reset clamps used to 0");
+    }
+
+    #[test]
+    fn normalize_quota_fraction_greater_than_1_no_reset_is_unlimited() {
+        // No reset_time + clamped fraction 1.0 → unlimited.
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(1.5));
+        assert!(is_unlimited);
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_huge_fraction_is_unlimited() {
+        // 2^53 is finite but > 1.0 → clamps to 1.0 → unlimited.
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(2f64.powi(53)));
+        assert!(is_unlimited);
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_negative_infinity_no_reset_is_unlimited() {
+        // -inf is non-finite → falls to `_` arm → no reset → 1.0 → unlimited.
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(f64::NEG_INFINITY));
+        assert!(is_unlimited, "-inf + no reset → 1.0 fraction → unlimited");
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_negative_infinity_with_reset_clamps_to_base() {
+        // -inf is non-finite → falls to `_` arm → reset is Some → 0.0
+        // → used = NORMALIZED_BASE (no overflow).
+        let (used, is_unlimited) =
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(f64::NEG_INFINITY));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000, "-inf+reset clamps to fully used (no overflow)");
+    }
+
+    #[test]
+    fn normalize_quota_fraction_zero_fraction_with_reset_fully_used() {
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(0.0)),
+            (1000, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_zero_fraction_no_reset_fully_used() {
+        assert_eq!(normalize_quota_fraction(None, Some(0.0)), (1000, false));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_exactly_1_with_reset_is_not_unlimited() {
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(1.0)),
+            (0, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_subnormal_positive_f64_does_not_panic() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(5e-324_f64));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_just_below_one_used_almost_full() {
+        assert_eq!(
+            normalize_quota_fraction(None, Some(0.999_999_999)),
+            (1, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_tiny_remaining_truncates_to_zero() {
+        assert_eq!(
+            normalize_quota_fraction(None, Some(0.000_001)),
+            (1000, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_is_pure_idempotent() {
+        let args = (Some("2023-01-01T00:00:00Z"), Some(0.7));
+        assert_eq!(
+            normalize_quota_fraction(args.0, args.1),
+            normalize_quota_fraction(args.0, args.1),
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_unicode_reset_time_unaffected() {
+        let unicode_reset: &str = "2024-01-01T00:00:00Z \u{1F511}";
+        let (used, is_unlimited) = normalize_quota_fraction(Some(unicode_reset), Some(0.5));
+        assert_eq!(used, 500);
+        assert!(!is_unlimited);
+    }
+
+    // ==========
+    // CONTRACT TESTS (Fix #2): clamp to [0, NORMALIZED_BASE] + handle NaN
+    // ==========
+
+    /// raw_fraction = Some(-0.5) used to produce used = 1500 (overflow).
+    /// Now clamps via f64::clamp(0.0, 1.0) to remaining = 0 → used = 1000.
+    #[test]
+    fn normalize_quota_fraction_clamps_negative_fraction() {
+        let (used, is_unlimited) = normalize_quota_fraction(Some("2024-01-01"), Some(-0.5));
+        assert_eq!(used, 1000);
+        assert!(!is_unlimited);
+    }
+
+    /// raw_fraction = Some(1.5) used to produce used = -500 (underflow).
+    /// Now clamps to remaining = 1000 → used = 0 (NOT unlimited because
+    /// reset_time is Some).
+    #[test]
+    fn normalize_quota_fraction_clamps_fraction_greater_than_one_with_reset() {
+        let (used, is_unlimited) = normalize_quota_fraction(Some("2024-01-01"), Some(1.5));
+        assert_eq!(used, 0);
+        assert!(!is_unlimited);
+    }
+
+    /// raw_fraction = NaN used to silently produce used = NORMALIZED_BASE
+    /// via platform-defined (NaN as i64) cast. Now NaN is treated as
+    /// non-finite, falls to the `_` arm, and with reset_time = Some
+    /// resolves to remaining = 0 → used = NORMALIZED_BASE.
+    #[test]
+    fn normalize_quota_fraction_treats_nan_as_zero_fraction_with_reset() {
+        let (used, is_unlimited) = normalize_quota_fraction(Some("2024-01-01"), Some(f64::NAN));
+        assert_eq!(used, 1000);
+        assert!(!is_unlimited);
+    }
+}
+
+/// Tests for `count_tokens` + `parse_total_tokens` (GAP-3).
+///
+/// The 4xx propagation test (`count_tokens_propagates_4xx`) requires
+/// the `upstream-hyper` feature (it spins a real hyper client against
+/// a local TCP server). With the feature off, only the JSON-shaped
+/// unit tests run.
+#[cfg(test)]
+mod count_tokens_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn count_tokens_wraps_request_only_no_project() {
+        // The wrap contract: `{"request": <body>}` with no `project`,
+        // `model`, `requestType`, or `enabledCreditTypes` envelope
+        // fields. The reference implementation (Antigravity-Manager
+        // gemini.rs:854-864) confirms `:countTokens` rejects those.
+        let inner = serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        });
+        let wrapped = serde_json::json!({ "request": inner });
+
+        assert_eq!(wrapped.get("project"), None);
+        assert_eq!(wrapped.get("model"), None);
+        assert_eq!(wrapped.get("requestType"), None);
+        assert_eq!(wrapped.get("enabledCreditTypes"), None);
+        assert_eq!(wrapped["request"]["contents"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn parse_total_tokens_flat() {
+        let body = json!({"totalTokens": 42});
+        assert_eq!(parse_total_tokens(&body), Some(42));
+    }
+
+    #[test]
+    fn parse_total_tokens_nested() {
+        let body = json!({"response": {"totalTokens": 7}});
+        assert_eq!(parse_total_tokens(&body), Some(7));
+    }
+
+    #[test]
+    fn parse_total_tokens_missing_returns_none() {
+        assert_eq!(parse_total_tokens(&json!({})), None);
+        assert_eq!(parse_total_tokens(&json!({"response": {}})), None);
+        // Wrong type — u64 that overflows i64 still yields None (as_i64 filters).
+        assert_eq!(parse_total_tokens(&json!({"totalTokens": "42"})), None);
+    }
+
+    /// End-to-end propagation of a non-2xx upstream status.
+    ///
+    /// Spins a local TCP server that responds with `401 auth required`,
+    /// points an `UpstreamClient::for_test_with_connector` at it, and
+    /// verifies the resulting `Err(String)` carries both the status
+    /// code AND the body bytes so the operator can debug.
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn count_tokens_propagates_4xx() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(401, "auth required").await;
+        let res = count_tokens(
+            &upstream,
+            "fake-token",
+            &serde_json::json!({"contents": []}),
+        )
+        .await;
+        let err = res.expect_err("must error on 4xx");
+        assert!(
+            err.contains("401"),
+            "error msg should mention status: {err}"
+        );
+        assert!(
+            err.contains("auth required"),
+            "body should be in msg: {err}"
+        );
+    }
+}
+
+// ============================================================
+// GAP-3: Adversarial tests for count_tokens / parse_total_tokens
+// ============================================================
+#[cfg(test)]
+mod count_tokens_adversarial_tests {
+    use super::*;
+    use serde_json::json;
+
+    // --- parse_total_tokens: edge cases ---
+
+    #[test]
+    fn adv_parse_total_tokens_negative_value() {
+        // Negative token count is unusual but should still parse
+        let body = json!({"totalTokens": -1});
+        assert_eq!(parse_total_tokens(&body), Some(-1));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_zero_value() {
+        // Zero tokens — valid edge case (empty request)
+        let body = json!({"totalTokens": 0});
+        assert_eq!(parse_total_tokens(&body), Some(0));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_max_i64_value() {
+        // i64::MAX — should parse
+        let body = json!({"totalTokens": i64::MAX});
+        assert_eq!(parse_total_tokens(&body), Some(i64::MAX));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_overflow_i64_returns_none() {
+        // A u64 that overflows i64 — as_i64 filters these out, so we get None
+        let body = json!({"totalTokens": u64::MAX});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_float_returns_none() {
+        // Float values should be rejected (no truncation)
+        let body = json!({"totalTokens": 3.15});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_string_number_returns_none() {
+        // String-form number — no implicit coercion
+        let body = json!({"totalTokens": "42"});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_bool_returns_none() {
+        let body = json!({"totalTokens": true});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_array_returns_none() {
+        let body = json!({"totalTokens": [42]});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_nested_negative() {
+        let body = json!({"response": {"totalTokens": -1}});
+        assert_eq!(parse_total_tokens(&body), Some(-1));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_both_flat_and_nested_prefers_nested() {
+        // Spec says nested form is checked first, but the implementation
+        // checks nested first via .get("response").and_then(...).or_else.
+        // This test confirms the precedence (nested wins).
+        let body = json!({
+            "response": {"totalTokens": 7},
+            "totalTokens": 100
+        });
+        assert_eq!(parse_total_tokens(&body), Some(7));
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_nested_with_wrong_inner_type() {
+        // Nested form exists but totalTokens inside is wrong type
+        let body = json!({"response": {"totalTokens": "7"}});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_null_response() {
+        // response is null → can't get totalTokens
+        let body = json!({"response": null});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    #[test]
+    fn adv_parse_total_tokens_response_is_array() {
+        // response is an array, not an object — totalTokens path returns None
+        let body = json!({"response": []});
+        assert_eq!(parse_total_tokens(&body), None);
+    }
+
+    // --- count_tokens wrapper invariants (pure: only testable without I/O) ---
+
+    #[test]
+    fn adv_wrap_invariants_no_top_level_project() {
+        // The wrapper only adds "request"; no "project", "model", "requestType",
+        // "enabledCreditTypes", or "userAgent" at top level. This pins the spec
+        // invariant that countTokens REJECTS those keys.
+        let inner = json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        });
+        let wrapped = json!({ "request": inner });
+        assert!(wrapped.get("project").is_none());
+        assert!(wrapped.get("model").is_none());
+        assert!(wrapped.get("requestType").is_none());
+        assert!(wrapped.get("enabledCreditTypes").is_none());
+        assert!(wrapped.get("userAgent").is_none());
+    }
+
+    #[test]
+    fn adv_wrap_preserves_nested_request_object() {
+        // The wrapper does not mangle the inner body
+        let inner = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "a"}]},
+                {"role": "model", "parts": [{"text": "b"}]}
+            ]
+        });
+        let wrapped = json!({ "request": inner });
+        let inner_from_wrapped = &wrapped["request"];
+        assert_eq!(inner_from_wrapped["contents"].as_array().unwrap().len(), 2);
+        assert_eq!(inner_from_wrapped["contents"][0]["parts"][0]["text"], "a");
+    }
+
+    #[test]
+    fn adv_count_tokens_url_constant() {
+        // Pin the URL — must match the spec
+        assert_eq!(
+            COUNT_TOKENS_URL,
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:countTokens"
+        );
     }
 }

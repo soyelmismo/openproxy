@@ -1,11 +1,13 @@
 use super::{
     AccountId, ApiError, AppState, CoreError, Deserialize, ProviderId, ProviderRefreshQuery,
+    Serialize,
 };
 use crate::extractors::DbReader;
 use axum::{
     Json,
     extract::{Path, Query, State},
 };
+use openproxy_core::account_scanner as core_account_scanner;
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::admin as core_admin;
 use openproxy_core::providers as core_providers;
@@ -20,6 +22,7 @@ pub struct AccountListQuery {
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/", axum::routing::get(list_accounts).post(create_account))
+        .route("/scan", axum::routing::post(scan_accounts))
         .route("/{id}", axum::routing::delete(delete_account))
         .route("/{id}/health", axum::routing::post(set_account_health))
         .route(
@@ -309,4 +312,123 @@ pub async fn apply_account_local_cli(
         "success": true,
         "path": token_file.to_string_lossy(),
     })))
+}
+
+// ==========
+// GAP-7: POST /admin/api/accounts/scan
+// (docs/specs/antigravity-gaps-p3.md §7)
+// ==========
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ScanQuery {
+    #[serde(default)]
+    pub auto_import: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScanResponse {
+    pub scanned: Vec<core_account_scanner::DiscoveredAccount>,
+    pub imported: Vec<ImportSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportSummary {
+    pub provider_id: String,
+    pub label: String,
+    pub account_id: AccountId,
+}
+
+/// `POST /admin/api/accounts/scan`
+///
+/// Descubre credenciales OAuth de CLIs locales (hoy: solo antigravity-cli) y,
+/// opcionalmente, las importa como accounts.
+///
+/// Body (todos los campos opcionales):
+/// * `sources:     Vec<String>` — reservado para follow-up multi-provider;
+///   hoy solo se escanea antigravity-cli.
+/// * `auto_import: bool`        — si true, crea accounts vía
+///   `services().accounts.create` y dispara
+///   `spawn_background_provider_refresh`.
+/// * `dry_run:     bool`        — si true (o `auto_import=false`), devuelve
+///   la lista de discoveries sin tocar la DB.
+///
+/// AGENTS §4.3: el scan offline corre en `spawn_blocking`; el writer guard
+/// de SQLite se libera antes de cualquier `.await`.
+pub async fn scan_accounts(
+    State(s): State<AppState>,
+    Json(q): Json<ScanQuery>,
+) -> Result<Json<ScanResponse>, ApiError> {
+    // 1. Scan offline (no DB lock tomado).
+    let discovered = tokio::task::spawn_blocking(core_account_scanner::scan_external_accounts)
+        .await
+        .map_err(|e| ApiError(CoreError::Internal(format!("scan join error: {e}"))))?;
+
+    // 2. dry_run / sin auto_import: devolver sin tocar DB.
+    if q.dry_run || !q.auto_import {
+        return Ok(Json(ScanResponse {
+            scanned: discovered,
+            imported: Vec::new(),
+        }));
+    }
+
+    // 3. auto_import: crear accounts vía el mismo path OAuth que
+    //    `resolve_or_create_oauth_account` (handlers/admin/oauth.rs).
+    let mut imported = Vec::with_capacity(discovered.len());
+    for entry in discovered {
+        let id = s
+            .services()
+            .accounts
+            .create(
+                s.master_key().as_ref(),
+                core_admin::CreateAccountInput {
+                    provider_id: entry.provider_id.clone(),
+                    api_key: None, // OAuth: el token va en store_oauth_tokens
+                    label: Some(entry.label.clone()),
+                    priority: Some(100),
+                    extra_config_json: None,
+                },
+            )?;
+
+        // Almacena los tokens OAuth leídos del archivo (espejo del path
+        // OAuth post-exchange). El writer guard se libera al salir del
+        // bloque (AGENTS §4.3: jamás retener locks a través de `.await`).
+        {
+            let w = s.db_pool().writer();
+            core_accounts::store_oauth_tokens(
+                &w,
+                id,
+                s.master_key().as_ref(),
+                core_accounts::StoreOAuthTokensParams {
+                    access_token: &entry.access_token,
+                    refresh_token: entry.refresh_token.as_deref(),
+                    token_type: "Bearer",
+                    expires_at: None,
+                    scope: None,
+                    provider_specific: None,
+                    email: entry.email.as_deref(),
+                },
+            )?;
+        }
+
+        // Refresca metadata/quota del provider en background — idéntico a
+        // `create_account` (accounts.rs:62).
+        super::providers::spawn_background_provider_refresh(
+            s.clone(),
+            entry.provider_id.clone(),
+            Some(id.0),
+        );
+
+        imported.push(ImportSummary {
+            provider_id: entry.provider_id,
+            label: entry.label,
+            account_id: id,
+        });
+    }
+
+    Ok(Json(ScanResponse {
+        scanned: Vec::new(),
+        imported,
+    }))
 }
