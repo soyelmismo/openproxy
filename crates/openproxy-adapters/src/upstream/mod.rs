@@ -56,6 +56,10 @@ mod response;
 mod tests;
 
 #[cfg(feature = "upstream-hyper")]
+#[cfg(test)]
+pub use tests::tests_helper;
+
+#[cfg(feature = "upstream-hyper")]
 pub use cancel::CancellationToken;
 #[cfg(feature = "upstream-hyper")]
 pub use client::{UpstreamClient, UpstreamRequest};

@@ -1014,6 +1014,87 @@ pub const LOAD_CODE_ASSIST_URL: &str =
 pub const ONBOARD_USER_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
 
+/// `countTokens` upstream proxy URL.
+pub const COUNT_TOKENS_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:countTokens";
+
+/// Parse the `:countTokens` response body and extract `totalTokens`.
+///
+/// Supports both response shapes observed in the wild:
+/// - flat: `{ "totalTokens": N }`
+/// - nested: `{ "response": { "totalTokens": N } }`
+///
+/// Returns `None` when the field is absent or not a signed integer.
+pub fn parse_total_tokens(body: &serde_json::Value) -> Option<i64> {
+    body.get("response")
+        .and_then(|r| r.get("totalTokens"))
+        .or_else(|| body.get("totalTokens"))
+        .and_then(|v| v.as_i64())
+}
+
+/// Call `v1internal:countTokens` upstream and return the exact token count.
+///
+/// Mirrors [`load_code_assist`]: bearer auth, `inject_antigravity_headers`
+/// with `project_id = None` (the reference confirms `:countTokens`
+/// rejects the `x-goog-user-project` header), `UpstreamRequest::post_json`,
+/// `is_streaming = false`, and `TimeoutProfile::Chat`.
+///
+/// The body is wrapped as `{ "request": <body> }` — **without** injecting
+/// `project` / `model` / `requestType` / `enabledCreditTypes` at the
+/// envelope level (the upstream rejects that envelope shape for
+/// `:countTokens`).
+///
+/// Returns `Ok(i64)` on a 2xx response carrying a `totalTokens` field, or
+/// `Err(String)` describing the failure (non-2xx status, network error,
+/// parse error, missing `totalTokens`).
+pub async fn count_tokens(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    access_token: &str,
+    body: &serde_json::Value,
+) -> std::result::Result<i64, String> {
+    let wrapped = serde_json::json!({ "request": body });
+    let body_bytes = serde_json::to_vec(&wrapped)
+        .map_err(|e| format!("antigravity countTokens serialize: {e}"))?;
+
+    let mut req = crate::upstream::UpstreamRequest::post_json(
+        COUNT_TOKENS_URL,
+        bytes::Bytes::from(body_bytes),
+    );
+    let mut __auth_val = bytes::BytesMut::with_capacity(7 + access_token.len());
+    __auth_val.extend_from_slice(b"Bearer ");
+    __auth_val.extend_from_slice(access_token.as_bytes());
+    if let Ok(v) = http::HeaderValue::from_maybe_shared(__auth_val.freeze()) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream
+        .call(req, crate::upstream::TimeoutProfile::Chat, cancel)
+        .await
+        .map_err(|e| format!("antigravity countTokens: {e}"))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).into_owned();
+        return Err(format!(
+            "antigravity countTokens status {status}: {body_str}"
+        ));
+    }
+
+    let body_bytes = resp
+        .collect()
+        .await
+        .map_err(|e| format!("antigravity countTokens read: {e}"))?;
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("antigravity countTokens parse: {e}"))?;
+
+    parse_total_tokens(&value)
+        .ok_or_else(|| "antigravity countTokens: missing totalTokens".to_string())
+}
+
 /// Call `loadCodeAssist` and extract `projectId` (or `None` when
 /// the user is not yet on-boarded).
 pub async fn load_code_assist(
@@ -1238,5 +1319,86 @@ mod user_quota_tests {
         assert_eq!(result.weekly_used.unwrap(), 500);
         assert_eq!(result.session_limit.unwrap(), 1000);
         assert_eq!(result.session_used.unwrap(), 200);
+    }
+}
+
+/// Tests for `count_tokens` + `parse_total_tokens` (GAP-3).
+///
+/// The 4xx propagation test (`count_tokens_propagates_4xx`) requires
+/// the `upstream-hyper` feature (it spins a real hyper client against
+/// a local TCP server). With the feature off, only the JSON-shaped
+/// unit tests run.
+#[cfg(test)]
+mod count_tokens_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn count_tokens_wraps_request_only_no_project() {
+        // The wrap contract: `{"request": <body>}` with no `project`,
+        // `model`, `requestType`, or `enabledCreditTypes` envelope
+        // fields. The reference implementation (Antigravity-Manager
+        // gemini.rs:854-864) confirms `:countTokens` rejects those.
+        let inner = serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        });
+        let wrapped = serde_json::json!({ "request": inner });
+
+        assert_eq!(wrapped.get("project"), None);
+        assert_eq!(wrapped.get("model"), None);
+        assert_eq!(wrapped.get("requestType"), None);
+        assert_eq!(wrapped.get("enabledCreditTypes"), None);
+        assert_eq!(wrapped["request"]["contents"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn parse_total_tokens_flat() {
+        let body = json!({"totalTokens": 42});
+        assert_eq!(parse_total_tokens(&body), Some(42));
+    }
+
+    #[test]
+    fn parse_total_tokens_nested() {
+        let body = json!({"response": {"totalTokens": 7}});
+        assert_eq!(parse_total_tokens(&body), Some(7));
+    }
+
+    #[test]
+    fn parse_total_tokens_missing_returns_none() {
+        assert_eq!(parse_total_tokens(&json!({})), None);
+        assert_eq!(parse_total_tokens(&json!({"response": {}})), None);
+        // Wrong type — u64 that overflows i64 still yields None (as_i64 filters).
+        assert_eq!(parse_total_tokens(&json!({"totalTokens": "42"})), None);
+    }
+
+    /// End-to-end propagation of a non-2xx upstream status.
+    ///
+    /// Spins a local TCP server that responds with `401 auth required`,
+    /// points an `UpstreamClient::for_test_with_connector` at it, and
+    /// verifies the resulting `Err(String)` carries both the status
+    /// code AND the body bytes so the operator can debug.
+    #[cfg(feature = "upstream-hyper")]
+    #[tokio::test]
+    async fn count_tokens_propagates_4xx() {
+        use crate::upstream::tests_helper as mock_helper;
+        use std::sync::Arc;
+
+        let upstream: Arc<crate::upstream::UpstreamClient> =
+            mock_helper::build_mock_upstream_returning_status(401, "auth required").await;
+        let res = count_tokens(
+            &upstream,
+            "fake-token",
+            &serde_json::json!({"contents": []}),
+        )
+        .await;
+        let err = res.expect_err("must error on 4xx");
+        assert!(
+            err.contains("401"),
+            "error msg should mention status: {err}"
+        );
+        assert!(
+            err.contains("auth required"),
+            "body should be in msg: {err}"
+        );
     }
 }
