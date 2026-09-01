@@ -368,7 +368,12 @@ async fn fetch_antigravity_models_from_endpoint(
     endpoint: &str,
 ) -> Option<Vec<DiscoveredModel>> {
     let mut req = UpstreamRequest::post_json(endpoint, Bytes::from_static(b"{}"));
-    crate::antigravity_headers::insert_bearer(&mut req, api_key);
+    if let Err(e) = crate::antigravity_headers::insert_bearer(&mut req, api_key) {
+        tracing::warn!(
+            "antigravity build bearer header for {endpoint}: {e} — skipping endpoint"
+        );
+        return None;
+    }
     req.headers.insert(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
@@ -543,7 +548,12 @@ impl AntigravityAdapter {
         let mut last_err: Option<CoreError> = None;
         for url in &endpoints {
             let mut req = UpstreamRequest::post_json(*url, bytes::Bytes::from_static(b"{}"));
-            crate::antigravity_headers::insert_bearer(&mut req, access_token);
+            if let Err(e) = crate::antigravity_headers::insert_bearer(&mut req, access_token) {
+                last_err = Some(CoreError::UpstreamConnection(format!(
+                    "{url}: invalid bearer token: {e}"
+                )));
+                continue;
+            }
             req.headers.insert(
                 http::header::CONTENT_TYPE,
                 http::HeaderValue::from_static("application/json"),
@@ -1193,6 +1203,175 @@ mod user_quota_tests {
             normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(0.3)),
             (700, false)
         );
+    }
+}
+
+// =====================================================================
+// ADVERSARIAL TESTS — dedup-antigravity-gemini refactor (D6)
+// =====================================================================
+
+#[cfg(test)]
+mod adversarial_normalize_quota_fraction {
+    use super::normalize_quota_fraction;
+
+    #[test]
+    fn normalize_quota_fraction_both_none_is_unlimited() {
+        assert_eq!(normalize_quota_fraction(None, None), (0, true));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_empty_reset_time_treated_as_some() {
+        assert_eq!(normalize_quota_fraction(Some(""), Some(0.5)), (500, false));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_huge_reset_time_no_panic() {
+        let huge = "x".repeat(10 * 1024 * 1024);
+        let (used, is_unlimited) = normalize_quota_fraction(Some(&huge), Some(0.5));
+        assert_eq!(used, 500);
+        assert!(!is_unlimited);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_nan_fraction_implementation_defined_cast() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(f64::NAN));
+        assert!(!is_unlimited, "NaN is never >= 1.0");
+        assert_eq!(used, 1000, "NaN->i64 cast saturates to 0 on the test platform");
+    }
+
+    #[test]
+    fn normalize_quota_fraction_infinity_with_no_reset_is_unlimited() {
+        assert_eq!(
+            normalize_quota_fraction(None, Some(f64::INFINITY)),
+            (0, true)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_infinity_with_reset_used_underflows() {
+        let (used, is_unlimited) =
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(f64::INFINITY));
+        assert!(!is_unlimited);
+        // (1000 * INF) as i64 = i64::MAX (saturated).
+        // 1000 - i64::MAX = i64::MIN + 1001 (no saturating_sub clamp
+        // because the arithmetic result is above i64::MIN).
+        assert_eq!(used, i64::MIN + 1001);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_negative_zero_treated_as_zero() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(-0.0));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000);
+    }
+
+    /// **BUG-FINDING TEST:** negative fraction causes `used` to
+    /// exceed `NORMALIZED_BASE`. With `raw_fraction = -0.5`,
+    /// `remaining = (1000 * -0.5) as i64 = -500`. Then
+    /// `used = base.saturating_sub(-500) = 1000 + 500 = 1500`.
+    /// This is a real semantic bug: the user-visible "used"
+    /// exceeds the total. Pin it for a future fix.
+    #[test]
+    fn normalize_quota_fraction_negative_fraction_used_overflows_base() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(-0.5));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1500, "BUG: used > base with negative fraction");
+    }
+
+    /// Fraction `1.5` with reset_time: `is_unlimited = false`,
+    /// `used = 1000 - 1500 = -500` (no saturating_sub clamp).
+    /// **BUG-FINDING TEST:** `used` is negative (used over the
+    /// base by 500). Pin the actual behavior.
+    #[test]
+    fn normalize_quota_fraction_greater_than_1_with_reset_used_negative() {
+        let (used, is_unlimited) =
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(1.5));
+        assert!(!is_unlimited);
+        assert_eq!(used, -500, "BUG: used can go negative with fraction > 1.0 + reset_time");
+    }
+
+    #[test]
+    fn normalize_quota_fraction_greater_than_1_no_reset_is_unlimited() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(1.5));
+        assert!(is_unlimited);
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_huge_fraction_is_unlimited() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(2f64.powi(53)));
+        assert!(is_unlimited, "2^53 > 1.0 -> is_unlimited");
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_negative_infinity_used_overflows_to_max() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(f64::NEG_INFINITY));
+        assert!(!is_unlimited, "-inf is NOT >= 1.0");
+        // 1000 * -inf as i64 = i64::MIN (saturated);
+        // base.sat_sub(MIN) = MAX.
+        assert_eq!(used, i64::MAX);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_zero_fraction_with_reset_fully_used() {
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(0.0)),
+            (1000, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_zero_fraction_no_reset_fully_used() {
+        assert_eq!(normalize_quota_fraction(None, Some(0.0)), (1000, false));
+    }
+
+    #[test]
+    fn normalize_quota_fraction_exactly_1_with_reset_is_not_unlimited() {
+        assert_eq!(
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(1.0)),
+            (0, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_subnormal_positive_f64_does_not_panic() {
+        let (used, is_unlimited) = normalize_quota_fraction(None, Some(5e-324_f64));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_just_below_one_used_almost_full() {
+        assert_eq!(
+            normalize_quota_fraction(None, Some(0.999_999_999)),
+            (1, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_tiny_remaining_truncates_to_zero() {
+        assert_eq!(
+            normalize_quota_fraction(None, Some(0.000_001)),
+            (1000, false)
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_is_pure_idempotent() {
+        let args = (Some("2023-01-01T00:00:00Z"), Some(0.7));
+        assert_eq!(
+            normalize_quota_fraction(args.0, args.1),
+            normalize_quota_fraction(args.0, args.1),
+        );
+    }
+
+    #[test]
+    fn normalize_quota_fraction_unicode_reset_time_unaffected() {
+        let unicode_reset: &str = "2024-01-01T00:00:00Z \u{1F511}";
+        let (used, is_unlimited) = normalize_quota_fraction(Some(unicode_reset), Some(0.5));
+        assert_eq!(used, 500);
+        assert!(!is_unlimited);
     }
 }
 
