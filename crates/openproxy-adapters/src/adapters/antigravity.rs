@@ -23,15 +23,32 @@ fn normalize_quota_fraction(
     reset_time: Option<&str>,
     raw_fraction: Option<f64>,
 ) -> (i64, bool) {
-    let remaining_fraction = raw_fraction.unwrap_or_else(|| {
-        if reset_time.is_some() { 0.0 } else { 1.0 }
-    });
+    const NORMALIZED_BASE: i64 = 1000;
+    // Treat NaN as fully used (not unlimited) — avoids silent corruption.
+    // Treat non-finite values and out-of-range inputs as zero-fraction
+    // (fully used) for the reset_time = Some case, and 1.0 (unlimited)
+    // for the reset_time = None case. Clamp the fraction to [0.0, 1.0]
+    // so downstream arithmetic cannot overflow.
+    let remaining_fraction = match raw_fraction {
+        Some(f) if f.is_finite() => f.clamp(0.0, 1.0),
+        _ => {
+            if reset_time.is_some() {
+                0.0
+            } else {
+                1.0
+            }
+        }
+    };
     let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
     let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
     let used = if is_unlimited {
         0
     } else {
-        NORMALIZED_BASE.saturating_sub(remaining)
+        // Final clamp to [0, NORMALIZED_BASE] — defensive against any
+        // future change to the upstream fraction contract.
+        NORMALIZED_BASE
+            .saturating_sub(remaining)
+            .clamp(0, NORMALIZED_BASE)
     };
     (used, is_unlimited)
 }
@@ -1233,14 +1250,19 @@ mod adversarial_normalize_quota_fraction {
     }
 
     #[test]
-    fn normalize_quota_fraction_nan_fraction_implementation_defined_cast() {
+    fn normalize_quota_fraction_nan_fraction_treated_as_unlimited_when_no_reset() {
+        // NaN is non-finite, so the new clamp contract falls into the
+        // `_ => if reset_time.is_some() { 0.0 } else { 1.0 }` branch.
+        // With no reset_time, NaN → unlimited (used = 0).
         let (used, is_unlimited) = normalize_quota_fraction(None, Some(f64::NAN));
-        assert!(!is_unlimited, "NaN is never >= 1.0");
-        assert_eq!(used, 1000, "NaN->i64 cast saturates to 0 on the test platform");
+        assert!(is_unlimited, "NaN with no reset → 1.0 fraction → unlimited");
+        assert_eq!(used, 0);
     }
 
     #[test]
     fn normalize_quota_fraction_infinity_with_no_reset_is_unlimited() {
+        // INFINITY is clamped to 1.0 by `f64::clamp(0.0, 1.0)` before
+        // the unlimited check, so it still resolves as unlimited.
         assert_eq!(
             normalize_quota_fraction(None, Some(f64::INFINITY)),
             (0, true)
@@ -1248,14 +1270,13 @@ mod adversarial_normalize_quota_fraction {
     }
 
     #[test]
-    fn normalize_quota_fraction_infinity_with_reset_used_underflows() {
+    fn normalize_quota_fraction_infinity_with_reset_clamped_to_fully_used() {
+        // INFINITY is non-finite → falls to the `_` arm → reset is Some
+        // → remaining_fraction = 0.0 → used = NORMALIZED_BASE (clamped).
         let (used, is_unlimited) =
             normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(f64::INFINITY));
         assert!(!is_unlimited);
-        // (1000 * INF) as i64 = i64::MAX (saturated).
-        // 1000 - i64::MAX = i64::MIN + 1001 (no saturating_sub clamp
-        // because the arithmetic result is above i64::MIN).
-        assert_eq!(used, i64::MIN + 1001);
+        assert_eq!(used, 1000, "inf+reset clamps to fully used (no underflow)");
     }
 
     #[test]
@@ -1265,33 +1286,30 @@ mod adversarial_normalize_quota_fraction {
         assert_eq!(used, 1000);
     }
 
-    /// **BUG-FINDING TEST:** negative fraction causes `used` to
-    /// exceed `NORMALIZED_BASE`. With `raw_fraction = -0.5`,
-    /// `remaining = (1000 * -0.5) as i64 = -500`. Then
-    /// `used = base.saturating_sub(-500) = 1000 + 500 = 1500`.
-    /// This is a real semantic bug: the user-visible "used"
-    /// exceeds the total. Pin it for a future fix.
+    /// Negative fraction used to overflow `used > NORMALIZED_BASE`.
+    /// Now `f64::clamp(0.0, 1.0)` constrains `remaining_fraction = 0.0`
+    /// → `used = NORMALIZED_BASE` (clamped to the legal range).
     #[test]
-    fn normalize_quota_fraction_negative_fraction_used_overflows_base() {
+    fn normalize_quota_fraction_negative_fraction_clamps_to_base() {
         let (used, is_unlimited) = normalize_quota_fraction(None, Some(-0.5));
         assert!(!is_unlimited);
-        assert_eq!(used, 1500, "BUG: used > base with negative fraction");
+        assert_eq!(used, 1000, "negative fraction clamps to fully used");
     }
 
-    /// Fraction `1.5` with reset_time: `is_unlimited = false`,
-    /// `used = 1000 - 1500 = -500` (no saturating_sub clamp).
-    /// **BUG-FINDING TEST:** `used` is negative (used over the
-    /// base by 500). Pin the actual behavior.
+    /// Fraction `1.5` with reset_time used to produce `used = -500`
+    /// (underflow). Now clamps to 0 (fully used, NOT unlimited because
+    /// reset_time is Some).
     #[test]
-    fn normalize_quota_fraction_greater_than_1_with_reset_used_negative() {
+    fn normalize_quota_fraction_greater_than_1_with_reset_clamps_to_zero() {
         let (used, is_unlimited) =
             normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(1.5));
-        assert!(!is_unlimited);
-        assert_eq!(used, -500, "BUG: used can go negative with fraction > 1.0 + reset_time");
+        assert!(!is_unlimited, "reset_time is Some, so never unlimited");
+        assert_eq!(used, 0, "fraction > 1.0 with reset clamps used to 0");
     }
 
     #[test]
     fn normalize_quota_fraction_greater_than_1_no_reset_is_unlimited() {
+        // No reset_time + clamped fraction 1.0 → unlimited.
         let (used, is_unlimited) = normalize_quota_fraction(None, Some(1.5));
         assert!(is_unlimited);
         assert_eq!(used, 0);
@@ -1299,18 +1317,28 @@ mod adversarial_normalize_quota_fraction {
 
     #[test]
     fn normalize_quota_fraction_huge_fraction_is_unlimited() {
+        // 2^53 is finite but > 1.0 → clamps to 1.0 → unlimited.
         let (used, is_unlimited) = normalize_quota_fraction(None, Some(2f64.powi(53)));
-        assert!(is_unlimited, "2^53 > 1.0 -> is_unlimited");
+        assert!(is_unlimited);
         assert_eq!(used, 0);
     }
 
     #[test]
-    fn normalize_quota_fraction_negative_infinity_used_overflows_to_max() {
+    fn normalize_quota_fraction_negative_infinity_no_reset_is_unlimited() {
+        // -inf is non-finite → falls to `_` arm → no reset → 1.0 → unlimited.
         let (used, is_unlimited) = normalize_quota_fraction(None, Some(f64::NEG_INFINITY));
-        assert!(!is_unlimited, "-inf is NOT >= 1.0");
-        // 1000 * -inf as i64 = i64::MIN (saturated);
-        // base.sat_sub(MIN) = MAX.
-        assert_eq!(used, i64::MAX);
+        assert!(is_unlimited, "-inf + no reset → 1.0 fraction → unlimited");
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn normalize_quota_fraction_negative_infinity_with_reset_clamps_to_base() {
+        // -inf is non-finite → falls to `_` arm → reset is Some → 0.0
+        // → used = NORMALIZED_BASE (no overflow).
+        let (used, is_unlimited) =
+            normalize_quota_fraction(Some("2023-01-01T00:00:00Z"), Some(f64::NEG_INFINITY));
+        assert!(!is_unlimited);
+        assert_eq!(used, 1000, "-inf+reset clamps to fully used (no overflow)");
     }
 
     #[test]
@@ -1371,6 +1399,40 @@ mod adversarial_normalize_quota_fraction {
         let unicode_reset: &str = "2024-01-01T00:00:00Z \u{1F511}";
         let (used, is_unlimited) = normalize_quota_fraction(Some(unicode_reset), Some(0.5));
         assert_eq!(used, 500);
+        assert!(!is_unlimited);
+    }
+
+    // ==========
+    // CONTRACT TESTS (Fix #2): clamp to [0, NORMALIZED_BASE] + handle NaN
+    // ==========
+
+    /// raw_fraction = Some(-0.5) used to produce used = 1500 (overflow).
+    /// Now clamps via f64::clamp(0.0, 1.0) to remaining = 0 → used = 1000.
+    #[test]
+    fn normalize_quota_fraction_clamps_negative_fraction() {
+        let (used, is_unlimited) = normalize_quota_fraction(Some("2024-01-01"), Some(-0.5));
+        assert_eq!(used, 1000);
+        assert!(!is_unlimited);
+    }
+
+    /// raw_fraction = Some(1.5) used to produce used = -500 (underflow).
+    /// Now clamps to remaining = 1000 → used = 0 (NOT unlimited because
+    /// reset_time is Some).
+    #[test]
+    fn normalize_quota_fraction_clamps_fraction_greater_than_one_with_reset() {
+        let (used, is_unlimited) = normalize_quota_fraction(Some("2024-01-01"), Some(1.5));
+        assert_eq!(used, 0);
+        assert!(!is_unlimited);
+    }
+
+    /// raw_fraction = NaN used to silently produce used = NORMALIZED_BASE
+    /// via platform-defined (NaN as i64) cast. Now NaN is treated as
+    /// non-finite, falls to the `_` arm, and with reset_time = Some
+    /// resolves to remaining = 0 → used = NORMALIZED_BASE.
+    #[test]
+    fn normalize_quota_fraction_treats_nan_as_zero_fraction_with_reset() {
+        let (used, is_unlimited) = normalize_quota_fraction(Some("2024-01-01"), Some(f64::NAN));
+        assert_eq!(used, 1000);
         assert!(!is_unlimited);
     }
 }
