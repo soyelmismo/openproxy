@@ -359,7 +359,12 @@ fn is_tool_call_fulfilled(
 }
 
 fn inject_deepseek_reasoning_if_needed(parsed: &mut openproxy_types::OpenAIRequest) {
-    if parsed.model.as_bytes().windows(8).any(|w| w.eq_ignore_ascii_case(b"deepseek")) {
+    if parsed
+        .model
+        .as_bytes()
+        .windows(8)
+        .any(|w| w.eq_ignore_ascii_case(b"deepseek"))
+    {
         for msg in &mut parsed.messages {
             if msg.role == "assistant" && !msg.extra.contains_key("reasoning_content") {
                 msg.extra.insert(
