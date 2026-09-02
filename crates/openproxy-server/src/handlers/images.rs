@@ -213,6 +213,13 @@ async fn fetch_remote_image(
         .parse()
         .map_err(|e| ApiError(CoreError::Validation(format!("invalid image URL: {e}"))))?;
 
+    let scheme = uri.scheme_str();
+    if scheme != Some("http") && scheme != Some("https") {
+        return Err(ApiError(CoreError::Validation(
+            "only HTTP and HTTPS schemes are allowed".into(),
+        )));
+    }
+
     let host = uri
         .host()
         .ok_or_else(|| ApiError(CoreError::Validation("image URL must have a host".into())))?;
