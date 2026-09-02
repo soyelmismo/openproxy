@@ -1227,7 +1227,50 @@ pub async fn fetch_custom_proxy_source(
     url: &str,
     priority: i32,
 ) -> crate::error::Result<Vec<ScrapedProxy>> {
-    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest};
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest, is_private_or_reserved};
+
+    // SSRF Mitigation
+    let uri: axum::http::Uri = url.parse().map_err(|e| {
+        crate::error::CoreError::Internal(format!("Invalid URL for custom proxy source: {e}"))
+    })?;
+
+    match uri.scheme_str() {
+        Some("http") | Some("https") => {}
+        _ => {
+            return Err(crate::error::CoreError::Internal(
+                "Custom proxy source URL scheme must be http or https".to_string(),
+            ));
+        }
+    }
+
+    let host = uri.host().ok_or_else(|| {
+        crate::error::CoreError::Internal("Custom proxy source URL missing host".to_string())
+    })?;
+
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if is_private_or_reserved(&ip) {
+            return Err(crate::error::CoreError::Internal(
+                "SSRF Block: Custom proxy source host resolves to a private or reserved IP"
+                    .to_string(),
+            ));
+        }
+    } else {
+        if let Ok(mut addrs) = tokio::net::lookup_host((host, 0)).await {
+            while let Some(addr) = addrs.next() {
+                if is_private_or_reserved(&addr.ip()) {
+                    return Err(crate::error::CoreError::Internal(
+                        "SSRF Block: Custom proxy source host resolves to a private or reserved IP"
+                            .to_string(),
+                    ));
+                }
+            }
+        } else {
+            return Err(crate::error::CoreError::Internal(
+                "Failed to resolve host for custom proxy source".to_string(),
+            ));
+        }
+    }
+
     let client = &*SHARED_PROXY_CLIENT;
     let req = UpstreamRequest::get(url);
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
