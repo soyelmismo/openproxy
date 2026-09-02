@@ -577,17 +577,17 @@ impl ResponseAccumulator {
                     })
                 })
                 .collect();
-            extra.insert("tool_calls".to_string(), Value::Array(tool_calls_value));
+            extra.insert(String::from("tool_calls"), Value::Array(tool_calls_value));
         }
         if self.truncated {
-            extra.insert("truncated".to_string(), Value::Bool(true));
+            extra.insert(String::from("truncated"), Value::Bool(true));
         }
         if self.partial {
-            extra.insert("partial".to_string(), Value::Bool(true));
+            extra.insert(String::from("partial"), Value::Bool(true));
         }
         if !self.raw_response_body.is_empty() {
             extra.insert(
-                "raw_response_body".to_string(),
+                String::from("raw_response_body"),
                 Value::String(String::from_utf8_lossy(&self.raw_response_body).into_owned()),
             );
         }
@@ -596,13 +596,16 @@ impl ResponseAccumulator {
 
     fn build_finish_message(&self) -> Map<String, Value> {
         let mut message = Map::new();
-        message.insert("role".to_string(), Value::String("assistant".to_string()));
+        message.insert(
+            String::from("role"),
+            Value::String(String::from("assistant")),
+        );
         let content_val = if self.content.is_empty() {
             Value::Null
         } else {
             Value::String(String::from_utf8_lossy(&self.content).into_owned())
         };
-        message.insert("content".to_string(), content_val);
+        message.insert(String::from("content"), content_val);
         for (k, v) in self.build_finish_extra() {
             message.insert(k, v);
         }
@@ -611,13 +614,13 @@ impl ResponseAccumulator {
 
     fn build_finish_choice(&self) -> Map<String, Value> {
         let mut choice = Map::new();
-        choice.insert("index".to_string(), Value::Number(0u64.into()));
+        choice.insert(String::from("index"), Value::Number(0u64.into()));
         choice.insert(
-            "message".to_string(),
+            String::from("message"),
             Value::Object(self.build_finish_message()),
         );
         choice.insert(
-            "finish_reason".to_string(),
+            String::from("finish_reason"),
             self.stop_reason
                 .as_ref()
                 .map_or(Value::Null, |s| Value::String(s.to_owned())),
@@ -631,20 +634,20 @@ impl ResponseAccumulator {
     /// (the `#[serde(flatten)]` catch-all on `OpenAIMessage`).
     pub fn finish(&self, chunk_id: &str, created: u64, model: &str) -> Value {
         let mut response = Map::new();
-        response.insert("id".to_string(), Value::String(chunk_id.to_string()));
+        response.insert(String::from("id"), Value::String(String::from(chunk_id)));
         response.insert(
-            "object".to_string(),
-            Value::String("chat.completion".to_string()),
+            String::from("object"),
+            Value::String(String::from("chat.completion")),
         );
-        response.insert("created".to_string(), Value::Number(created.into()));
-        response.insert("model".to_string(), Value::String(model.to_string()));
+        response.insert(String::from("created"), Value::Number(created.into()));
+        response.insert(String::from("model"), Value::String(String::from(model)));
         response.insert(
-            "choices".to_string(),
+            String::from("choices"),
             Value::Array(vec![Value::Object(self.build_finish_choice())]),
         );
         if let Some(usage) = &self.usage {
             response.insert(
-                "usage".to_string(),
+                String::from("usage"),
                 json!({
                     "prompt_tokens": usage.prompt_tokens,
                     "completion_tokens": usage.completion_tokens,
