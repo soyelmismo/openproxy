@@ -177,6 +177,15 @@ pub async fn update_proxy_test_url(
         .parse()
         .map_err(|_| ApiError(CoreError::Validation("invalid URL format".into())))?;
 
+    match parsed_url.scheme_str() {
+        Some("http" | "https") => {}
+        _ => {
+            return Err(ApiError(CoreError::Validation(
+                "URL scheme must be http or https".into(),
+            )));
+        }
+    }
+
     let host = parsed_url
         .host()
         .ok_or_else(|| ApiError(CoreError::Validation("URL must contain a host".into())))?;
