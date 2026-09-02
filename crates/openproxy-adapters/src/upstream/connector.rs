@@ -889,7 +889,7 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     let scheme = uri
         .scheme_str()
         .ok_or_else(|| "Missing proxy scheme".to_string())?
-        .to_lowercase();
+        .to_string();
     let host = uri
         .host()
         .ok_or_else(|| "Missing proxy host".to_string())?
@@ -1085,11 +1085,15 @@ async fn run_proxy_tunnel(
     dest_host: &str,
     dest_port: u16,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
-    match proxy.scheme.as_str() {
-        "socks5" => socks5_tunnel(stream, dest_host, dest_port).await,
-        "socks4" => socks4_tunnel(stream, dest_host, dest_port).await,
-        "http" | "https" => http_connect_tunnel(stream, proxy, dest_host, dest_port).await,
-        _ => Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into()),
+    let scheme = proxy.scheme.as_str();
+    if scheme.eq_ignore_ascii_case("socks5") {
+        socks5_tunnel(stream, dest_host, dest_port).await
+    } else if scheme.eq_ignore_ascii_case("socks4") {
+        socks4_tunnel(stream, dest_host, dest_port).await
+    } else if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+        http_connect_tunnel(stream, proxy, dest_host, dest_port).await
+    } else {
+        Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into())
     }
 }
 
