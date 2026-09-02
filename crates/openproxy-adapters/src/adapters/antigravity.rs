@@ -1101,10 +1101,15 @@ fn patch_part_thought_signature(part: &mut serde_json::Value) {
 }
 
 fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &str) {
-    let model_lc = model.to_lowercase();
-    let is_flash_or_agent = (model_lc.contains("gemini") && model_lc.contains("flash"))
-        || model_lc.contains("gemini-pro-agent")
-        || model_lc.contains("gemini-3-flash-agent");
+    let bytes = model.as_bytes();
+    let contains = |needle: &str| -> bool {
+        bytes
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    };
+    let is_flash_or_agent = (contains("gemini") && contains("flash"))
+        || contains("gemini-pro-agent")
+        || contains("gemini-3-flash-agent");
     if !is_flash_or_agent {
         return;
     }

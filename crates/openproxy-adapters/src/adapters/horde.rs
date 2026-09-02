@@ -487,8 +487,13 @@ impl HordeAdapter {
 
     /// Check if a model name refers to the Horde vision/interrogation synthetic model.
     pub fn is_vision_model(model_name: &str) -> bool {
-        let lower = model_name.to_lowercase();
-        lower == "horde/vision" || lower == "vision" || lower.ends_with("/vision")
+        if model_name.eq_ignore_ascii_case("horde/vision")
+            || model_name.eq_ignore_ascii_case("vision")
+        {
+            return true;
+        }
+        let bytes = model_name.as_bytes();
+        bytes.len() >= 7 && bytes[bytes.len() - 7..].eq_ignore_ascii_case(b"/vision")
     }
 
     /// Build a Horde `/interrogate/async` JSON payload.
