@@ -573,12 +573,6 @@ fn build_chat_format_test_payload(
     }
 }
 
-fn extract_antigravity_project(raw_account: Option<&core_accounts::Account>) -> Option<String> {
-    let raw = raw_account.as_ref()?.oauth_provider_specific.as_deref()?;
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    openproxy_pipeline::credentials::antigravity_project_from_value(&value)
-}
-
 fn extract_kiro_meta(
     raw_account: Option<&core_accounts::Account>,
 ) -> (Option<String>, Option<String>) {
@@ -603,12 +597,18 @@ fn build_custom_provider_meta(
     api_key: &str,
 ) -> Option<openproxy_types::context::CustomProviderMeta> {
     if provider_id == "antigravity" {
+        let antigravity_project = raw_account_opt
+            .and_then(|a| a.oauth_provider_specific.as_deref())
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|v| {
+                openproxy_pipeline::credentials::antigravity_project_from_value(&v)
+            });
         Some(openproxy_types::context::CustomProviderMeta {
             access_token: api_key.to_string(),
             maybe_refresh: None,
             kiro_region: None,
             kiro_profile_arn: None,
-            antigravity_project: extract_antigravity_project(raw_account_opt),
+            antigravity_project,
             antigravity_metadata: None,
             codex_workspace_id: None,
         })

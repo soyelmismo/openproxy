@@ -328,11 +328,15 @@ mod tests {
 }
 
     #[test]
-    fn antigravity_project_reads_camel_case_account_meta() {
-        // Pre-migration camelCase data is now handled by the DB-backed
-        // generic reader (AntigravityMeta's #[serde(alias = "projectId")])
-        // plus migration 000065. The in-memory helper is only invoked on
-        // already-decrypted account rows post-migration (snake_case).
+    fn antigravity_project_skips_camel_case_post_migration() {
+        // Post-migration (snake_case is canonical), the in-memory helper
+        // only inspects `project_id`. Legacy camelCase `projectId` rows
+        // are normalized by DB migration 000065 and the DB-backed reader
+        // (AntigravityMeta's #[serde(alias = "projectId")]) before this
+        // helper is ever called with decrypted JSON. So a still-camelCase
+        // payload reaching the in-memory helper means a row was not
+        // normalized, and we must return `None` rather than silently
+        // shadowing the canonical key.
         let account = raw_with_meta(Some(r#"{"projectId":"proj-abc"}"#));
         assert_eq!(
             project_id_for(account.oauth_provider_specific.as_deref())

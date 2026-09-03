@@ -5,10 +5,12 @@
 //!
 //! After a successful token exchange the provider calls
 //! `loadCodeAssist` (then `onboardUser` if the user has no
-//! `projectId` yet) to bootstrap a Cloud Code project and stores
-//! the resulting `projectId` in `accounts.oauth_provider_specific` as
-//! JSON: `{"projectId": "..."}`. The chat executor reads this
-//! field and embeds it in the upstream request envelope.
+//! `project_id` yet) to bootstrap a Cloud Code project and stores
+//! the resulting `project_id` in `accounts.oauth_provider_specific` as
+//! JSON: `{"project_id": "..."}` (canonical snake_case wire format).
+//! Legacy camelCase `projectId` payloads are normalized by DB
+//! migration 000065. The chat executor reads this field and embeds
+//! it in the upstream request envelope.
 //!
 //! # Module layout
 //!
