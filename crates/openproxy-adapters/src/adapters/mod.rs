@@ -386,9 +386,19 @@ pub trait ProviderAdapter: Send + Sync {
     }
 }
 
-/// Macro declarativa para delegar llamadas de métodos a través de todas las variantes de `ProviderAdapterEnum`.
-#[macro_export]
-
+/// Defines [`ProviderAdapterEnum`] and every piece of boilerplate that used
+/// to live in a hand-maintained sibling macro: the enum variants,
+/// `builtin_adapters()`, the `from_provider_id` jump-table, the per-method
+/// inline dispatch `match`, and the `pub use` re-exports for every builtin.
+/// The `builtins { ... }` list is the single source of truth — adding a
+/// provider is one line here.
+///
+/// Entry syntax:
+/// - builtins: `"provider-id" => Variant(module, AdapterType)`
+/// - custom:   `Variant(module, AdapterType)` (no `pub use` emitted)
+///
+/// `module` is one or more `::`-separated identifiers (e.g. `nvidia_nim` or
+/// `some::nested`); `AdapterType` is the struct name inside it.
 #[macro_export]
 macro_rules! define_provider_adapter {
     (
@@ -428,10 +438,8 @@ macro_rules! define_provider_adapter {
         }
 
         // Per-method inline dispatch: each match is generated from the same
-        // `builtins { ... }` + `custom { ... }` lists that define the enum,
-        // so exhaustiveness is guaranteed by the compiler — no separate
-        // hand-maintained dispatch table to keep in sync.
-
+        // `builtins` + `custom` lists that define the enum, so exhaustiveness
+        // is guaranteed by the compiler — no hand-maintained dispatch table.
         impl ProviderAdapterEnum {
             pub fn id(&self) -> &openproxy_types::ProviderId {
                 match self {
@@ -646,7 +654,127 @@ macro_rules! define_provider_adapter {
                 }
             }
         }
-    }
+
+        impl $crate::adapters::ProviderAdapter for ProviderAdapterEnum {
+            fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
+                self.config()
+            }
+            fn build_chat_url(&self, target_format: openproxy_types::TargetFormat, model: &openproxy_types::ModelId) -> String {
+                self.build_chat_url(target_format, model)
+            }
+            fn build_chat_url_for_account(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                model: &openproxy_types::ModelId,
+                account_label: &str,
+            ) -> String {
+                self.build_chat_url_for_account(target_format, model, account_label)
+            }
+            fn build_transcription_url(&self) -> String {
+                self.build_transcription_url()
+            }
+            fn build_embeddings_url(&self) -> String {
+                self.build_embeddings_url()
+            }
+            fn format_embedding_request(
+                &self,
+                req: &openproxy_types::embeddings::EmbeddingRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.format_embedding_request(req, upstream_model)
+            }
+            fn build_image_url(&self) -> String {
+                self.build_image_url()
+            }
+            fn build_image_edits_url(&self) -> String {
+                self.build_image_edits_url()
+            }
+            fn build_image_variations_url(&self) -> String {
+                self.build_image_variations_url()
+            }
+            fn format_image_request(
+                &self,
+                req: &openproxy_types::images::ImageGenerationRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.format_image_request(req, upstream_model)
+            }
+            fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+                self.build_auth_header(api_key)
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                target_format: openproxy_types::TargetFormat,
+                model: &openproxy_types::ModelId,
+            ) -> Vec<(String, String)> {
+                self.build_headers(api_key, target_format, model)
+            }
+            fn models_url(&self) -> Option<String> {
+                self.models_url()
+            }
+            fn models_url_for_account(&self, account_label: &str) -> Option<String> {
+                self.models_url_for_account(account_label)
+            }
+            fn fetch_models(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+            ) -> impl std::future::Future<Output = openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>>> + Send {
+                self.fetch_models(upstream_client, api_key)
+            }
+            fn fetch_models_for_account(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                account_label: &str,
+            ) -> impl std::future::Future<Output = openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>>> + Send {
+                self.fetch_models_for_account(upstream_client, api_key, account_label)
+            }
+            fn fetch_quota(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                access_token: Option<&str>,
+                provider_specific: Option<&str>,
+            ) -> impl std::future::Future<Output = Option<openproxy_types::Result<openproxy_types::AccountQuota>>> + Send {
+                self.fetch_quota(upstream_client, api_key, access_token, provider_specific)
+            }
+            fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
+                self.normalize_openai_request(view)
+            }
+            fn wrap_request_body(
+                &self,
+                body: bytes::Bytes,
+                target_format: openproxy_types::TargetFormat,
+                model: &openproxy_types::ModelId,
+                resolved_target: &openproxy_types::context::ResolvedTarget,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.wrap_request_body(body, target_format, model, resolved_target)
+            }
+            fn format_request(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                req: &openproxy_types::OpenAIRequest,
+                model: &openproxy_types::ModelId,
+                messages: &[openproxy_types::OpenAIMessage],
+                stream: bool,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.format_request(target_format, req, model, messages, stream)
+            }
+            fn is_anonymous_fallback(&self) -> bool {
+                self.is_anonymous_fallback()
+            }
+            fn translate_non_streaming_response(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                response_body: serde_json::Value,
+            ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
+                self.translate_non_streaming_response(target_format, response_body)
+            }
+        }
+    };
+}
 
 pub fn is_anonymous_fallback(provider_id: &str) -> bool {
     ProviderAdapterEnum::from_provider_id(provider_id)
@@ -1322,6 +1450,22 @@ mod tests {
         assert!(ids.contains(&"kiro"));
         assert!(ids.contains(&"vercel-gateway"));
         assert!(ids.contains(&"fx"));
+    }
+
+    /// After deduping `delegate_adapter_dispatch!` into inline `match` arms,
+    /// this test guarantees that every variant surfaced by `builtin_adapters()`
+    /// also round-trips through `from_provider_id()`. The dispatch `match`
+    /// itself is exhaustive by construction (the compiler enforces it), so
+    /// this is the runtime cross-check on the variant → id path.
+    #[test]
+    fn every_builtin_variant_resolves_from_provider_id() {
+        for adapter in builtin_adapters() {
+            let id = adapter.id().as_str();
+            assert!(
+                ProviderAdapterEnum::from_provider_id(id).is_some(),
+                "variant for `{id}` exists in builtin_adapters() but not in from_provider_id()"
+            );
+        }
     }
 
     // ---- Cloudflare Workers AI ---------------------------------------
