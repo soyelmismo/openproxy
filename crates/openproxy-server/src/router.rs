@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transport_compression_json_zstd() {
+    async fn test_transport_compression_json_gzip_fallback_or_bypass() {
         let state = make_state().await;
         let app = build_router(state);
 
@@ -374,7 +374,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/v1/models")
-                    .header("Accept-Encoding", "zstd")
+                    .header("Accept-Encoding", "gzip, zstd")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -387,7 +387,7 @@ mod tests {
                 .headers()
                 .get("content-encoding")
                 .and_then(|v| v.to_str().ok()),
-            Some("zstd")
+            Some("gzip")
         );
     }
 

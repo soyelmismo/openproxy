@@ -32,36 +32,15 @@
 //! sufficient for cost tracking and compression savings.
 
 use openproxy_types::message::OpenAIMessage;
-use std::sync::LazyLock;
-use tiktoken_rs::{CoreBPE, cl100k_base};
 
-/// Thread-safe singleton BPE encoder. Loaded once at first use.
-/// The cl100k_base vocab is ~50K tokens, embedded in the binary.
-static ENCODER: LazyLock<Option<CoreBPE>> = LazyLock::new(|| match cl100k_base() {
-    Ok(bpe) => {
-        tracing::info!("tiktoken cl100k_base BPE encoder initialized");
-        Some(bpe)
-    }
-    Err(e) => {
-        tracing::error!(
-            error = %e,
-            "failed to initialize tiktoken cl100k_base encoder; token estimation will fall back to char heuristic"
-        );
-        None
-    }
-});
-
-/// Estimate prompt tokens from a list of OpenAI messages using real BPE.
+/// Estimate prompt tokens from a list of OpenAI messages using a fast heuristic.
 ///
 /// Walks every message (system, user, assistant, tool), extracts text
 /// from both string content and array-of-parts content (Anthropic-style
-/// `[{type:"text",text:"..."}]`), and tokenizes with cl100k_base.
+/// `[{type:"text",text:"..."}]`), and estimates tokens.
 ///
 /// Includes a per-message overhead of 4 tokens (matching OpenAI's
 /// documented message framing overhead: `<|im_start|>role\n...<|im_end|>`).
-///
-/// If the BPE encoder failed to initialize (shouldn't happen in normal
-/// operation), falls back to the char-based heuristic.
 pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
     let mut total: u32 = 0;
     for msg in messages {
@@ -76,9 +55,7 @@ pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
     total
 }
 
-/// Estimate completion tokens from a text string using real BPE.
-///
-/// If the BPE encoder is unavailable, falls back to the heuristic.
+/// Estimate completion tokens from a text string.
 pub fn estimate_completion_tokens(text: &str) -> u32 {
     if text.is_empty() {
         return 0;
@@ -86,21 +63,9 @@ pub fn estimate_completion_tokens(text: &str) -> u32 {
     count_tokens(text)
 }
 
-/// Count tokens in a text string using cl100k_base BPE.
-///
-/// Falls back to a char-based heuristic (~4 chars/token) if the
-/// encoder is unavailable. The fallback is annotated in logs so
-/// the operator knows the count is approximate.
+/// Count tokens in a text string using a char-based heuristic (~4 chars/token).
 fn count_tokens(text: &str) -> u32 {
-    if let Some(ref bpe) = *ENCODER {
-        bpe.encode_with_special_tokens(text).len() as u32
-    } else {
-        // Fallback: ~4 chars per token (English), ~2 for CJK.
-        // This is the same heuristic as before, used only if BPE
-        // initialization failed (which shouldn't happen in normal
-        // operation — the vocab is embedded at compile time).
-        estimate_tokens_heuristic(text)
-    }
+    estimate_tokens_heuristic(text)
 }
 
 /// Extract text from an OpenAIMessage's content field, handling both

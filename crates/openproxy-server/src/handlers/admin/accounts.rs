@@ -236,8 +236,11 @@ pub(crate) fn resolve_refresh_account(
 }
 
 fn write_antigravity_token_file(payload_str: &str) -> Result<std::path::PathBuf, CoreError> {
-    let cli_dir = dirs::home_dir()
-        .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?;
+    let cli_dir = home
         .join(".gemini")
         .join("antigravity-cli");
 

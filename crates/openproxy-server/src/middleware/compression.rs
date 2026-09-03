@@ -1,6 +1,6 @@
 //! HTTP transport compression middleware.
 //!
-//! Provides automated gzip, zstd, and brotli compression for static dashboard
+//! Provides automated gzip compression for static dashboard
 //! assets (`/admin/dist/*`, styles, fonts) and JSON API endpoints (`/v1/models`,
 //! `/admin/api/*`).
 //!

@@ -90,10 +90,8 @@ libmimalloc-sys = { version = "0.1", default-features = false, features = ["exte
 # tests), but the retry helper needs it at build time.
 rusqlite = { workspace = true }
 ahash = "0.8.12"
-dirs = "6.0.0"
 tower-http = { workspace = true }
 thiserror.workspace = true
-arraydeque = "0.5.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
