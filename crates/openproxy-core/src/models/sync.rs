@@ -106,7 +106,11 @@ pub fn execute_sync_transaction(
                     max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
                     input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
                     output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                    model_type = COALESCE(models.model_type, excluded.model_type), \
+                    model_type = CASE \
+                        WHEN models.custom = 1 THEN COALESCE(models.model_type, excluded.model_type) \
+                        WHEN models.model_type IN ('audio', 'image') AND excluded.model_type = 'chat' THEN excluded.model_type \
+                        ELSE COALESCE(models.model_type, excluded.model_type) \
+                    END, \
                     family = COALESCE(excluded.family, family), \
                     capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
                     model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",

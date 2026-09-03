@@ -342,6 +342,7 @@ pub const CHAT_GUARD_KEYWORDS: &[&str] = &[
     "kimi",
     "glm-",
     "stepaudio",
+    "grok",
 ];
 
 pub const AUDIO_KEYWORDS: &[&str] = &[
@@ -370,6 +371,7 @@ pub const AUDIO_KEYWORDS: &[&str] = &[
     "sensevoice",
     "voxtral-mini-tts",
     "xai-tts",
+    "grok-stt",
     "-tts-",
     "_tts_",
     "/tts-",
@@ -455,6 +457,8 @@ fn check_chat_guard_model(lower: &str) -> Option<&'static str> {
     }
     if lower.contains("imagen-") || lower.contains("imagen/") || lower == "imagen" {
         Some("image")
+    } else if is_audio_model(lower) {
+        Some("audio")
     } else {
         Some("chat")
     }
@@ -488,6 +492,27 @@ fn infer_model_type_lower(lower: &str) -> &'static str {
         "image"
     } else {
         "chat"
+    }
+}
+
+pub fn resolve_effective_model_type<'a>(
+    model_type: &'a str,
+    custom: bool,
+    inferred_type: &'a str,
+) -> &'a str {
+    if custom {
+        if model_type.is_empty() {
+            inferred_type
+        } else {
+            model_type
+        }
+    } else if model_type.is_empty()
+        || (model_type == "chat" && inferred_type != "chat")
+        || (inferred_type == "chat" && (model_type == "audio" || model_type == "image"))
+    {
+        inferred_type
+    } else {
+        model_type
     }
 }
 
@@ -721,5 +746,20 @@ mod tests {
         assert_eq!(find_substring_match("contains-beta-here", TABLE), Some(2));
         assert_eq!(find_substring_match("contains-alpha-here", TABLE), Some(1));
         assert_eq!(find_substring_match("contains-none", TABLE), None);
+    }
+
+    #[test]
+    fn test_resolve_effective_model_type() {
+        assert_eq!(resolve_effective_model_type("audio", false, "chat"), "chat");
+        assert_eq!(resolve_effective_model_type("image", false, "chat"), "chat");
+        assert_eq!(resolve_effective_model_type("", false, "chat"), "chat");
+        assert_eq!(resolve_effective_model_type("chat", false, "embedding"), "embedding");
+        assert_eq!(resolve_effective_model_type("audio", true, "chat"), "audio");
+        assert_eq!(resolve_effective_model_type("audio", false, "audio"), "audio");
+
+        assert_eq!(infer_model_type("gemini-3.7-flash-low"), "chat");
+        assert_eq!(infer_model_type("gemini-2.5-flash-preview-tts"), "audio");
+        assert_eq!(infer_model_type("grok-4"), "chat");
+        assert_eq!(infer_model_type("grok-stt"), "audio");
     }
 }

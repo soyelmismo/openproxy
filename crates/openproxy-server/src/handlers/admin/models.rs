@@ -152,6 +152,17 @@ pub async fn list_models_admin(
     if let Some(p) = q.provider_id {
         list.retain(|m| m.provider_id.as_str() == p);
     }
+    for m in &mut list {
+        let inferred_type = openproxy_types::capabilities::infer_model_type(m.model_id.as_str());
+        let effective_type = openproxy_types::capabilities::resolve_effective_model_type(
+            &m.model_type,
+            m.custom,
+            inferred_type,
+        );
+        if m.model_type.as_ref() != effective_type {
+            m.model_type = effective_type.to_string().into_boxed_str();
+        }
+    }
     Ok(Json(list))
 }
 
@@ -251,7 +262,18 @@ fn test_error_result(row_id: i64, status: u16, err_msg: &str) -> TestResult {
 fn load_model_for_test(s: &AppState, model_row_id: i64) -> Result<core_models::Model, TestResult> {
     let r = s.db_pool().reader();
     match core_models::get_by_row_id(&r, ModelRowId(model_row_id)) {
-        Ok(Some(m)) => Ok(m),
+        Ok(Some(mut m)) => {
+            let inferred_type = openproxy_types::capabilities::infer_model_type(m.model_id.as_str());
+            let effective_type = openproxy_types::capabilities::resolve_effective_model_type(
+                &m.model_type,
+                m.custom,
+                inferred_type,
+            );
+            if m.model_type.as_ref() != effective_type {
+                m.model_type = effective_type.to_string().into_boxed_str();
+            }
+            Ok(m)
+        }
         Ok(None) => Err(test_error_result(
             model_row_id,
             404,
@@ -694,13 +716,18 @@ pub(crate) async fn run_test_for_model(
     let effective_target_format =
         resolve_effective_target_format(adapter.format(), model.target_format);
     let inferred_type = openproxy_types::capabilities::infer_model_type(model.model_id.as_str());
-    let is_audio = model.model_type.as_ref() == "audio" || inferred_type == "audio";
+    let effective_type = openproxy_types::capabilities::resolve_effective_model_type(
+        &model.model_type,
+        model.custom,
+        inferred_type,
+    );
+    let is_audio = effective_type == "audio";
     let is_stt = is_audio
         && (openproxy_types::capabilities::is_stt_model(model.model_id.as_str())
-            || model.model_type.as_ref() == "audio");
+            || !model.model_id.as_str().contains("tts"));
     let is_tts = is_audio && !is_stt;
-    let is_embedding = model.model_type.as_ref() == "embedding" || inferred_type == "embedding";
-    let is_image = model.model_type.as_ref() == "image" || inferred_type == "image";
+    let is_embedding = effective_type == "embedding";
+    let is_image = effective_type == "image";
 
     let (url, body_value, multipart_opt): (
         String,

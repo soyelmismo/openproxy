@@ -706,6 +706,19 @@ fn enrich_metadata(conn: &Connection) -> Result<usize> {
                            OR models.model_id_normalized LIKE '%claude%'
                            OR models.model_id_normalized LIKE '%qwen%')
                   THEN 'audio'
+                WHEN (models.model_id_normalized LIKE '%gemini%'
+                  OR models.model_id_normalized LIKE '%gpt-%'
+                  OR models.model_id_normalized LIKE '%claude%'
+                  OR models.model_id_normalized LIKE '%qwen%'
+                  OR models.model_id_normalized LIKE '%llama%'
+                  OR models.model_id_normalized LIKE '%mistral%'
+                  OR models.model_id_normalized LIKE '%deepseek%'
+                  OR models.model_id_normalized LIKE '%gemma%')
+                  AND NOT (models.model_id_normalized LIKE '%whisper%'
+                           OR models.model_id_normalized LIKE '%tts%'
+                           OR models.model_id_normalized LIKE '%dall-e%'
+                           OR models.model_id_normalized LIKE '%imagen%')
+                  THEN 'chat'
                 ELSE models.model_type
             END
          WHERE models.custom = 0
