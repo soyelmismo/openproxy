@@ -240,6 +240,24 @@ pub fn sse_payload_needs_parse(payload: &str) -> bool {
     payload.contains("\"usage\":{") || check_finish_reason_non_null(payload)
 }
 
+// `MAX_TOOL_*` / `MAX_RESPONSES_*` are `pub(crate)` in their submodules
+// (spec §2.3: crate-visible, hidden from the external API). They are NOT
+// re-exported here because no in-crate consumer references them via
+// `crate::sse::MAX_TOOL_*` (verified in `streaming_state.rs` and friends:
+// all SSE-bound constants are accessed from inside the module that owns
+// them, or from `mod.rs` directly). Re-exporting `pub(crate)` items via
+// `pub(crate) use` is legal but triggers `unused_imports` under
+// `-D warnings`; this is the root-cause fix that keeps clippy clean.
+pub use anthropic::{
+    parse_anthropic_sse_stream_line, translate_anthropic_sse_event, translate_anthropic_sse_payload,
+    AnthropicToolUseAccumulator,
+};
+pub use atomesus::parse_atomesus_sse_line;
+pub use fx::parse_fx_sse_line;
+pub use gemini::parse_gemini_sse_line;
+pub use openai::parse_openai_sse_line;
+pub use responses::{parse_responses_sse_stream_line, ResponsesSseState};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,21 +328,3 @@ mod tests {
         assert_eq!(parse_sse_data_line(multi_colon), Some(":data:hello"));
     }
 }
-
-// `MAX_TOOL_*` / `MAX_RESPONSES_*` are `pub(crate)` in their submodules
-// (spec §2.3: crate-visible, hidden from the external API). They are NOT
-// re-exported here because no in-crate consumer references them via
-// `crate::sse::MAX_TOOL_*` (verified in `streaming_state.rs` and friends:
-// all SSE-bound constants are accessed from inside the module that owns
-// them, or from `mod.rs` directly). Re-exporting `pub(crate)` items via
-// `pub(crate) use` is legal but triggers `unused_imports` under
-// `-D warnings`; this is the root-cause fix that keeps clippy clean.
-pub use anthropic::{
-    parse_anthropic_sse_stream_line, translate_anthropic_sse_event, translate_anthropic_sse_payload,
-    AnthropicToolUseAccumulator,
-};
-pub use atomesus::parse_atomesus_sse_line;
-pub use fx::parse_fx_sse_line;
-pub use gemini::parse_gemini_sse_line;
-pub use openai::parse_openai_sse_line;
-pub use responses::{parse_responses_sse_stream_line, ResponsesSseState};
