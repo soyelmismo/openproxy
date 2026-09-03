@@ -274,4 +274,36 @@ mod tests {
         assert_eq!(v_thinking["model"], "cipher");
         assert_eq!(v_thinking["mode"], "thinking");
     }
+
+    #[test]
+    fn test_atomesus_wrap_request_body_prompt_fallback() {
+        let adapter = AtomesusAdapter::new();
+        let target = dummy_resolved_target();
+
+        let body = bytes::Bytes::from(serde_json::json!({ "prompt": "Hello prompt" }).to_string());
+        let res = adapter
+            .wrap_request_body(
+                body,
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .unwrap();
+
+        let v: serde_json::Value = serde_json::from_slice(&res).unwrap();
+        assert_eq!(v["message"], "Hello prompt");
+
+        let empty_body = bytes::Bytes::from(serde_json::json!({}).to_string());
+        let res_empty = adapter
+            .wrap_request_body(
+                empty_body,
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .unwrap();
+
+        let v_empty: serde_json::Value = serde_json::from_slice(&res_empty).unwrap();
+        assert_eq!(v_empty["message"], "");
+    }
 }
