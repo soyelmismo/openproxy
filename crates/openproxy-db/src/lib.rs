@@ -31,3 +31,6 @@ pub mod notifications;
 
 pub use error::{DbErrorKind, classify_sqlite_error, map_constraint_error};
 pub use maintenance::DbTable;
+
+#[cfg(test)]
+pub(crate) mod test_db;

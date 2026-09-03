@@ -1624,6 +1624,7 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "httpmock",
  "hyper",
  "hyper-util",
  "miniz_oxide",

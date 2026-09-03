@@ -734,9 +734,134 @@ pub fn clear_current_proxy_id(conn: &Connection, account_id: AccountId) -> Resul
     Ok(())
 }
 
+/// Typed shape of the Antigravity entry in `oauth_provider_specific`.
+///
+/// **Canonical wire format (post-this-spec):**
+/// - `{"project_id": "..."}` — written by BOTH
+///   `openproxy_db::accounts::update_antigravity_project_id` AND
+///   `openproxy_core::oauth::antigravity::post_exchange::persist_post_exchange_meta`
+///   (already snake_case via `AntigravityProviderMeta`).
+///
+/// **Legacy wire format (read-only):**
+/// - `{"projectId": "..."}` — written by pre-spec
+///   `update_antigravity_project_id`. Accepted on read via
+///   `#[serde(alias = "projectId")]` for backward compatibility with
+///   rows persisted before the unification migration
+///   (`000065_antigravity_project_id_wire_format.sql`) ran.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct AntigravityMeta {
+    #[serde(alias = "projectId", alias = "project_id")]
+    pub project_id: Option<String>,
+}
+
+/// Read and deserialize the `oauth_provider_specific` JSON column for
+/// the given account into a caller-supplied type.
+///
+/// The column is encrypted with AES-256-GCM for non-Antigravity
+/// providers (kiro, codex) via
+/// `openproxy_db::accounts::encrypt_oauth_provider_specific`; Antigravity
+/// rows are stored in plaintext. The companion function
+/// `openproxy_db::accounts::decrypt_oauth_provider_specific` is used
+/// here to recover the plaintext before deserialization. The `master_key`
+/// parameter is `Option<&MasterKey>`: callers that already hold the
+/// decrypted plaintext at the repository layer may pass `None` to
+/// skip the (idempotent) decrypt step.
+///
+/// Returns:
+/// - `Ok(Some(t))` when the column is non-NULL and `T` deserializes
+///   successfully from the JSON value.
+/// - `Ok(None)` when the account row does not exist, when the column
+///   is NULL, when the column contains an empty string, OR when the
+///   decrypt step fails (invalid base64 / wrong key).
+/// - `Err(CoreError::Parse(_))` when the (post-decrypt) column
+///   contains a value that is not valid JSON or that does not match
+///   `T`'s deserialization shape, but ONLY when `master_key` is None.
+///   When `master_key` is Some, parse failures on the post-decrypt
+///   plaintext collapse to Ok(None) (preserving the historical silent-skip
+///   semantics of the prior in-line reader).
+///
+/// Caller must serialize the `&Connection` reference such that no guard
+/// crosses an `.await` boundary.
+pub fn read_provider_meta<T>(
+    conn: &Connection,
+    master_key: Option<&MasterKey>,
+    account_id: i64,
+) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let raw: Option<Option<String>> = conn
+        .query_row(
+            account_oauth_specific_select!("WHERE id = ?1"),
+            params![account_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "read_provider_meta for account {account_id}"
+        )))?;
+
+    let Some(raw) = raw.flatten() else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    // Decrypt when a key is supplied. `decrypt_oauth_provider_specific`
+    // is intentionally permissive: on base64/decode/GCM failure it
+    // returns the input string unchanged. We collapse a `None` from
+    // the decrypt step to `Ok(None)` so callers cannot accidentally
+    // see garbage plaintext.
+    let plaintext = match master_key {
+        Some(mk) => decrypt_oauth_provider_specific(Some(&raw), mk),
+        None => Some(raw),
+    };
+    let Some(plaintext) = plaintext else {
+        return Ok(None);
+    };
+    match serde_json::from_str::<T>(&plaintext) {
+        Ok(v) => Ok(Some(v)),
+        // Preserves the silent-skip semantics of the historical
+        // in-line reader when the row was encrypted and the decrypt
+        // step produced garbage: a ciphertext that fails GCM must NOT
+        // elevate `CoreError::Parse`. Plaintext rows (no master_key)
+        // with malformed JSON DO elevate Parse.
+        Err(_) if master_key.is_some() => Ok(None),
+        Err(e) => Err(CoreError::Parse(format!(
+            "read_provider_meta deserialize for account {account_id}: {e}"
+        ))),
+    }
+}
+
+/// Read the Antigravity `project_id` for an account, flattening the
+/// `AntigravityMeta` shape to `Option<String>` and rejecting empty
+/// strings.
+///
+/// This is the canonical reader used by:
+/// - the credentials pipeline (`openproxy-pipeline::credentials`)
+/// - the admin handlers (`openproxy-server::handlers.admin.models`)
+///
+/// Returns:
+/// - `Ok(Some(pid))` when the column has a non-empty `project_id`.
+/// - `Ok(None)` when the account has no metadata, no `project_id` key,
+///   or the key is present but empty/whitespace-only.
+/// - `Err(CoreError::Parse(_))` when the column is not valid JSON.
+pub fn read_antigravity_project(
+    conn: &Connection,
+    master_key: Option<&MasterKey>,
+    account_id: i64,
+) -> Result<Option<String>> {
+    let meta: Option<AntigravityMeta> = read_provider_meta(conn, master_key, account_id)?;
+    Ok(meta
+        .and_then(|m| m.project_id)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_db::{open_in_memory, seed_antigravity_provider};
 
     #[test]
     fn test_summarize_api_key_short() {
@@ -754,5 +879,217 @@ mod tests {
             summarize_api_key("AIzaSyD1234567890abcdefgh"),
             "AIzaSy...efgh"
         );
+    }
+
+    // ---------- Fase A: read_provider_meta + read_antigravity_project ----------
+
+    #[test]
+    fn read_provider_meta_deserializes_camel_case_project_id() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"projectId":"my-proj"}"#)],
+        )
+        .unwrap();
+
+        let meta: Option<AntigravityMeta> =
+            read_provider_meta(&conn, None, 1).unwrap();
+        assert_eq!(meta.and_then(|m| m.project_id).as_deref(), Some("my-proj"));
+    }
+
+    #[test]
+    fn read_provider_meta_deserializes_snake_case_project_id() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"project_id":"my-proj-snake"}"#)],
+        )
+        .unwrap();
+
+        let meta: Option<AntigravityMeta> =
+            read_provider_meta(&conn, None, 1).unwrap();
+        assert_eq!(
+            meta.and_then(|m| m.project_id).as_deref(),
+            Some("my-proj-snake")
+        );
+    }
+
+    #[test]
+    fn read_provider_meta_returns_none_when_column_is_null() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id) VALUES ('antigravity')",
+            [],
+        )
+        .unwrap();
+
+        let meta: Option<AntigravityMeta> =
+            read_provider_meta(&conn, None, 1).unwrap();
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn read_provider_meta_returns_none_when_key_absent() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"unrelated":"x"}"#)],
+        )
+        .unwrap();
+
+        // The generic reader returns Some(AntigravityMeta { project_id: None })
+        // (the JSON shape parsed fine, just no recognized key). The wrapper
+        // flattens this to None. Verify both layers agree.
+        let meta: Option<AntigravityMeta> =
+            read_provider_meta(&conn, None, 1).unwrap();
+        assert!(meta.is_some_and(|m| m.project_id.is_none()));
+        assert_eq!(read_antigravity_project(&conn, None, 1).unwrap(), None);
+    }
+
+    #[test]
+    fn read_antigravity_project_rejects_empty_string() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"projectId":""}"#)],
+        )
+        .unwrap();
+
+        let res = read_antigravity_project(&conn, None, 1).unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn read_antigravity_project_rejects_whitespace_only() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"projectId":"   "}"#)],
+        )
+        .unwrap();
+
+        let res = read_antigravity_project(&conn, None, 1).unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn read_antigravity_project_accepts_camel_and_snake_case() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"projectId":"camel"}"#)],
+        )
+        .unwrap();
+        assert_eq!(
+            read_antigravity_project(&conn, None, 1).unwrap().as_deref(),
+            Some("camel")
+        );
+
+        let conn2 = open_in_memory();
+        seed_antigravity_provider(&conn2);
+        conn2.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"project_id":"snake"}"#)],
+        )
+        .unwrap();
+        assert_eq!(
+            read_antigravity_project(&conn2, None, 1).unwrap().as_deref(),
+            Some("snake")
+        );
+    }
+
+    #[test]
+    fn read_provider_meta_works_with_other_structs() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct KiroMeta {
+            region: Option<String>,
+        }
+
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(
+                r#"{"region":"us-east-1","profileArn":"arn:..."}"#
+            )],
+        )
+        .unwrap();
+
+        let meta: Option<KiroMeta> = read_provider_meta(&conn, None, 1).unwrap();
+        assert_eq!(
+            meta,
+            Some(KiroMeta {
+                region: Some("us-east-1".into())
+            })
+        );
+    }
+
+    #[test]
+    fn read_provider_meta_decrypts_aes_encrypted_row_with_master_key() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        let master = MasterKey::generate();
+        let plaintext = r#"{"project_id":"encrypted-proj"}"#;
+        let blob = master.encrypt(plaintext).unwrap();
+        let b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            &blob,
+        );
+
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(b64)],
+        )
+        .unwrap();
+
+        let meta: Option<AntigravityMeta> =
+            read_provider_meta(&conn, Some(&master), 1).unwrap();
+        assert_eq!(
+            meta.and_then(|m| m.project_id).as_deref(),
+            Some("encrypted-proj")
+        );
+    }
+
+    #[test]
+    fn read_provider_meta_returns_none_on_aes_decrypt_failure() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        let master = MasterKey::generate();
+
+        // base64 valid but blob that is NOT a valid AES-GCM ciphertext.
+        let garbage_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"this is not a valid AES-GCM blob",
+        );
+
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(garbage_b64)],
+        )
+        .unwrap();
+
+        let res: Result<Option<AntigravityMeta>> =
+            read_provider_meta(&conn, Some(&master), 1);
+        assert!(res.is_ok(), "decrypt failure must NOT propagate Parse");
+        assert!(res.unwrap().is_none());
     }
 }
