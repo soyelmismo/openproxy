@@ -240,9 +240,7 @@ fn write_antigravity_token_file(payload_str: &str) -> Result<std::path::PathBuf,
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
         .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?;
-    let cli_dir = home
-        .join(".gemini")
-        .join("antigravity-cli");
+    let cli_dir = home.join(".gemini").join("antigravity-cli");
 
     std::fs::create_dir_all(&cli_dir).map_err(|e| {
         CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {e}"))
