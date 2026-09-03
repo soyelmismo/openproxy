@@ -24,12 +24,11 @@
 //! - This file: the trait `impl`, the provider struct, the OAuth
 //!   spec, and the tests that exercise the trait surface directly.
 
-use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
-use crate::error::{CoreError, Result};
+use crate::error::Result;
 use crate::ids::AccountId;
 use crate::oauth::{DbRef, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::UpstreamClient;
@@ -183,32 +182,6 @@ impl OAuthProvider for AntigravityOAuthProvider {
         // 3. Persist projectId (+ optional email/label) on the account row.
         persist_post_exchange_meta(db_pool, account_id, project_id, email).await
     }
-}
-
-/// Read the `projectId` stored on the account row by `post_exchange`.
-///
-/// Returns `Ok(None)` when the account is not OAuth, has no
-/// `oauth_provider_specific` JSON, or the JSON does not contain a
-/// `projectId`. Returns `Ok(Some(_))` when one is present.
-pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Option<String>> {
-    let raw: Option<Option<String>> = conn
-        .query_row(
-            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "read_project_id for account {}",
-            account_id.0
-        )))?;
-
-    let Some(raw) = raw.flatten() else {
-        return Ok(None);
-    };
-    let meta: AntigravityProviderMeta = serde_json::from_str(&raw)
-        .map_err(|e| CoreError::Parse(format!("antigravity meta parse: {e}")))?;
-    Ok(meta.project_id)
 }
 
 #[cfg(test)]
