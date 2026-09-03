@@ -1,9 +1,9 @@
 //! Gemini SSE parser.
 
-use super::{parse_sse_data_line, UpstreamSseChunk};
+use super::{UpstreamSseChunk, parse_provider_json, parse_sse_data_or_done};
 use crate::translation::OpenAIUsage;
-use openproxy_types::error::{CoreError, Result};
-use serde_json::{json, Value};
+use openproxy_types::error::Result;
+use serde_json::{Value, json};
 
 /// Lightweight probe struct for extracting ONLY the fields the proxy
 /// needs from a Gemini SSE chunk, without allocating the full
@@ -125,12 +125,15 @@ fn extract_gemini_content_and_reasoning(
 
 fn extract_gemini_usage(usage_metadata: Option<&GeminiUsageProbe>) -> Option<OpenAIUsage> {
     let u = usage_metadata?;
-    Some(OpenAIUsage {
-        prompt_tokens: u.prompt_tokens?.try_into().unwrap_or(u32::MAX),
-        completion_tokens: u.completion_tokens?.try_into().unwrap_or(u32::MAX),
-        total_tokens: u.total_tokens?.try_into().unwrap_or(u32::MAX),
-        prompt_tokens_details: None,
-    })
+    // All three token counts must be present (matches legacy semantics:
+    // partial usage metadata is dropped to avoid emitting an
+    // `OpenAIUsage` with `0`s, which would corrupt downstream billing).
+    Some(super::build_openai_usage(
+        Some(u.prompt_tokens?),
+        Some(u.completion_tokens?),
+        Some(u.total_tokens?),
+        None,
+    ))
 }
 
 pub fn parse_gemini_sse_line(
@@ -139,15 +142,13 @@ pub fn parse_gemini_sse_line(
     created: u64,
     model: &str,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let Some(payload) = parse_sse_data_line(line) else {
-        return Ok(None);
+    let payload = match parse_sse_data_or_done(line) {
+        super::SseDataOrDone::Payload(p) => p,
+        super::SseDataOrDone::Done => return Ok(Some(UpstreamSseChunk::done())),
+        super::SseDataOrDone::Skip => return Ok(None),
     };
-    if payload == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk::done()));
-    }
 
-    let probe: GeminiSseProbe = serde_json::from_str(payload)
-        .map_err(|e| CoreError::Parse(format!("gemini sse json: {e}")))?;
+    let probe: GeminiSseProbe = parse_provider_json(payload, "gemini")?;
 
     let candidates = extract_gemini_candidates(&probe);
     let usage_metadata = extract_gemini_usage_metadata(&probe);
@@ -163,9 +164,7 @@ pub fn parse_gemini_sse_line(
     } else {
         json!({"content": text})
     };
-    let finish_val = finish_reason
-        .as_ref()
-        .map_or(Value::Null, |r| json!(r));
+    let finish_val = finish_reason.as_ref().map_or(Value::Null, |r| json!(r));
 
     let chunk = json!({
         "id": chunk_id,
@@ -196,6 +195,7 @@ pub fn parse_gemini_sse_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openproxy_types::error::CoreError;
 
     #[test]
     fn parse_gemini_data_line() {

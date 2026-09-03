@@ -1,6 +1,8 @@
 //! Atomesus SSE parser.
 
-use super::{parse_sse_data_line, UpstreamSseChunk};
+use super::{
+    UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done,
+};
 use openproxy_types::error::Result;
 use serde_json::Value;
 
@@ -11,56 +13,34 @@ pub fn parse_atomesus_sse_line(
     created: u64,
     model_name: &str,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let Some(data_str) = parse_sse_data_line(line) else {
-        return Ok(None);
+    let data_str = match parse_sse_data_or_done(line) {
+        super::SseDataOrDone::Payload(p) => p,
+        super::SseDataOrDone::Done => return Ok(Some(UpstreamSseChunk::done())),
+        super::SseDataOrDone::Skip => return Ok(None),
     };
-    if data_str == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk::done()));
-    }
-    let Ok(val) = serde_json::from_str::<Value>(data_str) else {
-        return Ok(None);
-    };
+    let val: Value = parse_provider_json(data_str, "atomesus")?;
     let event_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match event_type {
         "heartbeat" | "start" => Ok(None),
         "content" => {
             let content_str = val.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            let payload = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_name,
-                "choices": [{
-                    "index": 0,
-                    "delta": {
-                        "content": content_str
-                    },
-                    "finish_reason": null
-                }]
-            });
-            let mut chunk = UpstreamSseChunk::new(payload);
-            chunk.has_content = !content_str.is_empty();
-            Ok(Some(chunk))
+            Ok(Some(make_text_delta(
+                chunk_id,
+                created,
+                model_name,
+                content_str,
+                false,
+            )))
         }
         "thinking" => {
             let thought_str = val.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            let payload = serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_name,
-                "choices": [{
-                    "index": 0,
-                    "delta": {
-                        "reasoning_content": thought_str
-                    },
-                    "finish_reason": null
-                }]
-            });
-            let mut chunk = UpstreamSseChunk::new(payload);
-            chunk.delta_reasoning = Some(thought_str.to_string());
-            chunk.has_content = !thought_str.is_empty();
-            Ok(Some(chunk))
+            Ok(Some(make_text_delta(
+                chunk_id,
+                created,
+                model_name,
+                thought_str,
+                true,
+            )))
         }
         _ => Ok(None),
     }
@@ -110,5 +90,14 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn atomesus_malformed_json_returns_error() {
+        // Regression (P3-1): malformed JSON must surface as
+        // CoreError::Parse instead of being silently swallowed as
+        // Ok(None), matching every other provider parser.
+        let result = parse_atomesus_sse_line("data: {not valid json}", "cmpl_1", 100, "atomesus");
+        assert!(result.is_err(), "malformed JSON should produce an error");
     }
 }

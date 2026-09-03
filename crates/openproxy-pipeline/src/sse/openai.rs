@@ -1,8 +1,7 @@
 //! OpenAI-compatible SSE parser.
 
-use super::{parse_sse_data_line, UpstreamSseChunk};
-use crate::translation::OpenAIUsage;
-use openproxy_types::error::{CoreError, Result};
+use super::{UpstreamSseChunk, build_openai_usage, parse_sse_data_or_done, parse_provider_json};
+use openproxy_types::error::Result;
 use openproxy_types::message::PromptTokensDetails;
 use serde_json::Value;
 
@@ -58,16 +57,14 @@ struct OpenAiDeltaProbe {
 /// Returns `Ok(None)` for empty lines, comments, and `[DONE]` sentinels.
 /// Returns `Ok(Some(chunk))` for valid data lines.
 pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
-    let Some(payload) = parse_sse_data_line(line) else {
-        return Ok(None);
+    let payload = match parse_sse_data_or_done(line) {
+        super::SseDataOrDone::Payload(p) => p,
+        super::SseDataOrDone::Done => return Ok(Some(UpstreamSseChunk::done())),
+        super::SseDataOrDone::Skip => return Ok(None),
     };
-    if payload == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk::done()));
-    }
     // Fast targeted parse: only extracts usage + finish_reason,
     // skips all other fields (delta.content, tool_calls, etc.)
-    let probe: OpenAiSseProbe = serde_json::from_str(payload)
-        .map_err(|e| CoreError::Parse(format!("openai sse json: {e}")))?;
+    let probe: OpenAiSseProbe = parse_provider_json(payload, "openai")?;
 
     let usage = probe.usage.map(|u| {
         let cached = u
@@ -83,18 +80,14 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
             .or(u.cache_read_input_tokens)
             .and_then(|c| u32::try_from(c).ok());
 
-        OpenAIUsage {
-            prompt_tokens: u.prompt_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
-            completion_tokens: u
-                .completion_tokens
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(u32::MAX),
-            total_tokens: u.total_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
-            prompt_tokens_details: cached.map(|c| PromptTokensDetails {
+        build_openai_usage(
+            u.prompt_tokens,
+            u.completion_tokens,
+            u.total_tokens,
+            cached.map(|c| PromptTokensDetails {
                 cached_tokens: Some(c),
             }),
-        }
+        )
     });
     // o1-style reasoning models (o1, o3, deepseek-r1) emit
     // `delta.reasoning_content` on chunks that also carry `usage`
@@ -125,6 +118,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openproxy_types::error::CoreError;
 
     #[test]
     fn parse_openai_data_line() {

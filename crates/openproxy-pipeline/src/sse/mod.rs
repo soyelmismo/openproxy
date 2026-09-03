@@ -225,6 +225,178 @@ pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
     &bytes[pos..]
 }
 
+/// Outcome of [`parse_sse_data_or_done`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SseDataOrDone<'a> {
+    Payload(&'a str),
+    Done,
+    Skip,
+}
+
+/// Classify an SSE line as payload, `[DONE]` sentinel, or skippable.
+/// Replaces the `parse_sse_data_line` + `[DONE]` check duplicated in
+/// every provider parser.
+#[inline]
+pub(crate) fn parse_sse_data_or_done(line: &str) -> SseDataOrDone<'_> {
+    let Some(payload) = parse_sse_data_line(line) else {
+        return SseDataOrDone::Skip;
+    };
+    if payload == "[DONE]" {
+        return SseDataOrDone::Done;
+    }
+    SseDataOrDone::Payload(payload)
+}
+
+/// Deserialize an SSE payload as JSON, returning
+/// `CoreError::Parse("<provider> sse json: ...")`. Replaces the
+/// duplicated `serde_json::from_str` + `map_err` pattern.
+#[inline]
+pub(crate) fn parse_provider_json<T, S>(payload: S, provider: &str) -> Result<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+    S: AsRef<str>,
+{
+    serde_json::from_str(payload.as_ref())
+        .map_err(|e| CoreError::Parse(format!("{provider} sse json: {e}")))
+}
+
+/// Build `OpenAIUsage` from `Option<u64>` token counts, applying the
+/// standard `unwrap_or(0).try_into().unwrap_or(u32::MAX)` conversion.
+#[inline]
+pub(crate) fn build_openai_usage(
+    prompt: Option<u64>,
+    completion: Option<u64>,
+    total: Option<u64>,
+    details: Option<openproxy_types::message::PromptTokensDetails>,
+) -> OpenAIUsage {
+    OpenAIUsage {
+        prompt_tokens: prompt.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+        completion_tokens: completion.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+        total_tokens: total.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+        prompt_tokens_details: details,
+    }
+}
+
+/// OpenAI-shape `chat.completion.chunk` carrying a single text or
+/// reasoning delta. `is_reasoning=true` routes the text into
+/// `reasoning_content` and populates `delta_reasoning`.
+#[inline]
+pub(crate) fn make_text_delta(
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    text: &str,
+    is_reasoning: bool,
+) -> UpstreamSseChunk {
+    let delta = if is_reasoning {
+        serde_json::json!({ "content": "", "reasoning_content": text })
+    } else {
+        serde_json::json!({ "content": text })
+    };
+    let payload = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": delta,
+            "finish_reason": null,
+        }]
+    });
+    UpstreamSseChunk {
+        raw_payload: None,
+        payload,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: if is_reasoning {
+            Some(text.to_string())
+        } else {
+            None
+        },
+        delta_tool_calls: Vec::new(),
+        has_content: !text.is_empty(),
+    }
+}
+
+/// OpenAI-shape chunk for a tool-call start event (id, name, empty
+/// arguments). `has_content=false` so the idle-chunk timer isn't reset
+/// before argument tokens arrive.
+#[inline]
+pub(crate) fn make_tool_call_start(
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    index: u32,
+    id: &str,
+    name: &str,
+) -> UpstreamSseChunk {
+    let tool_call = serde_json::json!({
+        "index": index,
+        "id": id,
+        "type": "function",
+        "function": { "name": name, "arguments": "" }
+    });
+    let payload = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": { "tool_calls": [&tool_call] },
+            "finish_reason": null,
+        }]
+    });
+    UpstreamSseChunk {
+        raw_payload: None,
+        payload,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: vec![tool_call],
+        has_content: false,
+    }
+}
+
+/// OpenAI-shape chunk for a tool-call argument-delta event.
+#[inline]
+pub(crate) fn make_tool_call_delta(
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    index: u32,
+    arguments: &str,
+) -> UpstreamSseChunk {
+    let tool_call = serde_json::json!({
+        "index": index,
+        "function": { "arguments": arguments }
+    });
+    let payload = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": { "tool_calls": [&tool_call] },
+            "finish_reason": null,
+        }]
+    });
+    UpstreamSseChunk {
+        raw_payload: None,
+        payload,
+        done: false,
+        usage: None,
+        stop_reason: None,
+        delta_reasoning: None,
+        delta_tool_calls: vec![tool_call],
+        has_content: !arguments.is_empty(),
+    }
+}
+
 fn check_finish_reason_non_null(payload: &str) -> bool {
     payload.find("\"finish_reason").is_some_and(|idx| {
         let start = idx + 14;
@@ -249,14 +421,14 @@ pub fn sse_payload_needs_parse(payload: &str) -> bool {
 // `pub(crate) use` is legal but triggers `unused_imports` under
 // `-D warnings`; this is the root-cause fix that keeps clippy clean.
 pub use anthropic::{
-    parse_anthropic_sse_stream_line, translate_anthropic_sse_event, translate_anthropic_sse_payload,
-    AnthropicToolUseAccumulator,
+    AnthropicToolUseAccumulator, parse_anthropic_sse_stream_line, translate_anthropic_sse_event,
+    translate_anthropic_sse_payload,
 };
 pub use atomesus::parse_atomesus_sse_line;
 pub use fx::parse_fx_sse_line;
 pub use gemini::parse_gemini_sse_line;
 pub use openai::parse_openai_sse_line;
-pub use responses::{parse_responses_sse_stream_line, ResponsesSseState};
+pub use responses::{ResponsesSseState, parse_responses_sse_stream_line};
 
 #[cfg(test)]
 mod tests {

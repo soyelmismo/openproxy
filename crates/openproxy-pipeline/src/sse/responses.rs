@@ -1,6 +1,8 @@
 //! OpenAI Responses API SSE parser.
 
-use super::{parse_sse_data_line, UpstreamSseChunk};
+use super::{
+    UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done,
+};
 use crate::translation::OpenAIUsage;
 use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;
@@ -24,15 +26,13 @@ pub fn parse_responses_sse_stream_line(
     model_name: &str,
     state: &mut ResponsesSseState,
 ) -> Result<Option<UpstreamSseChunk>> {
-    let Some(data) = parse_sse_data_line(line) else {
-        return Ok(None);
+    let data = match parse_sse_data_or_done(line) {
+        super::SseDataOrDone::Payload(p) => p,
+        super::SseDataOrDone::Done => return Ok(Some(UpstreamSseChunk::done())),
+        super::SseDataOrDone::Skip => return Ok(None),
     };
-    if data == "[DONE]" {
-        return Ok(Some(UpstreamSseChunk::done()));
-    }
 
-    let value: Value = serde_json::from_str(data)
-        .map_err(|e| CoreError::Parse(format!("responses SSE JSON parse: {e}")))?;
+    let value: Value = parse_provider_json(data, "responses")?;
 
     if let Some(error) = value.get("error") {
         return Err(CoreError::upstream_error(
@@ -95,40 +95,16 @@ pub fn parse_responses_sse_stream_line(
                 "function": { "name": &name, "arguments": "" }
             }));
 
-            return Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: serde_json::json!({
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "tool_calls": [{
-                                "index": state.tool_calls.len() - 1,
-                                "id": call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "arguments": ""
-                                }
-                            }]
-                        }
-                    }]
-                }),
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: None,
-                delta_tool_calls: vec![serde_json::json!({
-                    "index": state.tool_calls.len() - 1,
-                    "id": call_id,
-                    "type": "function",
-                    "function": { "name": name, "arguments": "" }
-                })],
-                has_content: false,
-            }));
+            let tc_index = state.tool_calls.len() - 1;
+            let chunk = super::make_tool_call_start(
+                chunk_id,
+                created,
+                model_name,
+                tc_index as u32,
+                &call_id,
+                &name,
+            );
+            return Ok(Some(chunk));
         }
     }
 
@@ -174,35 +150,14 @@ pub fn parse_responses_sse_stream_line(
             }
         }
 
-        return Ok(Some(UpstreamSseChunk {
-            raw_payload: None,
-            payload: serde_json::json!({
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_name,
-                "choices": [{
-                    "index": 0,
-                    "delta": {
-                        "tool_calls": [{
-                            "index": index,
-                            "function": {
-                                "arguments": delta
-                            }
-                        }]
-                    }
-                }]
-            }),
-            done: false,
-            usage: None,
-            stop_reason: None,
-            delta_reasoning: None,
-            delta_tool_calls: vec![serde_json::json!({
-                "index": index,
-                "function": { "arguments": delta }
-            })],
-            has_content: true,
-        }));
+        let chunk = super::make_tool_call_delta(
+            chunk_id,
+            created,
+            model_name,
+            index as u32,
+            delta,
+        );
+        return Ok(Some(chunk));
     }
 
     if event_type == "response.content_part.added"
@@ -210,27 +165,13 @@ pub fn parse_responses_sse_stream_line(
     {
         let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
         if !text.is_empty() {
-            return Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: serde_json::json!({
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "content": text
-                        }
-                    }]
-                }),
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: None,
-                delta_tool_calls: Vec::new(),
-                has_content: true,
-            }));
+            return Ok(Some(make_text_delta(
+                chunk_id,
+                created,
+                model_name,
+                text,
+                false,
+            )));
         }
     }
 
@@ -240,27 +181,13 @@ pub fn parse_responses_sse_stream_line(
     ) {
         let delta = value.get("delta").and_then(|v| v.as_str()).unwrap_or("");
         if !delta.is_empty() {
-            return Ok(Some(UpstreamSseChunk {
-                raw_payload: None,
-                payload: serde_json::json!({
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "content": delta
-                        }
-                    }]
-                }),
-                done: false,
-                usage: None,
-                stop_reason: None,
-                delta_reasoning: None,
-                delta_tool_calls: Vec::new(),
-                has_content: true,
-            }));
+            return Ok(Some(make_text_delta(
+                chunk_id,
+                created,
+                model_name,
+                delta,
+                false,
+            )));
         }
     }
 

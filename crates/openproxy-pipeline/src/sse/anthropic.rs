@@ -1,6 +1,6 @@
 //! Anthropic SSE parsing and OpenAI translation.
 
-use super::{UpstreamSseChunk, MAX_SSE_EVENT_TYPE_BYTES};
+use super::{MAX_SSE_EVENT_TYPE_BYTES, UpstreamSseChunk};
 use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;
 
