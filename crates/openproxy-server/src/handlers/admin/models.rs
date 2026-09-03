@@ -574,18 +574,9 @@ fn build_chat_format_test_payload(
 }
 
 fn extract_antigravity_project(raw_account: Option<&core_accounts::Account>) -> Option<String> {
-    raw_account
-        .as_ref()
-        .and_then(|a| a.oauth_provider_specific.as_ref())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .and_then(|v| {
-            v.get("project_id")
-                .or_else(|| v.get("project"))
-                .or_else(|| v.get("projectId"))
-                .or_else(|| v.get("client_id"))
-                .or_else(|| v.get("clientId"))
-                .and_then(|p| p.as_str().map(String::from))
-        })
+    let raw = raw_account.as_ref()?.oauth_provider_specific.as_deref()?;
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    openproxy_pipeline::credentials::antigravity_project_from_value(&value)
 }
 
 fn extract_kiro_meta(
