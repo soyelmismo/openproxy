@@ -1,8 +1,6 @@
 //! Vercel AI SDK Spec v4 / fx.sh SSE parser.
 
-use super::{
-    UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done,
-};
+use super::{UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done};
 use crate::translation::OpenAIUsage;
 use openproxy_types::error::Result;
 use serde_json::Value;
@@ -24,11 +22,15 @@ pub fn parse_fx_sse_line(
     match event_type {
         "text-delta" => {
             let text = val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
-            Ok(Some(make_text_delta(chunk_id, created, model_name, text, false)))
+            Ok(Some(make_text_delta(
+                chunk_id, created, model_name, text, false,
+            )))
         }
         "reasoning-delta" => {
             let reasoning = val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
-            Ok(Some(make_text_delta(chunk_id, created, model_name, reasoning, true)))
+            Ok(Some(make_text_delta(
+                chunk_id, created, model_name, reasoning, true,
+            )))
         }
         "tool-call" => {
             let call_id = val.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("");

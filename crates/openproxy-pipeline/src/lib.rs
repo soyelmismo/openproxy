@@ -30,6 +30,7 @@ pub mod repository;
 pub mod response_ext;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
+mod dispatcher;
 pub mod redact;
 pub mod sse;
 pub mod sse_accumulator;
@@ -42,7 +43,6 @@ pub mod think_extractor;
 pub mod timeouts;
 pub mod translation;
 pub mod upstream_dispatcher;
-mod dispatcher;
 pub mod usage_tracker;
 pub mod worker;
 

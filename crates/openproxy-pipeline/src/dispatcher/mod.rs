@@ -5,18 +5,18 @@
 
 use crate::PipelineResult;
 use openproxy_adapters::upstream::UpstreamRequest;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-pub mod types;
-pub(super) mod rotation;
-pub(super) mod proxy;
 pub(super) mod fail;
-pub(super) mod stream;
-pub(super) mod unary;
 pub(super) mod horde;
+pub(super) mod proxy;
+pub(super) mod rotation;
+pub(super) mod stream;
 #[cfg(test)]
 mod tests;
+pub mod types;
+pub(super) mod unary;
 
 pub(crate) use rotation::ProxyRotationTrigger;
 pub(crate) use types::{
@@ -79,7 +79,10 @@ impl UpstreamDispatcher {
 
         let mut upstream_request =
             UpstreamRequest::post_json(params.url.to_string(), params.body_bytes.clone());
-        match self.resolve_and_assign_proxy(&params.req, params.target).await {
+        match self
+            .resolve_and_assign_proxy(&params.req, params.target)
+            .await
+        {
             Ok((proxy_url, proxy_status)) => {
                 upstream_request.proxy = proxy_url.clone();
                 upstream_request.proxy_status = proxy_status.clone();

@@ -5,11 +5,11 @@
 
 use super::types::{DispatchContext, DispatchParams, NonStreamingSuccessArgs};
 use super::{Dispatcher, UpstreamDispatcher};
+use crate::PipelineResult;
 use crate::think_extractor::extract_think_from_response;
 use crate::translation::OpenAIResponse;
-use crate::PipelineResult;
-use openproxy_adapters::upstream::{UpstreamError, UpstreamRequest};
 use openproxy_adapters::ProviderAdapter;
+use openproxy_adapters::upstream::{UpstreamError, UpstreamRequest};
 use openproxy_types::error::CoreError;
 use std::time::Instant;
 

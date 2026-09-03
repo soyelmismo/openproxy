@@ -600,9 +600,7 @@ fn build_custom_provider_meta(
         let antigravity_project = raw_account_opt
             .and_then(|a| a.oauth_provider_specific.as_deref())
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .and_then(|v| {
-                openproxy_pipeline::credentials::antigravity_project_from_value(&v)
-            });
+            .and_then(|v| openproxy_pipeline::credentials::antigravity_project_from_value(&v));
         Some(openproxy_types::context::CustomProviderMeta {
             access_token: api_key.to_string(),
             maybe_refresh: None,

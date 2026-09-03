@@ -1,6 +1,6 @@
 //! OpenAI-compatible SSE parser.
 
-use super::{UpstreamSseChunk, build_openai_usage, parse_sse_data_or_done, parse_provider_json};
+use super::{UpstreamSseChunk, build_openai_usage, parse_provider_json, parse_sse_data_or_done};
 use openproxy_types::error::Result;
 use openproxy_types::message::PromptTokensDetails;
 use serde_json::Value;

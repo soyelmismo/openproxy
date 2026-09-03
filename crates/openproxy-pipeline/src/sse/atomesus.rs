@@ -1,8 +1,6 @@
 //! Atomesus SSE parser.
 
-use super::{
-    UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done,
-};
+use super::{UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done};
 use openproxy_types::error::Result;
 use serde_json::Value;
 

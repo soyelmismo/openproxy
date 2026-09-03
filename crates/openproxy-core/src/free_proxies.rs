@@ -44,10 +44,8 @@ pub struct ScrapedProxy {
 // via `httpmock::MockServer`. See spec 2026-09-03-free-proxies-url-param.
 
 // JSON sources (single absolute URL each).
-pub const PROXIFLY_URL: &str =
-    "https://api.proxifly.dev/proxy?format=json&quantity=100";
-pub const ONEPROXY_URL: &str =
-    "https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced";
+pub const PROXIFLY_URL: &str = "https://api.proxifly.dev/proxy?format=json&quantity=100";
+pub const ONEPROXY_URL: &str = "https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced";
 pub const PROXYSCRAPE_CDN_URL: &str =
     "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json";
 pub const GEONODE_URL: &str =
@@ -2441,7 +2439,11 @@ broken
             .expect("github sync");
 
         mock.assert_calls(1);
-        assert!(proxies.iter().any(|p| p.host == "9.9.9.9" && p.port == 3128));
+        assert!(
+            proxies
+                .iter()
+                .any(|p| p.host == "9.9.9.9" && p.port == 3128)
+        );
         assert!(proxies.iter().any(|p| p.host == "8.8.8.8" && p.port == 80));
     }
 

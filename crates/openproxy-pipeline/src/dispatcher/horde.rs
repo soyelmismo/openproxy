@@ -2,14 +2,14 @@
 //! imagen al endpoint público de AI Horde). Bifurca ANTES de la decisión
 //! streaming/non-streaming del dispatcher principal.
 
-use super::types::{DispatchContext, DispatchParams};
 use super::UpstreamDispatcher;
-use crate::translation::OpenAIResponse;
+use super::types::{DispatchContext, DispatchParams};
 use crate::PipelineResult;
+use crate::translation::OpenAIResponse;
 use openproxy_adapters::upstream::{CancellationToken, UpstreamRequest};
+use openproxy_types::Model;
 use openproxy_types::combos::ComboTarget;
 use openproxy_types::error::CoreError;
-use openproxy_types::Model;
 use std::time::Instant;
 
 /// `true` cuando el target es `horde` y el modelo es de visión (o el

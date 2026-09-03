@@ -123,9 +123,11 @@ pub(crate) fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
         }
         DbRef::Connection(mutex) => {
             let conn = mutex.lock();
-            if let Err(e) =
-                crate::accounts::set_health(&conn, account_id, crate::accounts::HealthStatus::Unhealthy)
-            {
+            if let Err(e) = crate::accounts::set_health(
+                &conn,
+                account_id,
+                crate::accounts::HealthStatus::Unhealthy,
+            ) {
                 log_failure(&e, "test_path");
             }
         }

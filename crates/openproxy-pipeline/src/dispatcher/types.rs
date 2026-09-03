@@ -5,8 +5,8 @@
 
 use crate::timeouts::Timeouts;
 use openproxy_adapters::upstream::UpstreamRequest;
-use openproxy_types::models::Model;
 use openproxy_types::TargetFormat;
+use openproxy_types::models::Model;
 use std::time::Instant;
 
 use crate::PipelineRequest;

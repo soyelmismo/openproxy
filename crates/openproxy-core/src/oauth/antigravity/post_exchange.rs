@@ -35,9 +35,7 @@ pub(crate) async fn fetch_user_email(
     // Surface invalid bearer tokens as a soft failure: this helper is
     // best-effort and any header issue must skip the call without
     // sending a malformed Authorization header upstream.
-    if let Err(e) =
-        openproxy_adapters::antigravity_headers::insert_bearer(&mut req, access_token)
-    {
+    if let Err(e) = openproxy_adapters::antigravity_headers::insert_bearer(&mut req, access_token) {
         tracing::debug!(
             access_token_len = access_token.len(),
             error = %e,

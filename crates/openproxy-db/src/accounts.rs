@@ -933,8 +933,7 @@ mod tests {
         )
         .unwrap();
 
-        let meta: Option<AntigravityMeta> =
-            read_provider_meta(&conn, None, 1).unwrap();
+        let meta: Option<AntigravityMeta> = read_provider_meta(&conn, None, 1).unwrap();
         assert_eq!(meta.and_then(|m| m.project_id).as_deref(), Some("my-proj"));
     }
 
@@ -949,8 +948,7 @@ mod tests {
         )
         .unwrap();
 
-        let meta: Option<AntigravityMeta> =
-            read_provider_meta(&conn, None, 1).unwrap();
+        let meta: Option<AntigravityMeta> = read_provider_meta(&conn, None, 1).unwrap();
         assert_eq!(
             meta.and_then(|m| m.project_id).as_deref(),
             Some("my-proj-snake")
@@ -967,8 +965,7 @@ mod tests {
         )
         .unwrap();
 
-        let meta: Option<AntigravityMeta> =
-            read_provider_meta(&conn, None, 1).unwrap();
+        let meta: Option<AntigravityMeta> = read_provider_meta(&conn, None, 1).unwrap();
         assert!(meta.is_none());
     }
 
@@ -986,8 +983,7 @@ mod tests {
         // The generic reader returns Some(AntigravityMeta { project_id: None })
         // (the JSON shape parsed fine, just no recognized key). The wrapper
         // flattens this to None. Verify both layers agree.
-        let meta: Option<AntigravityMeta> =
-            read_provider_meta(&conn, None, 1).unwrap();
+        let meta: Option<AntigravityMeta> = read_provider_meta(&conn, None, 1).unwrap();
         assert!(meta.is_some_and(|m| m.project_id.is_none()));
         assert_eq!(read_antigravity_project(&conn, None, 1).unwrap(), None);
     }
@@ -1039,14 +1035,17 @@ mod tests {
 
         let conn2 = open_in_memory();
         seed_antigravity_provider(&conn2);
-        conn2.execute(
-            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+        conn2
+            .execute(
+                "INSERT INTO accounts (provider_id, oauth_provider_specific) \
              VALUES ('antigravity', ?1)",
-            rusqlite::params![Some(r#"{"project_id":"snake"}"#)],
-        )
-        .unwrap();
+                rusqlite::params![Some(r#"{"project_id":"snake"}"#)],
+            )
+            .unwrap();
         assert_eq!(
-            read_antigravity_project(&conn2, None, 1).unwrap().as_deref(),
+            read_antigravity_project(&conn2, None, 1)
+                .unwrap()
+                .as_deref(),
             Some("snake")
         );
     }
@@ -1065,9 +1064,7 @@ mod tests {
         conn.execute(
             "INSERT INTO accounts (provider_id, oauth_provider_specific) \
              VALUES ('antigravity', ?1)",
-            rusqlite::params![Some(
-                r#"{"region":"us-east-1","profileArn":"arn:..."}"#
-            )],
+            rusqlite::params![Some(r#"{"region":"us-east-1","profileArn":"arn:..."}"#)],
         )
         .unwrap();
 
@@ -1087,10 +1084,7 @@ mod tests {
         let master = MasterKey::generate();
         let plaintext = r#"{"project_id":"encrypted-proj"}"#;
         let blob = master.encrypt(plaintext).unwrap();
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &blob,
-        );
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &blob);
 
         conn.execute(
             "INSERT INTO accounts (provider_id, oauth_provider_specific) \
@@ -1099,8 +1093,7 @@ mod tests {
         )
         .unwrap();
 
-        let meta: Option<AntigravityMeta> =
-            read_provider_meta(&conn, Some(&master), 1).unwrap();
+        let meta: Option<AntigravityMeta> = read_provider_meta(&conn, Some(&master), 1).unwrap();
         assert_eq!(
             meta.and_then(|m| m.project_id).as_deref(),
             Some("encrypted-proj")
@@ -1126,8 +1119,7 @@ mod tests {
         )
         .unwrap();
 
-        let res: Result<Option<AntigravityMeta>> =
-            read_provider_meta(&conn, Some(&master), 1);
+        let res: Result<Option<AntigravityMeta>> = read_provider_meta(&conn, Some(&master), 1);
         assert!(res.is_ok(), "decrypt failure must NOT propagate Parse");
         assert!(res.unwrap().is_none());
     }
@@ -1145,10 +1137,7 @@ mod tests {
              VALUES ('antigravity', ?1), \
                     ('antigravity', ?2), \
                     ('antigravity', NULL)",
-            rusqlite::params![
-                Some(r#"{"projectId":"a"}"#),
-                Some(r#"{"project_id":"b"}"#),
-            ],
+            rusqlite::params![Some(r#"{"projectId":"a"}"#), Some(r#"{"project_id":"b"}"#),],
         )
         .unwrap();
 
@@ -1186,12 +1175,8 @@ mod tests {
         let wrapper = read_antigravity_project(&conn, None, 1).unwrap();
         assert_eq!(wrapper.as_deref(), Some("new"));
 
-        let generic: Option<AntigravityMeta> =
-            read_provider_meta(&conn, None, 1).unwrap();
-        assert_eq!(
-            generic.and_then(|m| m.project_id).as_deref(),
-            Some("new")
-        );
+        let generic: Option<AntigravityMeta> = read_provider_meta(&conn, None, 1).unwrap();
+        assert_eq!(generic.and_then(|m| m.project_id).as_deref(), Some("new"));
 
         // The unified writer replaces the legacy camelCase key with
         // the snake_case canonical form (per C.4 wire-format unification).

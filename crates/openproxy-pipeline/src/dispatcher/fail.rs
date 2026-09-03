@@ -3,14 +3,14 @@
 //! Concentra las llamadas a `self.record_and_fail*` (los 3 variantes:
 //! sin trace_id, con trace_id, con partial-params).
 
-use super::types::DispatchContext;
 use super::UpstreamDispatcher;
-use crate::{parse_retry_after_ms, FailureContext, PipelineRequest, PipelineResult};
+use super::types::DispatchContext;
+use crate::{FailureContext, PipelineRequest, PipelineResult, parse_retry_after_ms};
 use openproxy_adapters::upstream::UpstreamError;
-use openproxy_types::combos::{Combo, ComboTarget};
-use openproxy_types::error::CoreError;
 use openproxy_types::CancelReason;
 use openproxy_types::Model;
+use openproxy_types::combos::{Combo, ComboTarget};
+use openproxy_types::error::CoreError;
 use std::sync::Arc;
 use tokio::sync::watch;
 

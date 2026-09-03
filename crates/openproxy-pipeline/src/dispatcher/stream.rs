@@ -3,13 +3,13 @@
 //! principal (`dispatch_upstream_streaming`, 239 LOC) y sus helpers de
 //! fallo (`fail_stream_*`, `fail_on_sink_send_error`).
 
+use super::UpstreamDispatcher;
 use super::types::{
     DispatchContext, StreamDispatchParams, StreamFailureContext, StreamingNon2xxArgs,
     StreamingSuccessArgs,
 };
-use super::UpstreamDispatcher;
-use crate::streaming_state::StreamingState;
 use crate::PipelineResult;
+use crate::streaming_state::StreamingState;
 use openproxy_adapters::upstream::{CancellationToken, UpstreamRequest};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::CoreError;
@@ -574,14 +574,14 @@ mod tests {
     //! (que requiere red); la rama de pre-flight + sink-missing es la
     //! primera que se evalúa y no necesita IO.
 
+    use super::super::UpstreamDispatcher;
     use super::super::tests::fresh_pool;
     use super::super::types::{DispatchContext, StreamDispatchParams};
-    use super::super::UpstreamDispatcher;
     use openproxy_adapters::UpstreamClient;
     use openproxy_db::MasterKey;
+    use openproxy_types::CancelReason;
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::providers::{AuthType, ProviderFormat, RateLimitScope};
-    use openproxy_types::CancelReason;
 
     fn build_dispatcher_for_stream_test(
         conn_arc: std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
@@ -780,7 +780,7 @@ mod tests {
             }
             other => panic!("expected CoreError::Internal, got {other:?}"),
         }
-                assert_eq!(result.status_code, 500);
+        assert_eq!(result.status_code, 500);
 
         // Verificamos también que el DispatchContext se construye
         // correctamente vía la rama de fallo temprano — sanity check

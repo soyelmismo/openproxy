@@ -1,8 +1,6 @@
 //! OpenAI Responses API SSE parser.
 
-use super::{
-    UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done,
-};
+use super::{UpstreamSseChunk, make_text_delta, parse_provider_json, parse_sse_data_or_done};
 use crate::translation::OpenAIUsage;
 use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;
@@ -150,13 +148,7 @@ pub fn parse_responses_sse_stream_line(
             }
         }
 
-        let chunk = super::make_tool_call_delta(
-            chunk_id,
-            created,
-            model_name,
-            index as u32,
-            delta,
-        );
+        let chunk = super::make_tool_call_delta(chunk_id, created, model_name, index as u32, delta);
         return Ok(Some(chunk));
     }
 
@@ -166,11 +158,7 @@ pub fn parse_responses_sse_stream_line(
         let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
         if !text.is_empty() {
             return Ok(Some(make_text_delta(
-                chunk_id,
-                created,
-                model_name,
-                text,
-                false,
+                chunk_id, created, model_name, text, false,
             )));
         }
     }
@@ -182,11 +170,7 @@ pub fn parse_responses_sse_stream_line(
         let delta = value.get("delta").and_then(|v| v.as_str()).unwrap_or("");
         if !delta.is_empty() {
             return Ok(Some(make_text_delta(
-                chunk_id,
-                created,
-                model_name,
-                delta,
-                false,
+                chunk_id, created, model_name, delta, false,
             )));
         }
     }

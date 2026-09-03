@@ -323,9 +323,9 @@ mod tests {
     }
 
     fn project_id_for(raw: Option<&str>) -> Option<String> {
-    raw.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .and_then(|v| antigravity_project_from_value(&v))
-}
+        raw.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| antigravity_project_from_value(&v))
+    }
 
     #[test]
     fn antigravity_project_skips_camel_case_post_migration() {
@@ -339,8 +339,7 @@ mod tests {
         // shadowing the canonical key.
         let account = raw_with_meta(Some(r#"{"projectId":"proj-abc"}"#));
         assert_eq!(
-            project_id_for(account.oauth_provider_specific.as_deref())
-                .as_deref(),
+            project_id_for(account.oauth_provider_specific.as_deref()).as_deref(),
             None
         );
     }
@@ -350,8 +349,7 @@ mod tests {
         let account = raw_with_meta(Some(r#"{"project_id":"proj-snake"}"#));
 
         assert_eq!(
-            project_id_for(account.oauth_provider_specific.as_deref())
-                .as_deref(),
+            project_id_for(account.oauth_provider_specific.as_deref()).as_deref(),
             Some("proj-snake")
         );
     }
@@ -371,13 +369,14 @@ mod tests {
         );
         // snake_case wins when both keys are present.
         assert_eq!(
-            antigravity_project_from_value(
-                &json!({"project_id":"snake","projectId":"camel"})
-            ),
+            antigravity_project_from_value(&json!({"project_id":"snake","projectId":"camel"})),
             Some("snake".to_string())
         );
         assert_eq!(antigravity_project_from_value(&json!({})), None);
-        assert_eq!(antigravity_project_from_value(&json!("not-an-object")), None);
+        assert_eq!(
+            antigravity_project_from_value(&json!("not-an-object")),
+            None
+        );
         assert_eq!(
             antigravity_project_from_value(&json!({"project_id":""})),
             None

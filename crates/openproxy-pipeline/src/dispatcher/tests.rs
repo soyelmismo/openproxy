@@ -9,8 +9,8 @@
 //! Este archivo se declara como `#[cfg(test)] mod tests;` desde
 //! `dispatcher/mod.rs`, así que `super::*` resuelve contra el orquestador.
 
-use super::types::DispatchContext;
 use super::UpstreamDispatcher;
+use super::types::DispatchContext;
 use openproxy_adapters::UpstreamClient;
 use openproxy_db::MasterKey;
 use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
