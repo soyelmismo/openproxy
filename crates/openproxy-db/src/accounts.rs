@@ -728,21 +728,21 @@ pub fn update_antigravity_project_id(
         .map_err(crate::error::map_db_error_ctx("query account"))?
         .flatten();
 
-    let mut meta = if let Some(json_str) = current_json_opt {
-        serde_json::from_str::<serde_json::Value>(&json_str)
-            .unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    if let Some(obj) = meta.as_object_mut() {
-        obj.insert(
-            "projectId".to_string(),
-            serde_json::Value::String(new_project_id.to_string()),
-        );
-    }
-
-    let new_json_str = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
+    // Deserialize the existing JSON (if any) into AntigravityMeta so we
+    // preserve any other fields and accept either wire format
+    // (camelCase `projectId` legacy OR snake_case `project_id`).
+    // Then set the new project_id and re-serialize — the snake_case
+    // output is the canonical wire format going forward.
+    let mut meta: AntigravityMeta = current_json_opt
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(AntigravityMeta { project_id: None });
+    meta.project_id = Some(new_project_id.to_string());
+    let new_json_str = serde_json::to_string(&meta).map_err(|e| {
+        CoreError::Internal(format!(
+            "update_antigravity_project_id serialize for account {account_id}: {e}"
+        ))
+    })?;
 
     conn.execute(
         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
@@ -1165,5 +1165,46 @@ mod tests {
         );
         assert!(!map.contains_key(&3)); // NULL column
         assert!(!map.contains_key(&99)); // row not found
+    }
+
+    // ---------- Fase D: update_antigravity_project_id round-trip ----------
+
+    #[test]
+    fn update_antigravity_project_id_round_trips() {
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1)",
+            rusqlite::params![Some(r#"{"projectId":"old"}"#)],
+        )
+        .unwrap();
+
+        update_antigravity_project_id(&conn, 1, "new").unwrap();
+
+        // Read back with both readers to confirm the new value is reachable.
+        let wrapper = read_antigravity_project(&conn, None, 1).unwrap();
+        assert_eq!(wrapper.as_deref(), Some("new"));
+
+        let generic: Option<AntigravityMeta> =
+            read_provider_meta(&conn, None, 1).unwrap();
+        assert_eq!(
+            generic.and_then(|m| m.project_id).as_deref(),
+            Some("new")
+        );
+
+        // The unified writer replaces the legacy camelCase key with
+        // the snake_case canonical form (per C.4 wire-format unification).
+        let raw: Option<Option<String>> = conn
+            .query_row(
+                "SELECT oauth_provider_specific FROM accounts WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let raw = raw.flatten().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(value.get("projectId").is_none());
+        assert_eq!(value["project_id"], "new");
     }
 }
