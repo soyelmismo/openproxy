@@ -160,10 +160,14 @@ impl Pipeline {
             let models_map = repo
                 .get_models_by_row_ids(&model_row_ids)
                 .unwrap_or_default();
-            let (accounts_map, kiro_map, antigravity_map) =
+            let (accounts_map, kiro_map) =
                 repo.get_accounts_meta(&account_ids).unwrap_or_default();
             let providers_map = repo
                 .get_providers_auth_type(&provider_ids_no_account)
+                .unwrap_or_default();
+            let id_values: Vec<i64> = account_ids.iter().map(|a| a.0).collect();
+            let antigravity_map = repo
+                .get_antigravity_projects(&id_values)
                 .unwrap_or_default();
 
             crate::credentials::CredentialManager::resolve_credentials(

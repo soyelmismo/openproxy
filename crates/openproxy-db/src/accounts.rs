@@ -543,19 +543,64 @@ pub struct KiroMeta {
 pub type AccountsMetaMaps = (
     std::collections::HashMap<i64, RawAccount>,
     std::collections::HashMap<i64, KiroMeta>,
-    std::collections::HashMap<i64, Box<str>>,
 );
 
-fn extract_ag_meta(oauth_prov: Option<&str>) -> Option<Box<str>> {
-    let oauth_json = oauth_prov?;
-    let meta: serde_json::Value = serde_json::from_str(oauth_json).ok()?;
-    let pid = meta
-        .get("projectId")
-        .or_else(|| meta.get("project_id"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())?;
-    Some(pid.into())
+/// Batch read of `oauth_provider_specific` for multiple account IDs,
+/// returning a `HashMap<account_id, T>` with only the accounts that
+/// have non-NULL metadata and successful deserialization.
+///
+/// Used by the pipeline's `get_accounts_meta` to populate the
+/// antigravity project map without a per-account query.
+pub fn read_provider_meta_batch<T>(
+    conn: &Connection,
+    master_key: Option<&MasterKey>,
+    account_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let mut out: std::collections::HashMap<i64, T> =
+        std::collections::HashMap::with_capacity(account_ids.len());
+    if account_ids.is_empty() {
+        return Ok(out);
+    }
+    let rows: Vec<(i64, Option<String>)> = crate::batch::query_in_chunks_by(
+        conn,
+        "SELECT id, oauth_provider_specific FROM accounts WHERE id IN ({})",
+        account_ids,
+        crate::batch::DEFAULT_CHUNK_SIZE,
+        |id| *id,
+        |r| {
+            let id: i64 = r.get(0)?;
+            let raw: Option<String> = r.get(1)?;
+            Ok((id, raw))
+        },
+    )
+    .map_err(crate::error::map_db_error_ctx("batch read_provider_meta"))?;
+
+    for (id, raw) in rows {
+        let Some(raw) = raw.filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let plaintext = match master_key {
+            Some(mk) => decrypt_oauth_provider_specific(Some(&raw), mk),
+            None => Some(raw),
+        };
+        let Some(plaintext) = plaintext else {
+            continue;
+        };
+        let value: T = match serde_json::from_str::<T>(&plaintext) {
+            Ok(v) => v,
+            Err(_) if master_key.is_some() => continue,
+            Err(e) => {
+                return Err(CoreError::Parse(format!(
+                    "read_provider_meta_batch deserialize for account {id}: {e}"
+                )));
+            }
+        };
+        out.insert(id, value);
+    }
+    Ok(out)
 }
 
 fn extract_json_field(val: &serde_json::Value, primary: &str, secondary: &str) -> Option<Box<str>> {
@@ -596,13 +641,8 @@ type AccountRowTuple = (
 fn populate_account_meta_maps(rows: Vec<AccountRowTuple>) -> AccountsMetaMaps {
     let mut raw_map = std::collections::HashMap::with_capacity(rows.len());
     let mut kiro_map = std::collections::HashMap::new();
-    let mut ag_map = std::collections::HashMap::new();
 
     for (id_val, api_key, label, access, refresh, expires, oauth_prov, _email, extra_json) in rows {
-        if let Some(pid) = extract_ag_meta(oauth_prov.as_deref()) {
-            ag_map.insert(id_val, pid);
-        }
-
         if let Some(kiro) = extract_kiro_meta(extra_json.as_deref()) {
             kiro_map.insert(id_val, kiro);
         }
@@ -622,7 +662,7 @@ fn populate_account_meta_maps(rows: Vec<AccountRowTuple>) -> AccountsMetaMaps {
         );
     }
 
-    (raw_map, kiro_map, ag_map)
+    (raw_map, kiro_map)
 }
 
 fn validate_all_accounts_found(
@@ -640,7 +680,6 @@ fn validate_all_accounts_found(
 pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
     if account_ids.is_empty() {
         return Ok((
-            std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
         ));
@@ -668,10 +707,10 @@ pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result
     )
     .map_err(crate::error::map_db_error_ctx("batch query accounts"))?;
 
-    let (raw_map, kiro_map, ag_map) = populate_account_meta_maps(rows);
+    let (raw_map, kiro_map) = populate_account_meta_maps(rows);
     validate_all_accounts_found(account_ids, &raw_map)?;
 
-    Ok((raw_map, kiro_map, ag_map))
+    Ok((raw_map, kiro_map))
 }
 
 pub fn update_antigravity_project_id(
@@ -1091,5 +1130,40 @@ mod tests {
             read_provider_meta(&conn, Some(&master), 1);
         assert!(res.is_ok(), "decrypt failure must NOT propagate Parse");
         assert!(res.unwrap().is_none());
+    }
+
+    // ---------- Fase C.1: read_provider_meta_batch ----------
+
+    #[test]
+    fn read_provider_meta_batch_returns_map_for_valid_ids() {
+        use std::collections::HashMap;
+
+        let conn = open_in_memory();
+        seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts (provider_id, oauth_provider_specific) \
+             VALUES ('antigravity', ?1), \
+                    ('antigravity', ?2), \
+                    ('antigravity', NULL)",
+            rusqlite::params![
+                Some(r#"{"projectId":"a"}"#),
+                Some(r#"{"project_id":"b"}"#),
+            ],
+        )
+        .unwrap();
+
+        let map: HashMap<i64, AntigravityMeta> =
+            read_provider_meta_batch(&conn, None, &[1, 2, 3, 99]).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get(&1).and_then(|m| m.project_id.clone()).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            map.get(&2).and_then(|m| m.project_id.clone()).as_deref(),
+            Some("b")
+        );
+        assert!(!map.contains_key(&3)); // NULL column
+        assert!(!map.contains_key(&99)); // row not found
     }
 }
