@@ -61,8 +61,7 @@ test('sidebar collapse to icons + localStorage persistence', async ({ page }: { 
   expect(labelIsHiddenAttr || labelDisplay === 'none').toBe(true);
 
   // 6. Body has the collapsed class.
-  const bodyHasClass = await page.evaluate(() => document.body.classList.contains('sidebar-collapsed'));
-  expect(bodyHasClass).toBe(true);
+  await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
 
   // 7. Sidebar column narrowed to ~56px.
   const collapsedWidth = await sidebarWidth(page);
@@ -72,8 +71,7 @@ test('sidebar collapse to icons + localStorage persistence', async ({ page }: { 
   await page.reload();
   const storedAfterReload = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
   expect(storedAfterReload).toBe('1');
-  const bodyHasClassAfterReload = await page.evaluate(() => document.body.classList.contains('sidebar-collapsed'));
-  expect(bodyHasClassAfterReload).toBe(true);
+  await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
   const widthAfterReload = await sidebarWidth(page);
   expect(widthAfterReload).toBeLessThan(80);
 
@@ -88,6 +86,7 @@ test('sidebar collapse to icons + localStorage persistence', async ({ page }: { 
 
   // 10. Reload — expanded persists.
   await page.reload();
+  await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
   const storedExpandedReload = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
   expect(storedExpandedReload).toBe('0');
   const widthExpandedReload = await sidebarWidth(page);
