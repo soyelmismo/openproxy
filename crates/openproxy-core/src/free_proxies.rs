@@ -1621,9 +1621,7 @@ fn execute_proxy_batch_update(
                 let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
             }
         }
-        tx_db
-            .commit()
-            .map_err(openproxy_db::error::map_db_error)?;
+        tx_db.commit().map_err(openproxy_db::error::map_db_error)?;
         Ok(())
     })
 }
