@@ -352,7 +352,7 @@ fn parse_tool_call_probe(payload: &str) -> Option<Vec<ToolCallProbe<'_>>> {
         .and_then(|d| d.tool_calls)
 }
 
-fn parse_upstream_error_payload(json_str: &str) -> Option<(u16, String)> {
+fn parse_upstream_error_payload(json_bytes: &[u8]) -> Option<(u16, String)> {
     #[derive(serde::Deserialize)]
     struct UpstreamErrorProbe<'a> {
         choices: Option<Vec<serde_json::Value>>,
@@ -365,7 +365,7 @@ fn parse_upstream_error_payload(json_str: &str) -> Option<(u16, String)> {
         #[serde(borrow)]
         message: Option<std::borrow::Cow<'a, str>>,
     }
-    let v = serde_json::from_slice::<UpstreamErrorProbe<'_>>(json_str.as_bytes()).ok()?;
+    let v = serde_json::from_slice::<UpstreamErrorProbe<'_>>(json_bytes).ok()?;
     if !v.choices.is_none_or(|c| c.is_empty()) {
         return None;
     }
@@ -379,16 +379,18 @@ fn parse_upstream_error_payload(json_str: &str) -> Option<(u16, String)> {
     Some((code, message))
 }
 
-fn extract_error_from_line(line: &str) -> Option<(u16, String)> {
-    let json_str = line
-        .strip_prefix("data: ")
-        .or_else(|| line.strip_prefix("data:"))
-        .unwrap_or(line)
-        .trim();
-    if !json_str.starts_with('{') {
+fn extract_error_from_line(line: &[u8]) -> Option<(u16, String)> {
+    let json_bytes = line
+        .strip_prefix(b"data: ")
+        .or_else(|| line.strip_prefix(b"data:"))
+        .unwrap_or(line);
+
+    let json_bytes = json_bytes.trim_ascii();
+
+    if !json_bytes.starts_with(b"{") {
         return None;
     }
-    parse_upstream_error_payload(json_str)
+    parse_upstream_error_payload(json_bytes)
 }
 
 impl ResponseAccumulator {
@@ -402,8 +404,7 @@ impl ResponseAccumulator {
         }
         self.raw_response_body
             .split(|&b| b == b'\n')
-            .map(String::from_utf8_lossy)
-            .find_map(|line| extract_error_from_line(&line))
+            .find_map(extract_error_from_line)
     }
 
     fn append_delta_content_if_present(&mut self, payload: &str) {
