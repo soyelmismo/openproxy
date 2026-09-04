@@ -1000,6 +1000,7 @@ fn insert_upstream_headers(
     req: &mut UpstreamRequest,
     headers: &[(&str, &str)],
 ) -> std::result::Result<(), String> {
+    req.headers.reserve(headers.len());
     for &(k, v) in headers {
         let Ok(hv) = HeaderValue::from_str(v) else {
             continue;
@@ -1069,16 +1070,6 @@ pub(crate) async fn upstream_get_json(
     serde_json::from_slice(&bytes).map_err(|e| format!("{url}: parse: {e}"))
 }
 
-fn header_name_custom(name: &str) -> Option<http::header::HeaderName> {
-    if name.eq_ignore_ascii_case("x-api-key") {
-        Some(http::HeaderName::from_static("x-api-key"))
-    } else if name.eq_ignore_ascii_case("x-goog-api-key") {
-        Some(http::HeaderName::from_static("x-goog-api-key"))
-    } else {
-        None
-    }
-}
-
 /// Map a header name to its typed `http::header::HeaderName` constant
 /// when one exists; return `None` for non-standard names. This keeps
 /// the common cases (`Authorization`, `Content-Type`, `User-Agent`)
@@ -1086,14 +1077,17 @@ fn header_name_custom(name: &str) -> Option<http::header::HeaderName> {
 /// for every call.
 pub(crate) fn header_name(name: &str) -> Option<http::header::HeaderName> {
     use http::header;
-    if name.eq_ignore_ascii_case("authorization") {
-        Some(header::AUTHORIZATION)
-    } else if name.eq_ignore_ascii_case("content-type") {
-        Some(header::CONTENT_TYPE)
-    } else if name.eq_ignore_ascii_case("user-agent") {
-        Some(header::USER_AGENT)
-    } else {
-        header_name_custom(name)
+    match name.len() {
+        9 if name.eq_ignore_ascii_case("x-api-key") => {
+            Some(http::HeaderName::from_static("x-api-key"))
+        }
+        10 if name.eq_ignore_ascii_case("user-agent") => Some(header::USER_AGENT),
+        12 if name.eq_ignore_ascii_case("content-type") => Some(header::CONTENT_TYPE),
+        13 if name.eq_ignore_ascii_case("authorization") => Some(header::AUTHORIZATION),
+        14 if name.eq_ignore_ascii_case("x-goog-api-key") => {
+            Some(http::HeaderName::from_static("x-goog-api-key"))
+        }
+        _ => None,
     }
 }
 
