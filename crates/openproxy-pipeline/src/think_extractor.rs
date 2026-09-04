@@ -264,12 +264,8 @@ fn strip_orphaned_close_tags(content: &str) -> String {
             if find_ignore_ascii_case(safe_slice_to(&result, pos), open_tag).is_some() {
                 break;
             }
-            // Remove the orphaned close tag.
-            result = format!(
-                "{}{}",
-                safe_slice_to(&result, pos),
-                safe_slice_from(&result, pos + close_tag.len())
-            );
+            // Remove the orphaned close tag in-place.
+            result.replace_range(pos..pos + close_tag.len(), "");
         }
     }
     result
@@ -399,7 +395,7 @@ impl ThinkStreamExtractor {
         };
 
         // Found an opening tag. Emit content before it.
-        let content_before = safe_slice_to(input, tag_pos).to_string();
+        let mut content_before = safe_slice_to(input, tag_pos).to_string();
         let after_tag = safe_slice_from(input, tag_pos);
 
         // Determine the close tag we're looking for.
@@ -423,12 +419,10 @@ impl ThinkStreamExtractor {
         let (more_content, reasoning) = self.process_inside_think(after_tag_content);
         // content_before is the text before <think>, more_content should
         // be empty (we're inside think now) but just in case.
-        let final_content = if more_content.is_empty() {
-            content_before
-        } else {
-            format!("{content_before}{more_content}")
-        };
-        (final_content, reasoning)
+        if !more_content.is_empty() {
+            content_before.push_str(&more_content);
+        }
+        (content_before, reasoning)
     }
 
     fn process_inside_think(&mut self, input: &str) -> (String, String) {
@@ -444,7 +438,7 @@ impl ThinkStreamExtractor {
         match find_ignore_ascii_case(input, &close_tag) {
             Some(pos) => {
                 // Found closing tag. Everything before it is reasoning.
-                let reasoning = safe_slice_to(input, pos).to_string();
+                let mut reasoning = safe_slice_to(input, pos).to_string();
                 let after_close = safe_slice_from(input, pos + close_tag.len());
                 self.inside_think = false;
                 self.close_tag = None;
@@ -455,12 +449,10 @@ impl ThinkStreamExtractor {
 
                 // Process remaining content as outside-think.
                 let (more_content, more_reasoning) = self.process_outside_think(after_close);
-                let final_reasoning = if more_reasoning.is_empty() {
-                    reasoning
-                } else {
-                    format!("{reasoning}{more_reasoning}")
-                };
-                (more_content, final_reasoning)
+                if !more_reasoning.is_empty() {
+                    reasoning.push_str(&more_reasoning);
+                }
+                (more_content, reasoning)
             }
             None => {
                 // No closing tag found. But the end of the input might
