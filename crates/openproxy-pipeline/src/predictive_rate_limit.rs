@@ -354,10 +354,7 @@ impl PredictiveRateLimiter {
             return state_clone.evaluate(now_ms);
         }
 
-        let mut map = shard.inner.write();
-        let state = map.entry(key).or_default();
-        state.refresh(now_ms);
-        state.evaluate(now_ms)
+        TargetReadiness::Ready
     }
 
     /// Evalúa la disponibilidad predictiva del target sin modificar contadores (compatibilidad).
