@@ -404,7 +404,7 @@ impl ResponseAccumulator {
         }
         self.raw_response_body
             .split(|&b| b == b'\n')
-            .find_map(|line| extract_error_from_line(line))
+            .find_map(extract_error_from_line)
     }
 
     fn append_delta_content_if_present(&mut self, payload: &str) {
