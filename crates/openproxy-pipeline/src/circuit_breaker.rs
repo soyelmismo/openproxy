@@ -1,7 +1,7 @@
 use openproxy_types::combos::ComboTarget;
 use openproxy_types::config::CircuitBreakerConfig;
 use openproxy_types::ids::{AccountId, ModelRowId};
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,7 +57,7 @@ pub struct FailureOutcome {
 
 #[derive(Clone)]
 pub struct CircuitBreakerRegistry {
-    inner: Arc<Mutex<HashMap<CircuitBreakerKey, AccountBreaker>>>,
+    inner: Arc<RwLock<HashMap<CircuitBreakerKey, AccountBreaker>>>,
     threshold: u8,
     unhealthy_duration: Duration,
 }
@@ -65,30 +65,32 @@ pub struct CircuitBreakerRegistry {
 impl CircuitBreakerRegistry {
     pub fn new(config: &CircuitBreakerConfig) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(RwLock::new(HashMap::new())),
             threshold: config.failure_threshold,
             unhealthy_duration: Duration::from_millis(config.unhealthy_duration_ms),
         }
     }
 
     pub fn is_healthy(&self, account: CircuitBreakerKey) -> Health {
-        let mut g = self.inner.lock();
-        let entry = g.entry(account).or_insert_with(|| AccountBreaker {
-            unhealthy_until: None,
-            last_activity_ms: now_ms(),
-            consecutive_failures: 0,
-            state: Health::Healthy,
-        });
-        if entry.state == Health::Unhealthy
-            && let Some(until) = entry.unhealthy_until
-            && Instant::now() >= until
-        {
-            entry.state = Health::Healthy;
-            entry.consecutive_failures = 0;
-            entry.unhealthy_until = None;
+        if !self.inner.read().contains_key(&account) {
+            return Health::Healthy;
         }
-        entry.last_activity_ms = now_ms();
-        entry.state
+
+        let mut g = self.inner.write();
+        if let Some(entry) = g.get_mut(&account) {
+            if entry.state == Health::Unhealthy
+                && let Some(until) = entry.unhealthy_until
+                && Instant::now() >= until
+            {
+                entry.state = Health::Healthy;
+                entry.consecutive_failures = 0;
+                entry.unhealthy_until = None;
+            }
+            entry.last_activity_ms = now_ms();
+            entry.state
+        } else {
+            Health::Healthy
+        }
     }
 
     pub fn is_target_healthy(&self, target: &ComboTarget) -> bool {
@@ -106,7 +108,7 @@ impl CircuitBreakerRegistry {
     }
 
     pub fn record_success(&self, account: CircuitBreakerKey) {
-        let mut g = self.inner.lock();
+        let mut g = self.inner.write();
         if let Some(entry) = g.get_mut(&account) {
             entry.consecutive_failures = 0;
             entry.state = Health::Healthy;
@@ -120,7 +122,7 @@ impl CircuitBreakerRegistry {
     }
 
     pub fn record_failure_outcome(&self, account: CircuitBreakerKey) -> FailureOutcome {
-        let mut g = self.inner.lock();
+        let mut g = self.inner.write();
         let entry = g.entry(account).or_insert_with(|| AccountBreaker {
             consecutive_failures: 0,
             state: Health::Healthy,
@@ -147,7 +149,7 @@ impl CircuitBreakerRegistry {
 
     #[cfg(test)]
     pub fn force_unhealthy(&self, account: CircuitBreakerKey) {
-        let mut g = self.inner.lock();
+        let mut g = self.inner.write();
         g.insert(
             account,
             AccountBreaker {
@@ -160,24 +162,28 @@ impl CircuitBreakerRegistry {
     }
 
     pub fn prune_idle(&self, max_idle: Duration) -> usize {
-        let mut g = self.inner.lock();
+        let mut g = self.inner.write();
         let cutoff = now_ms().saturating_sub(max_idle.as_millis() as u64);
         let now = Instant::now();
-        let before = g.len();
+        let mut pruned = 0;
         g.retain(|_, e| {
             let is_actively_unhealthy =
                 e.state == Health::Unhealthy && e.unhealthy_until.is_some_and(|until| now < until);
-            is_actively_unhealthy || e.last_activity_ms >= cutoff
+            let keep = is_actively_unhealthy || e.last_activity_ms >= cutoff;
+            if !keep {
+                pruned += 1;
+            }
+            keep
         });
-        before - g.len()
+        pruned
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner.read().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner.read().is_empty()
     }
 }
 
