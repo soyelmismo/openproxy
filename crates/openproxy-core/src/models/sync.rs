@@ -82,14 +82,14 @@ pub fn execute_sync_transaction(
             .unchecked_transaction()
             .map_err(openproxy_db::error::map_db_error)?;
 
-    {
-        let new_models_set: std::collections::HashSet<&str> = diff
-            .new_models
-            .iter()
-            .map(|n| n.model_id.as_str())
-            .collect();
+        {
+            let new_models_set: std::collections::HashSet<&str> = diff
+                .new_models
+                .iter()
+                .map(|n| n.model_id.as_str())
+                .collect();
 
-        let mut stmt = tx
+            let mut stmt = tx
             .prepare(
                 "INSERT INTO models (\
                     provider_id, model_id, display_name, target_format, \
@@ -120,104 +120,104 @@ pub fn execute_sync_transaction(
             )
             .map_err(openproxy_db::error::map_db_error)?;
 
-        for d in discovered {
-            let model_id_str = d.model_id.as_str();
-            let caps = d
-                .capabilities
-                .clone()
-                .unwrap_or_else(|| openproxy_types::capabilities::infer_capabilities(model_id_str));
-            let caps_json = caps.to_json();
-            let input_mods_json = d
-                .input_modalities
-                .as_ref()
-                .and_then(|v| serde_json::to_string(v).ok())
-                .or_else(|| {
-                    Some(openproxy_types::capabilities::infer_input_modalities_json(
-                        model_id_str,
-                    ))
+            for d in discovered {
+                let model_id_str = d.model_id.as_str();
+                let caps = d.capabilities.clone().unwrap_or_else(|| {
+                    openproxy_types::capabilities::infer_capabilities(model_id_str)
                 });
-            let output_mods_json = d
-                .output_modalities
-                .as_ref()
-                .and_then(|v| serde_json::to_string(v).ok())
-                .or_else(|| {
-                    Some(openproxy_types::capabilities::infer_output_modalities_json(
-                        model_id_str,
-                    ))
+                let caps_json = caps.to_json();
+                let input_mods_json = d
+                    .input_modalities
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string(v).ok())
+                    .or_else(|| {
+                        Some(openproxy_types::capabilities::infer_input_modalities_json(
+                            model_id_str,
+                        ))
+                    });
+                let output_mods_json = d
+                    .output_modalities
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string(v).ok())
+                    .or_else(|| {
+                        Some(openproxy_types::capabilities::infer_output_modalities_json(
+                            model_id_str,
+                        ))
+                    });
+                let inferred_type = d.model_type.clone().unwrap_or_else(|| {
+                    openproxy_types::capabilities::infer_model_type(model_id_str).to_string()
                 });
-            let inferred_type = d.model_type.clone().unwrap_or_else(|| {
-                openproxy_types::capabilities::infer_model_type(model_id_str).to_string()
-            });
-            let inferred_family = d
-                .family
-                .clone()
-                .or_else(|| openproxy_types::capabilities::infer_family(model_id_str));
+                let inferred_family = d
+                    .family
+                    .clone()
+                    .or_else(|| openproxy_types::capabilities::infer_family(model_id_str));
 
-            let is_new = new_models_set.contains(model_id_str);
-            if is_new {
-                new_model_ids.push(d.model_id.clone());
-                inserted_model_ids.push(model_id_str);
+                let is_new = new_models_set.contains(model_id_str);
+                if is_new {
+                    new_model_ids.push(d.model_id.clone());
+                    inserted_model_ids.push(model_id_str);
+                }
+
+                let normalized = crate::model_normalize::normalize_model_id(model_id_str);
+
+                let changed = stmt
+                    .execute(params![
+                        provider.as_str(),        // 1. provider_id
+                        model_id_str,             // 2. model_id
+                        d.display_name,           // 3. display_name
+                        d.target_format.as_str(), // 4. target_format
+                        ttl_secs,                 // 5. (used in the datetime '+? seconds' expr)
+                        d.context_length,         // 6. context_length
+                        d.max_output_tokens,      // 7. max_output_tokens
+                        input_mods_json,          // 8. input_modalities_json
+                        output_mods_json,         // 9. output_modalities_json
+                        inferred_type,            // 10. model_type
+                        inferred_family,          // 11. family
+                        caps_json,                // 12. capabilities_json
+                        &normalized,              // 13. model_id_normalized
+                    ])
+                    .map_err(openproxy_db::error::map_db_error)?;
+                total += changed;
             }
-
-            let normalized = crate::model_normalize::normalize_model_id(model_id_str);
-
-            let changed = stmt
-                .execute(params![
-                    provider.as_str(),        // 1. provider_id
-                    model_id_str,             // 2. model_id
-                    d.display_name,           // 3. display_name
-                    d.target_format.as_str(), // 4. target_format
-                    ttl_secs,                 // 5. (used in the datetime '+? seconds' expr)
-                    d.context_length,         // 6. context_length
-                    d.max_output_tokens,      // 7. max_output_tokens
-                    input_mods_json,          // 8. input_modalities_json
-                    output_mods_json,         // 9. output_modalities_json
-                    inferred_type,            // 10. model_type
-                    inferred_family,          // 11. family
-                    caps_json,                // 12. capabilities_json
-                    &normalized,              // 13. model_id_normalized
-                ])
-                .map_err(openproxy_db::error::map_db_error)?;
-            total += changed;
         }
-    }
 
-    if discovered.is_empty() {
-        tx.execute(
-            "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
-            params![provider.as_str()],
-        )
-        .map_err(openproxy_db::error::map_db_error)?;
-    } else {
-        let discovered_ids: Vec<&str> = discovered.iter().map(|d| d.model_id.as_str()).collect();
-        let discovered_json =
-            serde_json::to_string(&discovered_ids).unwrap_or_else(|_| "[]".to_string());
-        let sql = "DELETE FROM models \
+        if discovered.is_empty() {
+            tx.execute(
+                "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
+                params![provider.as_str()],
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+        } else {
+            let discovered_ids: Vec<&str> =
+                discovered.iter().map(|d| d.model_id.as_str()).collect();
+            let discovered_json =
+                serde_json::to_string(&discovered_ids).unwrap_or_else(|_| "[]".to_string());
+            let sql = "DELETE FROM models \
              WHERE provider_id = ? AND custom = 0 \
                AND model_id NOT IN (SELECT value FROM json_each(?))";
-        tx.execute(sql, params![provider.as_str(), discovered_json])
-            .map_err(openproxy_db::error::map_db_error)?;
-    }
+            tx.execute(sql, params![provider.as_str(), discovered_json])
+                .map_err(openproxy_db::error::map_db_error)?;
+        }
 
-    let events = generate_events(&tx, provider, diff)?;
+        let events = generate_events(&tx, provider, diff)?;
 
-    if !inserted_model_ids.is_empty() {
-        let inserted_json =
-            serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
-        let sql = "SELECT id, model_id FROM models \
+        if !inserted_model_ids.is_empty() {
+            let inserted_json =
+                serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
+            let sql = "SELECT id, model_id FROM models \
              WHERE provider_id = ? AND model_id IN (SELECT value FROM json_each(?))";
-        let mut stmt = tx.prepare(sql).map_err(openproxy_db::error::map_db_error)?;
-        let rows = stmt
-            .query_map(params![provider.as_str(), inserted_json], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-            })
-            .map_err(openproxy_db::error::map_db_error)?;
-        let new_rows: Vec<(i64, String)> = rows
-            .map(|r| r.map_err(openproxy_db::error::map_db_error))
-            .collect::<Result<Vec<_>>>()?;
-        drop(stmt);
+            let mut stmt = tx.prepare(sql).map_err(openproxy_db::error::map_db_error)?;
+            let rows = stmt
+                .query_map(params![provider.as_str(), inserted_json], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(openproxy_db::error::map_db_error)?;
+            let new_rows: Vec<(i64, String)> = rows
+                .map(|r| r.map_err(openproxy_db::error::map_db_error))
+                .collect::<Result<Vec<_>>>()?;
+            drop(stmt);
 
-        let combo_targets_present: bool = tx
+            let combo_targets_present: bool = tx
             .query_row(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'combo_targets'",
                 [],
@@ -225,29 +225,29 @@ pub fn execute_sync_transaction(
             )
             .is_ok_and(|n| n != 0);
 
-        if combo_targets_present {
-            for (new_id, upstream) in &new_rows {
-                let updated = openproxy_db::combos::reconnect_orphan_targets(
-                    &tx,
-                    provider,
-                    upstream,
-                    ModelRowId(*new_id),
-                )?;
-                if updated > 0 {
-                    tracing::info!(
-                        target: "openproxy.core.models",
-                        provider = %provider,
-                        upstream_model_id = %upstream,
-                        new_model_row_id = new_id,
-                        reconnected_targets = updated,
-                        "gate F1: reconnected orphan combo_targets to re-inserted model",
-                    );
+            if combo_targets_present {
+                for (new_id, upstream) in &new_rows {
+                    let updated = openproxy_db::combos::reconnect_orphan_targets(
+                        &tx,
+                        provider,
+                        upstream,
+                        ModelRowId(*new_id),
+                    )?;
+                    if updated > 0 {
+                        tracing::info!(
+                            target: "openproxy.core.models",
+                            provider = %provider,
+                            upstream_model_id = %upstream,
+                            new_model_row_id = new_id,
+                            reconnected_targets = updated,
+                            "gate F1: reconnected orphan combo_targets to re-inserted model",
+                        );
+                    }
                 }
             }
         }
-    }
 
-    tx.commit().map_err(openproxy_db::error::map_db_error)?;
+        tx.commit().map_err(openproxy_db::error::map_db_error)?;
 
         Ok((
             UpsertResult {
