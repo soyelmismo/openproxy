@@ -6,23 +6,32 @@ use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
 use std::collections::HashMap;
 
-pub struct CredentialManager;
-
-impl CredentialManager {
-    fn antigravity_project_from_account(raw_account: &RawAccount) -> Option<String> {
-        raw_account
-            .oauth_provider_specific
-            .as_deref()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .and_then(|meta| {
-                meta.get("projectId")
-                    .or_else(|| meta.get("project_id"))
-                    .and_then(|v| v.as_str())
-                    .filter(|v| !v.is_empty())
-                    .map(ToString::to_string)
-            })
+/// In-memory reader for the Antigravity `project_id` from an already-
+/// loaded `oauth_provider_specific` JSON value.
+///
+/// Used in hot paths where the account is already in memory (the
+/// pipeline's `Credentials` flow and the smart-warmup scheduler) and
+/// issuing a DB query would be wasteful.
+///
+/// Reads the canonical snake_case `project_id` key (post-C.4 wire
+/// format unification; the database migration
+/// `000065_antigravity_project_id_wire_format.sql` normalizes all
+/// pre-existing camelCase rows to snake_case).
+///
+/// Returns `None` when the value is not an object, when no
+/// `project_id` key is present, or when the value is not a
+/// non-empty string.
+pub fn antigravity_project_from_value(value: &serde_json::Value) -> Option<String> {
+    let pid = value.get("project_id")?.as_str()?;
+    let trimmed = pid.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
+
+pub struct CredentialManager;
 
 pub struct ResolutionMaps<'a> {
     pub models_map: &'a HashMap<i64, Model>,
@@ -138,7 +147,13 @@ fn extract_provider_custom_meta(
                 .antigravity_map
                 .get(&account_id)
                 .map(|s| s.to_string())
-                .or_else(|| CredentialManager::antigravity_project_from_account(raw_account));
+                .or_else(|| {
+                    raw_account
+                        .oauth_provider_specific
+                        .as_deref()
+                        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                        .and_then(|v| antigravity_project_from_value(&v))
+                });
             let metadata = raw_account
                 .oauth_provider_specific
                 .as_deref()
@@ -307,13 +322,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn antigravity_project_reads_camel_case_account_meta() {
-        let account = raw_with_meta(Some(r#"{"projectId":"proj-abc"}"#));
+    fn project_id_for(raw: Option<&str>) -> Option<String> {
+        raw.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| antigravity_project_from_value(&v))
+    }
 
+    #[test]
+    fn antigravity_project_skips_camel_case_post_migration() {
+        // Post-migration (snake_case is canonical), the in-memory helper
+        // only inspects `project_id`. Legacy camelCase `projectId` rows
+        // are normalized by DB migration 000065 and the DB-backed reader
+        // (AntigravityMeta's #[serde(alias = "projectId")]) before this
+        // helper is ever called with decrypted JSON. So a still-camelCase
+        // payload reaching the in-memory helper means a row was not
+        // normalized, and we must return `None` rather than silently
+        // shadowing the canonical key.
+        let account = raw_with_meta(Some(r#"{"projectId":"proj-abc"}"#));
         assert_eq!(
-            CredentialManager::antigravity_project_from_account(&account).as_deref(),
-            Some("proj-abc")
+            project_id_for(account.oauth_provider_specific.as_deref()).as_deref(),
+            None
         );
     }
 
@@ -322,8 +349,41 @@ mod tests {
         let account = raw_with_meta(Some(r#"{"project_id":"proj-snake"}"#));
 
         assert_eq!(
-            CredentialManager::antigravity_project_from_account(&account).as_deref(),
+            project_id_for(account.oauth_provider_specific.as_deref()).as_deref(),
             Some("proj-snake")
+        );
+    }
+
+    #[test]
+    fn antigravity_project_from_value_reads_snake_case_only() {
+        use serde_json::json;
+        assert_eq!(
+            antigravity_project_from_value(&json!({"project_id":"snake"})),
+            Some("snake".to_string())
+        );
+        // camelCase is NOT supported by the in-memory helper post-C.4
+        // (the migration normalizes legacy rows to snake_case).
+        assert_eq!(
+            antigravity_project_from_value(&json!({"projectId":"camel"})),
+            None
+        );
+        // snake_case wins when both keys are present.
+        assert_eq!(
+            antigravity_project_from_value(&json!({"project_id":"snake","projectId":"camel"})),
+            Some("snake".to_string())
+        );
+        assert_eq!(antigravity_project_from_value(&json!({})), None);
+        assert_eq!(
+            antigravity_project_from_value(&json!("not-an-object")),
+            None
+        );
+        assert_eq!(
+            antigravity_project_from_value(&json!({"project_id":""})),
+            None
+        );
+        assert_eq!(
+            antigravity_project_from_value(&json!({"project_id":"   "})),
+            None
         );
     }
 }

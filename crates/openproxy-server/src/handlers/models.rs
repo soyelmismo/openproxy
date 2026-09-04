@@ -28,6 +28,7 @@
 
 use axum::{Json, extract::State, http::HeaderMap};
 use openproxy_core::{capabilities, models};
+use openproxy_core::capabilities::resolve_effective_model_type;
 use openproxy_types::CoreError;
 
 use crate::{error::ApiError, state::AppState};
@@ -225,31 +226,10 @@ fn build_combo_entry(
         "max_output_tokens": null,
         "input_modalities": input_modalities,
         "output_modalities": output_modalities,
-        "capabilities": {},
+        "capabilities": serde_json::json!({}),
         "type": combo_type,
         "family": "combo",
     })
-}
-
-fn resolve_effective_model_type<'a>(
-    model_type: &'a str,
-    custom: bool,
-    inferred_type: &'a str,
-) -> &'a str {
-    if custom {
-        if model_type.is_empty() {
-            inferred_type
-        } else {
-            model_type
-        }
-    } else if model_type.is_empty()
-        || (model_type == "chat" && inferred_type != "chat")
-        || (inferred_type == "chat" && (model_type == "audio" || model_type == "image"))
-    {
-        inferred_type
-    } else {
-        model_type
-    }
 }
 
 fn parse_modalities_json_or(

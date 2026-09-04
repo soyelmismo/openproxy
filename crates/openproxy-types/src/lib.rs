@@ -61,6 +61,7 @@ pub use capabilities::{
     infer_default_output_modalities, infer_family, infer_input_modalities,
     infer_input_modalities_for_model, infer_input_modalities_json, infer_max_output_tokens,
     infer_model_type, infer_output_modalities, infer_output_modalities_json,
+    resolve_effective_model_type,
 };
 pub use combos::{
     Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH, PriorityMode, Strategy,

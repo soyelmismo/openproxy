@@ -214,15 +214,17 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 }
 
 pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
-    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+    crate::error::with_busy_retry("delete_model", || {
+        let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
-    let removed = tx
-        .execute("DELETE FROM models WHERE id = ?1", params![id.0])
-        .map_err(map_db_error_ctx(format!("delete model {}", id.0)))?;
+        let removed = tx
+            .execute("DELETE FROM models WHERE id = ?1", params![id.0])
+            .map_err(map_db_error_ctx(format!("delete model {}", id.0)))?;
 
-    tx.commit().map_err(map_db_error)?;
+        tx.commit().map_err(map_db_error)?;
 
-    Ok(removed as u64)
+        Ok(removed as u64)
+    })
 }
 
 pub fn create_custom(
@@ -496,6 +498,20 @@ pub fn apply_auto_activation(
     Ok(updated as u64)
 }
 
+pub use crate::error::BUSY_RETRY_DELAYS;
+
+/// `apply_auto_activation` with automatic retry on transient SQLite
+/// BUSY/LOCKED via [`crate::error::with_busy_retry`].
+pub fn apply_auto_activation_with_retry(
+    conn: &Connection,
+    provider: &ProviderId,
+    keyword: Option<&str>,
+) -> Result<u64> {
+    crate::error::with_busy_retry("apply_auto_activation", || {
+        apply_auto_activation(conn, provider, keyword)
+    })
+}
+
 fn fetch_existing_model_ids(
     conn: &Connection,
     provider: &ProviderId,
@@ -538,7 +554,13 @@ fn upsert_discovered_models<'a>(
                 max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
                 input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
                 output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                model_type = COALESCE(models.model_type, excluded.model_type), \
+                model_type = CASE \
+                    WHEN models.custom = 1 THEN COALESCE(models.model_type, excluded.model_type) \
+                    WHEN models.model_type = 'audio' AND excluded.model_type = 'chat' THEN excluded.model_type \
+                    WHEN models.model_type = 'chat' AND excluded.model_type != 'chat' THEN excluded.model_type \
+                    WHEN models.model_type = 'embedding' AND excluded.model_type = 'rerank' THEN excluded.model_type \
+                    ELSE COALESCE(models.model_type, excluded.model_type) \
+                END, \
                 family = COALESCE(excluded.family, family), \
                 capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
                 model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
@@ -663,31 +685,33 @@ pub fn upsert_many(
     discovered: &[DiscoveredModel],
     ttl: Duration,
 ) -> Result<UpsertResult> {
-    let ttl_secs = ttl.as_secs() as i64;
-    let existing = fetch_existing_model_ids(conn, provider)?;
-    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+    crate::error::with_busy_retry("models_upsert_many", || {
+        let ttl_secs = ttl.as_secs() as i64;
+        let existing = fetch_existing_model_ids(conn, provider)?;
+        let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
-    let mut new_model_ids: Vec<ModelId> = Vec::new();
-    let mut inserted_model_ids: Vec<&str> = Vec::new();
+        let mut new_model_ids: Vec<ModelId> = Vec::new();
+        let mut inserted_model_ids: Vec<&str> = Vec::new();
 
-    let total = upsert_discovered_models(
-        &tx,
-        provider,
-        discovered,
-        ttl_secs,
-        &existing,
-        &mut new_model_ids,
-        &mut inserted_model_ids,
-    )?;
+        let total = upsert_discovered_models(
+            &tx,
+            provider,
+            discovered,
+            ttl_secs,
+            &existing,
+            &mut new_model_ids,
+            &mut inserted_model_ids,
+        )?;
 
-    prune_obsolete_models(&tx, provider, discovered)?;
-    reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids)?;
+        prune_obsolete_models(&tx, provider, discovered)?;
+        reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids)?;
 
-    tx.commit().map_err(map_db_error)?;
+        tx.commit().map_err(map_db_error)?;
 
-    Ok(UpsertResult {
-        touched: total,
-        new_model_ids: new_model_ids.into(),
+        Ok(UpsertResult {
+            touched: total,
+            new_model_ids: new_model_ids.into(),
+        })
     })
 }
 
@@ -837,5 +861,220 @@ impl ModelRepository for SqliteModelRepository {
 impl crate::crud::FromRow for Model {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         map_row(row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::DbPool;
+    use crate::models;
+    use crate::providers::{self, NewProvider};
+    use openproxy_types::error::CoreError;
+    use openproxy_types::{
+        AuthType, DiscoveredModel, ModelId, ProviderFormat, ProviderId as CoreProviderId,
+        RateLimitScope, TargetFormat,
+    };
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+    use std::time::{Duration, Instant};
+
+    /// Mirror of `combos::tests::fresh_pool` — every test gets an
+    /// isolated file-based DB so WAL locks between tests never bleed.
+    fn fresh_pool() -> (DbPool, PathBuf) {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("openproxy-models-test-{pid}-{nanos}-{n}"));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        let path = dir.join("models.db");
+        let pool = DbPool::open(&path).expect("open pool");
+        {
+            let mut w = pool.writer();
+            crate::migrations::run(&mut w).expect("migrations");
+        }
+        (pool, path)
+    }
+
+    fn seed_provider(conn: &Connection, provider: &CoreProviderId) {
+        providers::create(
+            conn,
+            NewProvider {
+                id: provider,
+                name: provider.as_str(),
+                base_url: "https://example.invalid",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                rate_limit_scope: RateLimitScope::Account,
+            },
+        )
+        .expect("seed provider");
+    }
+
+    fn seed_models(conn: &Connection, provider: &CoreProviderId, ids: &[&str]) {
+        models::upsert_many(
+            conn,
+            provider,
+            &ids.iter()
+                .map(|id| DiscoveredModel {
+                    model_id: ModelId::new(*id),
+                    display_name: Some((*id).to_string()),
+                    target_format: TargetFormat::Openai,
+                    context_length: None,
+                    max_output_tokens: None,
+                    input_modalities: None,
+                    output_modalities: None,
+                    model_type: None,
+                    family: None,
+                    capabilities: None,
+                })
+                .collect::<Vec<_>>(),
+            Duration::from_hours(1),
+        )
+        .expect("upsert_many seed");
+    }
+
+    /// AC-A: happy path — the wrapper succeeds on the first attempt
+    /// when no contention is present. The wrapper must not introduce
+    /// any retry-side delay in the success path.
+    #[test]
+    fn apply_auto_activation_with_retry_succeeds_on_first_attempt() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.open_connection().expect("open conn");
+        let provider = CoreProviderId::new("acme_ok");
+
+        seed_provider(&conn, &provider);
+        seed_models(&conn, &provider, &["gpt-4", "claude-3", "llama-3"]);
+
+        let started = Instant::now();
+        let result = apply_auto_activation_with_retry(&conn, &provider, Some("gpt"));
+        let elapsed = started.elapsed();
+
+        assert!(result.is_ok(), "expected ok, got {result:?}");
+        let updated = result.unwrap();
+        assert!(updated >= 1, "gpt-4 row should have been updated");
+        // No retry on success — well under the 50ms minimum backoff.
+        assert!(
+            elapsed < Duration::from_millis(40),
+            "first-attempt success should be near-instant; took {elapsed:?}",
+        );
+    }
+
+    /// AC-B: when a sibling connection holds a write lock, the
+    /// wrapper waits through the backoff schedule and succeeds once
+    /// the lock is released. We force a BUSY collision on a sibling
+    /// connection and verify the retry recovers.
+    ///
+    /// The retry-wrapped `conn` is configured with
+    /// `busy_timeout = 0` so it returns BUSY immediately on each
+    /// attempt (instead of waiting the production 5s default). The
+    /// blocker holds a write transaction for 120ms — long enough
+    /// to fail attempts 1 and 2, but short enough that attempt 3
+    /// (fired 150ms after the start) succeeds.
+    #[test]
+    fn apply_auto_activation_with_retry_succeeds_after_transient_busy() {
+        let (pool, _path) = fresh_pool();
+        // The connection we'll retry against. Override
+        // `busy_timeout` to 0 so each attempt returns BUSY
+        // immediately rather than waiting the production 5s.
+        let conn = pool.open_connection().expect("open conn");
+        conn.pragma_update(None, "busy_timeout", 0i64)
+            .expect("busy_timeout=0 on retry conn");
+        let provider = CoreProviderId::new("acme_busy");
+
+        seed_provider(&conn, &provider);
+        seed_models(&conn, &provider, &["gpt-4", "claude-3"]);
+
+        // Sibling connection that will hold a write transaction
+        // for 120ms. With `busy_timeout=0` on the retry `conn`,
+        // the wrapper's first two attempts return BUSY
+        // immediately, but by the third attempt (fired 150ms
+        // after t=0) the blocker has released the lock and the
+        // wrapper succeeds.
+        let blocker_path = _path;
+        let blocker = std::thread::spawn(move || {
+            let blocker_conn = Connection::open(&blocker_path).expect("blocker open");
+            // Make the blocker's first failed write return BUSY
+            // immediately instead of waiting its own 5s
+            // busy_timeout — that way the test isn't dominated
+            // by the producer-side wait either.
+            blocker_conn
+                .pragma_update(None, "busy_timeout", 0i64)
+                .expect("busy_timeout=0 on blocker");
+            let tx = blocker_conn.unchecked_transaction().expect("blocker tx");
+            tx.execute(
+                "INSERT INTO providers (id, name, base_url, auth_type, format) \
+                 VALUES ('blocker', 'b', 'https://x', 'bearer', 'openai')",
+                [],
+            )
+            .expect("blocker insert");
+            std::thread::sleep(Duration::from_millis(120));
+            tx.commit().expect("blocker commit");
+        });
+
+        // Give the blocker a moment to acquire its write tx.
+        std::thread::sleep(Duration::from_millis(30));
+
+        let started = Instant::now();
+        let result = apply_auto_activation_with_retry(&conn, &provider, Some("gpt"));
+        let elapsed = started.elapsed();
+
+        blocker.join().expect("blocker join");
+
+        assert!(
+            result.is_ok(),
+            "wrapper should recover after blocker releases lock, got {result:?}",
+        );
+        // Total wall time ≥ first backoff (50ms) — i.e. the
+        // retry was actually exercised before the wrapper
+        // succeeded.
+        assert!(
+            elapsed >= Duration::from_millis(50),
+            "wrapper should have slept through at least one backoff; took {elapsed:?}",
+        );
+        // And bounded above by the cumulative backoff budget
+        // (50ms + 100ms = 150ms) plus a small scheduling slack
+        // for the third attempt's instant return.
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "wrapper should have recovered well within the retry budget; took {elapsed:?}",
+        );
+    }
+
+    /// AC-D: non-BUSY errors (e.g. `SQLITE_ERROR` for "no such
+    /// table" against a freshly-opened in-memory connection) must
+    /// propagate immediately without sleeping through the backoff
+    /// schedule.
+    #[test]
+    fn apply_auto_activation_with_retry_does_not_retry_non_busy_errors() {
+        // Bare in-memory connection with no migrations applied.
+        // `apply_auto_activation` will hit `SQLITE_ERROR` (no such
+        // table) on its first attempt. The wrapper must NOT retry
+        // this — it must propagate immediately.
+        let raw = Connection::open_in_memory().expect("in-memory");
+        let provider = CoreProviderId::new("acme_broken");
+
+        let started = Instant::now();
+        let result = apply_auto_activation_with_retry(&raw, &provider, Some("gpt"));
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "expected err, got {result:?}");
+        // Non-BUSY errors must propagate in well under the 50ms
+        // minimum retry delay.
+        assert!(
+            elapsed < Duration::from_millis(40),
+            "non-BUSY error should propagate immediately; took {elapsed:?}",
+        );
+        // And the returned error must be a Database variant, not a
+        // retry-exhausted warning.
+        match result {
+            Err(CoreError::Database { .. }) => {}
+            other => panic!("expected Database error, got {other:?}"),
+        }
     }
 }

@@ -36,6 +36,32 @@ pub struct ScrapedProxy {
     pub priority: i32,
 }
 
+// Module-scope upstream URL constants. Each `sync_*` function
+// takes its target URL as a parameter and forwards it to the
+// fetch helper; the constants below are referenced from
+// `BUILTIN_PROXY_SOURCES[i].url` so dispatching wires the real
+// production host by default and tests can override the URL
+// via `httpmock::MockServer`. See spec 2026-09-03-free-proxies-url-param.
+
+// JSON sources (single absolute URL each).
+pub const PROXIFLY_URL: &str = "https://api.proxifly.dev/proxy?format=json&quantity=100";
+pub const ONEPROXY_URL: &str = "https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced";
+pub const PROXYSCRAPE_CDN_URL: &str =
+    "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json";
+pub const GEONODE_URL: &str =
+    "https://proxylist.geonode.com/api/proxy-list?limit=500&sort_by=lastChecked&sort_type=desc";
+pub const CLEARPROXY_URL: &str =
+    "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/json/all.json";
+pub const VAKHOV_URL: &str = "https://vakhov.github.io/fresh-proxy-list/proxylist.json";
+pub const GPROXYNET_URL: &str =
+    "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/proxies.json";
+
+// Plain-text source: base host used to build the per-repo file
+// URLs. `sync_github_lists` substitutes this base into its 7
+// templates so an injected mock base exercises the full
+// dispatch path (see spec §A4).
+pub const GITHUB_LISTS_BASE_URL: &str = "https://raw.githubusercontent.com";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxySource {
     pub id: String,
@@ -411,82 +437,75 @@ pub fn upsert_scraped_proxies(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let tx = conn
-        .transaction()
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+    openproxy_db::error::with_busy_retry("upsert_scraped_proxies", || {
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = conn
+            .transaction()
+            .map_err(openproxy_db::error::map_db_error)?;
 
-    let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
-               source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
-               type = excluded.type, \
-               country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
-               username = excluded.username, \
-               password = excluded.password, \
-               priority = excluded.priority, \
-               updated_at = excluded.updated_at";
+        let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
+                   source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
+                   type = excluded.type, \
+                   country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
+                   username = excluded.username, \
+                   password = excluded.password, \
+                   priority = excluded.priority, \
+                   updated_at = excluded.updated_at";
 
-    openproxy_db::batch::batch_insert(
-        &tx,
-        "INSERT INTO",
-        "free_proxies",
-        &[
-            "id",
-            "source",
-            "host",
-            "port",
-            "type",
-            "country_code",
-            "status",
-            "latency_ms",
-            "last_validated",
-            "username",
-            "password",
-            "priority",
-            "created_at",
-            "updated_at",
-        ],
-        proxies,
-        Some(on_conflict_suffix),
-        |p, params| {
-            let id = uuid::Uuid::new_v4().to_string();
-            params.push(id.into());
-            params.push(p.source.clone().into());
-            params.push(p.host.clone().into());
-            params.push(p.port.into());
-            params.push(p.r#type.clone().into());
-            match &p.country_code {
-                Some(cc) => params.push(cc.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            params.push("unknown".to_string().into());
-            params.push(rusqlite::types::Value::Null);
-            params.push(rusqlite::types::Value::Null);
-            match &p.username {
-                Some(u) => params.push(u.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            match &p.password {
-                Some(pass) => params.push(pass.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            params.push(p.priority.into());
-            params.push(now.clone().into());
-            params.push(now.clone().into());
-        },
-    )
-    .map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+        openproxy_db::batch::batch_insert(
+            &tx,
+            "INSERT INTO",
+            "free_proxies",
+            &[
+                "id",
+                "source",
+                "host",
+                "port",
+                "type",
+                "country_code",
+                "status",
+                "latency_ms",
+                "last_validated",
+                "username",
+                "password",
+                "priority",
+                "created_at",
+                "updated_at",
+            ],
+            proxies,
+            Some(on_conflict_suffix),
+            |p, params| {
+                let id = uuid::Uuid::new_v4().to_string();
+                params.push(id.into());
+                params.push(p.source.clone().into());
+                params.push(p.host.clone().into());
+                params.push(p.port.into());
+                params.push(p.r#type.clone().into());
+                match &p.country_code {
+                    Some(cc) => params.push(cc.to_owned().into()),
+                    None => params.push(rusqlite::types::Value::Null),
+                }
+                params.push("unknown".to_string().into());
+                params.push(rusqlite::types::Value::Null);
+                params.push(rusqlite::types::Value::Null);
+                match &p.username {
+                    Some(u) => params.push(u.to_owned().into()),
+                    None => params.push(rusqlite::types::Value::Null),
+                }
+                match &p.password {
+                    Some(pass) => params.push(pass.to_owned().into()),
+                    None => params.push(rusqlite::types::Value::Null),
+                }
+                params.push(p.priority.into());
+                params.push(now.clone().into());
+                params.push(now.clone().into());
+            },
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
 
-    tx.commit().map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
-    Ok(())
+        tx.commit().map_err(openproxy_db::error::map_db_error)?;
+        Ok(())
+    })
 }
 
 // Scraper integrations
@@ -531,12 +550,8 @@ async fn fetch_upstream_json<T: serde::de::DeserializeOwned>(
         .map_err(|e| crate::error::CoreError::Internal(format!("{name} JSON error: {e}")))
 }
 
-async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<ProxiflyItem> = fetch_upstream_json(
-        "https://api.proxifly.dev/proxy?format=json&quantity=100",
-        "Proxifly",
-    )
-    .await?;
+async fn sync_proxifly(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<ProxiflyItem> = fetch_upstream_json(url, "Proxifly").await?;
 
     let list = items
         .into_iter()
@@ -621,50 +636,56 @@ async fn fetch_github_proxy_file(
     parse_plain_proxy_lines(&text, src_name, proto)
 }
 
-async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
+async fn sync_github_lists(base_url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
     let client = &*SHARED_PROXY_CLIENT;
     let mut list = Vec::new();
+    // Templates now start with `{base}` so the caller can swap
+    // the upstream host (e.g. to a `httpmock::MockServer`).
+    // `{base}` is replaced BEFORE `{}` so a protocol token can
+    // never collide with the placeholder (see spec R4).
     let sources: &[(&str, &str, &[&str])] = &[
         (
             "iplocate",
-            "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/{}.txt",
+            "{base}/iplocate/free-proxy-list/main/protocols/{}.txt",
             &["http", "https", "socks4", "socks5"],
         ),
         (
             "hideip",
-            "https://raw.githubusercontent.com/zloi-user/hideip.me/main/{}.txt",
+            "{base}/zloi-user/hideip.me/main/{}.txt",
             &["http", "socks4", "socks5"],
         ),
         (
             "r00tee",
-            "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt",
+            "{base}/r00tee/Proxy-List/main/Socks5.txt",
             &["socks5"],
         ),
         (
             "hookzof",
-            "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+            "{base}/hookzof/socks5_list/master/proxy.txt",
             &["socks5"],
         ),
         (
             "anonymouswork",
-            "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/https_proxies.txt",
+            "{base}/Anonym0usWork1221/Free-Proxies/main/proxy_files/https_proxies.txt",
             &["https"],
         ),
         (
             "komutan234",
-            "https://raw.githubusercontent.com/komutan234/Proxy-List-Free/main/proxies/http.txt",
+            "{base}/komutan234/Proxy-List-Free/main/proxies/http.txt",
             &["http"],
         ),
         (
             "yuceltoluyag",
-            "https://raw.githubusercontent.com/yuceltoluyag/GoodProxy/main/raw.txt",
+            "{base}/yuceltoluyag/GoodProxy/main/raw.txt",
             &["http"],
         ),
     ];
 
     for &(src_name, url_template, protocols) in sources {
         for &proto in protocols {
-            let url = url_template.replace("{}", proto);
+            let url = url_template
+                .replace("{base}", base_url)
+                .replace("{}", proto);
             let mut proxies = fetch_github_proxy_file(client, src_name, proto, &url).await;
             list.append(&mut proxies);
         }
@@ -685,12 +706,8 @@ struct OneProxyApiResponse {
     proxies: Option<Vec<OneProxyApiProxy>>,
 }
 
-async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let body: OneProxyApiResponse = fetch_upstream_json(
-        "https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced",
-        "1proxy",
-    )
-    .await?;
+async fn sync_oneproxy(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let body: OneProxyApiResponse = fetch_upstream_json(url, "1proxy").await?;
 
     let proxies = body.proxies.unwrap_or_default();
     let list = proxies
@@ -720,12 +737,8 @@ struct ProxyScrapeCdnItem {
     country_code: Option<String>,
 }
 
-async fn sync_proxyscrape_cdn() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<ProxyScrapeCdnItem> = fetch_upstream_json(
-        "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json",
-        "ProxyScrape CDN",
-    )
-    .await?;
+async fn sync_proxyscrape_cdn(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<ProxyScrapeCdnItem> = fetch_upstream_json(url, "ProxyScrape CDN").await?;
 
     let list = items
         .into_iter()
@@ -756,12 +769,13 @@ struct GeonodeResponse {
     data: Vec<GeonodeItem>,
 }
 
-async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
+async fn sync_geonode(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
     use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest};
     let client = &*SHARED_PROXY_CLIENT;
-    let mut req = UpstreamRequest::get(
-        "https://proxylist.geonode.com/api/proxy-list?limit=500&sort_by=lastChecked&sort_type=desc",
-    );
+    let mut req = UpstreamRequest::get(url);
+    // ACCEPT / USER_AGENT are part of the Geonode API contract
+    // (it gates by UA) — they stay hardcoded, only the host
+    // URL is parameterizable.
     req.headers.insert(
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json"),
@@ -823,12 +837,8 @@ struct ClearProxyItem {
     country_code: Option<String>,
 }
 
-async fn sync_clearproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<ClearProxyItem> = fetch_upstream_json(
-        "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/json/all.json",
-        "ClearProxy",
-    )
-    .await?;
+async fn sync_clearproxy(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<ClearProxyItem> = fetch_upstream_json(url, "ClearProxy").await?;
 
     let list = items
         .into_iter()
@@ -861,12 +871,8 @@ fn parse_vakhov_port(port: &serde_json::Value) -> Option<u16> {
     }
 }
 
-async fn sync_vakhov() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<VakhovItem> = fetch_upstream_json(
-        "https://vakhov.github.io/fresh-proxy-list/proxylist.json",
-        "Vakhov",
-    )
-    .await?;
+async fn sync_vakhov(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<VakhovItem> = fetch_upstream_json(url, "Vakhov").await?;
 
     let list = items
         .into_iter()
@@ -894,12 +900,8 @@ struct GProxyNetItem {
     country: Option<String>,
 }
 
-async fn sync_gproxynet() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<GProxyNetItem> = fetch_upstream_json(
-        "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/proxies.json",
-        "GProxyNet",
-    )
-    .await?;
+async fn sync_gproxynet(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<GProxyNetItem> = fetch_upstream_json(url, "GProxyNet").await?;
 
     let list = items
         .into_iter()
@@ -927,7 +929,7 @@ pub struct BuiltinProxySourceDef {
     pub url: &'static str,
     pub scraped_sources: &'static [&'static str],
     pub sync_fn:
-        fn() -> futures::future::BoxFuture<'static, crate::error::Result<Vec<ScrapedProxy>>>,
+        fn(&str) -> futures::future::BoxFuture<'static, crate::error::Result<Vec<ScrapedProxy>>>,
 }
 
 impl BuiltinProxySourceDef {
@@ -940,14 +942,22 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
     BuiltinProxySourceDef {
         id: "builtin_proxifly",
         name: "Proxifly (Built-in)",
-        url: "",
+        url: PROXIFLY_URL,
         scraped_sources: &["proxifly"],
-        sync_fn: || Box::pin(sync_proxifly()),
+        // Clone the &str into an owned String and `async move`
+        // it into the boxed future so the future satisfies
+        // the `BoxFuture<'static, _>` bound in the `sync_fn`
+        // field type. See spec §4 (R1) for why a borrowed
+        // `&str` would fail to coerce to the fn-pointer type.
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_proxifly(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_github",
         name: "GitHub Lists (Built-in)",
-        url: "",
+        url: GITHUB_LISTS_BASE_URL,
         scraped_sources: &[
             "iplocate",
             "hideip",
@@ -957,49 +967,70 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
             "komutan234",
             "yuceltoluyag",
         ],
-        sync_fn: || Box::pin(sync_github_lists()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_github_lists(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_oneproxy",
         name: "1proxy (Built-in)",
-        url: "",
+        url: ONEPROXY_URL,
         scraped_sources: &["1proxy"],
-        sync_fn: || Box::pin(sync_oneproxy()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_oneproxy(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_proxyscrape",
         name: "ProxyScrape (Built-in)",
-        url: "",
+        url: PROXYSCRAPE_CDN_URL,
         scraped_sources: &["proxyscrape_cdn"],
-        sync_fn: || Box::pin(sync_proxyscrape_cdn()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_proxyscrape_cdn(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_geonode",
         name: "Geonode (Built-in)",
-        url: "",
+        url: GEONODE_URL,
         scraped_sources: &["geonode"],
-        sync_fn: || Box::pin(sync_geonode()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_geonode(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_clearproxy",
         name: "ClearProxy (Built-in)",
-        url: "",
+        url: CLEARPROXY_URL,
         scraped_sources: &["clearproxy"],
-        sync_fn: || Box::pin(sync_clearproxy()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_clearproxy(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_vakhov",
         name: "Vakhov (Built-in)",
-        url: "",
+        url: VAKHOV_URL,
         scraped_sources: &["vakhov"],
-        sync_fn: || Box::pin(sync_vakhov()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_vakhov(&u).await })
+        },
     },
     BuiltinProxySourceDef {
         id: "builtin_gproxynet",
         name: "GProxyNet (Built-in)",
-        url: "",
+        url: GPROXYNET_URL,
         scraped_sources: &["gproxynet"],
-        sync_fn: || Box::pin(sync_gproxynet()),
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_gproxynet(&u).await })
+        },
     },
 ];
 
@@ -1321,12 +1352,22 @@ async fn sync_single_source(
         return;
     }
     if src.is_builtin {
-        if let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id) {
-            #[allow(clippy::collapsible_if)]
-            if let Ok(mut list) = (def.sync_fn)().await {
+        // `let-else` collapses the nested `if let` so the
+        // dispatch block needs no `#[allow(clippy::collapsible_if)]`.
+        // Built-in sync errors are now recorded in `errors`
+        // (was silently dropped) — see spec §R2 / AC4.
+        let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id) else {
+            return;
+        };
+        match (def.sync_fn)(def.url).await {
+            Ok(mut list) => {
                 *fetched += list.len();
                 scraped.append(&mut list);
             }
+            Err(e) => errors.push(format!(
+                "Built-in proxy source '{}' sync failed: {}",
+                src.name, e
+            )),
         }
         return;
     }
@@ -1558,40 +1599,33 @@ fn fetch_background_test_proxies(conn: &Connection) -> Vec<ProxyTestCandidate> {
 
 fn execute_proxy_batch_update(
     conn: &mut Connection,
-    batch: Vec<(String, Result<i64, String>)>,
+    batch: &[(String, Result<i64, String>)],
 ) -> Result<(), crate::error::CoreError> {
-    let tx_db = conn
-        .transaction()
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-    let now = chrono::Utc::now().to_rfc3339();
-    {
-        let mut stmt = tx_db
-            .prepare_cached(
-                "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
-            )
-            .map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    openproxy_db::error::with_busy_retry("execute_proxy_batch_update", || {
+        let tx_db = conn
+            .transaction()
+            .map_err(openproxy_db::error::map_db_error)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let mut stmt = tx_db
+                .prepare_cached(
+                    "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
 
-        for (id, test_res) in batch {
-            let (status, latency) = match test_res {
-                Ok(lat) => ("alive", Some(lat)),
-                Err(_) => ("dead", None),
-            };
-            let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
+            for (id, test_res) in batch {
+                let (status, latency) = match test_res {
+                    Ok(lat) => ("alive", Some(*lat)),
+                    Err(_) => ("dead", None),
+                };
+                let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
+            }
         }
-    }
-    tx_db
-        .commit()
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-    Ok(())
+        tx_db
+            .commit()
+            .map_err(openproxy_db::error::map_db_error)?;
+        Ok(())
+    })
 }
 
 pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
@@ -1628,7 +1662,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 let _ =
                     tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
                         let mut w = pool.open_connection()?;
-                        execute_proxy_batch_update(&mut w, batch)
+                        execute_proxy_batch_update(&mut w, &batch)
                     })
                     .await;
             }
@@ -1662,6 +1696,44 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    // ---- Test helpers (P2-1, P3-1, P3-2) ----
+
+    fn scraped(source: &str, host: &str, port: u16, r#type: &str) -> ScrapedProxy {
+        ScrapedProxy {
+            source: source.into(),
+            host: host.into(),
+            port,
+            r#type: r#type.into(),
+            country_code: None,
+            username: None,
+            password: None,
+            priority: 0,
+        }
+    }
+
+    fn scraped_with_country(
+        source: &str,
+        host: &str,
+        port: u16,
+        r#type: &str,
+        cc: &str,
+    ) -> ScrapedProxy {
+        let mut s = scraped(source, host, port, r#type);
+        s.country_code = Some(cc.into());
+        s
+    }
+
+    fn fresh_pool(name: &str) -> (tempfile::TempDir, Arc<openproxy_db::DbPool>) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db_path = tmp.path().join(format!("{name}.db"));
+        let pool = Arc::new(openproxy_db::DbPool::open(&db_path).expect("open db pool"));
+        {
+            let mut conn = pool.writer();
+            openproxy_db::migrations::run(&mut conn).expect("migrations");
+        }
+        (tmp, pool)
+    }
 
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1762,26 +1834,8 @@ mod tests {
         let mut conn = setup_test_db();
 
         let scraped = vec![
-            ScrapedProxy {
-                source: "proxifly".to_string(),
-                host: "10.0.0.1".to_string(),
-                port: 3128,
-                r#type: "https".to_string(),
-                country_code: Some("FR".to_string()),
-                username: None,
-                password: None,
-                priority: 0,
-            },
-            ScrapedProxy {
-                source: "iplocate".to_string(),
-                host: "10.0.0.2".to_string(),
-                port: 1080,
-                r#type: "socks5".to_string(),
-                country_code: None,
-                username: None,
-                password: None,
-                priority: 0,
-            },
+            scraped_with_country("proxifly", "10.0.0.1", 3128, "https", "FR"),
+            scraped("iplocate", "10.0.0.2", 1080, "socks5"),
         ];
 
         upsert_scraped_proxies(&mut conn, &scraped).unwrap();
@@ -2045,5 +2099,350 @@ mod tests {
 
         let list_after = list_proxy_sources(&conn).unwrap();
         assert_eq!(list_after.len(), 0);
+    }
+
+    // ---- Pure-parser tests (no HTTP / no DB) ----
+    //
+    // Per AGENTS.md §3.1 P3, every function >20 LOC extracted from the
+    // `sync_*` built-ins must have at least one unit test. These are
+    // pure-Rust parsers that take raw strings and return `Option<_>` /
+    // `Vec<_>`; no I/O involved.
+
+    #[test]
+    fn parse_proxy_host_port_accepts_valid_ipv4_port() {
+        let r = parse_proxy_host_port("1.2.3.4:8080");
+        assert_eq!(r, Some(("1.2.3.4".to_string(), 8080)));
+    }
+
+    #[test]
+    fn parse_proxy_host_port_accepts_hostname_port() {
+        let r = parse_proxy_host_port("  proxy.example.com : 3128 ");
+        assert_eq!(r, Some(("proxy.example.com".to_string(), 3128)));
+    }
+
+    #[test]
+    fn parse_proxy_host_port_rejects_missing_port() {
+        assert_eq!(parse_proxy_host_port("1.2.3.4"), None);
+    }
+
+    #[test]
+    fn parse_proxy_host_port_rejects_empty_host() {
+        assert_eq!(parse_proxy_host_port(":8080"), None);
+    }
+
+    #[test]
+    fn parse_proxy_host_port_rejects_zero_port() {
+        // u16::parse rejects 0? No — 0 is a valid u16. The function
+        // explicitly rejects 0 to avoid surfacing a "0/0" proxy row.
+        assert_eq!(parse_proxy_host_port("1.2.3.4:0"), None);
+    }
+
+    #[test]
+    fn parse_proxy_host_port_rejects_non_numeric_port() {
+        assert_eq!(parse_proxy_host_port("1.2.3.4:abc"), None);
+    }
+
+    #[test]
+    fn parse_proxy_host_port_rejects_port_overflow() {
+        // 99999 is not a u16.
+        assert_eq!(parse_proxy_host_port("1.2.3.4:99999"), None);
+    }
+
+    #[test]
+    fn parse_plain_proxy_lines_skips_comments_and_blanks() {
+        let body = "\
+# Header comment line
+1.2.3.4:8080
+
+   5.6.7.8:1080
+# Another comment
+9.10.11.12:3128   \t
+";
+        let parsed = parse_plain_proxy_lines(body, "testsrc", "http");
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].host, "1.2.3.4");
+        assert_eq!(parsed[0].port, 8080);
+        assert_eq!(parsed[0].r#type, "http");
+        assert_eq!(parsed[0].source, "testsrc");
+        assert_eq!(parsed[1].host, "5.6.7.8");
+        assert_eq!(parsed[2].host, "9.10.11.12");
+        assert_eq!(parsed[2].port, 3128);
+    }
+
+    #[test]
+    fn parse_plain_proxy_lines_skips_malformed_rows() {
+        // 'broken' has no port, '1.2.3.4:notaport' is unparseable.
+        let body = "\
+1.2.3.4:8080
+broken
+1.2.3.4:notaport
+5.6.7.8:1080
+";
+        let parsed = parse_plain_proxy_lines(body, "testsrc", "socks5");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].host, "1.2.3.4");
+        assert_eq!(parsed[0].port, 8080);
+        assert_eq!(parsed[0].r#type, "socks5");
+        assert_eq!(parsed[1].host, "5.6.7.8");
+    }
+
+    #[test]
+    fn parse_plain_proxy_lines_empty_input() {
+        assert!(parse_plain_proxy_lines("", "src", "http").is_empty());
+        assert!(parse_plain_proxy_lines("\n\n\n", "src", "http").is_empty());
+        assert!(parse_plain_proxy_lines("# only comments\n# here\n", "src", "http").is_empty());
+    }
+
+    #[test]
+    fn parse_custom_proxy_auth_separates_user_and_password() {
+        let (u, p) = parse_custom_proxy_auth(Some("alice:secret"));
+        assert_eq!(u.as_deref(), Some("alice"));
+        assert_eq!(p.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn parse_custom_proxy_auth_token_without_colon() {
+        // Token-only auth: username present, no password.
+        let (u, p) = parse_custom_proxy_auth(Some("bearer-token-xyz"));
+        assert_eq!(u.as_deref(), Some("bearer-token-xyz"));
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn parse_custom_proxy_auth_none() {
+        let (u, p) = parse_custom_proxy_auth(None);
+        assert_eq!(u, None);
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn parse_custom_proxy_auth_trims_whitespace() {
+        let (u, p) = parse_custom_proxy_auth(Some("  alice : secret  "));
+        assert_eq!(u.as_deref(), Some("alice"));
+        assert_eq!(p.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn parse_custom_proxy_line_default_protocol_is_http() {
+        // No `://` scheme — defaults to http.
+        let p = parse_custom_proxy_line("1.2.3.4:8080", "mysrc", 5).unwrap();
+        assert_eq!(p.source, "mysrc");
+        assert_eq!(p.host, "1.2.3.4");
+        assert_eq!(p.port, 8080);
+        assert_eq!(p.r#type, "http");
+        assert_eq!(p.priority, 5);
+        assert_eq!(p.username, None);
+        assert_eq!(p.password, None);
+    }
+
+    #[test]
+    fn parse_custom_proxy_line_with_scheme_and_auth() {
+        let p = parse_custom_proxy_line("socks5://proxy.example.com:1080:user:pass", "mysrc", 3)
+            .unwrap();
+        assert_eq!(p.r#type, "socks5");
+        assert_eq!(p.host, "proxy.example.com");
+        assert_eq!(p.port, 1080);
+        assert_eq!(p.username.as_deref(), Some("user"));
+        assert_eq!(p.password.as_deref(), Some("pass"));
+        assert_eq!(p.priority, 3);
+    }
+
+    #[test]
+    fn parse_custom_proxy_line_skips_comments_and_blanks() {
+        assert!(parse_custom_proxy_line("# a comment", "src", 0).is_none());
+        assert!(parse_custom_proxy_line("", "src", 0).is_none());
+        assert!(parse_custom_proxy_line("   \t  ", "src", 0).is_none());
+    }
+
+    #[test]
+    fn parse_custom_proxy_line_rejects_unparseable_port() {
+        assert!(parse_custom_proxy_line("1.2.3.4:notaport", "src", 0).is_none());
+    }
+
+    #[test]
+    fn parse_custom_proxy_line_rejects_zero_port() {
+        assert!(parse_custom_proxy_line("1.2.3.4:0", "src", 0).is_none());
+    }
+
+    #[test]
+    fn parse_vakhov_port_handles_number() {
+        let v: serde_json::Value = serde_json::json!(8080);
+        assert_eq!(parse_vakhov_port(&v), Some(8080));
+    }
+
+    #[test]
+    fn parse_vakhov_port_handles_string() {
+        let v: serde_json::Value = serde_json::json!("1080");
+        assert_eq!(parse_vakhov_port(&v), Some(1080));
+    }
+
+    #[test]
+    fn parse_vakhov_port_rejects_null_and_unparseable_string() {
+        let null: serde_json::Value = serde_json::Value::Null;
+        assert_eq!(parse_vakhov_port(&null), None);
+        // Unparseable string -> None.
+        let unparseable: serde_json::Value = serde_json::json!("not-a-port");
+        assert_eq!(parse_vakhov_port(&unparseable), None);
+        // Object/array variants -> None.
+        let arr: serde_json::Value = serde_json::json!([8080]);
+        assert_eq!(parse_vakhov_port(&arr), None);
+        let obj: serde_json::Value = serde_json::json!({"p": 8080});
+        assert_eq!(parse_vakhov_port(&obj), None);
+        // Boolean -> None.
+        let boolean: serde_json::Value = serde_json::json!(true);
+        assert_eq!(parse_vakhov_port(&boolean), None);
+    }
+
+    #[test]
+    fn resolve_scraped_sources_for_builtin_returns_scraped_list() {
+        let v = resolve_scraped_sources(true, "builtin_proxifly", "ignored");
+        assert_eq!(v, vec!["proxifly"]);
+    }
+
+    #[test]
+    fn resolve_scraped_sources_for_unknown_builtin_falls_back_to_name() {
+        let v = resolve_scraped_sources(true, "builtin_unknown", "myName");
+        assert_eq!(v, vec!["myName"]);
+    }
+
+    #[test]
+    fn resolve_scraped_sources_for_custom_returns_name() {
+        let v = resolve_scraped_sources(false, "any-id", "Custom Source");
+        assert_eq!(v, vec!["Custom Source"]);
+    }
+
+    // ---- End-to-end: sync_all_providers with a real DbPool ----
+    //
+    // The per-source scrapers (`sync_proxifly`, etc.) now hardcode their
+    // upstream URLs internally, so this test exercises only the DB-side
+    // orchestrator mechanics: source seeding, activation gating,
+    // upserting pre-built `ScrapedProxy` rows through
+    // `upsert_scraped_proxies`, and idempotency on `(host, port)`.
+
+    #[test]
+    fn e2e_upsert_is_idempotent_for_same_host_port() {
+        // File-backed pool because upsert_scraped_proxies requires
+        // `&mut Connection`, which the in-memory pool cannot share
+        // across concurrent writers.
+        let (_tmp, pool) = fresh_pool("idempotent");
+
+        let scraped = vec![scraped_with_country("test", "10.0.0.1", 8080, "http", "US")];
+
+        // First upsert: 1 new row.
+        {
+            let mut w = pool.writer();
+            upsert_scraped_proxies(&mut w, &scraped).expect("upsert");
+        }
+        let count_after_first: i64 = {
+            let r = pool.reader();
+            r.query_row("SELECT COUNT(*) FROM free_proxies", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(count_after_first, 1);
+
+        // Second upsert of the same scraped proxy: still 1 row, but
+        // updated_at must change. The ON CONFLICT(host, port) clause
+        // rewrites the source/type/priority/updated_at fields.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        {
+            let mut w = pool.writer();
+            upsert_scraped_proxies(&mut w, &scraped).expect("upsert #2");
+        }
+        let count_after_second: i64 = {
+            let r = pool.reader();
+            r.query_row("SELECT COUNT(*) FROM free_proxies", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(count_after_second, 1, "upsert must not duplicate rows");
+
+        // Verify ON CONFLICT did update fields (custom source wins
+        // when free_proxies.source == 'custom'; for non-custom the
+        // excluded.source wins).
+        let new_source: String = {
+            let r = pool.reader();
+            r.query_row(
+                "SELECT source FROM free_proxies WHERE host = '10.0.0.1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(new_source, "test");
+    }
+
+    // ---- httpmock end-to-end tests (spec 2026-09-03) ----
+    // These tests rely on the `ssrf-bypass` dev-dep override on
+    // `openproxy-adapters` (see crates/openproxy-core/Cargo.toml
+    // `[dev-dependencies]`) so that `httpmock::MockServer` binding
+    // to 127.0.0.1 is reachable. Production binaries are unaffected.
+
+    #[tokio::test]
+    async fn sync_proxifly_hits_injected_url_and_parses_json() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/proxy");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"[{"ip":"1.2.3.4","port":8080,"protocol":"HTTP",
+                          "geolocation":{"country":"US"}}]"#,
+                );
+        });
+
+        let url = format!("{}/proxy?format=json&quantity=100", server.base_url());
+        let proxies = sync_proxifly(&url).await.expect("proxifly sync");
+
+        mock.assert();
+        assert_eq!(proxies.len(), 1);
+        assert_eq!(proxies[0].host, "1.2.3.4");
+        assert_eq!(proxies[0].port, 8080);
+        assert_eq!(proxies[0].r#type, "http");
+        assert_eq!(proxies[0].country_code.as_deref(), Some("US"));
+        assert_eq!(proxies[0].source, "proxifly");
+    }
+
+    #[tokio::test]
+    async fn sync_github_lists_hits_injected_base_and_parses_text() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        // Only the komutan234/http.txt path is exercised; every
+        // other template returns 404 and `fetch_github_proxy_file`
+        // swallows non-200 responses into an empty Vec (out of
+        // scope to change here — see spec Edge Cases table).
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/komutan234/Proxy-List-Free/main/proxies/http.txt");
+            then.status(200).body("9.9.9.9:3128\n8.8.8.8:80\n");
+        });
+        server.mock(|when, then| {
+            when.method(GET);
+            then.status(404);
+        });
+
+        let proxies = sync_github_lists(&server.base_url())
+            .await
+            .expect("github sync");
+
+        mock.assert_calls(1);
+        assert!(
+            proxies
+                .iter()
+                .any(|p| p.host == "9.9.9.9" && p.port == 3128)
+        );
+        assert!(proxies.iter().any(|p| p.host == "8.8.8.8" && p.port == 80));
+    }
+
+    #[tokio::test]
+    async fn sync_proxifly_returns_err_on_non_200() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/proxy");
+            then.status(503);
+        });
+        let url = format!("{}/proxy", server.base_url());
+        let res = sync_proxifly(&url).await;
+        assert!(res.is_err(), "non-200 must surface a CoreError");
     }
 }

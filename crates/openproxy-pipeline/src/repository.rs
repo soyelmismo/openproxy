@@ -88,6 +88,7 @@ pub trait PipelineRepository: Send + Sync {
     // Batch Loading
     fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>>;
     fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps>;
+    fn get_antigravity_projects(&self, account_ids: &[i64]) -> Result<HashMap<i64, Box<str>>>;
     fn get_providers_auth_type(
         &self,
         provider_ids: &[ProviderId],
@@ -292,6 +293,16 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
         openproxy_db::accounts::get_accounts_meta(&self.conn.lock(), account_ids)
+    }
+
+    fn get_antigravity_projects(&self, account_ids: &[i64]) -> Result<HashMap<i64, Box<str>>> {
+        let conn = self.conn.lock();
+        let map: HashMap<i64, openproxy_db::accounts::AntigravityMeta> =
+            openproxy_db::accounts::read_provider_meta_batch(&conn, None, account_ids)?;
+        Ok(map
+            .into_iter()
+            .filter_map(|(id, meta)| meta.project_id.map(|s| (id, s.into_boxed_str())))
+            .collect())
     }
 
     fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {

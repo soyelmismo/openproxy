@@ -386,60 +386,41 @@ pub trait ProviderAdapter: Send + Sync {
     }
 }
 
-/// Macro declarativa para delegar llamadas de métodos a través de todas las variantes de `ProviderAdapterEnum`.
-#[macro_export]
-macro_rules! delegate_adapter_dispatch {
-    ($self:expr, |$inner:ident| $call:expr) => {
-        match $self {
-            Self::Antigravity($inner) => { let $inner = &**$inner; $call },
-            Self::Atomesus($inner) => { let $inner = &**$inner; $call },
-            Self::Cline($inner) => { let $inner = &**$inner; $call },
-            Self::CloudflareWorkersAI($inner) => { let $inner = &**$inner; $call },
-            Self::Codex($inner) => { let $inner = &**$inner; $call },
-            Self::Gemini($inner) => { let $inner = &**$inner; $call },
-            Self::Horde($inner) => { let $inner = &**$inner; $call },
-            Self::Kilocode($inner) => { let $inner = &**$inner; $call },
-            Self::Kiro($inner) => { let $inner = &**$inner; $call },
-            Self::MiniMax($inner) => { let $inner = &**$inner; $call },
-            Self::NousResearch($inner) => { let $inner = &**$inner; $call },
-            Self::NvidiaNim($inner) => { let $inner = &**$inner; $call },
-            Self::OllamaCloud($inner) => { let $inner = &**$inner; $call },
-            Self::OpenCodeGo($inner) => { let $inner = &**$inner; $call },
-            Self::OpenCodeZen($inner) => { let $inner = &**$inner; $call },
-            Self::OpenRouter($inner) => { let $inner = &**$inner; $call },
-            Self::VercelGateway($inner) => { let $inner = &**$inner; $call },
-            Self::Fx($inner) => { let $inner = &**$inner; $call },
-            Self::Custom($inner) => { let $inner = &**$inner; $call },
-            #[cfg(any(test, feature = "test-utils"))]
-            Self::Mock($inner) => { let $inner = &**$inner; $call },
-        }
-    };
-    ($self:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
-        $crate::delegate_adapter_dispatch!($self, |inner| inner.$method($($arg),*))
-    };
-    ($self:expr, async $method:ident ( $($arg:expr),* $(,)? )) => {
-        $crate::delegate_adapter_dispatch!($self, |inner| inner.$method($($arg),*).await)
-    };
-}
-
+/// Defines [`ProviderAdapterEnum`] and every piece of boilerplate that used
+/// to live in a hand-maintained sibling macro: the enum variants,
+/// `builtin_adapters()`, the `from_provider_id` jump-table, the per-method
+/// inline dispatch `match`, and the `pub use` re-exports for every builtin.
+/// The `builtins { ... }` list is the single source of truth — adding a
+/// provider is one line here.
+///
+/// Entry syntax:
+/// - builtins: `"provider-id" => Variant(module, AdapterType)`
+/// - custom:   `Variant(module, AdapterType)` (no `pub use` emitted)
+///
+/// `module` is one or more `::`-separated identifiers (e.g. `nvidia_nim` or
+/// `some::nested`); `AdapterType` is the struct name inside it.
 #[macro_export]
 macro_rules! define_provider_adapter {
     (
         pub enum ProviderAdapterEnum {
             builtins {
-                $( $(#[$b_varmeta:meta])* $b_id:literal => $b_variant:ident($b_inner:ty) ),+ $(,)?
+                $( $(#[$b_varmeta:meta])* $b_id:literal => $b_variant:ident($($b_mod:ident)::* , $b_adapter:ident) ),+ $(,)?
             }
             custom {
-                $( $(#[$c_varmeta:meta])* $c_variant:ident($c_inner:ty) ),+ $(,)?
+                $( $(#[$c_varmeta:meta])* $c_variant:ident($($c_mod:ident)::* , $c_adapter:ident) ),+ $(,)?
             }
         }
     ) => {
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
         #[serde(tag = "provider_id", content = "config", rename_all = "kebab-case")]
         pub enum ProviderAdapterEnum {
-            $( $(#[$b_varmeta])* $b_variant(Box<$b_inner>) ),+,
-            $( $(#[$c_varmeta])* $c_variant(Box<$c_inner>) ),+
+            $( $(#[$b_varmeta])* $b_variant(Box<$($b_mod)::*::$b_adapter>) ),+,
+            $( $(#[$c_varmeta])* $c_variant(Box<$($c_mod)::*::$c_adapter>) ),+
         }
+
+        // Re-export every builtin adapter. Adding it to `builtins` above is the
+        // only edit required — no manual `pub use` line to keep in sync.
+        $( pub use $($b_mod)::*::$b_adapter; )+
 
         pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
             vec![
@@ -456,21 +437,39 @@ macro_rules! define_provider_adapter {
             }
         }
 
+        // Per-method inline dispatch: each match is generated from the same
+        // `builtins` + `custom` lists that define the enum, so exhaustiveness
+        // is guaranteed by the compiler — no hand-maintained dispatch table.
         impl ProviderAdapterEnum {
             pub fn id(&self) -> &openproxy_types::ProviderId {
-                delegate_adapter_dispatch!(self, id())
+                match self {
+                    $( Self::$b_variant(inner) => inner.id(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.id(), )+
+                }
             }
             pub fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
-                delegate_adapter_dispatch!(self, config())
+                match self {
+                    $( Self::$b_variant(inner) => inner.config(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.config(), )+
+                }
             }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
-                delegate_adapter_dispatch!(self, metadata())
+                match self {
+                    $( Self::$b_variant(inner) => inner.metadata(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.metadata(), )+
+                }
             }
             pub fn is_anonymous_fallback(&self) -> bool {
-                delegate_adapter_dispatch!(self, is_anonymous_fallback())
+                match self {
+                    $( Self::$b_variant(inner) => inner.is_anonymous_fallback(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.is_anonymous_fallback(), )+
+                }
             }
             pub fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
-                delegate_adapter_dispatch!(self, models_dev_canonical_ids())
+                match self {
+                    $( Self::$b_variant(inner) => inner.models_dev_canonical_ids(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_dev_canonical_ids(), )+
+                }
             }
             pub fn wrap_request_body(
                 &self,
@@ -479,16 +478,28 @@ macro_rules! define_provider_adapter {
                 model: &openproxy_types::ModelId,
                 resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                delegate_adapter_dispatch!(self, wrap_request_body(body, target_format, model, resolved_target))
+                match self {
+                    $( Self::$b_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
+                }
             }
             pub fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
-                delegate_adapter_dispatch!(self, auth_type())
+                match self {
+                    $( Self::$b_variant(inner) => inner.auth_type(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.auth_type(), )+
+                }
             }
             pub fn format(&self) -> $crate::adapters::AdapterFormat {
-                delegate_adapter_dispatch!(self, format())
+                match self {
+                    $( Self::$b_variant(inner) => inner.format(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format(), )+
+                }
             }
             pub fn build_chat_url(&self, target_format: openproxy_types::TargetFormat, model: &openproxy_types::ModelId) -> String {
-                delegate_adapter_dispatch!(self, build_chat_url(target_format, model))
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_chat_url(target_format, model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_chat_url(target_format, model), )+
+                }
             }
             pub fn build_chat_url_for_account(
                 &self,
@@ -496,39 +507,66 @@ macro_rules! define_provider_adapter {
                 model: &openproxy_types::ModelId,
                 account_label: &str,
             ) -> String {
-                delegate_adapter_dispatch!(self, build_chat_url_for_account(target_format, model, account_label))
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
+                }
             }
             pub fn build_transcription_url(&self) -> String {
-                delegate_adapter_dispatch!(self, build_transcription_url())
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_transcription_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_transcription_url(), )+
+                }
             }
             pub fn build_embeddings_url(&self) -> String {
-                delegate_adapter_dispatch!(self, build_embeddings_url())
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_embeddings_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_embeddings_url(), )+
+                }
             }
             pub fn format_embedding_request(
                 &self,
                 req: &openproxy_types::embeddings::EmbeddingRequest,
                 upstream_model: &str,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                delegate_adapter_dispatch!(self, format_embedding_request(req, upstream_model))
+                match self {
+                    $( Self::$b_variant(inner) => inner.format_embedding_request(req, upstream_model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_embedding_request(req, upstream_model), )+
+                }
             }
             pub fn build_image_url(&self) -> String {
-                delegate_adapter_dispatch!(self, build_image_url())
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_image_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_url(), )+
+                }
             }
             pub fn build_image_edits_url(&self) -> String {
-                delegate_adapter_dispatch!(self, build_image_edits_url())
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_image_edits_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_edits_url(), )+
+                }
             }
             pub fn build_image_variations_url(&self) -> String {
-                delegate_adapter_dispatch!(self, build_image_variations_url())
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_image_variations_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_variations_url(), )+
+                }
             }
             pub fn format_image_request(
                 &self,
                 req: &openproxy_types::images::ImageGenerationRequest,
                 upstream_model: &str,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                delegate_adapter_dispatch!(self, format_image_request(req, upstream_model))
+                match self {
+                    $( Self::$b_variant(inner) => inner.format_image_request(req, upstream_model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_image_request(req, upstream_model), )+
+                }
             }
             pub fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-                delegate_adapter_dispatch!(self, build_auth_header(api_key))
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_auth_header(api_key), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_auth_header(api_key), )+
+                }
             }
             pub fn build_headers(
                 &self,
@@ -536,20 +574,32 @@ macro_rules! define_provider_adapter {
                 target_format: openproxy_types::TargetFormat,
                 model: &openproxy_types::ModelId,
             ) -> Vec<(String, String)> {
-                delegate_adapter_dispatch!(self, build_headers(api_key, target_format, model))
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_headers(api_key, target_format, model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_headers(api_key, target_format, model), )+
+                }
             }
             pub fn models_url(&self) -> Option<String> {
-                delegate_adapter_dispatch!(self, models_url())
+                match self {
+                    $( Self::$b_variant(inner) => inner.models_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_url(), )+
+                }
             }
             pub fn models_url_for_account(&self, account_label: &str) -> Option<String> {
-                delegate_adapter_dispatch!(self, models_url_for_account(account_label))
+                match self {
+                    $( Self::$b_variant(inner) => inner.models_url_for_account(account_label), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_url_for_account(account_label), )+
+                }
             }
             pub async fn fetch_models(
                 &self,
                 upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
                 api_key: &str,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
-                delegate_adapter_dispatch!(self, async fetch_models(upstream_client, api_key))
+                match self {
+                    $( Self::$b_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
+                }
             }
             pub async fn fetch_models_for_account(
                 &self,
@@ -557,10 +607,16 @@ macro_rules! define_provider_adapter {
                 api_key: &str,
                 account_label: &str,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
-                delegate_adapter_dispatch!(self, async fetch_models_for_account(upstream_client, api_key, account_label))
+                match self {
+                    $( Self::$b_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
+                }
             }
             pub fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
-                delegate_adapter_dispatch!(self, normalize_openai_request(view))
+                match self {
+                    $( Self::$b_variant(inner) => inner.normalize_openai_request(view), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.normalize_openai_request(view), )+
+                }
             }
             pub fn format_request(
                 &self,
@@ -570,14 +626,20 @@ macro_rules! define_provider_adapter {
                 messages: &[openproxy_types::OpenAIMessage],
                 stream: bool,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                delegate_adapter_dispatch!(self, format_request(target_format, req, model, messages, stream))
+                match self {
+                    $( Self::$b_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
+                }
             }
             pub fn translate_non_streaming_response(
                 &self,
                 target_format: openproxy_types::TargetFormat,
                 response_body: serde_json::Value,
             ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
-                delegate_adapter_dispatch!(self, translate_non_streaming_response(target_format, response_body))
+                match self {
+                    $( Self::$b_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
+                }
             }
             pub async fn fetch_quota(
                 &self,
@@ -586,7 +648,10 @@ macro_rules! define_provider_adapter {
                 access_token: Option<&str>,
                 provider_specific: Option<&str>,
             ) -> Option<openproxy_types::Result<openproxy_types::AccountQuota>> {
-                delegate_adapter_dispatch!(self, async fetch_quota(upstream_client, api_key, access_token, provider_specific))
+                match self {
+                    $( Self::$b_variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+
+                }
             }
         }
 
@@ -719,29 +784,29 @@ pub fn is_anonymous_fallback(provider_id: &str) -> bool {
 define_provider_adapter! {
     pub enum ProviderAdapterEnum {
         builtins {
-            "antigravity" => Antigravity(crate::adapters::antigravity::AntigravityAdapter),
-            "atomesus" => Atomesus(crate::adapters::atomesus::AtomesusAdapter),
-            "cline" => Cline(crate::adapters::cline::ClineAdapter),
-            "cloudflare-workers-ai" => CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
-            "codex" => Codex(crate::adapters::codex::CodexAdapter),
-            "gemini" => Gemini(crate::adapters::gemini::GeminiAdapter),
-            "horde" => Horde(crate::adapters::horde::HordeAdapter),
-            "kilocode" => Kilocode(crate::adapters::kilocode::KilocodeAdapter),
-            "kiro" => Kiro(crate::adapters::kiro_ai::KiroAdapter),
-            "minimax" => MiniMax(crate::adapters::minimax::MiniMaxAdapter),
-            "nous-research" => NousResearch(crate::adapters::nous_research::NousResearchAdapter),
-            "nvidia-nim" => NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter),
-            "ollama-cloud" => OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter),
-            "opencode-go" => OpenCodeGo(crate::adapters::opencode_common::OpenCodeGoAdapter),
-            "opencode-zen" => OpenCodeZen(crate::adapters::opencode_common::OpenCodeZenAdapter),
-            "openrouter" => OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
-            "vercel-gateway" => VercelGateway(crate::adapters::vercel_gateway::VercelGatewayAdapter),
-            "fx" => Fx(crate::adapters::fx::FxAdapter),
+            "antigravity" => Antigravity(antigravity, AntigravityAdapter),
+            "atomesus" => Atomesus(atomesus, AtomesusAdapter),
+            "cline" => Cline(cline, ClineAdapter),
+            "cloudflare-workers-ai" => CloudflareWorkersAI(cloudflare_workers_ai, CloudflareWorkersAIAdapter),
+            "codex" => Codex(codex, CodexAdapter),
+            "gemini" => Gemini(gemini, GeminiAdapter),
+            "horde" => Horde(horde, HordeAdapter),
+            "kilocode" => Kilocode(kilocode, KilocodeAdapter),
+            "kiro" => Kiro(kiro_ai, KiroAdapter),
+            "minimax" => MiniMax(minimax, MiniMaxAdapter),
+            "nous-research" => NousResearch(nous_research, NousResearchAdapter),
+            "nvidia-nim" => NvidiaNim(nvidia_nim, NvidiaNimAdapter),
+            "ollama-cloud" => OllamaCloud(ollama_cloud, OllamaCloudAdapter),
+            "opencode-go" => OpenCodeGo(opencode_common, OpenCodeGoAdapter),
+            "opencode-zen" => OpenCodeZen(opencode_common, OpenCodeZenAdapter),
+            "openrouter" => OpenRouter(openrouter, OpenRouterAdapter),
+            "vercel-gateway" => VercelGateway(vercel_gateway, VercelGatewayAdapter),
+            "fx" => Fx(fx, FxAdapter),
         }
         custom {
-            Custom(crate::adapters::custom_adapter::CustomAdapter),
+            Custom(custom_adapter, CustomAdapter),
             #[cfg(any(test, feature = "test-utils"))]
-            Mock(crate::adapters::mock::MockAdapter),
+            Mock(mock, MockAdapter),
         }
     }
 }
@@ -890,26 +955,8 @@ pub mod vercel_gateway;
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;
 
-pub use antigravity::AntigravityAdapter;
-pub use atomesus::AtomesusAdapter;
-pub use cline::ClineAdapter;
-pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
-pub use codex::CodexAdapter;
 pub use custom_adapter::CustomAdapter;
 pub use factory::AdapterFactory;
-pub use fx::FxAdapter;
-pub use gemini::GeminiAdapter;
-pub use horde::HordeAdapter;
-pub use kilocode::KilocodeAdapter;
-pub use kiro_ai::KiroAdapter;
-pub use minimax::MiniMaxAdapter;
-pub use nous_research::NousResearchAdapter;
-pub use nvidia_nim::NvidiaNimAdapter;
-pub use ollama_cloud::OllamaCloudAdapter;
-pub use opencode_common::OpenCodeGoAdapter;
-pub use opencode_common::OpenCodeZenAdapter;
-pub use openrouter::OpenRouterAdapter;
-pub use vercel_gateway::VercelGatewayAdapter;
 
 // =====================================================================
 // Shared upstream helpers
@@ -1403,6 +1450,22 @@ mod tests {
         assert!(ids.contains(&"kiro"));
         assert!(ids.contains(&"vercel-gateway"));
         assert!(ids.contains(&"fx"));
+    }
+
+    /// After deduping `delegate_adapter_dispatch!` into inline `match` arms,
+    /// this test guarantees that every variant surfaced by `builtin_adapters()`
+    /// also round-trips through `from_provider_id()`. The dispatch `match`
+    /// itself is exhaustive by construction (the compiler enforces it), so
+    /// this is the runtime cross-check on the variant → id path.
+    #[test]
+    fn every_builtin_variant_resolves_from_provider_id() {
+        for adapter in builtin_adapters() {
+            let id = adapter.id().as_str();
+            assert!(
+                ProviderAdapterEnum::from_provider_id(id).is_some(),
+                "variant for `{id}` exists in builtin_adapters() but not in from_provider_id()"
+            );
+        }
     }
 
     // ---- Cloudflare Workers AI ---------------------------------------

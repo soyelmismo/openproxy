@@ -454,18 +454,6 @@ async fn run_one_tick(
         return;
     };
 
-    let conn = match db_pool.open_connection() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                provider = %provider,
-                error = %e,
-                "discovery tick: failed to open db connection; skipping cycle",
-            );
-            return;
-        }
-    };
-
     let adapter = match (&adapter, &provider_row) {
         (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(Box::new(
             openproxy_adapters::adapters::CustomAdapter::from_provider_row(row),
@@ -474,7 +462,7 @@ async fn run_one_tick(
     };
 
     let result = admin::refresh_models(
-        conn,
+        db_pool,
         &provider,
         &api_key,
         &adapter,
@@ -647,9 +635,11 @@ async fn handle_discovery_outcome(
             let keyword = provider_row.and_then(|p| p.auto_activate_keyword.clone());
             let _ = tokio::task::spawn_blocking(move || match db_pool_clone.open_connection() {
                 Ok(aa_conn) => {
-                    if let Err(e) =
-                        models::apply_auto_activation(&aa_conn, &provider_clone, keyword.as_deref())
-                    {
+                    if let Err(e) = models::apply_auto_activation_with_retry(
+                        &aa_conn,
+                        &provider_clone,
+                        keyword.as_deref(),
+                    ) {
                         tracing::warn!(
                             provider = %provider_clone,
                             error = %e,

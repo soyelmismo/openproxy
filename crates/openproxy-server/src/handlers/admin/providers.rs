@@ -220,12 +220,21 @@ async fn resolve_refresh_key_and_label(
     Ok((api_key, label))
 }
 
-fn apply_provider_auto_activation(s: &AppState, provider: &ProviderId) -> Result<u64, ApiError> {
-    let w = s.db_pool().writer();
-    let p = core_providers::get(&w, provider)?;
-    let keyword = p.and_then(|pp| pp.auto_activate_keyword);
-    let n = openproxy_db::models::apply_auto_activation(&w, provider, keyword.as_deref())?;
-    Ok(n)
+async fn apply_provider_auto_activation(
+    s: &AppState,
+    provider: &ProviderId,
+) -> Result<u64, ApiError> {
+    let pool = std::sync::Arc::clone(s.db_pool());
+    let pid = provider.clone();
+    tokio::task::spawn_blocking(move || {
+        let w = pool.writer();
+        let p = core_providers::get(&w, &pid)?;
+        let keyword = p.and_then(|pp| pp.auto_activate_keyword);
+        let n = openproxy_db::models::apply_auto_activation_with_retry(&w, &pid, keyword.as_deref())?;
+        Ok(n)
+    })
+    .await
+    .map_err(|e| ApiError(CoreError::Internal(format!("join error: {e}"))))?
 }
 
 fn spawn_favicon_fetch_if_needed(s: &AppState, provider: &ProviderId) {
@@ -270,13 +279,8 @@ pub(crate) async fn run_provider_refresh(
     let (api_key, account_label) =
         resolve_refresh_key_and_label(&s, &provider, selected_account_id).await?;
 
-    let conn_for_refresh = match s.db_pool().open_connection() {
-        Ok(c) => c,
-        Err(e) => return Err(ApiError(e)),
-    };
-
     let upsert = match core_admin::refresh_models(
-        conn_for_refresh,
+        s.db_pool(),
         &provider,
         &api_key,
         &adapter,
@@ -291,7 +295,7 @@ pub(crate) async fn run_provider_refresh(
     };
 
     spawn_favicon_fetch_if_needed(&s, &provider);
-    let activated = apply_provider_auto_activation(&s, &provider)?;
+    let activated = apply_provider_auto_activation(&s, &provider).await?;
 
     Ok(Json(serde_json::json!({
         "provider": provider_id_str,

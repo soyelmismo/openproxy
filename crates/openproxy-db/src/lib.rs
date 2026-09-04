@@ -29,5 +29,11 @@ pub mod maintenance;
 pub mod models;
 pub mod notifications;
 
-pub use error::{DbErrorKind, classify_sqlite_error, map_constraint_error};
+pub use error::{
+    BUSY_RETRY_DELAYS, DbErrorKind, classify_sqlite_error, is_sqlite_busy, map_constraint_error,
+    with_busy_retry,
+};
 pub use maintenance::DbTable;
+
+#[cfg(test)]
+pub(crate) mod test_db;

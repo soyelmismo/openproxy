@@ -147,10 +147,16 @@ pub fn seed_virtual_combo_provider(conn: &Connection) -> Result<bool> {
 }
 
 fn needs_model_type_fix(current_type: &str, inferred_type: &str) -> bool {
-    current_type.is_empty() || (current_type == "chat" && inferred_type != "chat")
+    current_type.is_empty()
+        || (current_type == "chat" && inferred_type != "chat")
+        || (current_type == "audio" && inferred_type == "chat")
+        || (current_type == "embedding" && inferred_type == "rerank")
 }
 
 fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> Result<usize> {
+    if m.custom {
+        return Ok(0);
+    }
     let model_id = m.model_id.as_ref();
     let inferred_model_type = capabilities::infer_model_type(model_id);
     let model_type_needs_fix = needs_model_type_fix(&m.model_type, inferred_model_type);

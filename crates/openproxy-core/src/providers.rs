@@ -295,8 +295,14 @@ pub async fn fetch_and_cache_favicon(
     upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
 ) -> Result<()> {
     if let Some(data_uri) = fetch_favicon_data_uri(base_url, upstream_client).await {
-        let conn = db_pool.open_connection()?;
-        set_favicon(&conn, id, &data_uri)?;
+        let pool = std::sync::Arc::clone(db_pool);
+        let id_clone = id.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.writer();
+            set_favicon(&conn, &id_clone, &data_uri)
+        })
+        .await
+        .map_err(|e| openproxy_types::error::CoreError::Internal(format!("join error: {e}")))??;
     }
     Ok(())
 }

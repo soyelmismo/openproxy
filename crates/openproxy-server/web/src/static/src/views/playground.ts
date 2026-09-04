@@ -271,11 +271,49 @@ function getEffectiveApiKey(): string {
 }
 
 function inferModelTypeFrontend(modelId: string, rawType?: string | null): ModalityType | 'rerank' {
+  const idLower = modelId.toLowerCase();
+  const isChatGuard =
+    idLower.includes('gemini') ||
+    idLower.includes('gpt-') ||
+    idLower.includes('claude') ||
+    idLower.includes('qwen') ||
+    idLower.includes('llama') ||
+    idLower.includes('mistral') ||
+    idLower.includes('mixtral') ||
+    idLower.includes('deepseek') ||
+    idLower.includes('gemma') ||
+    idLower.includes('inkling') ||
+    idLower.includes('mimo') ||
+    idLower.includes('muse-spark');
+  const isAudioExplicit =
+    idLower.includes('whisper') ||
+    idLower.includes('tts') ||
+    idLower.includes('-asr') ||
+    idLower.includes('_asr') ||
+    idLower.includes('/asr') ||
+    idLower.includes('deepgram') ||
+    idLower.includes('speechmatics') ||
+    idLower.includes('elevenlabs') ||
+    idLower.includes('fish-audio');
+  const isImageExplicit =
+    idLower.includes('dall-e') ||
+    idLower.includes('imagen') ||
+    idLower.includes('flux') ||
+    idLower.includes('midjourney') ||
+    idLower.includes('sdxl') ||
+    idLower.includes('seedream') ||
+    idLower.includes('nano-banana') ||
+    idLower.includes('lucid-origin') ||
+    idLower.includes('grok-imagine');
+
+  if (isChatGuard && !isAudioExplicit && !isImageExplicit) {
+    return 'chat';
+  }
+
   const t = (rawType || '').toLowerCase();
   if (t === 'image' || t === 'embedding' || t === 'audio' || t === 'rerank') {
     return t as ModalityType | 'rerank';
   }
-  const idLower = modelId.toLowerCase();
   if (idLower.includes('deepgram')) return 'audio';
   if (
     idLower.includes('gpt-4o-audio') ||

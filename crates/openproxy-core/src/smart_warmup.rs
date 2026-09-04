@@ -103,7 +103,8 @@ async fn run_warmup_cycle(
                     let token = accounts::decrypt_access_token(&conn, a.id, &master_key).ok()?;
                     let meta = a.oauth_provider_specific?;
                     let v: serde_json::Value = serde_json::from_str(&meta).ok()?;
-                    let project_id = v.get("project_id")?.as_str()?.to_string();
+                    let project_id =
+                        openproxy_pipeline::credentials::antigravity_project_from_value(&v)?;
                     let account_id_str = acc_id.to_string();
                     Some((acc_id, token, project_id, account_id_str))
                 })
@@ -397,5 +398,21 @@ mod tests {
         );
         assert!(!request.stream);
         assert_eq!(request.temperature, Some(0.0));
+    }
+
+    /// The warmup closure uses `openproxy_pipeline::credentials::
+    /// antigravity_project_from_value`, which (post-C.4 wire-format
+    /// unification) reads snake_case `project_id`. The migration
+    /// `000065_antigravity_project_id_wire_format.sql` normalizes any
+    /// pre-existing camelCase rows at startup, so the closure does not
+    /// need to handle camelCase directly. This test pins the contract.
+    #[test]
+    fn smart_warmup_extract_reads_snake_case_canonical() {
+        use serde_json::json;
+        let v = json!({"project_id":"canonical"});
+        assert_eq!(
+            openproxy_pipeline::credentials::antigravity_project_from_value(&v),
+            Some("canonical".to_string())
+        );
     }
 }

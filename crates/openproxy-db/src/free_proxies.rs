@@ -351,14 +351,16 @@ fn apply_source_priorities(tx: &rusqlite::Transaction, ids: &[String]) -> Result
 
 /// Reorder proxy source priorities in batch.
 pub fn reorder_proxy_sources(conn: &Connection, ids: &[String]) -> Result<()> {
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(crate::error::map_db_error)?;
+    crate::error::with_busy_retry("reorder_proxy_sources", || {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(crate::error::map_db_error)?;
 
-    apply_source_priorities(&tx, ids)?;
-    tx.commit().map_err(crate::error::map_db_error)?;
+        apply_source_priorities(&tx, ids)?;
+        tx.commit().map_err(crate::error::map_db_error)?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Prune dead proxies from free_proxies table.

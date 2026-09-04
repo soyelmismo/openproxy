@@ -1,222 +1,14 @@
-//! Antigravity (Google Cloud Code) OAuth provider.
+//! `invalid_grant` retry loop + per-account `OnUnhealthyCell` callback.
 //!
-//! Uses Authorization Code with PKCE against Google's OAuth2 endpoints.
-//! The client_id is hardcoded to the one used by Cloud Code.
-//!
-//! After a successful token exchange the provider calls
-//! `loadCodeAssist` (then `onboardUser` if the user has no
-//! `projectId` yet) to bootstrap a Cloud Code project and stores
-//! the resulting `projectId` in `accounts.oauth_provider_specific` as
-//! JSON: `{"projectId": "..."}`. The chat executor reads this
-//! field and embeds it in the upstream request envelope.
+//! The loop is generic over the async operation so unit tests can
+//! supply a closure that returns synthetic `Err(invalid_grant)` or
+//! `Ok` without touching the network.
 
-use rusqlite::{Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
-
-use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{DbRef, OAuthFlow, OAuthProvider, TokenResponse};
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
-use openproxy_db::secrets::MasterKey;
-use std::sync::Arc;
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU32, Ordering};
+use crate::oauth::TokenResponse;
 
-use dashmap::DashMap;
-
-/// Google OAuth client_id for Cloud Code (Antigravity).
-const CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep";
-
-/// Public OAuth client_secret for Google native/installed app clients.
-/// This is NOT a real secret — Google explicitly documents that native app
-/// client_secrets are distributed in source code.
-/// https://developers.google.com/identity/protocols/oauth2/native-app
-const DEFAULT_CLIENT_SECRET: &str = "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";
-
-/// Google OAuth scopes for Cloud Code.
-const SCOPES: &[&str] = &[
-    "openid",
-    "https://www.googleapis.com/auth/cloud-platform",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/cclog",
-    "https://www.googleapis.com/auth/experimentsandconfigs",
-];
-
-/// Number of consecutive `invalid_grant` responses before marking the
-/// account `Unhealthy`. Mirrors `UNHEALTHY_THRESHOLD` in
-/// `crate::oauth::mod` (kept independent because this path runs
-/// on-demand, not from the scheduler).
-const ANTIGRAVITY_INVALID_GRANT_THRESHOLD: u32 = 3;
-
-/// Backoff schedule (ms) between retries on `invalid_grant`.
-/// `index 0 = before retry 1`, `index 1 = before retry 2`, `index 2 = before retry 3`.
-const ANTIGRAVITY_BACKOFF_MS: [u64; 3] = [500, 1_000, 2_000];
-
-/// Per-account consecutive-`invalid_grant` counter, scoped to the running
-/// process. Survives until the daemon is restarted; on restart the counter
-/// resets and the first `invalid_grant` is a clean slate. Acceptable because
-/// the DB's `health_status` column is the source of truth for "blocked"
-/// accounts.
-///
-/// The key is `account_id.0` (i64) so we never construct a transient
-/// `String` for hashing on the hot path. The value is an `AtomicU32`
-/// so concurrent refreshes for the same account don't race on the
-/// counter.
-static INVALID_GRANT_COUNTERS: LazyLock<DashMap<i64, AtomicU32>> = LazyLock::new(DashMap::new);
-
-/// Google OAuth endpoints.
-const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
-const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-
-/// Cloud Code `metadata.ideType` used when the operator has not
-/// configured a custom IDE identity. The Antigravity client sends
-/// `ANTIGRAVITY` as the IDE type.
-///
-/// `projectId` recovered from `loadCodeAssist` (or `onboardUser`) and
-/// persisted in `accounts.oauth_provider_specific` as JSON.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AntigravityProviderMeta {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-}
-
-fn antigravity_oauth_spec() -> OAuthSpec {
-    OAuthSpec {
-        id: "antigravity",
-        flow: OAuthFlow::AuthorizationCodePkce,
-        authorize_url: Some(AUTH_URL),
-        token_url: TOKEN_URL,
-        device_authorization_url: None,
-        client_id_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_ID"),
-        client_id_default: CLIENT_ID,
-        client_secret_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET"),
-        client_secret_default: Some(DEFAULT_CLIENT_SECRET),
-        scopes: SCOPES,
-        auth_extra_params: &[("access_type", "offline"), ("prompt", "consent")],
-        request_encoding: OAuthRequestEncoding::FormUrlEncoded,
-        user_agent: Some(openproxy_adapters::antigravity_headers::oauth_user_agent),
-    }
-}
-
-#[derive(Clone)]
-pub struct AntigravityOAuthProvider {
-    generic: GenericOAuthProvider,
-}
-
-impl AntigravityOAuthProvider {
-    pub fn new() -> Self {
-        Self {
-            generic: GenericOAuthProvider::new(antigravity_oauth_spec()),
-        }
-    }
-}
-
-impl Default for AntigravityOAuthProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Increment the consecutive-`invalid_grant` counter for this account
-/// and return its new value. Lock-free at the call site (the entry
-/// insertion only happens on the first failure for a given account).
-///
-/// The counter is bounded: once it reaches `ANTIGRAVITY_INVALID_GRANT_THRESHOLD`,
-/// subsequent bumps saturate at that value rather than growing without
-/// limit (BUG-1 in `docs/specs/adversarial-findings.md`). `fetch_update`
-/// guarantees the read-modify-write is atomic across threads, so
-/// concurrent bumps for the same account converge on
-/// `threshold`, not `N × threshold` (BUG-2).
-fn bump_invalid_grant_counter(account_id: AccountId) -> u32 {
-    let counter = INVALID_GRANT_COUNTERS
-        .entry(account_id.0)
-        .or_insert_with(|| AtomicU32::new(0));
-    // `fetch_update` performs an atomic CAS loop and returns
-    // `Ok(previous)` on success, so we compute the NEW value by adding
-    // 1 to the previous one when the closure bumped it. The closure
-    // caps the value at `ANTIGRAVITY_INVALID_GRANT_THRESHOLD`, so
-    // concurrent bumps converge on the threshold instead of inflating
-    // it (BUG-2) and repeated calls do not grow it past the threshold
-    // (BUG-1).
-    let previous = counter
-        .value()
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            if current >= ANTIGRAVITY_INVALID_GRANT_THRESHOLD {
-                Some(current)
-            } else {
-                Some(current + 1)
-            }
-        })
-        // `fetch_update` only returns `Err` if the closure returns
-        // `None`, which we never do. Mapping the (impossible) error
-        // branch to the threshold is purely defensive.
-        .unwrap_or(ANTIGRAVITY_INVALID_GRANT_THRESHOLD);
-    // `previous` is the value seen inside the closure. If the closure
-    // bumped it (i.e. `previous < threshold`), the new value is
-    // `previous + 1`; otherwise it equals `previous`.
-    if previous >= ANTIGRAVITY_INVALID_GRANT_THRESHOLD {
-        previous
-    } else {
-        previous + 1
-    }
-}
-
-/// Reset the counter to zero (called when a refresh succeeds).
-/// Drop the entry entirely so the map stays bounded by the number of
-/// accounts currently in a "bad streak".
-fn reset_invalid_grant_counter(account_id: AccountId) {
-    INVALID_GRANT_COUNTERS.remove(&account_id.0);
-}
-
-/// Mark the account as `Unhealthy` in the DB. Two execution paths:
-///
-/// * `DbRef::Pool` (production): spawn a `tokio::task::spawn_blocking`
-///   fire-and-forget task so the synchronous SQLite write never blocks
-///   the async runtime and the original `invalid_grant` error is
-///   surfaced to the caller without added latency.
-/// * `DbRef::Connection` (test path): lock the mutex inline because
-///   tests do not own a `DbPool`.
-///
-/// Failures here are logged but do not propagate — we never want a
-/// secondary DB error to mask the original refresh failure.
-fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
-    let acc_id = account_id;
-    match db {
-        DbRef::Pool(pool) => {
-            let pool = pool.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = pool.writer();
-                if let Err(e) = crate::accounts::set_health(
-                    &conn,
-                    acc_id,
-                    crate::accounts::HealthStatus::Unhealthy,
-                ) {
-                    tracing::warn!(
-                        account = acc_id.0,
-                        error = %e,
-                        "antigravity oauth: failed to set health to unhealthy"
-                    );
-                }
-            });
-        }
-        DbRef::Connection(mutex) => {
-            let conn = mutex.lock();
-            if let Err(e) =
-                crate::accounts::set_health(&conn, acc_id, crate::accounts::HealthStatus::Unhealthy)
-            {
-                tracing::warn!(
-                    account = acc_id.0,
-                    error = %e,
-                    "antigravity oauth: failed to set health to unhealthy (test path)"
-                );
-            }
-        }
-    }
-}
+use super::counters::{ANTIGRAVITY_BACKOFF_MS, ANTIGRAVITY_INVALID_GRANT_THRESHOLD, bump, reset};
 
 /// Pure helper that drives the `invalid_grant` retry loop. Generic
 /// over the async operation so unit tests can supply a closure that
@@ -237,7 +29,7 @@ fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
 /// 4. Between attempts, sleep for the indexed backoff duration. The
 ///    sleep is wrapped in `tokio::time::timeout` so a cancelled
 ///    caller does not stall in a backoff forever (cross-spec fix N5).
-async fn drive_invalid_grant_retry<F, Fut>(
+pub(super) async fn drive_invalid_grant_retry<F, Fut>(
     account_id: AccountId,
     mut op: F,
     on_unhealthy: impl FnOnce(AccountId) + Send,
@@ -252,7 +44,7 @@ where
     for attempt in 0..ANTIGRAVITY_INVALID_GRANT_THRESHOLD {
         match op().await {
             Ok(token) => {
-                reset_invalid_grant_counter(account_id);
+                reset(account_id);
                 if attempt > 0 {
                     tracing::info!(
                         account = account_id.0,
@@ -270,7 +62,7 @@ where
                     return Err(e);
                 }
 
-                let count = bump_invalid_grant_counter(account_id);
+                let count = bump(account_id);
                 tracing::warn!(
                     account = account_id.0,
                     attempt = attempt + 1,
@@ -327,7 +119,7 @@ where
 /// helper while also being able to choose to NOT call it if the loop
 /// succeeds before reaching the threshold. Avoids a `OnceCell`-style
 /// dance for a single-shot callback.
-struct OnUnhealthyCell<F: FnOnce(AccountId)> {
+pub(super) struct OnUnhealthyCell<F: FnOnce(AccountId)> {
     inner: Option<F>,
 }
 
@@ -342,326 +134,12 @@ impl<F: FnOnce(AccountId)> OnUnhealthyCell<F> {
     }
 }
 
-impl OAuthProvider for AntigravityOAuthProvider {
-    crate::delegate_oauth_to_generic!(
-        name,
-        flow,
-        build_auth_url,
-        exchange_code,
-        request_device_code,
-        poll_device_token
-    );
-
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-        upstream_client: &Arc<UpstreamClient>,
-        account_id: AccountId,
-        db: DbRef<'_>,
-    ) -> Result<TokenResponse> {
-        let refresh_token = refresh_token.to_string();
-        let upstream_client = Arc::clone(upstream_client);
-        let on_unhealthy_db = db;
-        drive_invalid_grant_retry(
-            account_id,
-            move || {
-                let refresh_token = refresh_token.clone();
-                let upstream_client = Arc::clone(&upstream_client);
-                async move {
-                    self.generic
-                        .refresh_token(&refresh_token, &upstream_client, account_id, db)
-                        .await
-                }
-            },
-            move |aid| {
-                mark_account_unhealthy(on_unhealthy_db, aid);
-            },
-        )
-        .await
-    }
-
-    fn aliases(&self) -> &'static [&'static str] {
-        &["antigravity-cli"]
-    }
-
-    async fn post_exchange(
-        &self,
-        account_id: AccountId,
-        db_pool: &std::sync::Arc<openproxy_db::DbPool>,
-        master_key: &MasterKey,
-        upstream: &Arc<UpstreamClient>,
-    ) -> Result<()> {
-        // 1. Decrypt the access token we just stored. The writer
-        //    guard is dropped at the end of the block so the next
-        //    `.await` (the loadCodeAssist HTTP call) is `Send`.
-        let access_token = {
-            let conn = db_pool.writer();
-            crate::accounts::decrypt_access_token(&conn, account_id, master_key)?
-        };
-
-        // 1b. Fetch user info from Google
-        let email = {
-            let user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json";
-            let mut req = UpstreamRequest::get(user_info_url);
-            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
-            req.is_streaming = false;
-            let cancel = CancellationToken::new();
-            match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
-                Ok(resp) if resp.status.is_success() => {
-                    let body = resp.collect().await.unwrap_or_default();
-                    serde_json::from_slice::<serde_json::Value>(&body)
-                        .ok()
-                        .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from))
-                }
-                _ => None,
-            }
-        };
-
-        // 2. Call loadCodeAssist. If it returns a projectId we are
-        //    done; otherwise we need to onboard the user.
-        let metadata = serde_json::json!({
-            "ideType": "ANTIGRAVITY",
-        });
-
-        let project_id = match openproxy_adapters::adapters::antigravity::load_code_assist(
-            upstream,
-            &access_token,
-            &metadata,
-        )
-        .await
-        .map_err(CoreError::UpstreamConnection)?
-        {
-            Some(pid) => pid,
-            None => {
-                // Retry onboardUser up to 15 times with exponential backoff
-                let mut result = None;
-                let mut delay = std::time::Duration::from_millis(50);
-                for attempt in 0..15 {
-                    match openproxy_adapters::adapters::antigravity::onboard_user(
-                        upstream,
-                        &access_token,
-                        "",
-                        &metadata,
-                    )
-                    .await
-                    {
-                        Ok(Some(pid)) => {
-                            result = Some(pid);
-                            break;
-                        }
-                        Ok(None) => {
-                            // Not done yet, wait and retry
-                            tokio::time::sleep(delay).await;
-                            delay = std::cmp::min(delay * 2, std::time::Duration::from_secs(2));
-                        }
-                        Err(e) => {
-                            tracing::warn!(attempt = attempt + 1, error = %e, "onboardUser failed");
-                            break;
-                        }
-                    }
-                }
-                match result {
-                    Some(pid) => pid,
-                    None => {
-                        tracing::warn!("onboardUser did not complete after 15 attempts");
-                        return Err(CoreError::Internal(
-                            "onboardUser did not complete after 15 attempts".into(),
-                        ));
-                    }
-                }
-            }
-        };
-
-        // 3. Persist the projectId on the account row.
-        let meta = AntigravityProviderMeta {
-            project_id: Some(project_id),
-        };
-        let meta_json = serde_json::to_string(&meta)
-            .map_err(|e| CoreError::Internal(format!("antigravity meta serialize: {e}")))?;
-        let conn = db_pool.writer();
-        conn.execute(
-            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-            rusqlite::params![meta_json, account_id.0],
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!(
-                "antigravity post_exchange update project_id for account {}: {}",
-                account_id.0, e
-            ),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-
-        // 4. Update email and label on the account row if we fetched it.
-        if let Some(ref email) = email {
-            conn.execute(
-                "UPDATE accounts SET email = ?1, label = COALESCE(NULLIF(label, ''), ?1) WHERE id = ?2",
-                rusqlite::params![email, account_id.0],
-            )
-            .map_err(|e| CoreError::Database {
-                message: format!(
-                    "antigravity post_exchange update email and label for account {}: {}",
-                    account_id.0, e
-                ),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Read the `projectId` stored on the account row by `post_exchange`.
-///
-/// Returns `Ok(None)` when the account is not OAuth, has no
-/// `oauth_provider_specific` JSON, or the JSON does not contain a
-/// `projectId`. Returns `Ok(Some(_))` when one is present.
-pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Option<String>> {
-    let raw: Option<Option<String>> = conn
-        .query_row(
-            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "read_project_id for account {}",
-            account_id.0
-        )))?;
-
-    let Some(raw) = raw.flatten() else {
-        return Ok(None);
-    };
-    let meta: AntigravityProviderMeta = serde_json::from_str(&raw)
-        .map_err(|e| CoreError::Parse(format!("antigravity meta parse: {e}")))?;
-    Ok(meta.project_id)
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::counters::{ANTIGRAVITY_INVALID_GRANT_THRESHOLD, INVALID_GRANT_COUNTERS};
+    use super::super::test_util::*;
     use super::*;
-
-    #[test]
-    fn code_verifier_is_url_safe() {
-        let v = crate::oauth::generic::generate_code_verifier();
-        assert!(v.len() >= 43);
-        assert!(v.len() <= 128);
-        // Must be base64url-safe characters only.
-        assert!(
-            v.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        );
-    }
-
-    #[test]
-    fn code_challenge_deterministic() {
-        let verifier = "test-verifier-string";
-        let a = crate::oauth::generic::code_challenge_s256(verifier);
-        let b = crate::oauth::generic::code_challenge_s256(verifier);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn code_challenge_differs_per_verifier() {
-        let a = crate::oauth::generic::code_challenge_s256("verifier-a");
-        let b = crate::oauth::generic::code_challenge_s256("verifier-b");
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn name_and_flow() {
-        let p = AntigravityOAuthProvider::new();
-        assert_eq!(p.name(), "antigravity");
-        assert_eq!(p.aliases(), &["antigravity-cli"]);
-        assert_eq!(p.flow(), OAuthFlow::AuthorizationCodePkce);
-    }
-
-    #[tokio::test]
-    async fn antigravity_authorize_url_comes_from_generic_spec() {
-        let p = AntigravityOAuthProvider::new();
-        let (url, verifier, challenge, _state) = p
-            .build_auth_url("http://localhost:8788/admin/callback.html")
-            .await
-            .unwrap();
-
-        assert!(!verifier.is_empty());
-        assert_eq!(
-            challenge,
-            crate::oauth::generic::code_challenge_s256(&verifier)
-        );
-        assert!(url.starts_with(AUTH_URL));
-        assert!(url.contains("client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep"));
-        assert!(url.contains("access_type=offline"));
-        assert!(url.contains("prompt=consent"));
-        assert!(url.contains("code_challenge_method=S256"));
-    }
-
-    #[test]
-    fn antigravity_provider_meta_serde_roundtrip() {
-        let meta = AntigravityProviderMeta {
-            project_id: Some("my-proj-123".into()),
-        };
-        let json = serde_json::to_string(&meta).unwrap();
-        let back: AntigravityProviderMeta = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.project_id.as_deref(), Some("my-proj-123"));
-    }
-
-    #[test]
-    fn antigravity_provider_meta_missing_project_id() {
-        let meta = AntigravityProviderMeta { project_id: None };
-        let json = serde_json::to_string(&meta).unwrap();
-        // Empty meta → JSON object with no `projectId` (skipped).
-        assert!(!json.contains("projectId"));
-    }
-
-    #[test]
-    fn post_exchange_metadata_envelope_is_correct() {
-        // The upstream `metadata` envelope is small and stable; we
-        // assert its shape so a silent refactor is caught.
-        let metadata = serde_json::json!({
-            "ideType": "ANTIGRAVITY",
-        });
-        assert_eq!(metadata["ideType"], "ANTIGRAVITY");
-        assert!(metadata.get("platform").is_none());
-        assert!(metadata.get("pluginType").is_none());
-    }
-
-    // ==========
-    // GAP-5: invalid_grant retry loop + per-account counter tests
-    // ==========
-    //
-    // These tests exercise `drive_invalid_grant_retry` directly with
-    // synthetic closures. They do NOT touch the network, the DB, or
-    // `AntigravityOAuthProvider::refresh_token`. The full refresh path
-    // is exercised in integration tests elsewhere.
-
-    use std::sync::atomic::AtomicU32;
-
-    fn dummy_token(label: &str) -> TokenResponse {
-        TokenResponse {
-            access_token: format!("access-{label}"),
-            token_type: "Bearer".into(),
-            expires_in: Some(3600),
-            refresh_token: Some(format!("refresh-{label}")),
-            scope: None,
-            id_token: None,
-        }
-    }
-
-    fn invalid_grant_err() -> CoreError {
-        CoreError::Auth("server returned invalid_grant".into())
-    }
-
-    fn network_err() -> CoreError {
-        CoreError::UpstreamConnection("connection refused".into())
-    }
-
-    /// Clears the global counter map for the given account id so a
-    /// previous test cannot leak state into the next.
-    fn clear_counter(account_id: AccountId) {
-        INVALID_GRANT_COUNTERS.remove(&account_id.0);
-    }
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]
     async fn drive_retry_success_first_attempt() {
@@ -929,31 +407,17 @@ mod tests {
     }
 }
 
-// ============================================================
+// ==========
 // GAP-5: Adversarial tests for invalid_grant retry + counter
-// ============================================================
+// ==========
 #[cfg(test)]
 mod adversarial_retry_tests {
-    use super::*;
-    use std::sync::atomic::AtomicU32;
-
-    fn invalid_grant_err() -> CoreError {
-        CoreError::Auth("server returned invalid_grant".into())
-    }
-
-    fn network_err() -> CoreError {
-        CoreError::UpstreamConnection("connection refused".into())
-    }
-
-    fn clear_counter(aid: AccountId) {
-        INVALID_GRANT_COUNTERS.remove(&aid.0);
-    }
-
-    fn get_counter_val(aid: AccountId) -> u32 {
-        INVALID_GRANT_COUNTERS
-            .get(&aid.0)
-            .map_or(0, |e| e.value().load(Ordering::Relaxed))
-    }
+    use super::super::counters::{ANTIGRAVITY_INVALID_GRANT_THRESHOLD, INVALID_GRANT_COUNTERS};
+    use super::super::test_util::*;
+    use super::drive_invalid_grant_retry;
+    use crate::ids::AccountId;
+    use crate::oauth::TokenResponse;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     // --- 100 concurrent invalid_grant calls to same account (FIX BUG-2) ---
 
@@ -1015,7 +479,7 @@ mod adversarial_retry_tests {
         let _ = drive_invalid_grant_retry(
             acc_b,
             || async {
-                Ok(crate::oauth::TokenResponse {
+                Ok(TokenResponse {
                     access_token: "ok".into(),
                     token_type: "Bearer".into(),
                     expires_in: None,
@@ -1192,7 +656,7 @@ mod adversarial_retry_tests {
         let _ = drive_invalid_grant_retry(
             account_id,
             || async {
-                Ok(crate::oauth::TokenResponse {
+                Ok(TokenResponse {
                     access_token: "ok".into(),
                     token_type: "Bearer".into(),
                     expires_in: None,

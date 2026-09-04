@@ -924,21 +924,13 @@ pub fn update_model(conn: &Connection, id: ModelRowId, input: UpdateModelInput) 
 /// not present in the table for this provider before the call). On
 /// failure, returns an [`CoreError`] describing the upstream or DB
 /// failure.
+/// ## Concurrency and Connection Safety
 ///
-/// ## `Send` and the connection
-///
-/// The function takes the [`Connection`] by value (not by reference).
-/// `rusqlite::Connection: !Sync` — it carries a `RefCell` internally for
-/// the prepared-statement cache — so `&Connection: !Send`. Holding that
-/// borrow across the `adapter.fetch_models(...).await` would propagate
-/// `!Send` to the outer future, which breaks axum's `Handler` trait
-/// (which requires the handler future to be `Send` for the multi-threaded
-/// tokio runtime). The caller is expected to *clone* the connection (in
-/// the production path: `DbPool::with_conn` plus a second open via the
-/// pool's writer mutex that we then drop before awaiting) and hand the
-/// owned handle in here, so the future stays `Send` end to end.
+/// Verifies the provider exists in SQLite without holding the writer lock,
+/// fetches models asynchronously over HTTP with no database locks or connections held,
+/// and then persists the discovered models in `spawn_blocking` via the pool's writer.
 pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
-    conn: Connection,
+    pool: &openproxy_db::DbPool,
     provider: &ProviderId,
     api_key: &str,
     adapter: &A,
@@ -946,7 +938,15 @@ pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
     ttl_seconds: i64,
     account_label: &str,
 ) -> Result<models::UpsertResult> {
-    let provider_row = providers::get(&conn, provider)?;
+    let pool_reader = pool.clone();
+    let provider_clone = provider.clone();
+    let provider_row = tokio::task::spawn_blocking(move || {
+        let r = pool_reader.reader();
+        providers::get(&r, &provider_clone)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("join error: {e}")))??;
+
     if provider_row.is_none() {
         return Err(CoreError::ProviderNotFound(provider.to_string()));
     }
@@ -960,7 +960,17 @@ pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
         )));
     }
     let ttl = Duration::from_secs(ttl_seconds.max(0) as u64);
-    models::upsert_many(&conn, provider, &discovered, ttl)
+    let pool_writer = pool.clone();
+    let provider_clone = provider.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool_writer.writer();
+        if providers::get(&conn, &provider_clone)?.is_none() {
+            return Err(CoreError::ProviderNotFound(provider_clone.to_string()));
+        }
+        models::upsert_many(&conn, &provider_clone, &discovered, ttl)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("join error: {e}")))?
 }
 
 /// Inputs for [`set_active_bulk`]. The dashboard sends one of these from
@@ -1376,7 +1386,6 @@ mod tests {
         // ProviderNotFound when the provider does not exist. We don't need
         // an actual adapter or HTTP roundtrip to exercise this branch.
         let (pool, _path) = fresh_pool();
-        let conn = pool.open_connection().expect("open conn");
 
         // We need a minimal adapter impl to satisfy the trait. We don't
         // call `fetch_models` on it.
@@ -1394,7 +1403,7 @@ mod tests {
             .build()
             .expect("runtime");
         let res = rt.block_on(refresh_models(
-            conn,
+            &pool,
             &ProviderId::new("does-not-exist"),
             "sk-doesnt-matter",
             &adapter,
@@ -1449,7 +1458,6 @@ mod tests {
             .expect("seed model");
         }
 
-        let conn = pool.open_connection().expect("open conn");
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(Box::new(
             openproxy_adapters::adapters::MockAdapter::new(
                 "prov-preserve",
@@ -1464,7 +1472,7 @@ mod tests {
             .build()
             .expect("runtime");
         let res = rt.block_on(refresh_models(
-            conn,
+            &pool,
             &provider_id,
             "sk-test",
             &adapter,

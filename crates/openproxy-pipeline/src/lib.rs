@@ -30,6 +30,7 @@ pub mod repository;
 pub mod response_ext;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
+mod dispatcher;
 pub mod redact;
 pub mod sse;
 pub mod sse_accumulator;
