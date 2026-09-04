@@ -785,14 +785,32 @@ mod tests {
     #[test]
     fn test_resolve_effective_model_type() {
         assert_eq!(resolve_effective_model_type("audio", false, "chat"), "chat");
-        assert_eq!(resolve_effective_model_type("image", false, "chat"), "image");
+        assert_eq!(
+            resolve_effective_model_type("image", false, "chat"),
+            "image"
+        );
         assert_eq!(resolve_effective_model_type("", false, "chat"), "chat");
-        assert_eq!(resolve_effective_model_type("chat", false, "embedding"), "embedding");
-        assert_eq!(resolve_effective_model_type("embedding", false, "rerank"), "rerank");
-        assert_eq!(resolve_effective_model_type("chat", false, "image"), "image");
-        assert_eq!(resolve_effective_model_type("chat", false, "audio"), "audio");
+        assert_eq!(
+            resolve_effective_model_type("chat", false, "embedding"),
+            "embedding"
+        );
+        assert_eq!(
+            resolve_effective_model_type("embedding", false, "rerank"),
+            "rerank"
+        );
+        assert_eq!(
+            resolve_effective_model_type("chat", false, "image"),
+            "image"
+        );
+        assert_eq!(
+            resolve_effective_model_type("chat", false, "audio"),
+            "audio"
+        );
         assert_eq!(resolve_effective_model_type("audio", true, "chat"), "audio");
-        assert_eq!(resolve_effective_model_type("audio", false, "audio"), "audio");
+        assert_eq!(
+            resolve_effective_model_type("audio", false, "audio"),
+            "audio"
+        );
 
         assert_eq!(infer_model_type("gemini-3.7-flash-low"), "chat");
         assert_eq!(infer_model_type("gemini-2.5-flash-preview-tts"), "audio");
