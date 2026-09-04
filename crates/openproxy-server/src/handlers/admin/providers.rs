@@ -230,7 +230,8 @@ async fn apply_provider_auto_activation(
         let w = pool.writer();
         let p = core_providers::get(&w, &pid)?;
         let keyword = p.and_then(|pp| pp.auto_activate_keyword);
-        let n = openproxy_db::models::apply_auto_activation_with_retry(&w, &pid, keyword.as_deref())?;
+        let n =
+            openproxy_db::models::apply_auto_activation_with_retry(&w, &pid, keyword.as_deref())?;
         Ok(n)
     })
     .await
