@@ -263,7 +263,8 @@ fn load_model_for_test(s: &AppState, model_row_id: i64) -> Result<core_models::M
     let r = s.db_pool().reader();
     match core_models::get_by_row_id(&r, ModelRowId(model_row_id)) {
         Ok(Some(mut m)) => {
-            let inferred_type = openproxy_types::capabilities::infer_model_type(m.model_id.as_str());
+            let inferred_type =
+                openproxy_types::capabilities::infer_model_type(m.model_id.as_str());
             let effective_type = openproxy_types::capabilities::resolve_effective_model_type(
                 &m.model_type,
                 m.custom,
