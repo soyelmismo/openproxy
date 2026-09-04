@@ -964,6 +964,9 @@ pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
     let provider_clone = provider.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool_writer.writer();
+        if providers::get(&conn, &provider_clone)?.is_none() {
+            return Err(CoreError::ProviderNotFound(provider_clone.to_string()));
+        }
         models::upsert_many(&conn, &provider_clone, &discovered, ttl)
     })
     .await
