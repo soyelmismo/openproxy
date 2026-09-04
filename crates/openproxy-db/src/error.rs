@@ -64,12 +64,17 @@ fn classify_primary_code(code: rusqlite::ErrorCode, msg: Option<&str>) -> DbErro
 }
 
 fn classify_constraint_message(msg: &str) -> DbErrorKind {
-    let upper = msg.to_ascii_uppercase();
-    if upper.contains("FOREIGN KEY") {
+    let contains_ignore_case = |needle: &str| {
+        msg.as_bytes()
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    };
+
+    if contains_ignore_case("FOREIGN KEY") {
         DbErrorKind::ForeignKeyViolation
-    } else if upper.contains("UNIQUE") || upper.contains("PRIMARY KEY") {
+    } else if contains_ignore_case("UNIQUE") || contains_ignore_case("PRIMARY KEY") {
         DbErrorKind::UniqueViolation
-    } else if upper.contains("CHECK") {
+    } else if contains_ignore_case("CHECK") {
         DbErrorKind::CheckViolation
     } else {
         DbErrorKind::Other
