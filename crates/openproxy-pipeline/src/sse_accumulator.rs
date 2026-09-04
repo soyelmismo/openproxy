@@ -383,10 +383,8 @@ fn extract_error_from_line(line: &[u8]) -> Option<(u16, String)> {
     let json_bytes = line
         .strip_prefix(b"data: ")
         .or_else(|| line.strip_prefix(b"data:"))
-        .unwrap_or(line);
-
-    let json_bytes = json_bytes.trim_ascii();
-
+        .unwrap_or(line)
+        .trim_ascii();
     if !json_bytes.starts_with(b"{") {
         return None;
     }
