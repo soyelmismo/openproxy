@@ -25,10 +25,16 @@ fn execute_round_robin(
     if n == 0 {
         return targets;
     }
-    let counter = rr_counters
-        .entry(combo_id)
-        .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
-    let val = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    let val = if let Some(counter) = rr_counters.get(&combo_id) {
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    } else {
+        let counter = rr_counters
+            .entry(combo_id)
+            .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+
     let shift = (val % n as u64) as usize;
     targets.rotate_left(shift);
     targets
