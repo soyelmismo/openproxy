@@ -128,7 +128,8 @@ pub fn is_sqlite_busy(err: &openproxy_types::error::CoreError) -> bool {
 
 /// Backoff schedule for SQLite BUSY retries. Three attempts total: at
 /// `t=0` (initial), then `50ms`, then `100ms`.
-pub const BUSY_RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(100)];
+pub const BUSY_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_millis(50), Duration::from_millis(100)];
 
 /// Execute an operation with automatic retry on transient SQLite BUSY/LOCKED errors.
 ///
@@ -358,7 +359,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.db");
         let conn1 = Connection::open(&path).unwrap();
-        conn1.execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE t (id INT PRIMARY KEY);").unwrap();
+        conn1
+            .execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE t (id INT PRIMARY KEY);")
+            .unwrap();
         conn1.pragma_update(None, "busy_timeout", 0i64).unwrap();
 
         let conn2 = Connection::open(&path).unwrap();
@@ -371,7 +374,9 @@ mod tests {
             if attempts == 2 {
                 let _ = conn2.execute_batch("ROLLBACK");
             }
-            conn1.execute("INSERT INTO t VALUES (1)", []).map_err(map_db_error)
+            conn1
+                .execute("INSERT INTO t VALUES (1)", [])
+                .map_err(map_db_error)
         });
 
         assert!(res.is_ok(), "expected success after rollback, got {res:?}");
