@@ -437,82 +437,75 @@ pub fn upsert_scraped_proxies(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let tx = conn
-        .transaction()
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+    openproxy_db::error::with_busy_retry("upsert_scraped_proxies", || {
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = conn
+            .transaction()
+            .map_err(openproxy_db::error::map_db_error)?;
 
-    let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
-               source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
-               type = excluded.type, \
-               country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
-               username = excluded.username, \
-               password = excluded.password, \
-               priority = excluded.priority, \
-               updated_at = excluded.updated_at";
+        let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
+                   source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
+                   type = excluded.type, \
+                   country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
+                   username = excluded.username, \
+                   password = excluded.password, \
+                   priority = excluded.priority, \
+                   updated_at = excluded.updated_at";
 
-    openproxy_db::batch::batch_insert(
-        &tx,
-        "INSERT INTO",
-        "free_proxies",
-        &[
-            "id",
-            "source",
-            "host",
-            "port",
-            "type",
-            "country_code",
-            "status",
-            "latency_ms",
-            "last_validated",
-            "username",
-            "password",
-            "priority",
-            "created_at",
-            "updated_at",
-        ],
-        proxies,
-        Some(on_conflict_suffix),
-        |p, params| {
-            let id = uuid::Uuid::new_v4().to_string();
-            params.push(id.into());
-            params.push(p.source.clone().into());
-            params.push(p.host.clone().into());
-            params.push(p.port.into());
-            params.push(p.r#type.clone().into());
-            match &p.country_code {
-                Some(cc) => params.push(cc.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            params.push("unknown".to_string().into());
-            params.push(rusqlite::types::Value::Null);
-            params.push(rusqlite::types::Value::Null);
-            match &p.username {
-                Some(u) => params.push(u.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            match &p.password {
-                Some(pass) => params.push(pass.to_owned().into()),
-                None => params.push(rusqlite::types::Value::Null),
-            }
-            params.push(p.priority.into());
-            params.push(now.clone().into());
-            params.push(now.clone().into());
-        },
-    )
-    .map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+        openproxy_db::batch::batch_insert(
+            &tx,
+            "INSERT INTO",
+            "free_proxies",
+            &[
+                "id",
+                "source",
+                "host",
+                "port",
+                "type",
+                "country_code",
+                "status",
+                "latency_ms",
+                "last_validated",
+                "username",
+                "password",
+                "priority",
+                "created_at",
+                "updated_at",
+            ],
+            proxies,
+            Some(on_conflict_suffix),
+            |p, params| {
+                let id = uuid::Uuid::new_v4().to_string();
+                params.push(id.into());
+                params.push(p.source.clone().into());
+                params.push(p.host.clone().into());
+                params.push(p.port.into());
+                params.push(p.r#type.clone().into());
+                match &p.country_code {
+                    Some(cc) => params.push(cc.to_owned().into()),
+                    None => params.push(rusqlite::types::Value::Null),
+                }
+                params.push("unknown".to_string().into());
+                params.push(rusqlite::types::Value::Null);
+                params.push(rusqlite::types::Value::Null);
+                match &p.username {
+                    Some(u) => params.push(u.to_owned().into()),
+                    None => params.push(rusqlite::types::Value::Null),
+                }
+                match &p.password {
+                    Some(pass) => params.push(pass.to_owned().into()),
+                    None => params.push(rusqlite::types::Value::Null),
+                }
+                params.push(p.priority.into());
+                params.push(now.clone().into());
+                params.push(now.clone().into());
+            },
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
 
-    tx.commit().map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
-    Ok(())
+        tx.commit().map_err(openproxy_db::error::map_db_error)?;
+        Ok(())
+    })
 }
 
 // Scraper integrations
@@ -1606,40 +1599,33 @@ fn fetch_background_test_proxies(conn: &Connection) -> Vec<ProxyTestCandidate> {
 
 fn execute_proxy_batch_update(
     conn: &mut Connection,
-    batch: Vec<(String, Result<i64, String>)>,
+    batch: &[(String, Result<i64, String>)],
 ) -> Result<(), crate::error::CoreError> {
-    let tx_db = conn
-        .transaction()
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-    let now = chrono::Utc::now().to_rfc3339();
-    {
-        let mut stmt = tx_db
-            .prepare_cached(
-                "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
-            )
-            .map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    openproxy_db::error::with_busy_retry("execute_proxy_batch_update", || {
+        let tx_db = conn
+            .transaction()
+            .map_err(openproxy_db::error::map_db_error)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let mut stmt = tx_db
+                .prepare_cached(
+                    "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
 
-        for (id, test_res) in batch {
-            let (status, latency) = match test_res {
-                Ok(lat) => ("alive", Some(lat)),
-                Err(_) => ("dead", None),
-            };
-            let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
+            for (id, test_res) in batch {
+                let (status, latency) = match test_res {
+                    Ok(lat) => ("alive", Some(*lat)),
+                    Err(_) => ("dead", None),
+                };
+                let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
+            }
         }
-    }
-    tx_db
-        .commit()
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-    Ok(())
+        tx_db
+            .commit()
+            .map_err(openproxy_db::error::map_db_error)?;
+        Ok(())
+    })
 }
 
 pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
@@ -1676,7 +1662,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 let _ =
                     tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
                         let mut w = pool.open_connection()?;
-                        execute_proxy_batch_update(&mut w, batch)
+                        execute_proxy_batch_update(&mut w, &batch)
                     })
                     .await;
             }

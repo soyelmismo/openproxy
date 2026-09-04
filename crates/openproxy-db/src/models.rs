@@ -214,15 +214,17 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 }
 
 pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
-    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+    crate::error::with_busy_retry("delete_model", || {
+        let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
-    let removed = tx
-        .execute("DELETE FROM models WHERE id = ?1", params![id.0])
-        .map_err(map_db_error_ctx(format!("delete model {}", id.0)))?;
+        let removed = tx
+            .execute("DELETE FROM models WHERE id = ?1", params![id.0])
+            .map_err(map_db_error_ctx(format!("delete model {}", id.0)))?;
 
-    tx.commit().map_err(map_db_error)?;
+        tx.commit().map_err(map_db_error)?;
 
-    Ok(removed as u64)
+        Ok(removed as u64)
+    })
 }
 
 pub fn create_custom(
@@ -496,64 +498,18 @@ pub fn apply_auto_activation(
     Ok(updated as u64)
 }
 
-/// Backoff schedule for SQLite BUSY retries in
-/// [`apply_auto_activation_with_retry`]. Three attempts total: at
-/// `t=0` (initial), then `50ms`, then `100ms`. The cap is enforced
-/// by `attempt < BUSY_RETRY_DELAYS.len()`.
-const BUSY_RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(100)];
+pub use crate::error::BUSY_RETRY_DELAYS;
 
 /// `apply_auto_activation` with automatic retry on transient SQLite
-/// BUSY/LOCKED.
-///
-/// The function is called from a `spawn_blocking` thread, so the
-/// sleeps in the backoff schedule don't block the Tokio runtime.
-/// Each retry creates a new `unchecked_transaction` (the previous
-/// one was rolled back when the error propagated), so the data is
-/// in a consistent state.
-///
-/// Total worst-case latency is bounded by
-/// `2 * busy_timeout + Σ BUSY_RETRY_DELAYS`
-/// (about 10s with the default 5s `busy_timeout`). This is
-/// acceptable because the call is best-effort (the next tick will
-/// retry the whole flow), the `spawn_blocking` thread is a
-/// dedicated blocking worker not the Tokio runtime, and the admin
-/// handler at `handlers/admin/providers.rs:227` is the only
-/// user-visible call site and can afford the wait.
+/// BUSY/LOCKED via [`crate::error::with_busy_retry`].
 pub fn apply_auto_activation_with_retry(
     conn: &Connection,
     provider: &ProviderId,
     keyword: Option<&str>,
 ) -> Result<u64> {
-    let mut attempt: u32 = 0;
-    loop {
-        match apply_auto_activation(conn, provider, keyword) {
-            Ok(n) => return Ok(n),
-            Err(e)
-                if crate::error::is_sqlite_busy(&e)
-                    && (attempt as usize) < BUSY_RETRY_DELAYS.len() =>
-            {
-                let delay = BUSY_RETRY_DELAYS[attempt as usize];
-                tracing::debug!(
-                    provider = %provider,
-                    attempt = attempt + 1,
-                    delay_ms = delay.as_millis() as u64,
-                    "apply_auto_activation: sqlite busy, retrying",
-                );
-                std::thread::sleep(delay);
-                attempt += 1;
-            }
-            Err(e) => {
-                if crate::error::is_sqlite_busy(&e) {
-                    tracing::warn!(
-                        provider = %provider,
-                        attempts = attempt + 1,
-                        "apply_auto_activation: sqlite busy, retries exhausted",
-                    );
-                }
-                return Err(e);
-            }
-        }
-    }
+    crate::error::with_busy_retry("apply_auto_activation", || {
+        apply_auto_activation(conn, provider, keyword)
+    })
 }
 
 fn fetch_existing_model_ids(
@@ -729,31 +685,33 @@ pub fn upsert_many(
     discovered: &[DiscoveredModel],
     ttl: Duration,
 ) -> Result<UpsertResult> {
-    let ttl_secs = ttl.as_secs() as i64;
-    let existing = fetch_existing_model_ids(conn, provider)?;
-    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
+    crate::error::with_busy_retry("models_upsert_many", || {
+        let ttl_secs = ttl.as_secs() as i64;
+        let existing = fetch_existing_model_ids(conn, provider)?;
+        let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
-    let mut new_model_ids: Vec<ModelId> = Vec::new();
-    let mut inserted_model_ids: Vec<&str> = Vec::new();
+        let mut new_model_ids: Vec<ModelId> = Vec::new();
+        let mut inserted_model_ids: Vec<&str> = Vec::new();
 
-    let total = upsert_discovered_models(
-        &tx,
-        provider,
-        discovered,
-        ttl_secs,
-        &existing,
-        &mut new_model_ids,
-        &mut inserted_model_ids,
-    )?;
+        let total = upsert_discovered_models(
+            &tx,
+            provider,
+            discovered,
+            ttl_secs,
+            &existing,
+            &mut new_model_ids,
+            &mut inserted_model_ids,
+        )?;
 
-    prune_obsolete_models(&tx, provider, discovered)?;
-    reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids)?;
+        prune_obsolete_models(&tx, provider, discovered)?;
+        reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids)?;
 
-    tx.commit().map_err(map_db_error)?;
+        tx.commit().map_err(map_db_error)?;
 
-    Ok(UpsertResult {
-        touched: total,
-        new_model_ids: new_model_ids.into(),
+        Ok(UpsertResult {
+            touched: total,
+            new_model_ids: new_model_ids.into(),
+        })
     })
 }
 

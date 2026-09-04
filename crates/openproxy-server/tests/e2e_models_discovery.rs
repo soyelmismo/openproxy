@@ -374,11 +374,12 @@ async fn call_refresh(
     provider: &ProviderId,
     api_key: &str,
 ) -> Option<models::UpsertResult> {
-    let conn = state.db_pool().open_connection().expect("open_connection");
-    let provider_row = openproxy_core::providers::get(&conn, provider)
-        .unwrap()
-        .unwrap();
-    let mut provider_row = provider_row;
+    let mut provider_row = {
+        let r = state.db_pool().reader();
+        openproxy_core::providers::get(&r, provider)
+            .unwrap()
+            .unwrap()
+    };
     if !provider_row.base_url.ends_with("/v1") {
         provider_row.base_url = format!("{}/v1", provider_row.base_url).into();
     }
@@ -388,7 +389,7 @@ async fn call_refresh(
         openproxy_adapters::adapters::ProviderAdapterEnum::Custom(Box::new(custom_adapter));
 
     admin::refresh_models(
-        conn,
+        state.db_pool(),
         provider,
         api_key,
         &adapter_enum,

@@ -72,14 +72,15 @@ pub fn execute_sync_transaction(
     diff: &SyncDiff,
     ttl: Duration,
 ) -> Result<SyncTransactionResult> {
-    let mut total = 0usize;
-    let mut new_model_ids: Vec<crate::ids::ModelId> = Vec::new();
-    let ttl_secs = ttl.as_secs() as i64;
-    let mut inserted_model_ids: Vec<&str> = Vec::new();
+    openproxy_db::error::with_busy_retry("execute_sync_transaction", || {
+        let mut total = 0usize;
+        let mut new_model_ids: Vec<crate::ids::ModelId> = Vec::new();
+        let ttl_secs = ttl.as_secs() as i64;
+        let mut inserted_model_ids: Vec<&str> = Vec::new();
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(openproxy_db::error::map_db_error)?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(openproxy_db::error::map_db_error)?;
 
     {
         let new_models_set: std::collections::HashSet<&str> = diff
@@ -248,13 +249,14 @@ pub fn execute_sync_transaction(
 
     tx.commit().map_err(openproxy_db::error::map_db_error)?;
 
-    Ok((
-        UpsertResult {
-            touched: total,
-            new_model_ids: new_model_ids.into(),
-        },
-        events,
-    ))
+        Ok((
+            UpsertResult {
+                touched: total,
+                new_model_ids: new_model_ids.into(),
+            },
+            events,
+        ))
+    })
 }
 
 pub fn generate_events(

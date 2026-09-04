@@ -454,18 +454,6 @@ async fn run_one_tick(
         return;
     };
 
-    let conn = match db_pool.open_connection() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                provider = %provider,
-                error = %e,
-                "discovery tick: failed to open db connection; skipping cycle",
-            );
-            return;
-        }
-    };
-
     let adapter = match (&adapter, &provider_row) {
         (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(Box::new(
             openproxy_adapters::adapters::CustomAdapter::from_provider_row(row),
@@ -474,7 +462,7 @@ async fn run_one_tick(
     };
 
     let result = admin::refresh_models(
-        conn,
+        db_pool,
         &provider,
         &api_key,
         &adapter,

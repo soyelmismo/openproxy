@@ -1,5 +1,7 @@
+use openproxy_types::Result;
 use openproxy_types::error::CoreError;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DbErrorKind {
@@ -122,6 +124,47 @@ pub fn is_sqlite_busy(err: &openproxy_types::error::CoreError) -> bool {
     };
     src.downcast_ref::<rusqlite::Error>()
         .is_some_and(|r| classify_sqlite_error(r) == DbErrorKind::BusyOrLocked)
+}
+
+/// Backoff schedule for SQLite BUSY retries. Three attempts total: at
+/// `t=0` (initial), then `50ms`, then `100ms`.
+pub const BUSY_RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(100)];
+
+/// Execute an operation with automatic retry on transient SQLite BUSY/LOCKED errors.
+///
+/// Intended for use from blocking contexts (e.g. within `spawn_blocking` or thread pools).
+/// At most 3 total attempts are made (initial, then retries after 50ms and 100ms).
+pub fn with_busy_retry<T, F>(op: &str, mut f: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    let mut attempt: usize = 0;
+    loop {
+        match f() {
+            Ok(val) => return Ok(val),
+            Err(e) if is_sqlite_busy(&e) && attempt < BUSY_RETRY_DELAYS.len() => {
+                let delay = BUSY_RETRY_DELAYS[attempt];
+                tracing::debug!(
+                    op = op,
+                    attempt = attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    "sqlite busy, retrying",
+                );
+                std::thread::sleep(delay);
+                attempt += 1;
+            }
+            Err(e) => {
+                if is_sqlite_busy(&e) {
+                    tracing::warn!(
+                        op = op,
+                        attempts = attempt + 1,
+                        "sqlite busy, retries exhausted",
+                    );
+                }
+                return Err(e);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -290,5 +333,59 @@ mod tests {
             source: None,
         };
         assert!(!is_sqlite_busy(&err));
+    }
+
+    #[test]
+    fn with_busy_retry_succeeds_first_attempt() {
+        let mut calls = 0;
+        let res = with_busy_retry("test_op", || {
+            calls += 1;
+            Ok(42)
+        });
+        assert_eq!(res.unwrap(), 42);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn with_busy_retry_retries_on_busy_and_succeeds() {
+        let dir = std::env::temp_dir().join(format!(
+            "openproxy-busy-retry-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+        let conn1 = Connection::open(&path).unwrap();
+        conn1.execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE t (id INT PRIMARY KEY);").unwrap();
+        conn1.pragma_update(None, "busy_timeout", 0i64).unwrap();
+
+        let conn2 = Connection::open(&path).unwrap();
+        conn2.pragma_update(None, "busy_timeout", 0i64).unwrap();
+        conn2.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let mut attempts = 0;
+        let res = with_busy_retry("test_retry", || {
+            attempts += 1;
+            if attempts == 2 {
+                let _ = conn2.execute_batch("ROLLBACK");
+            }
+            conn1.execute("INSERT INTO t VALUES (1)", []).map_err(map_db_error)
+        });
+
+        assert!(res.is_ok(), "expected success after rollback, got {res:?}");
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn with_busy_retry_propagates_non_busy_immediately() {
+        let mut calls = 0;
+        let res: Result<i32> = with_busy_retry("test_non_busy", || {
+            calls += 1;
+            Err(CoreError::Validation("invalid input".into()))
+        });
+        assert!(res.is_err());
+        assert_eq!(calls, 1);
     }
 }
