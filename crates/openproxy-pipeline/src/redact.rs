@@ -54,24 +54,19 @@
 use http::HeaderMap;
 use std::collections::BTreeMap;
 
-/// Set of header names whose values must never be persisted
-/// verbatim. The match is case-insensitive; the keys in this
-/// slice are lowercase to make the intent obvious.
-const SENSITIVE_HEADERS: &[&str] = &[
-    "authorization",
-    "x-api-key",
-    "cookie",
-    "set-cookie",
-    "proxy-authorization",
-    "x-auth-token",
-];
-
-/// Return `true` if `name` (case-insensitive) is in
-/// [`SENSITIVE_HEADERS`].
+/// Return `true` if `name` (case-insensitive) is one of the
+/// known sensitive headers: `authorization`, `x-api-key`, `cookie`,
+/// `set-cookie`, `proxy-authorization`, `x-auth-token`.
 pub fn is_sensitive(name: &str) -> bool {
-    SENSITIVE_HEADERS
-        .iter()
-        .any(|sensitive| sensitive.eq_ignore_ascii_case(name))
+    match name.len() {
+        6 => name.eq_ignore_ascii_case("cookie"),
+        9 => name.eq_ignore_ascii_case("x-api-key"),
+        10 => name.eq_ignore_ascii_case("set-cookie"),
+        12 => name.eq_ignore_ascii_case("x-auth-token"),
+        13 => name.eq_ignore_ascii_case("authorization"),
+        19 => name.eq_ignore_ascii_case("proxy-authorization"),
+        _ => false,
+    }
 }
 
 /// The literal value substituted in for any redacted header.
@@ -130,9 +125,15 @@ fn truncate_header_value(v: &str) -> std::borrow::Cow<'_, str> {
 }
 
 pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    // BTreeMap does not support pre-allocating capacity, but we can avoid
+    // unnecessary String allocations on insertion by using the Entry API
+    // or manually avoiding duplicate keys. However, HeaderMap can have duplicate keys.
+    // We collect into BTreeMap, replacing if duplicated.
     let mut out = BTreeMap::new();
     for (k, v) in headers {
-        let value = if is_sensitive(k.as_str()) {
+        let key_str = k.as_str();
+
+        let value = if is_sensitive(key_str) {
             REDACTED_PLACEHOLDER.to_string()
         } else {
             // `HeaderValue::to_str()` returns Err on non-ASCII
@@ -142,7 +143,15 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
             // the persisted `usage.request_headers` row.
             truncate_header_value(v.to_str().unwrap_or("")).into_owned()
         };
-        out.insert(k.as_str().to_string(), value);
+
+        if let Some(existing) = out.get_mut(key_str) {
+            // In case of duplicate headers (like multiple Set-Cookie),
+            // axum HeaderMap iterator yields them sequentially.
+            // But openproxy's legacy behavior just overwrites.
+            *existing = value;
+        } else {
+            out.insert(key_str.to_string(), value);
+        }
     }
     out
 }
@@ -167,9 +176,13 @@ pub fn redact_btreemap_sensitive(
 ) -> BTreeMap<String, String> {
     for (k, v) in &mut headers {
         if is_sensitive(k) {
-            *v = REDACTED_PLACEHOLDER.to_string();
+            v.clear();
+            v.push_str(REDACTED_PLACEHOLDER);
         } else if v.len() > REDACTED_HEADER_VALUE_MAX {
-            *v = truncate_header_value(v).into_owned();
+            // Re-using the String buffer directly if possible is slightly faster,
+            // but `truncate_header_value` already handles multibyte logic safely.
+            let truncated = truncate_header_value(v).into_owned();
+            *v = truncated;
         }
     }
     headers
@@ -268,7 +281,15 @@ mod tests {
 
     #[test]
     fn is_sensitive_matches_full_list() {
-        for h in SENSITIVE_HEADERS {
+        let known_sensitive = [
+            "authorization",
+            "x-api-key",
+            "cookie",
+            "set-cookie",
+            "proxy-authorization",
+            "x-auth-token",
+        ];
+        for h in known_sensitive {
             assert!(is_sensitive(h), "{h} should be sensitive");
             assert!(is_sensitive(&h.to_uppercase()), "uppercase {h}");
         }
