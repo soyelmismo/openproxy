@@ -47,3 +47,43 @@ impl std::fmt::Display for UpstreamErrorClass {
         f.write_str(s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_upstream_error_class_default() {
+        assert_eq!(UpstreamErrorClass::default(), UpstreamErrorClass::Generic);
+    }
+
+    #[test]
+    fn test_upstream_error_class_is_hard_skip() {
+        assert!(!UpstreamErrorClass::Generic.is_hard_skip());
+        assert!(UpstreamErrorClass::ValidationRequired.is_hard_skip());
+        assert!(UpstreamErrorClass::PermissionDenied.is_hard_skip());
+        assert!(UpstreamErrorClass::ResourceExhausted.is_hard_skip());
+        assert!(UpstreamErrorClass::MalformedToolCall.is_hard_skip());
+    }
+
+    #[test]
+    fn test_upstream_error_class_display() {
+        assert_eq!(UpstreamErrorClass::Generic.to_string(), "generic");
+        assert_eq!(
+            UpstreamErrorClass::ValidationRequired.to_string(),
+            "validation_required"
+        );
+        assert_eq!(
+            UpstreamErrorClass::PermissionDenied.to_string(),
+            "permission_denied"
+        );
+        assert_eq!(
+            UpstreamErrorClass::ResourceExhausted.to_string(),
+            "resource_exhausted"
+        );
+        assert_eq!(
+            UpstreamErrorClass::MalformedToolCall.to_string(),
+            "malformed_tool_call"
+        );
+    }
+}
