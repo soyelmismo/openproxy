@@ -251,6 +251,33 @@ pub fn find_substring_match<T: Copy>(haystack: &str, table: &[(&str, T)]) -> Opt
         .find_map(|&(k, v)| if haystack.contains(k) { Some(v) } else { None })
 }
 
+/// Checks whether `token` exists in `haystack` bounded by string ends or delimiters (`-`, `_`, `/`, `.`, `:`, ` `).
+#[inline]
+pub fn contains_delimited_token(haystack: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(token) {
+        let abs_pos = start + pos;
+        let end_pos = abs_pos + token.len();
+
+        let prev_ok = abs_pos == 0
+            || matches!(
+                haystack.as_bytes()[abs_pos - 1],
+                b'/' | b'-' | b'_' | b'.' | b':' | b' '
+            );
+        let next_ok = end_pos == haystack.len()
+            || matches!(
+                haystack.as_bytes()[end_pos],
+                b'/' | b'-' | b'_' | b'.' | b':' | b' '
+            );
+
+        if prev_ok && next_ok {
+            return true;
+        }
+        start = abs_pos + 1;
+    }
+    false
+}
+
 pub fn infer_context_length(model_id: &str) -> Option<i64> {
     const KNOWN: &[(&str, i64)] = &[
         ("claude-3", 200_000),
@@ -328,9 +355,6 @@ pub const CHAT_GUARD_KEYWORDS: &[&str] = &[
     "gemini",
     "gpt-4",
     "gpt-3",
-    "o1",
-    "o3",
-    "o4",
     "claude",
     "deepseek",
     "qwen",
@@ -372,9 +396,9 @@ pub const AUDIO_KEYWORDS: &[&str] = &[
     "voxtral-mini-tts",
     "xai-tts",
     "grok-stt",
-    "-tts-",
-    "_tts_",
-    "/tts-",
+    "-tts",
+    "_tts",
+    "/tts",
     "preview-tts",
     "-tts-preview",
     "-asr",
@@ -436,6 +460,11 @@ pub const IMAGE_KEYWORDS: &[&str] = &[
     "duc haiten",
     "nai-diffusion",
     "diffusion",
+    "seedream",
+    "grok-imagine",
+    "lucid-origin",
+    "nano-banana",
+    "quiverai/arrow",
 ];
 
 pub fn infer_model_type(model_id: &str) -> &'static str {
@@ -451,11 +480,18 @@ fn is_embedding_model(lower: &str) -> bool {
             && !lower.contains("embeddable"))
 }
 
+pub fn is_chat_guarded_family(lower: &str) -> bool {
+    CHAT_GUARD_KEYWORDS.iter().any(|k| lower.contains(k))
+        || contains_delimited_token(lower, "o1")
+        || contains_delimited_token(lower, "o3")
+        || contains_delimited_token(lower, "o4")
+}
+
 fn check_chat_guard_model(lower: &str) -> Option<&'static str> {
-    if !CHAT_GUARD_KEYWORDS.iter().any(|k| lower.contains(k)) {
+    if !is_chat_guarded_family(lower) {
         return None;
     }
-    if lower.contains("imagen-") || lower.contains("imagen/") || lower == "imagen" {
+    if is_image_model(lower) {
         Some("image")
     } else if is_audio_model(lower) {
         Some("audio")
@@ -466,9 +502,6 @@ fn check_chat_guard_model(lower: &str) -> Option<&'static str> {
 
 fn is_audio_model(lower: &str) -> bool {
     AUDIO_KEYWORDS.iter().any(|k| lower.contains(k))
-        || lower.ends_with("-tts")
-        || lower.ends_with("_tts")
-        || lower.ends_with("/tts")
         || (lower.contains("telnyx-") && lower.contains("tts"))
 }
 
@@ -508,7 +541,8 @@ pub fn resolve_effective_model_type<'a>(
         }
     } else if model_type.is_empty()
         || (model_type == "chat" && inferred_type != "chat")
-        || (inferred_type == "chat" && (model_type == "audio" || model_type == "image"))
+        || (model_type == "audio" && inferred_type == "chat")
+        || (model_type == "embedding" && inferred_type == "rerank")
     {
         inferred_type
     } else {
@@ -751,9 +785,12 @@ mod tests {
     #[test]
     fn test_resolve_effective_model_type() {
         assert_eq!(resolve_effective_model_type("audio", false, "chat"), "chat");
-        assert_eq!(resolve_effective_model_type("image", false, "chat"), "chat");
+        assert_eq!(resolve_effective_model_type("image", false, "chat"), "image");
         assert_eq!(resolve_effective_model_type("", false, "chat"), "chat");
         assert_eq!(resolve_effective_model_type("chat", false, "embedding"), "embedding");
+        assert_eq!(resolve_effective_model_type("embedding", false, "rerank"), "rerank");
+        assert_eq!(resolve_effective_model_type("chat", false, "image"), "image");
+        assert_eq!(resolve_effective_model_type("chat", false, "audio"), "audio");
         assert_eq!(resolve_effective_model_type("audio", true, "chat"), "audio");
         assert_eq!(resolve_effective_model_type("audio", false, "audio"), "audio");
 
@@ -761,5 +798,15 @@ mod tests {
         assert_eq!(infer_model_type("gemini-2.5-flash-preview-tts"), "audio");
         assert_eq!(infer_model_type("grok-4"), "chat");
         assert_eq!(infer_model_type("grok-stt"), "audio");
+        assert_eq!(infer_model_type("grok-imagine-image"), "image");
+        assert_eq!(infer_model_type("spacexai/grok-imagine-image-2.0"), "image");
+        assert_eq!(infer_model_type("sdxl-aungir-t6ao45"), "image");
+        assert_eq!(infer_model_type("sao10k/l3.3-euryale-70b"), "chat");
+        assert_eq!(infer_model_type("qwen/qwen3-asr-flash"), "audio");
+        assert_eq!(infer_model_type("gpt-4o-mini-tts:free"), "audio");
+        assert_eq!(infer_model_type("seedream-v4"), "image");
+        assert_eq!(infer_model_type("nano-banana-pro"), "image");
+        assert_eq!(infer_model_type("lucid-origin"), "image");
+        assert_eq!(infer_model_type("@cf/baai/bge-reranker-base"), "rerank");
     }
 }

@@ -600,7 +600,9 @@ fn upsert_discovered_models<'a>(
                 output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
                 model_type = CASE \
                     WHEN models.custom = 1 THEN COALESCE(models.model_type, excluded.model_type) \
-                    WHEN models.model_type IN ('audio', 'image') AND excluded.model_type = 'chat' THEN excluded.model_type \
+                    WHEN models.model_type = 'audio' AND excluded.model_type = 'chat' THEN excluded.model_type \
+                    WHEN models.model_type = 'chat' AND excluded.model_type != 'chat' THEN excluded.model_type \
+                    WHEN models.model_type = 'embedding' AND excluded.model_type = 'rerank' THEN excluded.model_type \
                     ELSE COALESCE(models.model_type, excluded.model_type) \
                 END, \
                 family = COALESCE(excluded.family, family), \

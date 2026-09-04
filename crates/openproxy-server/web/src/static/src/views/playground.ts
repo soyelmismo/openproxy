@@ -288,6 +288,9 @@ function inferModelTypeFrontend(modelId: string, rawType?: string | null): Modal
   const isAudioExplicit =
     idLower.includes('whisper') ||
     idLower.includes('tts') ||
+    idLower.includes('-asr') ||
+    idLower.includes('_asr') ||
+    idLower.includes('/asr') ||
     idLower.includes('deepgram') ||
     idLower.includes('speechmatics') ||
     idLower.includes('elevenlabs') ||
@@ -297,7 +300,11 @@ function inferModelTypeFrontend(modelId: string, rawType?: string | null): Modal
     idLower.includes('imagen') ||
     idLower.includes('flux') ||
     idLower.includes('midjourney') ||
-    idLower.includes('sdxl');
+    idLower.includes('sdxl') ||
+    idLower.includes('seedream') ||
+    idLower.includes('nano-banana') ||
+    idLower.includes('lucid-origin') ||
+    idLower.includes('grok-imagine');
 
   if (isChatGuard && !isAudioExplicit && !isImageExplicit) {
     return 'chat';

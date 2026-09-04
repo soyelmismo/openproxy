@@ -149,7 +149,8 @@ pub fn seed_virtual_combo_provider(conn: &Connection) -> Result<bool> {
 fn needs_model_type_fix(current_type: &str, inferred_type: &str) -> bool {
     current_type.is_empty()
         || (current_type == "chat" && inferred_type != "chat")
-        || (inferred_type == "chat" && (current_type == "audio" || current_type == "image"))
+        || (current_type == "audio" && inferred_type == "chat")
+        || (current_type == "embedding" && inferred_type == "rerank")
 }
 
 fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> Result<usize> {
