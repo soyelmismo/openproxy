@@ -144,10 +144,7 @@ pub async fn execute_image_generation(
     let started = Instant::now();
 
     // 1. Resolve routing plan.
-    let routing_plan = {
-        let r = db_pool.reader();
-        routing::resolve(&r, &req.model)?
-    };
+    let routing_plan = routing::resolve_routing(db_pool, &req.model).await?;
 
     // 2. Resolve image targets.
     let targets = resolve_image_targets(db_pool, routing_plan, &req.model, api_key_id, started)?;
