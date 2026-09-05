@@ -243,9 +243,17 @@ fn spawn_favicon_fetch_if_needed(s: &AppState, provider: &ProviderId) {
     let upstream_clone = std::sync::Arc::clone(s.upstream_client());
     let pool_clone = std::sync::Arc::clone(s.db_pool());
     tokio::spawn(async move {
+        // Read the provider row on a blocking thread so the synchronous
+        // SQLite call never lands on a Tokio worker.
         let p_opt = {
-            let r = pool_clone.reader();
-            core_providers::get(&r, &pid_clone).ok().flatten()
+            let pool = std::sync::Arc::clone(&pool_clone);
+            let pid = pid_clone.clone();
+            tokio::task::spawn_blocking(move || {
+                core_providers::get(&pool.reader(), &pid).ok().flatten()
+            })
+            .await
+            .ok()
+            .flatten()
         };
         if let Some(p) = p_opt
             && p.favicon_base64.is_none()
