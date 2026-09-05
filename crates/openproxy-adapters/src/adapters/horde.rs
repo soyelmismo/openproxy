@@ -238,14 +238,15 @@ impl ProviderAdapter for HordeAdapter {
         } else {
             api_key.trim()
         };
-        let mut headers = Vec::with_capacity(4);
-        headers.push(("Authorization".into(), crate::adapters::format_bearer(key)));
-        headers.push(("apikey".into(), key.to_string()));
-        headers.push((
-            "Client-Agent".into(),
-            concat!("openproxy:", env!("CARGO_PKG_VERSION")).into(),
-        ));
-        headers.push(("Content-Type".into(), "application/json".into()));
+        let headers = vec![
+            ("Authorization".into(), crate::adapters::format_bearer(key)),
+            ("apikey".into(), key.to_string()),
+            (
+                "Client-Agent".into(),
+                concat!("openproxy:", env!("CARGO_PKG_VERSION")).into(),
+            ),
+            ("Content-Type".into(), "application/json".into()),
+        ];
         headers
     }
 
