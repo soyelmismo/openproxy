@@ -1144,6 +1144,115 @@ pub fn build_discovered_model_with(id: String, target_format: TargetFormat) -> D
     build_discovered_model_full(id, None, target_format, None, None)
 }
 
+pub trait ModelListExt {
+    fn parse_openai_models(&self, target_format: TargetFormat) -> Option<Vec<DiscoveredModel>>;
+    fn parse_gemini_models(&self) -> Option<Vec<DiscoveredModel>>;
+}
+
+impl ModelListExt for serde_json::Value {
+    fn parse_openai_models(&self, target_format: TargetFormat) -> Option<Vec<DiscoveredModel>> {
+        let arr = self.get("data")?.as_array()?;
+        let models = arr
+            .iter()
+            .filter_map(|raw| {
+                let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
+                Some(build_discovered_model_with(entry.id, target_format))
+            })
+            .collect();
+        Some(models)
+    }
+
+    fn parse_gemini_models(&self) -> Option<Vec<DiscoveredModel>> {
+        let models_obj = self.get("models")?.as_object();
+        let models_arr = self.get("models").and_then(|m| m.as_array());
+
+        let models = if let Some(obj) = models_obj {
+            obj.iter()
+                .map(|(k, v)| {
+                    let display_name = v
+                        .get("displayName")
+                        .and_then(|d| d.as_str())
+                        .map(ToString::to_string);
+
+                    let context_length = v
+                        .get("maxTokens")
+                        .and_then(serde_json::Value::as_u64)
+                        .or_else(|| v.get("contextLength").and_then(serde_json::Value::as_u64))
+                        .map(|v| v as i64);
+
+                    let max_output_tokens = v
+                        .get("maxOutputTokens")
+                        .and_then(serde_json::Value::as_u64)
+                        .map(|v| v as i64)
+                        .or(Some(8192));
+
+                    let supports_thinking = v
+                        .get("supportsThinking")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    let supports_images = v
+                        .get("supportsImages")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    let tool_formatter_type = v
+                        .get("toolFormatterType")
+                        .and_then(|v| v.as_str())
+                        .is_some();
+                    let supports_cumulative_context = v
+                        .get("supportsCumulativeContext")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+
+                    let capabilities = openproxy_types::ModelCapabilities {
+                        vision: Some(supports_images),
+                        tool_calling: Some(tool_formatter_type || supports_cumulative_context),
+                        reasoning: Some(supports_thinking),
+                        thinking: Some(supports_thinking),
+                        attachment: Some(supports_images),
+                        structured_output: None,
+                        temperature: None,
+                    };
+
+                    DiscoveredModel {
+                        model_id: ModelId::new(k),
+                        display_name,
+                        target_format: TargetFormat::Gemini,
+                        context_length,
+                        max_output_tokens,
+                        input_modalities: None,
+                        output_modalities: None,
+                        model_type: Some("chat".to_string()),
+                        family: None,
+                        capabilities: Some(capabilities),
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else if let Some(arr) = models_arr {
+            arr.iter()
+                .filter_map(|m| {
+                    let full_name = m.get("name")?.as_str()?;
+                    let id = full_name.strip_prefix("models/").unwrap_or(full_name);
+                    let display_name = m
+                        .get("displayName")
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string);
+                    Some(build_discovered_model_full(
+                        id.to_string(),
+                        display_name,
+                        TargetFormat::Gemini,
+                        None,
+                        None,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            return None;
+        };
+
+        Some(models)
+    }
+}
+
 /// Fetch and parse an OpenAI-shaped `GET /models` response.
 ///
 /// All three new OpenAI-compatible providers (Nous Research, NVIDIA NIM,

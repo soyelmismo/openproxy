@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, Bytes, CancellationToken, CoreError, DiscoveredModel,
-    HeaderValue, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat,
-    TimeoutProfile, UpstreamClient, UpstreamRequest,
+    HeaderValue, ModelId, ModelListExt, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result,
+    TargetFormat, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 use crate::upstream::UpstreamError;
@@ -107,90 +107,13 @@ impl AntigravityAdapter {
         }
     }
 
-    fn extract_antigravity_model_capabilities(
-        model_data: &serde_json::Value,
-    ) -> openproxy_types::ModelCapabilities {
-        let supports_thinking = model_data
-            .get("supportsThinking")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let supports_images = model_data
-            .get("supportsImages")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let tool_formatter_type = model_data
-            .get("toolFormatterType")
-            .and_then(|v| v.as_str())
-            .is_some();
-        let supports_cumulative_context = model_data
-            .get("supportsCumulativeContext")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
-        openproxy_types::ModelCapabilities {
-            vision: Some(supports_images),
-            tool_calling: Some(tool_formatter_type || supports_cumulative_context),
-            reasoning: Some(supports_thinking),
-            thinking: Some(supports_thinking),
-            attachment: Some(supports_images),
-            structured_output: None,
-            temperature: None,
-        }
-    }
-
-    fn map_antigravity_discovered_model(
-        model_id: &str,
-        model_data: &serde_json::Value,
-    ) -> DiscoveredModel {
-        let display_name = model_data
-            .get("displayName")
-            .and_then(|d| d.as_str())
-            .map(std::string::ToString::to_string);
-
-        let context_length = model_data
-            .get("maxTokens")
-            .and_then(serde_json::Value::as_u64)
-            .or_else(|| {
-                model_data
-                    .get("contextLength")
-                    .and_then(serde_json::Value::as_u64)
-            })
-            .map(|v| v as i64);
-
-        let max_output_tokens = model_data
-            .get("maxOutputTokens")
-            .and_then(serde_json::Value::as_u64)
-            .map(|v| v as i64)
-            .or(Some(8192));
-
-        let capabilities = Self::extract_antigravity_model_capabilities(model_data);
-
-        DiscoveredModel {
-            model_id: ModelId::new(model_id),
-            display_name,
-            target_format: TargetFormat::Gemini,
-            context_length,
-            max_output_tokens,
-            input_modalities: None,
-            output_modalities: None,
-            model_type: Some("chat".to_string()),
-            family: None,
-            capabilities: Some(capabilities),
-        }
-    }
-
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     fn parse_models_response(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
         tracing::info!(
             "Antigravity fetchAvailableModels response: {}",
             serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string())
         );
-        let models_obj = body.get("models")?.as_object()?;
-        let models: Vec<DiscoveredModel> = models_obj
-            .iter()
-            .map(|(k, v)| Self::map_antigravity_discovered_model(k, v))
-            .collect();
-
+        let models = body.parse_gemini_models()?;
         (!models.is_empty()).then_some(models)
     }
 }

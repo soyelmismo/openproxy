@@ -1,7 +1,6 @@
 use super::{
-    AdapterAuthType, Arc, CoreError, DiscoveredModel, OpenAIModelEntry, ProviderAdapter,
-    ProviderAdapterConfig, ProviderMetadata, Result, TargetFormat, UpstreamClient,
-    build_discovered_model_full, build_discovered_model_with, upstream_get_json,
+    AdapterAuthType, Arc, CoreError, DiscoveredModel, ModelListExt, ProviderAdapter,
+    ProviderAdapterConfig, ProviderMetadata, Result, UpstreamClient, upstream_get_json,
 };
 
 // =====================================================================
@@ -105,44 +104,6 @@ fn build_custom_headers<'a>(
     headers
 }
 
-fn parse_custom_openai_models(
-    body: &serde_json::Value,
-    target_format: TargetFormat,
-) -> Option<Vec<DiscoveredModel>> {
-    let arr = body.get("data")?.as_array()?;
-    let models = arr
-        .iter()
-        .filter_map(|raw| {
-            let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-            Some(build_discovered_model_with(entry.id, target_format))
-        })
-        .collect();
-    Some(models)
-}
-
-fn parse_custom_gemini_models(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
-    let arr = body.get("models")?.as_array()?;
-    let models = arr
-        .iter()
-        .filter_map(|m| {
-            let full_name = m.get("name")?.as_str()?;
-            let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-            let display_name = m
-                .get("displayName")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string);
-            Some(build_discovered_model_full(
-                id.to_string(),
-                display_name,
-                TargetFormat::Gemini,
-                None,
-                None,
-            ))
-        })
-        .collect();
-    Some(models)
-}
-
 impl ProviderAdapter for CustomAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -197,9 +158,7 @@ impl ProviderAdapter for CustomAdapter {
             )));
         }
 
-        if let Some(models) =
-            parse_custom_openai_models(&body, self.config.format.default_target_format())
-        {
+        if let Some(models) = body.parse_openai_models(self.config.format.default_target_format()) {
             if models.is_empty() {
                 return Err(CoreError::UpstreamConnection(format!(
                     "{} /models: empty model array returned from upstream",
@@ -209,7 +168,7 @@ impl ProviderAdapter for CustomAdapter {
             return Ok(models);
         }
 
-        if let Some(models) = parse_custom_gemini_models(&body) {
+        if let Some(models) = body.parse_gemini_models() {
             if models.is_empty() {
                 return Err(CoreError::UpstreamConnection(format!(
                     "{} /models: empty model array returned from upstream",
@@ -230,7 +189,7 @@ impl ProviderAdapter for CustomAdapter {
 mod tests {
     use super::*;
     use crate::adapters::AdapterFormat;
-    use openproxy_types::{ModelId, ProviderId};
+    use openproxy_types::{ModelId, ProviderId, TargetFormat};
 
     #[test]
     fn test_build_chat_url() {
@@ -290,7 +249,7 @@ mod tests {
                 { "id": "claude-3-5-sonnet" }
             ]
         });
-        let models = parse_custom_openai_models(&json, TargetFormat::Openai).unwrap();
+        let models = json.parse_openai_models(TargetFormat::Openai).unwrap();
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].model_id.as_str(), "gpt-4o");
         assert_eq!(models[1].model_id.as_str(), "claude-3-5-sonnet");
@@ -305,10 +264,16 @@ mod tests {
                 "code": "INTERNAL_ERROR"
             }
         });
-        assert!(parse_custom_openai_models(&error_json, TargetFormat::Openai).is_none());
+        assert!(
+            error_json
+                .parse_openai_models(TargetFormat::Openai)
+                .is_none()
+        );
 
         let empty_json = serde_json::json!({ "data": [] });
-        let models = parse_custom_openai_models(&empty_json, TargetFormat::Openai).unwrap();
+        let models = empty_json
+            .parse_openai_models(TargetFormat::Openai)
+            .unwrap();
         assert!(models.is_empty());
     }
 }
