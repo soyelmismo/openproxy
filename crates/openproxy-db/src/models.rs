@@ -61,7 +61,10 @@ crate::def_table_select!(model_inserted_select, "models", "id, model_id");
 pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model>> {
     crate::db_query_all!(
         conn,
-        model_select!("WHERE provider_id = ?1 AND active = 1"),
+        model_select!(
+            "WHERE provider_id = ?1 AND active = 1 \
+             AND provider_id IN (SELECT id FROM providers WHERE active = 1)"
+        ),
         params![provider.as_str()],
         map_row,
         format!("list active models for {provider}")
@@ -71,7 +74,10 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
 pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
     crate::db_query_all!(
         conn,
-        model_select!("WHERE active = 1"),
+        model_select!(
+            "WHERE active = 1 \
+             AND provider_id IN (SELECT id FROM providers WHERE active = 1)"
+        ),
         [],
         map_row,
         "list active models"
@@ -176,7 +182,11 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
 pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<Model>> {
     crate::db_query_one!(
         conn,
-        model_select!("WHERE model_id = ?1 AND active = 1 ORDER BY id ASC LIMIT 1"),
+        model_select!(
+            "WHERE model_id = ?1 AND active = 1 \
+             AND provider_id IN (SELECT id FROM providers WHERE active = 1) \
+             ORDER BY id ASC LIMIT 1"
+        ),
         params![model_id],
         map_row,
         format!("find active model by name {model_id}")
@@ -191,7 +201,9 @@ pub fn find_active_by_provider_and_name(
     crate::db_query_one!(
         conn,
         model_select!(
-            "WHERE provider_id = ?1 AND model_id = ?2 AND active = 1 ORDER BY id ASC LIMIT 1"
+            "WHERE provider_id = ?1 AND model_id = ?2 AND active = 1 \
+             AND provider_id IN (SELECT id FROM providers WHERE active = 1) \
+             ORDER BY id ASC LIMIT 1"
         ),
         params![provider_id.as_str(), model_id],
         map_row,

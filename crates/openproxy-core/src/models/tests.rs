@@ -21,6 +21,7 @@ fn fresh_db() -> Connection {
                  base_url      TEXT NOT NULL,
                  auth_kind     TEXT NOT NULL,
                  health_status TEXT NOT NULL DEFAULT 'healthy',
+                 active        INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
                  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                  CHECK (health_status IN ('healthy', 'degraded', 'unhealthy'))
              );
@@ -683,6 +684,62 @@ fn list_active_all_excludes_disabled_and_expired_across_providers() {
     );
     assert!(!ids.contains(&"a-off"), "soft-disabled row excluded");
     assert_eq!(active.len(), 3);
+}
+
+#[test]
+fn list_active_all_excludes_models_from_deactivated_provider() {
+    let conn = fresh_db();
+    let prov_a = ProviderId::new("provA");
+    let prov_b = ProviderId::new("provB");
+
+    conn.execute(
+        "INSERT INTO providers (id, display_name, base_url, auth_kind, active) \
+         VALUES ('provB', 'Provider B', 'https://b.test', 'none', 0)",
+        [],
+    )
+    .expect("insert provB inactive");
+
+    conn.execute(
+        "INSERT INTO models (provider_id, model_id, display_name, target_format, active) \
+         VALUES ('provA', 'model-a', 'Model A', 'openai', 1)",
+        [],
+    )
+    .expect("insert model-a");
+
+    conn.execute(
+        "INSERT INTO models (provider_id, model_id, display_name, target_format, active) \
+         VALUES ('provB', 'model-b', 'Model B', 'openai', 1)",
+        [],
+    )
+    .expect("insert model-b");
+
+    // provB is inactive (active = 0), so model-b must not appear in list_active_all
+    let active = list_active_all(&conn).expect("list_active_all");
+    let ids: Vec<&str> = active.iter().map(|m| m.model_id.as_str()).collect();
+    assert_eq!(ids, vec!["model-a"]);
+
+    // list_active for provB must also return empty
+    let active_b = list_active(&conn, &prov_b).expect("list_active provB");
+    assert!(active_b.is_empty());
+
+    // list_active for provA returns model-a
+    let active_a = list_active(&conn, &prov_a).expect("list_active provA");
+    assert_eq!(active_a.len(), 1);
+
+    // find_active_by_name skips inactive provider's model
+    assert!(find_active_by_name(&conn, "model-b").unwrap().is_none());
+    assert!(find_active_by_name(&conn, "model-a").unwrap().is_some());
+
+    // Reactivate provB -> model-b reappears
+    conn.execute("UPDATE providers SET active = 1 WHERE id = 'provB'", [])
+        .expect("reactivate provB");
+    let active_reactivated = list_active_all(&conn).expect("list_active_all after reactivation");
+    let reactivated_ids: Vec<&str> = active_reactivated
+        .iter()
+        .map(|m| m.model_id.as_str())
+        .collect();
+    assert!(reactivated_ids.contains(&"model-a"));
+    assert!(reactivated_ids.contains(&"model-b"));
 }
 
 #[test]
