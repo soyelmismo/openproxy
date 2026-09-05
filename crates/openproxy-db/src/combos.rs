@@ -677,21 +677,46 @@ pub fn update_target_cooldown_mode(
     Ok(())
 }
 
+/// Columns of the `combo_targets` table that `update_target_column`
+/// can patch in isolation. Typed so the SQL dispatch is exhaustive at
+/// compile time and adding a new column becomes a single edit at the
+/// enum + its call sites instead of a `&'static str` literal that
+/// silently falls through to a panic.
+#[derive(Clone, Copy)]
+enum TargetColumn {
+    BaseSecs,
+    MaxSecs,
+    Factor,
+}
+
+impl TargetColumn {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::BaseSecs => "cooldown_base_secs",
+            Self::MaxSecs => "cooldown_max_secs",
+            Self::Factor => "cooldown_factor",
+        }
+    }
+
+    const fn sql(self) -> &'static str {
+        match self {
+            Self::BaseSecs => "UPDATE combo_targets SET cooldown_base_secs = ?1 WHERE id = ?2",
+            Self::MaxSecs => "UPDATE combo_targets SET cooldown_max_secs = ?1 WHERE id = ?2",
+            Self::Factor => "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
+        }
+    }
+}
+
 fn update_target_column<T: rusqlite::ToSql>(
     conn: &Connection,
     target_id: ComboTargetId,
-    column: &'static str,
+    column: TargetColumn,
     value: T,
 ) -> Result<()> {
-    let sql = match column {
-        "cooldown_base_secs" => "UPDATE combo_targets SET cooldown_base_secs = ?1 WHERE id = ?2",
-        "cooldown_max_secs" => "UPDATE combo_targets SET cooldown_max_secs = ?1 WHERE id = ?2",
-        "cooldown_factor" => "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
-        _ => unreachable!("invalid column"),
-    };
-    conn.execute(sql, params![value, target_id.0])
+    let column_name = column.as_str();
+    conn.execute(column.sql(), params![value, target_id.0])
         .map_err(crate::error::map_db_error_ctx(format!(
-            "update {column} for combo_target {}",
+            "update {column_name} for combo_target {}",
             target_id.0
         )))?;
     Ok(())
@@ -705,7 +730,7 @@ pub fn update_target_cooldown_base(
     update_target_column(
         conn,
         target_id,
-        "cooldown_base_secs",
+        TargetColumn::BaseSecs,
         base.map(|v| v as i64),
     )
 }
@@ -715,7 +740,12 @@ pub fn update_target_cooldown_max(
     target_id: ComboTargetId,
     max: Option<u64>,
 ) -> Result<()> {
-    update_target_column(conn, target_id, "cooldown_max_secs", max.map(|v| v as i64))
+    update_target_column(
+        conn,
+        target_id,
+        TargetColumn::MaxSecs,
+        max.map(|v| v as i64),
+    )
 }
 
 pub fn update_target_cooldown_factor(
@@ -723,7 +753,7 @@ pub fn update_target_cooldown_factor(
     target_id: ComboTargetId,
     factor: Option<u32>,
 ) -> Result<()> {
-    update_target_column(conn, target_id, "cooldown_factor", factor.map(i64::from))
+    update_target_column(conn, target_id, TargetColumn::Factor, factor.map(i64::from))
 }
 
 /// Atomically reassign `priority_order` for every target of `combo_id`
@@ -993,25 +1023,54 @@ pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) 
     Ok(())
 }
 
+/// Columns of the `combos` table that `update_combo_column` can patch
+/// in isolation. Typed so the SQL dispatch is exhaustive at compile
+/// time and adding a new column becomes a single edit at the enum +
+/// its call sites instead of a `&'static str` literal that silently
+/// falls through to a panic.
+#[derive(Clone, Copy)]
+enum ComboColumn {
+    CooldownBaseSecs,
+    CooldownMaxSecs,
+    CooldownFactor,
+    PreventiveRateLimit,
+}
+
+impl ComboColumn {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::CooldownBaseSecs => "cooldown_base_secs",
+            Self::CooldownMaxSecs => "cooldown_max_secs",
+            Self::CooldownFactor => "cooldown_factor",
+            Self::PreventiveRateLimit => "preventive_rate_limit",
+        }
+    }
+
+    const fn sql(self) -> &'static str {
+        match self {
+            Self::CooldownBaseSecs => "UPDATE combos SET cooldown_base_secs = ?1 WHERE id = ?2",
+            Self::CooldownMaxSecs => "UPDATE combos SET cooldown_max_secs = ?1 WHERE id = ?2",
+            Self::CooldownFactor => "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
+            Self::PreventiveRateLimit => {
+                "UPDATE combos SET preventive_rate_limit = ?1 WHERE id = ?2"
+            }
+        }
+    }
+}
+
 fn update_combo_column<T: rusqlite::ToSql>(
     conn: &Connection,
     id: ComboId,
-    column: &'static str,
+    column: ComboColumn,
     value: T,
 ) -> Result<()> {
-    let sql = match column {
-        "cooldown_base_secs" => "UPDATE combos SET cooldown_base_secs = ?1 WHERE id = ?2",
-        "cooldown_max_secs" => "UPDATE combos SET cooldown_max_secs = ?1 WHERE id = ?2",
-        "cooldown_factor" => "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
-        "preventive_rate_limit" => "UPDATE combos SET preventive_rate_limit = ?1 WHERE id = ?2",
-        _ => unreachable!("invalid column"),
-    };
-    let affected =
-        conn.execute(sql, params![value, id.0])
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "update {column} for combo {}",
-                id.0
-            )))?;
+    let column_name = column.as_str();
+    let affected = conn
+        .execute(column.sql(), params![value, id.0])
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update {column_name} for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -1020,22 +1079,42 @@ fn update_combo_column<T: rusqlite::ToSql>(
 
 /// Update ONLY the cooldown_base_secs column.
 pub fn update_cooldown_base(conn: &Connection, id: ComboId, base: Option<u64>) -> Result<()> {
-    update_combo_column(conn, id, "cooldown_base_secs", base.map(|v| v as i64))
+    update_combo_column(
+        conn,
+        id,
+        ComboColumn::CooldownBaseSecs,
+        base.map(|v| v as i64),
+    )
 }
 
 /// Update ONLY the cooldown_max_secs column.
 pub fn update_cooldown_max(conn: &Connection, id: ComboId, max: Option<u64>) -> Result<()> {
-    update_combo_column(conn, id, "cooldown_max_secs", max.map(|v| v as i64))
+    update_combo_column(
+        conn,
+        id,
+        ComboColumn::CooldownMaxSecs,
+        max.map(|v| v as i64),
+    )
 }
 
 /// Update ONLY the cooldown_factor column.
 pub fn update_cooldown_factor(conn: &Connection, id: ComboId, factor: Option<u32>) -> Result<()> {
-    update_combo_column(conn, id, "cooldown_factor", factor.map(i64::from))
+    update_combo_column(
+        conn,
+        id,
+        ComboColumn::CooldownFactor,
+        factor.map(i64::from),
+    )
 }
 
 /// Update the preventive_rate_limit toggle for a combo.
 pub fn update_preventive_rate_limit(conn: &Connection, id: ComboId, enabled: bool) -> Result<()> {
-    update_combo_column(conn, id, "preventive_rate_limit", i64::from(enabled))
+    update_combo_column(
+        conn,
+        id,
+        ComboColumn::PreventiveRateLimit,
+        i64::from(enabled),
+    )
 }
 
 /// Update the LKGP exploration rate. `None` clears the column back
