@@ -571,18 +571,15 @@ impl TokenRefreshCoordinator {
         COORDINATOR.get_or_init(TokenRefreshCoordinator::new)
     }
 
-    fn mutex_for_provider(&self, provider_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>> {
-        let mut map = self
-            .provider_mutexes
-            .lock()
-            .map_err(|e| CoreError::Internal(format!("provider_mutexes lock poisoned: {e}")))?;
+    fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut map = self.provider_mutexes.lock().expect("mutex poisoned");
         if let Some(mutex) = map.get(provider_id) {
-            return Ok(Arc::clone(mutex));
+            return Arc::clone(mutex);
         }
-        Ok(Arc::clone(
+        Arc::clone(
             map.entry(Box::from(provider_id))
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-        ))
+        )
     }
 
     pub async fn refresh_and_store(&self, params: OAuthRefreshParams<'_>) -> Result<TokenResponse> {
@@ -595,7 +592,7 @@ impl TokenRefreshCoordinator {
             db,
             master_key,
         } = params;
-        let mutex = self.mutex_for_provider(provider_id)?;
+        let mutex = self.mutex_for_provider(provider_id);
         let _guard = mutex.lock().await;
 
         match db {

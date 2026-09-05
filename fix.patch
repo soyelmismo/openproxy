@@ -1,0 +1,53 @@
+diff --git a/crates/openproxy-adapters/src/antigravity_headers.rs b/crates/openproxy-adapters/src/antigravity_headers.rs
+index 87828f3..a28c54f 100644
+--- a/crates/openproxy-adapters/src/antigravity_headers.rs
++++ b/crates/openproxy-adapters/src/antigravity_headers.rs
+@@ -596,7 +596,7 @@ mod tests {
+ #[cfg(test)]
+ mod adversarial_dedup_tests {
+     use super::*;
+-    use std::sync::Mutex;
++    use parking_lot::Mutex;
+
+     #[allow(dead_code)]
+     static TEST_LOCK: Mutex<()> = Mutex::new(());
+diff --git a/crates/openproxy-core/src/oauth/mod.rs b/crates/openproxy-core/src/oauth/mod.rs
+index e824107..544a168 100644
+--- a/crates/openproxy-core/src/oauth/mod.rs
++++ b/crates/openproxy-core/src/oauth/mod.rs
+@@ -555,13 +555,13 @@ type ProviderMutexMap = HashMap<Box<str>, Arc<tokio::sync::Mutex<()>>>;
+ /// refreshes for sibling accounts under the same public client.
+ #[derive(Default)]
+ pub struct TokenRefreshCoordinator {
+-    provider_mutexes: Arc<tokio::sync::Mutex<ProviderMutexMap>>,
++    provider_mutexes: Arc<std::sync::Mutex<ProviderMutexMap>>,
+ }
+
+ impl TokenRefreshCoordinator {
+     pub fn new() -> Self {
+         Self {
+-            provider_mutexes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
++            provider_mutexes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+         }
+     }
+
+@@ -571,8 +571,8 @@ impl TokenRefreshCoordinator {
+         COORDINATOR.get_or_init(TokenRefreshCoordinator::new)
+     }
+
+-    async fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+-        let mut map = self.provider_mutexes.lock().await;
++    fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
++        let mut map = self.provider_mutexes.lock().expect("mutex poisoned");
+         if let Some(mutex) = map.get(provider_id) {
+             return Arc::clone(mutex);
+         }
+@@ -592,7 +592,7 @@ impl TokenRefreshCoordinator {
+             db,
+             master_key,
+         } = params;
+-        let mutex = self.mutex_for_provider(provider_id).await;
++        let mutex = self.mutex_for_provider(provider_id);
+         let _guard = mutex.lock().await;
+
+         match db {
