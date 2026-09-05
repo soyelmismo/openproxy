@@ -2224,4 +2224,85 @@ mod tests {
         assert_eq!(parsed["model"], "new-model");
         assert_eq!(parsed["prompt"], "hello world");
     }
+
+    // ---- ModelListExt::parse_gemini_models polymorphic shapes ----
+
+    fn gemini_models_of(v: &DiscoveredModel) -> (&ModelId, &Option<String>) {
+        assert_eq!(v.target_format, TargetFormat::Gemini);
+        assert_eq!(v.model_type.as_deref(), Some("chat"));
+        (&v.model_id, &v.display_name)
+    }
+
+    #[test]
+    fn parse_gemini_models_object_empty_returns_empty_vec() {
+        // Empty `{"models": {}}` must NOT return None — custom_adapter relies on
+        // an empty vec (not an error) so the provider resolves to zero models.
+        let v = serde_json::json!({ "models": {} });
+        let out = ModelListExt::parse_gemini_models(&v);
+        assert!(out.is_some(), "empty object must yield Some(vec)");
+        assert!(out.unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_gemini_models_object_single_key_returns_one() {
+        let v = serde_json::json!({
+            "models": {
+                "gemini-1.5-flash": {
+                    "displayName": "Gemini 1.5 Flash",
+                    "maxTokens": 1048576u64,
+                    "maxOutputTokens": 8192u64,
+                    "supportsImages": true,
+                    "supportsThinking": false
+                }
+            }
+        });
+        let out = ModelListExt::parse_gemini_models(&v).expect("object branch yields Some");
+        assert_eq!(out.len(), 1);
+        let (id, display) = gemini_models_of(&out[0]);
+        assert_eq!(id.as_str(), "gemini-1.5-flash");
+        assert_eq!(display.as_deref(), Some("Gemini 1.5 Flash"));
+        assert_eq!(out[0].context_length, Some(1_048_576));
+        // max_output_tokens: explicit 8192 wins the default.
+        assert_eq!(out[0].max_output_tokens, Some(8192));
+        let caps = out[0].capabilities.as_ref().expect("capabilities set");
+        assert_eq!(caps.vision, Some(true));
+        assert_eq!(caps.thinking, Some(false));
+    }
+
+    #[test]
+    fn parse_gemini_models_array_empty_returns_empty_vec() {
+        let v = serde_json::json!({ "models": [] });
+        let out = ModelListExt::parse_gemini_models(&v).expect("array branch yields Some");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_gemini_models_array_populated_strips_models_prefix() {
+        let v = serde_json::json!({
+            "models": [
+                { "name": "models/gemini-1.5-pro", "displayName": "Gemini 1.5 Pro" },
+                { "name": "models/gemini-1.5-flash", "displayName": "Gemini 1.5 Flash" }
+            ]
+        });
+        let out = ModelListExt::parse_gemini_models(&v).expect("array branch yields Some");
+        assert_eq!(out.len(), 2);
+        let (id0, display0) = gemini_models_of(&out[0]);
+        assert_eq!(id0.as_str(), "gemini-1.5-pro");
+        assert_eq!(display0.as_deref(), Some("Gemini 1.5 Pro"));
+        let (id1, _) = gemini_models_of(&out[1]);
+        assert_eq!(id1.as_str(), "gemini-1.5-flash");
+        // Array branch uses build_discovered_model_full: context_length is unset
+        // and capabilities are inferred from the id (not None). The point of the
+        // test is the `models/` prefix strip and display_name plumbing.
+        assert!(out[0].context_length.is_none());
+        assert!(out[0].capabilities.is_some());
+    }
+
+    #[test]
+    fn parse_gemini_models_missing_models_key_returns_none() {
+        let v = serde_json::json!({});
+        assert!(ModelListExt::parse_gemini_models(&v).is_none());
+        let v = serde_json::json!({ "models": "not-an-object-or-array" });
+        assert!(ModelListExt::parse_gemini_models(&v).is_none());
+    }
 }
