@@ -1809,4 +1809,24 @@ mod tests {
                 .contains("Accepts: string | object")
         );
     }
+
+    #[test]
+    fn test_coerce_helpers() {
+        assert_eq!(coerce_str_to_boolean("true"), Some(true));
+        assert_eq!(coerce_str_to_boolean("1"), Some(true));
+        assert_eq!(coerce_str_to_boolean("YES"), Some(true));
+        assert_eq!(coerce_str_to_boolean("on"), Some(true));
+
+        assert_eq!(coerce_str_to_boolean("false"), Some(false));
+        assert_eq!(coerce_str_to_boolean("0"), Some(false));
+        assert_eq!(coerce_str_to_boolean("NO"), Some(false));
+        assert_eq!(coerce_str_to_boolean("off"), Some(false));
+
+        assert_eq!(coerce_str_to_boolean("invalid"), None);
+
+        assert!(is_preserved_string_number("01"));
+        assert!(is_preserved_string_number("007"));
+        assert!(!is_preserved_string_number("0.5"));
+        assert!(!is_preserved_string_number("123"));
+    }
 }
