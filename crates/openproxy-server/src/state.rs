@@ -523,8 +523,22 @@ impl AppState {
     /// list from the DB fails. Admin callers log and continue
     /// (the DB write has already committed; a future admin action
     /// will retry the reload) rather than failing the request.
-    pub fn rebuild_adapters(&self) -> Result<(), openproxy_types::CoreError> {
-        let new_adapters = Self::load_adapters(&self.db_pool)?;
+    ///
+    /// # Concurrency
+    ///
+    /// The sync SQLite read is offloaded to the blocking thread pool
+    /// via `tokio::task::spawn_blocking` so async admin handlers
+    /// never hold the runtime worker while rusqlite acquires the
+    /// writer mutex (AGENTS §4.3).
+    pub async fn rebuild_adapters(&self) -> Result<(), openproxy_types::CoreError> {
+        let pool = Arc::clone(&self.db_pool);
+        let new_adapters = tokio::task::spawn_blocking(move || Self::load_adapters(&pool))
+            .await
+            .map_err(|e| {
+                openproxy_types::CoreError::Internal(format!(
+                    "rebuild_adapters: spawn_blocking join: {e}"
+                ))
+            })??;
         *self.adapters.write() = Arc::new(new_adapters);
         Ok(())
     }
@@ -1127,7 +1141,7 @@ mod tests {
         let state = make_state().await;
 
         // 1. Empty DB → registry should contain only built-ins.
-        state.rebuild_adapters().expect("first rebuild");
+        state.rebuild_adapters().await.expect("first rebuild");
         let initial_ids: Vec<String> = state
             .adapters()
             .iter()
@@ -1174,7 +1188,7 @@ mod tests {
 
         // 4. Hot-reload. After this the registry must contain the
         //    custom adapter.
-        state.rebuild_adapters().expect("second rebuild");
+        state.rebuild_adapters().await.expect("second rebuild");
         let post_reload_ids: Vec<String> = state
             .adapters()
             .iter()
@@ -1216,7 +1230,10 @@ mod tests {
             )
             .expect("create custom provider");
         }
-        state.rebuild_adapters().expect("rebuild after create");
+        state
+            .rebuild_adapters()
+            .await
+            .expect("rebuild after create");
         let ids_after_create: Vec<String> = state
             .adapters()
             .iter()
@@ -1233,7 +1250,10 @@ mod tests {
             let w = state.db_pool().writer();
             providers::delete(&w, &custom_id).expect("delete custom provider");
         }
-        state.rebuild_adapters().expect("rebuild after delete");
+        state
+            .rebuild_adapters()
+            .await
+            .expect("rebuild after delete");
         let ids_after_delete: Vec<String> = state
             .adapters()
             .iter()

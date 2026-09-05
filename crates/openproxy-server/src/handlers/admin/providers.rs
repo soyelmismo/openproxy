@@ -69,21 +69,54 @@ pub async fn list_providers(
     Ok(Json(enriched))
 }
 
+/// Run a sync SQLite write against `db_pool` off the async runtime
+/// worker, then trigger an in-memory adapter registry reload.
+///
+/// Mirrors the previous sync macro signature: the closure body
+/// receives a borrowed `&Connection` via the binding `$w` and must
+/// return `Result<_, CoreError>`. Internally the closure is moved
+/// into a blocking task, so the body is run on a thread-pool worker
+/// rather than the Tokio runtime.
+///
+/// The macro clones the `Arc<DbPool>` so the writer mutex can be
+/// acquired off the async runtime worker (AGENTS §4.3). `JoinError`
+/// is mapped to `CoreError::Internal` so the operator sees a real
+/// 500 instead of a panic. On success the adapter registry is also
+/// rebuilt off-thread via a separate `spawn_blocking` call.
 macro_rules! with_adapter_reload {
     ($state:expr, $pid:expr, $action:literal, |$w:ident| $body:expr) => {{
-        let res = {
-            let $w = $state.db_pool().writer();
-            $body?
-        };
-        if let Err(e) = $state.rebuild_adapters() {
+        let pool = std::sync::Arc::clone($state.db_pool());
+        // Clone to `String` so we don't hold a borrow on `$pid` while the
+        // `move ||` closure below captures the same local by value.
+        let pid_for_log = $pid.to_string();
+        let join_err_msg = concat!(
+            "spawn_blocking join error after ",
+            $action,
+            ":"
+        );
+        let res: Result<_, $crate::error::ApiError> = tokio::task::spawn_blocking(move || {
+            let $w = pool.writer();
+            $body
+        })
+        .await
+        .map_err(|e| {
+            $crate::error::ApiError(openproxy_types::CoreError::Internal(format!(
+                "{join_err_msg} {e}"
+            )))
+        })
+        .and_then(|inner| inner.map_err($crate::error::ApiError));
+
+        let res = res?;
+
+        if let Err(e) = $state.rebuild_adapters().await {
             tracing::warn!(
-                provider_id = %$pid,
+                provider_id = %pid_for_log,
                 error = %e,
                 concat!("failed to reload adapter registry after ", $action)
             );
         } else {
             tracing::info!(
-                provider_id = %$pid,
+                provider_id = %pid_for_log,
                 concat!("reloaded adapter registry after ", $action)
             );
         }
@@ -139,8 +172,11 @@ pub async fn delete_provider(
         ))));
     }
     let pid = ProviderId::new(&id);
+    // Clone `pid` so the `spawn_blocking` closure can move its own copy;
+    // the outer `pid` is needed afterwards to render the success response.
+    let pid_for_body = pid.clone();
     with_adapter_reload!(s, pid.as_str(), "delete_provider", |w| {
-        core_admin::delete_provider(&w, &pid)
+        core_admin::delete_provider(&w, &pid_for_body)
     });
     Ok(Json(serde_json::json!({ "deleted": pid.as_str() })))
 }
