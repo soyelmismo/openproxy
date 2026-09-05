@@ -231,7 +231,9 @@ fn normalize_object_schema(map: &mut serde_json::Map<String, Value>) {
     if !map.contains_key("properties") {
         map.insert(String::from("properties"), json!({}));
     }
-    let target_props = map.get_mut("properties").expect("Key was just inserted or verified to exist");
+    let target_props = map
+        .get_mut("properties")
+        .expect("Key was just inserted or verified to exist");
     merge_items_into_properties(target_props, &mut items);
 }
 
@@ -501,7 +503,9 @@ fn append_nullable_description(map: &mut serde_json::Map<String, Value>) {
     if !map.contains_key("description") {
         map.insert(String::from("description"), Value::String(String::new()));
     }
-    let desc_val = map.get_mut("description").expect("Key was just inserted or verified to exist");
+    let desc_val = map
+        .get_mut("description")
+        .expect("Key was just inserted or verified to exist");
     if let Value::String(s) = desc_val
         && !s.contains("nullable")
     {
@@ -644,7 +648,9 @@ fn merge_into_existing_properties(
             Value::Object(serde_json::Map::new()),
         );
     }
-    let existing_props = map.get_mut("properties").expect("Key was just inserted or verified to exist");
+    let existing_props = map
+        .get_mut("properties")
+        .expect("Key was just inserted or verified to exist");
     if let Value::Object(existing_map) = existing_props {
         for (k, v) in merged_properties {
             existing_map.entry(k).or_insert(v);
@@ -662,7 +668,9 @@ fn merge_into_existing_required(
     if !map.contains_key("required") {
         map.insert(String::from("required"), Value::Array(Vec::new()));
     }
-    let existing_reqs = map.get_mut("required").expect("Key was just inserted or verified to exist");
+    let existing_reqs = map
+        .get_mut("required")
+        .expect("Key was just inserted or verified to exist");
     if let Value::Array(req_arr) = existing_reqs {
         let mut current_reqs: std::collections::HashSet<String> = req_arr
             .iter()
@@ -718,7 +726,9 @@ fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: &s
     if !map.contains_key("description") {
         map.insert(String::from("description"), Value::String(String::new()));
     }
-    let desc_val = map.get_mut("description").expect("Key was just inserted or verified to exist");
+    let desc_val = map
+        .get_mut("description")
+        .expect("Key was just inserted or verified to exist");
 
     if let Value::String(s) = desc_val {
         if s.is_empty() {
@@ -1116,9 +1126,16 @@ mod tests {
         clean_json_schema(&mut schema);
 
         // 验证 missing_prop 被从 required 中移除
-        let required = schema["required"].as_array().expect("Key was just inserted or verified to exist");
+        let required = schema["required"]
+            .as_array()
+            .expect("Key was just inserted or verified to exist");
         assert_eq!(required.len(), 1);
-        assert_eq!(required[0].as_str().expect("Key was just inserted or verified to exist"), "existing_prop");
+        assert_eq!(
+            required[0]
+                .as_str()
+                .expect("Key was just inserted or verified to exist"),
+            "existing_prop"
+        );
     }
 
     // [NEW TEST] 验证 anyOf 类型提取
@@ -1242,7 +1259,9 @@ mod tests {
         assert_eq!(config["properties"]["recursive"]["type"], "boolean");
 
         // 3. 验证 required 被合并上来了
-        let req = config["required"].as_array().expect("Key was just inserted or verified to exist");
+        let req = config["required"]
+            .as_array()
+            .expect("Key was just inserted or verified to exist");
         assert!(req.iter().any(|v| v == "path"));
 
         // 4. 验证 anyOf 字段本身被移除
@@ -1759,7 +1778,9 @@ mod tests {
         assert!(schema["properties"].get("extended_prop").is_some());
         assert_eq!(schema["properties"]["extended_prop"]["type"], "number");
 
-        let required = schema["required"].as_array().expect("Key was just inserted or verified to exist");
+        let required = schema["required"]
+            .as_array()
+            .expect("Key was just inserted or verified to exist");
         assert!(required.iter().any(|v| v == "base_prop"));
         assert!(required.iter().any(|v| v == "extended_prop"));
     }
