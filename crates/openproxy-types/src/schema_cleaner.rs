@@ -1812,20 +1812,34 @@ mod tests {
 
     #[test]
     fn test_coerce_helpers() {
+        // coerce_str_to_boolean: truthy variants (incl. mixed case)
         assert_eq!(coerce_str_to_boolean("true"), Some(true));
+        assert_eq!(coerce_str_to_boolean("True"), Some(true));
         assert_eq!(coerce_str_to_boolean("1"), Some(true));
         assert_eq!(coerce_str_to_boolean("YES"), Some(true));
         assert_eq!(coerce_str_to_boolean("on"), Some(true));
 
+        // coerce_str_to_boolean: falsy variants (incl. mixed case)
         assert_eq!(coerce_str_to_boolean("false"), Some(false));
+        assert_eq!(coerce_str_to_boolean("FALSE"), Some(false));
         assert_eq!(coerce_str_to_boolean("0"), Some(false));
         assert_eq!(coerce_str_to_boolean("NO"), Some(false));
         assert_eq!(coerce_str_to_boolean("off"), Some(false));
 
+        // coerce_str_to_boolean: non-mappings
+        assert_eq!(coerce_str_to_boolean(""), None);
+        assert_eq!(coerce_str_to_boolean("garbage"), None);
         assert_eq!(coerce_str_to_boolean("invalid"), None);
 
+        // is_preserved_string_number: leading zero with continuation is preserved
+        assert!(is_preserved_string_number("0a"));
         assert!(is_preserved_string_number("01"));
+        assert!(is_preserved_string_number("01.5"));
         assert!(is_preserved_string_number("007"));
+
+        // is_preserved_string_number: pure single "0", "0.x" floats, and
+        // non-leading-zero numerics are NOT preserved.
+        assert!(!is_preserved_string_number("0"));
         assert!(!is_preserved_string_number("0.5"));
         assert!(!is_preserved_string_number("123"));
     }
