@@ -1227,7 +1227,8 @@ impl ModelListExt for serde_json::Value {
                     }
                 })
                 .collect::<Vec<_>>()
-        } else if let Some(arr) = models_arr {
+        } else {
+            let arr = models_arr?;
             arr.iter()
                 .filter_map(|m| {
                     let full_name = m.get("name")?.as_str()?;
@@ -1245,8 +1246,6 @@ impl ModelListExt for serde_json::Value {
                     ))
                 })
                 .collect::<Vec<_>>()
-        } else {
-            return None;
         };
 
         Some(models)
