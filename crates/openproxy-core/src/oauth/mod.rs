@@ -555,13 +555,13 @@ type ProviderMutexMap = HashMap<Box<str>, Arc<tokio::sync::Mutex<()>>>;
 /// refreshes for sibling accounts under the same public client.
 #[derive(Default)]
 pub struct TokenRefreshCoordinator {
-    provider_mutexes: Arc<tokio::sync::Mutex<ProviderMutexMap>>,
+    provider_mutexes: Arc<std::sync::Mutex<ProviderMutexMap>>,
 }
 
 impl TokenRefreshCoordinator {
     pub fn new() -> Self {
         Self {
-            provider_mutexes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            provider_mutexes: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -571,8 +571,8 @@ impl TokenRefreshCoordinator {
         COORDINATOR.get_or_init(TokenRefreshCoordinator::new)
     }
 
-    async fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut map = self.provider_mutexes.lock().await;
+    fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut map = self.provider_mutexes.lock().expect("mutex poisoned");
         if let Some(mutex) = map.get(provider_id) {
             return Arc::clone(mutex);
         }
@@ -592,7 +592,7 @@ impl TokenRefreshCoordinator {
             db,
             master_key,
         } = params;
-        let mutex = self.mutex_for_provider(provider_id).await;
+        let mutex = self.mutex_for_provider(provider_id);
         let _guard = mutex.lock().await;
 
         match db {

@@ -40,7 +40,9 @@ impl TargetFormatter for OpenaiFormatter {
                 || m.name.as_deref().is_some_and(|n| {
                     n.is_empty()
                         || n.len() > 64
-                        || !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                        || !n
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
                 })
         });
         if needs_normalization {
