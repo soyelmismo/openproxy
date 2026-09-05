@@ -173,12 +173,21 @@ pub fn sanitize_message_name(role: &str, name: Option<&str>) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    if !raw.chars().any(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !raw
+        .chars()
+        .any(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return None;
     }
     let sanitized: String = raw
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(64)
         .collect();
 
