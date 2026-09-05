@@ -68,8 +68,16 @@ impl BackgroundService for CooldownPrunerService {
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = tick.tick() => {
-                    let w = self.db_pool.writer();
-                    let _ = openproxy_pipeline::repository::prune_expired_cooldowns(&w);
+                    let pool = Arc::clone(&self.db_pool);
+                    if let Err(e) =
+                        tokio::task::spawn_blocking(move || {
+                            let w = pool.writer();
+                            let _ = openproxy_pipeline::repository::prune_expired_cooldowns(&w);
+                        })
+                        .await
+                    {
+                        tracing::warn!(service = "cooldown_pruner", "prune task join failed: {e}");
+                    }
                 }
             }
         }
@@ -96,10 +104,18 @@ impl BackgroundService for RecordingTtlPrunerService {
                 () = cancel.cancelled() => break,
                 _ = tick.tick() => {
                     let ttl = *self.recording_ttl_secs_cell.read();
-                    let _ = openproxy_core::usage::prune_expired_recording_bodies(
-                        &self.db_pool.writer(),
-                        ttl,
-                    );
+                    let pool = Arc::clone(&self.db_pool);
+                    if let Err(e) =
+                        tokio::task::spawn_blocking(move || {
+                            let _ = openproxy_core::usage::prune_expired_recording_bodies(
+                                &pool.writer(),
+                                ttl,
+                            );
+                        })
+                        .await
+                    {
+                        tracing::warn!(service = "recording_ttl_pruner", "prune task join failed: {e}");
+                    }
                 }
             }
         }
@@ -205,12 +221,27 @@ impl BackgroundService for MaintenanceVacuumService {
                             m.usage_retention_days,
                         )
                     };
-                    prune_usage_and_dead_proxies(&self.db_pool, retention_days);
+                    let pool = Arc::clone(&self.db_pool);
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        prune_usage_and_dead_proxies(&pool, retention_days);
+                    })
+                    .await
+                    {
+                        tracing::warn!(service = "maintenance_vacuum", "prune task join failed: {e}");
+                    }
                     let interval_ticks = interval_hours.max(1);
                     vacuum_counter = vacuum_counter.wrapping_add(1);
                     if auto_vacuum && vacuum_counter >= interval_ticks {
                         vacuum_counter = 0;
-                        execute_vacuum_cycle(&self.db_pool, &self.vacuum_status, interval_hours, auto_vacuum);
+                        let pool = Arc::clone(&self.db_pool);
+                        let vac_status = Arc::clone(&self.vacuum_status);
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            execute_vacuum_cycle(&pool, &vac_status, interval_hours, auto_vacuum);
+                        })
+                        .await
+                        {
+                            tracing::warn!(service = "maintenance_vacuum", "vacuum task join failed: {e}");
+                        }
                     }
                 }
             }
@@ -322,17 +353,30 @@ impl BackgroundService for ModelsDevSyncService {
     }
 }
 
-pub(crate) fn prune_usage_and_dead_proxies(prune_pool: &openproxy_db::DbPool, retention_days: u32) {
+pub(crate) fn prune_usage_and_dead_proxies(
+    prune_pool: &Arc<openproxy_db::DbPool>,
+    retention_days: u32,
+) {
     let retention_secs: i64 = i64::from(retention_days) * 24 * 3600;
     if retention_secs > 0 {
-        let _ =
-            openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
+        if let Some(w) = prune_pool.try_writer_for(std::time::Duration::from_secs(5)) {
+            let _ = openproxy_core::usage::prune_expired_usage_rows(&w, retention_secs);
+        } else {
+            tracing::warn!("prune_usage_and_dead_proxies: writer lock contention, skipping tick");
+            return;
+        }
     }
-    let _ = openproxy_core::free_proxies::prune_dead_proxies(&prune_pool.writer());
+    if let Some(w) = prune_pool.try_writer_for(std::time::Duration::from_secs(5)) {
+        let _ = openproxy_core::free_proxies::prune_dead_proxies(&w);
+    } else {
+        tracing::warn!(
+            "prune_usage_and_dead_proxies: writer lock contention, skipping dead-proxy prune"
+        );
+    }
 }
 
 pub(crate) fn execute_vacuum_cycle(
-    prune_pool: &openproxy_db::DbPool,
+    prune_pool: &Arc<openproxy_db::DbPool>,
     vac_status: &RwLock<crate::state::VacuumStatus>,
     interval_hours: u32,
     auto_vacuum: bool,
@@ -341,13 +385,21 @@ pub(crate) fn execute_vacuum_cycle(
         let mut st = vac_status.write();
         st.in_progress = true;
     }
-    let vacuum_result = {
-        let w = prune_pool.writer();
-        let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-        let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
-        match inc_result {
-            Ok(()) => Ok(()),
-            Err(_) => w.execute_batch("VACUUM;"),
+    let vacuum_result = match prune_pool.try_writer_for(std::time::Duration::from_secs(5)) {
+        Some(w) => {
+            let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+            let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
+            match inc_result {
+                Ok(()) => Ok(()),
+                Err(_) => w.execute_batch("VACUUM;"),
+            }
+        }
+        None => {
+            tracing::warn!("execute_vacuum_cycle: writer lock contention, skipping cycle");
+            Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                Some("writer lock contention".into()),
+            ))
         }
     };
     let now = chrono::Utc::now().to_rfc3339();
