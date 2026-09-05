@@ -123,6 +123,13 @@ pub struct AppState {
     /// a VACUUM is currently in progress. Read by the dashboard's
     /// config view to show the button state.
     vacuum_status: Arc<RwLock<VacuumStatus>>,
+    /// Boot-time backfill status: last-run timestamp, last result, and
+    /// whether a backfill pass is currently in progress. Read by the
+    /// dashboard via [`AppState::backfill_status`] to surface a
+    /// "warming up" / "backfilling" banner so operators can see when
+    /// historical usage pricing has caught up.
+    #[allow(dead_code)]
+    backfill_status: Arc<RwLock<BackfillStatus>>,
     /// Sender for background worker jobs (usage insertion, cooldowns)
     background_tx: tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob>,
     /// Supervisor for managing background service lifecycles and graceful shutdown.
@@ -147,6 +154,25 @@ pub struct VacuumStatus {
     /// ISO-8601 timestamp of the next scheduled automatic VACUUM.
     /// `None` if auto_vacuum is disabled.
     pub next_scheduled: Option<String>,
+}
+
+/// Boot-time backfill status reported to the dashboard. Updated by the
+/// [`crate::background::BackfillService`] so the admin UI can show a
+/// "warming up" / "backfilling" banner while the slow
+/// `backfill_usage_pricing` and related scans run on a background
+/// task instead of blocking the listener socket.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct BackfillStatus {
+    /// `true` while a backfill pass is in progress.
+    pub in_progress: bool,
+    /// ISO-8601 timestamp of the last completed backfill pass. `None`
+    /// until the first pass finishes.
+    pub last_run: Option<String>,
+    /// `"ok"` or the error message from the last pass.
+    pub last_result: Option<String>,
+    /// Number of usage rows repriced in the most recent pass. `None`
+    /// until at least one pass has completed.
+    pub last_repriced: Option<usize>,
 }
 
 impl AppState {
@@ -192,6 +218,7 @@ impl AppState {
 
         let maintenance_cell = Arc::new(RwLock::new(config.storage.maintenance.clone()));
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
+        let backfill_status = Arc::new(RwLock::new(BackfillStatus::default()));
         let upstream_client = UpstreamClient::new();
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
         let supervisor = Arc::new(crate::background::BackgroundSupervisor::new());
@@ -204,6 +231,7 @@ impl AppState {
                 recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
                 maintenance_cell: Arc::clone(&maintenance_cell),
                 vacuum_status: Arc::clone(&vacuum_status),
+                backfill_status: Arc::clone(&backfill_status),
                 master_key: Arc::clone(&master_key),
                 adapters: Arc::clone(&adapters),
                 upstream_client: Arc::clone(&upstream_client),
@@ -289,6 +317,7 @@ impl AppState {
             predictive_limiter,
             maintenance_cell,
             vacuum_status,
+            backfill_status,
             background_tx,
             supervisor,
             api_key_cache,
@@ -323,6 +352,7 @@ impl AppState {
             openproxy_types::config::MaintenanceConfig::default(),
         ));
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
+        let backfill_status = Arc::new(RwLock::new(BackfillStatus::default()));
         let upstream_client = UpstreamClient::new();
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
         let supervisor = Arc::new(crate::background::BackgroundSupervisor::new());
@@ -335,6 +365,7 @@ impl AppState {
                 recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
                 maintenance_cell: Arc::clone(&maintenance_cell),
                 vacuum_status: Arc::clone(&vacuum_status),
+                backfill_status: Arc::clone(&backfill_status),
                 master_key: Arc::clone(&master_key),
                 adapters: Arc::clone(&adapters),
                 upstream_client: Arc::clone(&upstream_client),
@@ -414,6 +445,7 @@ impl AppState {
             predictive_limiter,
             maintenance_cell,
             vacuum_status,
+            backfill_status,
             background_tx,
             supervisor,
             api_key_cache,
@@ -726,6 +758,14 @@ impl AppState {
         self.circuit_breaker.clone()
     }
 
+    /// Snapshot the current boot-time backfill status. The dashboard
+    /// polls this to show a "warming up" / "backfilling" banner while
+    /// `cost::backfill_usage_pricing` and friends run in the
+    /// background after boot.
+    pub fn backfill_status(&self) -> BackfillStatus {
+        self.backfill_status.read().clone()
+    }
+
     pub fn predictive_limiter(&self) -> Arc<openproxy_pipeline::PredictiveRateLimiter> {
         Arc::clone(&self.predictive_limiter)
     }
@@ -782,6 +822,12 @@ fn init_database(config: &openproxy_core::AppConfig) -> anyhow::Result<openproxy
     Ok(openproxy_db::DbPool::open(&path)?)
 }
 
+/// Migrations and persisted-config hydration run inline at boot because
+/// the rest of `AppState::new` (load_adapters, supervisor wiring, etc.)
+/// depends on the schema being current. The slow backfill (provider
+/// re-pricing + `backfill_usage_pricing` full-table scan) is deferred
+/// to [`crate::background::BackfillService`] so the listener socket can
+/// bind immediately.
 fn run_database_maintenance(
     w: &mut openproxy_db::conn::WriterGuard<'_>,
     config: &mut openproxy_core::AppConfig,
@@ -797,7 +843,13 @@ fn run_database_maintenance(
         idle_chunk_retryable,
         compression_mode,
     )?;
-    seed_and_backfill_database(w)?;
+    // NOTE: `seed_and_backfill_database` is intentionally NOT called
+    // here. It used to run inline at boot and could take tens of
+    // seconds on large DBs because `backfill_usage_pricing` does a
+    // full table scan of `usage` with no covering index. It now
+    // runs in the background via [`crate::background::BackfillService`]
+    // so the listener socket can bind immediately. The bootstrap API
+    // key is created by the first `BackfillService` tick.
     Ok(())
 }
 
@@ -896,13 +948,15 @@ fn run_provider_and_combo_seeding(w: &openproxy_db::conn::WriterGuard<'_>) -> an
     Ok(())
 }
 
-fn run_model_and_usage_backfills(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
-    let backfilled = openproxy_core::seed::backfill_model_metadata(w)?;
+fn run_model_and_usage_backfills(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<usize> {
+    let mut total = 0usize;
+    let backfilled: usize = openproxy_core::seed::backfill_model_metadata(w)? as usize;
     if backfilled > 0 {
         tracing::info!(
             backfilled,
             "backfilled model metadata from heuristics on first start"
         );
+        total += backfilled;
     }
 
     let normalized = openproxy_core::models_dev_sync::backfill_model_id_normalized(w)?;
@@ -911,6 +965,7 @@ fn run_model_and_usage_backfills(w: &openproxy_db::conn::WriterGuard<'_>) -> any
             normalized,
             "backfilled model_id_normalized for existing model rows on boot"
         );
+        total += normalized;
     }
 
     let repriced = openproxy_core::models_dev_sync::recompute_costs(w)?;
@@ -919,8 +974,30 @@ fn run_model_and_usage_backfills(w: &openproxy_db::conn::WriterGuard<'_>) -> any
             repriced,
             "re-priced historical usage rows with missing pricing on boot"
         );
+        total += repriced;
     }
-    Ok(())
+
+    // Also run the cost-rs backfill which targets rows the recompute
+    // pass missed (e.g. when pricing was unknown at record time but
+    // became available later via a models.dev sync). Wrapped in
+    // with_busy_retry because this is the slowest writer op and the
+    // most likely to race with concurrent vacuum/usage inserts.
+    let cost_backfilled = openproxy_db::with_busy_retry("backfill::backfill_usage_pricing", || {
+        openproxy_db::cost::backfill_usage_pricing(w)
+    })
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "backfill_usage_pricing failed in background pass");
+        0
+    });
+    if cost_backfilled > 0 {
+        tracing::info!(
+            cost_backfilled,
+            "backfilled cost_usd on historical usage rows from updated pricing"
+        );
+        total += cost_backfilled;
+    }
+
+    Ok(total)
 }
 
 fn ensure_bootstrap_key_logged(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
@@ -934,11 +1011,18 @@ fn ensure_bootstrap_key_logged(w: &openproxy_db::conn::WriterGuard<'_>) -> anyho
     Ok(())
 }
 
-fn seed_and_backfill_database(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<()> {
+/// Full boot-time backfill: provider seed, model-metadata backfill,
+/// usage repricing, and bootstrap key creation. Intended to be called
+/// from the background [`crate::background::BackfillService`] so the
+/// listener socket can bind before the slow operations finish.
+///
+/// Returns the total number of rows touched across all steps; the
+/// caller uses this to update the admin UI's "warming up" banner.
+pub(crate) fn run_boot_backfill(w: &openproxy_db::conn::WriterGuard<'_>) -> anyhow::Result<usize> {
     run_provider_and_combo_seeding(w)?;
-    run_model_and_usage_backfills(w)?;
+    let total = run_model_and_usage_backfills(w)?;
     ensure_bootstrap_key_logged(w)?;
-    Ok(())
+    Ok(total)
 }
 
 struct SpawnBackgroundTasksArgs {
@@ -947,6 +1031,7 @@ struct SpawnBackgroundTasksArgs {
     recording_ttl_secs_cell: Arc<RwLock<i64>>,
     maintenance_cell: Arc<RwLock<openproxy_types::config::MaintenanceConfig>>,
     vacuum_status: Arc<RwLock<crate::state::VacuumStatus>>,
+    backfill_status: Arc<RwLock<crate::state::BackfillStatus>>,
     master_key: Arc<openproxy_db::secrets::MasterKey>,
     adapters: Arc<RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>>,
     upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
@@ -963,11 +1048,23 @@ fn spawn_background_tasks(
         recording_ttl_secs_cell,
         maintenance_cell,
         vacuum_status,
+        backfill_status,
         master_key,
         adapters,
         upstream_client,
         oauth_provider_registry,
     } = args;
+
+    // Boot backfill: provider seed + repricing + bootstrap key. First
+    // tick fires immediately so the dashboard sees a "backfilling"
+    // banner rather than waiting for the interval. We use a 6h cadence
+    // on subsequent passes so pricing drift after a models.dev sync is
+    // picked up.
+    supervisor.spawn(crate::background::BackfillService {
+        db_pool: Arc::clone(&db_pool),
+        backfill_status: Arc::clone(&backfill_status),
+        interval: std::time::Duration::from_hours(6),
+    });
 
     supervisor.spawn(crate::background::CooldownPrunerService {
         db_pool: Arc::clone(&db_pool),

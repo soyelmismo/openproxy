@@ -44,6 +44,7 @@ pub fn router() -> axum::Router<AppState> {
             axum::routing::get(get_maintenance_config).put(put_maintenance_config),
         )
         .route("/vacuum-status", axum::routing::get(get_vacuum_status))
+        .route("/backfill-status", axum::routing::get(get_backfill_status))
 }
 
 pub async fn admin_health() -> Json<serde_json::Value> {
@@ -237,6 +238,17 @@ pub async fn get_vacuum_status(
     State(s): State<AppState>,
 ) -> Result<Json<crate::state::VacuumStatus>, ApiError> {
     Ok(Json(s.vacuum_status()))
+}
+
+/// Snapshot of the background boot-time backfill status. The
+/// dashboard polls this endpoint so it can render a "warming up" /
+/// "backfilling" banner while the slow `backfill_usage_pricing`
+/// full-table scan runs on the `BackfillService` worker instead of
+/// blocking the listener socket at boot.
+pub async fn get_backfill_status(
+    State(s): State<AppState>,
+) -> Result<Json<crate::state::BackfillStatus>, ApiError> {
+    Ok(Json(s.backfill_status()))
 }
 
 pub async fn get_recording_ttl(

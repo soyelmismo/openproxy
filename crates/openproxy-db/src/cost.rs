@@ -8,6 +8,8 @@ use openproxy_types::usage::{
 use rusqlite::{Connection, params};
 use std::sync::LazyLock;
 
+use crate::error::with_busy_retry;
+
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64>, Option<f64>) {
     let cost = pricing::compute_cost_opt(
         price,
@@ -203,6 +205,27 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
     publish_usage_row(row);
 
     Ok(UsageId(rowid))
+}
+
+/// Hot-path wrapper around [`record`] that retries on transient
+/// `SQLITE_BUSY` from other writers (vacuum, backfill, concurrent
+/// inserts from a different process).
+///
+/// The hot-path callers all guard the writer with
+/// `try_writer_for(100ms)` to avoid starving chat requests behind a
+/// long admin query. Once that lock is held, the actual `INSERT` can
+/// still surface `SQLITE_BUSY` if the SQLite engine itself can't
+/// acquire the file-level write lock in time (e.g. another process
+/// is running vacuum). Without this wrapper the row is silently
+/// dropped, which loses a usage record. With it, we retry with
+/// 50ms+100ms backoff (150ms total ceiling), still well under the
+/// lock-hold window, and convert a transient `SQLITE_BUSY` into a
+/// successful insert.
+pub fn record_with_retry(
+    conn: &Connection,
+    input: &UsageInput,
+) -> openproxy_types::Result<UsageId> {
+    with_busy_retry("cost::record", || record(conn, input))
 }
 
 fn update_backfill_price(
@@ -474,5 +497,63 @@ mod tests {
             )
             .expect("query");
         assert_eq!(error_msg_redacted, "test error sk-[REDACTED]");
+    }
+
+    /// `record_with_retry` is a thin `with_busy_retry` wrapper around
+    /// `record`; on a quiescent DB it must behave identically to a
+    /// direct `record` call (no retries, no delay, success on first
+    /// attempt).
+    #[test]
+    fn record_with_retry_succeeds_first_attempt_on_quiescent_db() {
+        let dir = tempdir();
+        let path = dir.join("retry.db");
+        let pool = DbPool::open(&path).expect("open pool");
+        {
+            let mut w = pool.writer();
+            crate::migrations::run(&mut w).expect("migrations");
+        }
+
+        let input = UsageInput {
+            request_id: RequestId::new(),
+            trace_id: "trace-retry-1".to_string(),
+            attempt: 1,
+            provider_id: ProviderId::new("test"),
+            account_id: None,
+            combo_id: None,
+            model_row_id: None,
+            upstream_model_id: "test-model".to_string(),
+            combo_target_id: None,
+            prompt_tokens: Some(10),
+            completion_tokens: Some(20),
+            cached_tokens: None,
+            connect_ms: None,
+            ttft_ms: None,
+            total_ms: 100,
+            status_code: 200,
+            error_msg: None,
+            error_message: None,
+            race_total: 1,
+            race_attempts: 1,
+            api_key_id: None,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            proxy_url: None,
+            proxy_status: None,
+            flags: USAGE_FLAG_CLIENT_RESPONSE,
+            endpoint_kind: EndpointKind::Chat,
+        };
+
+        let conn = pool.writer();
+        let result = record_with_retry(&conn, &input);
+        assert!(
+            result.is_ok(),
+            "record_with_retry failed: {:?}",
+            result.err()
+        );
     }
 }

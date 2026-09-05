@@ -249,6 +249,97 @@ impl BackgroundService for MaintenanceVacuumService {
     }
 }
 
+/// Runs the boot-time backfill (provider seed, model-metadata
+/// backfill, `recompute_costs`, `cost::backfill_usage_pricing`, and
+/// bootstrap key creation) on a background task so the listener socket
+/// can bind immediately. The first tick fires right after `spawn`, then
+/// the service sleeps for `interval` between passes so pricing drift is
+/// picked up over time.
+///
+/// Status is reported through [`crate::state::BackfillStatus`] so the
+/// admin UI can show a "warming up" / "backfilling" banner while the
+/// slow `backfill_usage_pricing` full-table scan runs.
+pub struct BackfillService {
+    pub db_pool: Arc<openproxy_db::DbPool>,
+    pub backfill_status: Arc<parking_lot::RwLock<crate::state::BackfillStatus>>,
+    pub interval: Duration,
+}
+
+impl BackgroundService for BackfillService {
+    fn name(&self) -> &'static str {
+        "backfill"
+    }
+
+    async fn run(&self, cancel: CancellationToken) {
+        // First pass: fire ~immediately after the listener is bound so
+        // historical usage rows get repriced before the first dashboard
+        // poll. Subsequent passes run on the slow `interval` cadence.
+        if self.run_one_pass().await.is_none() {
+            return;
+        }
+
+        let mut tick = tokio::time::interval(self.interval);
+        // Skip the immediate tick (we already ran one pass above).
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    if self.run_one_pass().await.is_none() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl BackfillService {
+    /// Execute a single backfill pass on a blocking worker thread.
+    /// Returns `None` if the service was cancelled mid-pass.
+    async fn run_one_pass(&self) -> Option<()> {
+        {
+            let mut st = self.backfill_status.write();
+            st.in_progress = true;
+        }
+        let pool = Arc::clone(&self.db_pool);
+        let join = tokio::task::spawn_blocking(move || {
+            let w = pool.writer();
+            crate::state::run_boot_backfill(&w)
+        })
+        .await;
+
+        let result_str;
+        let mut touched = 0usize;
+        match join {
+            Ok(Ok(n)) => {
+                touched = n;
+                result_str = "ok".to_string();
+                tracing::info!(touched, "boot backfill pass complete");
+            }
+            Ok(Err(e)) => {
+                result_str = e.to_string();
+                tracing::warn!(error = %e, "boot backfill pass failed");
+            }
+            Err(e) if e.is_cancelled() => return None,
+            Err(e) => {
+                result_str = e.to_string();
+                tracing::warn!(error = %e, "boot backfill task join failed");
+            }
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let mut st = self.backfill_status.write();
+            st.in_progress = false;
+            st.last_run = Some(now);
+            st.last_result = Some(result_str);
+            st.last_repriced = Some(touched);
+        }
+        Some(())
+    }
+}
+
 /// Periodically synchronizes and health-tests free public proxy lists.
 pub struct FreeProxiesSyncService {
     pub db_pool: Arc<openproxy_db::DbPool>,
@@ -475,5 +566,59 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(count.load(Ordering::SeqCst), stopped_at);
+    }
+
+    /// Smoke test for [`BackfillService`]: a fresh empty DB should
+    /// still complete one backfill pass and populate `last_run` /
+    /// `last_result` so the admin UI can clear the "warming up" banner.
+    /// We use a 60s interval so the service only runs one pass during
+    /// the test and exits cleanly on shutdown.
+    #[tokio::test]
+    async fn backfill_service_completes_initial_pass_on_empty_db() {
+        use openproxy_db::DbPool;
+
+        let dir = std::env::temp_dir().join(format!(
+            "openproxy-backfill-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        let path = dir.join("backfill.db");
+        let pool = Arc::new(DbPool::open(&path).expect("open pool"));
+        {
+            let mut w = pool.writer();
+            openproxy_db::migrations::run(&mut w).expect("migrations");
+        }
+
+        let status = Arc::new(parking_lot::RwLock::new(
+            crate::state::BackfillStatus::default(),
+        ));
+        let supervisor = BackgroundSupervisor::new();
+        let handle = supervisor.spawn(BackfillService {
+            db_pool: Arc::clone(&pool),
+            backfill_status: Arc::clone(&status),
+            interval: Duration::from_secs(60),
+        });
+
+        // Poll the status for up to 5s waiting for the first pass to
+        // finish. On an empty DB the backfill is fast (just seeding
+        // built-in providers + the bootstrap key).
+        let mut completed = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if status.read().last_run.is_some() {
+                completed = true;
+                break;
+            }
+        }
+        supervisor.shutdown();
+        handle.await.expect("join handle");
+
+        let s = status.read().clone();
+        assert!(completed, "backfill pass did not complete; status={s:?}");
+        assert_eq!(s.last_result.as_deref(), Some("ok"));
+        assert!(!s.in_progress, "status still in_progress after pass");
     }
 }
