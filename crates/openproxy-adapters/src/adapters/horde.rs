@@ -1309,36 +1309,31 @@ fn parse_negative_tokens(words: &[&str], i: &mut usize, negative_prompts: &mut V
     }
 }
 
-fn apply_directive(
+fn apply_boolean_directive(lower: &str, parsed: &mut ParsedPromptDirectives) -> bool {
+    match lower {
+        "--no-hires" | "--no_hires" | "--nohires" => {
+            parsed.hires_fix = Some(false);
+            true
+        }
+        "--allow_slow" => {
+            parsed.slow_workers = Some(true);
+            true
+        }
+        "--any_worker" => {
+            parsed.trusted_workers = Some(false);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn apply_numeric_directive(
     lower: &str,
     words: &[&str],
     i: &mut usize,
     parsed: &mut ParsedPromptDirectives,
 ) -> bool {
     match lower {
-        "--hires" | "--hires_fix" => {
-            parsed.hires_fix = Some(parse_hires_flag(words, i));
-            true
-        }
-        "--no-hires" | "--no_hires" | "--nohires" => {
-            parsed.hires_fix = Some(false);
-            *i += 1;
-            true
-        }
-        "--allow_slow" => {
-            parsed.slow_workers = Some(true);
-            *i += 1;
-            true
-        }
-        "--any_worker" => {
-            parsed.trusted_workers = Some(false);
-            *i += 1;
-            true
-        }
-        "--sampler" | "--sampler_name" => {
-            parsed.sampler_name = parse_string_flag(words, i);
-            true
-        }
         "--steps" => {
             parsed.steps = parse_numeric_flag(words, i, |v: u32| v.clamp(10, 100));
             true
@@ -1360,6 +1355,21 @@ fn apply_directive(
             parsed.seed = parse_numeric_flag(words, i, |v: u64| v);
             true
         }
+        _ => false,
+    }
+}
+
+fn apply_string_directive(
+    lower: &str,
+    words: &[&str],
+    i: &mut usize,
+    parsed: &mut ParsedPromptDirectives,
+) -> bool {
+    match lower {
+        "--sampler" | "--sampler_name" => {
+            parsed.sampler_name = parse_string_flag(words, i);
+            true
+        }
         "--control" | "--control_type" => {
             parsed.control_type = parse_string_flag(words, i);
             true
@@ -1378,6 +1388,29 @@ fn apply_directive(
         }
         _ => false,
     }
+}
+
+fn apply_directive(
+    lower: &str,
+    words: &[&str],
+    i: &mut usize,
+    parsed: &mut ParsedPromptDirectives,
+) -> bool {
+    if apply_boolean_directive(lower, parsed) {
+        *i += 1;
+        return true;
+    }
+    if apply_numeric_directive(lower, words, i, parsed) {
+        return true;
+    }
+    if apply_string_directive(lower, words, i, parsed) {
+        return true;
+    }
+    if lower == "--hires" || lower == "--hires_fix" {
+        parsed.hires_fix = Some(parse_hires_flag(words, i));
+        return true;
+    }
+    false
 }
 
 /// Extract AI Horde prompt directives (<lora:...>, <ti:...>, --sampler, --steps, etc.) from a prompt.
