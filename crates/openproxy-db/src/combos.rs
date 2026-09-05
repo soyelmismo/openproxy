@@ -683,10 +683,7 @@ fn update_target_column<T: rusqlite::ToSql>(
     column: &'static str,
     value: T,
 ) -> Result<()> {
-    let mut sql = String::with_capacity(44 + column.len());
-    sql.push_str("UPDATE combo_targets SET ");
-    sql.push_str(column);
-    sql.push_str(" = ?1 WHERE id = ?2");
+    let sql = format!("UPDATE combo_targets SET {column} = ?1 WHERE id = ?2");
     conn.execute(&sql, params![value, target_id.0])
         .map_err(crate::error::map_db_error_ctx(format!(
             "update {column} for combo_target {}",
@@ -998,10 +995,7 @@ fn update_combo_column<T: rusqlite::ToSql>(
     column: &'static str,
     value: T,
 ) -> Result<()> {
-    let mut sql = String::with_capacity(37 + column.len());
-    sql.push_str("UPDATE combos SET ");
-    sql.push_str(column);
-    sql.push_str(" = ?1 WHERE id = ?2");
+    let sql = format!("UPDATE combos SET {column} = ?1 WHERE id = ?2");
     let affected =
         conn.execute(&sql, params![value, id.0])
             .map_err(crate::error::map_db_error_ctx(format!(

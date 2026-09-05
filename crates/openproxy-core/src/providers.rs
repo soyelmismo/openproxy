@@ -403,15 +403,7 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
         return Ok(());
     }
 
-    let mut sql = String::with_capacity(32 + sets.iter().map(|s| s.len() + 2).sum::<usize>());
-    sql.push_str("UPDATE providers SET ");
-    for (i, set) in sets.iter().enumerate() {
-        if i > 0 {
-            sql.push_str(", ");
-        }
-        sql.push_str(set);
-    }
-    sql.push_str(" WHERE id = ?");
+    let sql = format!("UPDATE providers SET {} WHERE id = ?", sets.join(", "));
     let id_owned = id.as_str().to_string();
     let mut bound: Vec<&dyn rusqlite::ToSql> = bound_values.iter().map(|b| b.as_ref()).collect();
     bound.push(&id_owned);
