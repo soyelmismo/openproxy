@@ -65,7 +65,7 @@ fn leak_string(s: String) -> &'static str {
 /// filter-construction time; all patterns are static literals, so a
 /// compile error is a programmer bug that should fail startup loudly.
 fn compile_re(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern).unwrap_or_else(|e| panic!("invalid filter pattern {pattern:?}: {e}"))
+    regex::Regex::new(pattern).expect("invalid filter pattern")
 }
 
 /// Pre-compute a rule name like `"git-status::strip_ansi"`.
@@ -185,7 +185,7 @@ macro_rules! compiled_filter {
 // call. Phase B already moved `strip_ansi` to memchr; this finishes the
 // job for the stderr-prefix path.
 static STDERR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("valid regex")
+    regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").expect("invalid filter pattern")
 });
 
 fn filter_stderr_prefixes(text: &str) -> String {

@@ -78,33 +78,34 @@ pub enum ContentType {
 
 /// `^path:line:` pattern from grep / ripgrep output.
 static SEARCH_RESULT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^[\w/.\-]+:\d+:").expect("invalid filter pattern"));
 
 /// Source-code structural keywords: `fn `, `func `, `def `, `class `, etc.
 static SOURCE_KEYWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(fn |func |def |class |struct |enum |interface |public |private |protected )")
-        .expect("valid regex")
+        .expect("invalid filter pattern")
 });
 
 /// Source-code import-like first line: `import `, `from `, `use `,
 /// `package `, `#include `, `require(`.
 static SOURCE_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(import |from |use |package |#include |require\()").expect("valid regex")
+    Regex::new(r"^(import |from |use |package |#include |require\()")
+        .expect("invalid filter pattern")
 });
 
 /// Generic error/warn/etc. token (case-insensitive) used by the
 /// "≥5 matching lines" sub-rule of BuildOutput detection.
 static GENERIC_ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").expect("valid regex")
+    Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").expect("invalid filter pattern")
 });
 
 /// `^make[N]:` (N is digits).
 static MAKE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^make\[\d+\]:").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^make\[\d+\]:").expect("invalid filter pattern"));
 
 /// `^running N tests` (cargo).
 static CARGO_RUNNING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^running \d+ tests").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^running \d+ tests").expect("invalid filter pattern"));
 
 /// Maximum number of lines to scan for detection. The spec says "first 100
 /// lines" for the overall scan; sub-scans (git diff, build output, tabular)

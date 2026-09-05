@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::sync::LazyLock;
 
 static REGION_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").expect("valid regex"));
+    LazyLock::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").expect("invalid filter pattern"));
 
 // =====================================================================
 // Kiro AI (AWS CodeWhisperer)
