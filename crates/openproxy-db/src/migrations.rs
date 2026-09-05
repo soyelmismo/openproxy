@@ -9,6 +9,8 @@ use openproxy_types::{CoreError, Result};
 use rusqlite::Connection;
 use std::fmt::Write;
 
+use crate::error::with_busy_retry;
+
 /// One embedded migration. `version` is the integer PK stored in
 /// `schema_migrations`. `sql` is the raw file contents.
 struct Migration {
@@ -89,12 +91,35 @@ fn run_migrations_with_fk_guard(
     needs_fk_off: bool,
 ) -> Result<()> {
     if !needs_fk_off {
-        return apply_migration_batch(conn, pending);
+        return apply_migration_batch_with_retry(conn, pending);
     }
     set_pragma_foreign_keys(conn, false)?;
-    let res = apply_migration_batch(conn, pending);
+    let res = apply_migration_batch_with_retry(conn, pending);
     let fk_res = set_pragma_foreign_keys(conn, true);
     res.and(fk_res)
+}
+
+/// Like [`apply_migration_batch`] but wraps the whole `BEGIN IMMEDIATE` →
+/// `COMMIT` window in `with_busy_retry`.
+///
+/// `TransactionBehavior::Immediate` acquires a RESERVED lock at `BEGIN`,
+/// which can race with another process holding the writer (e.g. a
+/// crash-restart loop where a previous openproxy instance is still
+/// flushing its WAL on shutdown). The per-connection `busy_timeout` of
+/// 5s usually absorbs this, but if it expires the BEGIN fails with
+/// `SQLITE_BUSY`. We retry the whole transaction (rollback is implicit
+/// because the failed BEGIN never produced a committed transaction)
+/// with 50ms+100ms backoff, matching `BUSY_RETRY_DELAYS`.
+fn apply_migration_batch_with_retry(conn: &mut Connection, pending: &[&Migration]) -> Result<()> {
+    with_busy_retry("migrations::apply_batch", || {
+        apply_migration_batch(conn, pending)
+    })
+    .inspect_err(|e| {
+        tracing::error!(
+            error = %e,
+            "migration batch failed (including BUSY retries)",
+        );
+    })
 }
 
 /// Apply pending migrations on `conn`.
@@ -111,7 +136,13 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         .any(|m| m.sql.contains("PRAGMA foreign_keys = OFF"));
     run_migrations_with_fk_guard(conn, &pending, needs_fk_off)?;
 
-    let _ = crate::cost::backfill_usage_pricing(conn);
+    // Note: historical versions of this function ran an inline
+    // `cost::backfill_usage_pricing` here, but that full-table scan
+    // can take tens of seconds on large DBs and was blocking the
+    // server's listener socket at boot. The server now runs it
+    // through the background `BackfillService` instead. Tests
+    // exercising the migration runner should call
+    // `cost::backfill_usage_pricing` explicitly if they need it.
 
     Ok(())
 }

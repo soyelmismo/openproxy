@@ -18,6 +18,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use crate::error::with_busy_retry;
+
 /// Alias for the writer guard returned by [`DbPool::writer`].
 pub type WriterGuard<'a> = parking_lot::MutexGuard<'a, Connection>;
 
@@ -81,7 +83,27 @@ impl DbPool {
     /// Open or create a SQLite database at `path`, configure pragmas, and return
     /// a ready-to-use pool. The caller is expected to run migrations on the
     /// writer before issuing any queries.
+    ///
+    /// Wraps the entire open path in `with_busy_retry`: if another process
+    /// holds the DB file lock (e.g. a crash-restart loop where the previous
+    /// openproxy instance hasn't fully released the writer mutex), the
+    /// `Connection::open_with_flags` call may surface `SQLITE_BUSY` after
+    /// the per-connection `busy_timeout` elapses. Retrying with 50ms+100ms
+    /// backoff covers the typical handover window without making legitimate
+    /// failures noisy.
     pub fn open(path: &Path) -> Result<Self> {
+        with_busy_retry("DbPool::open", || Self::open_inner(path)).inspect_err(|e| {
+            tracing::error!(
+                path = %path.display(),
+                error = %e,
+                "DbPool::open failed (including BUSY retries)",
+            );
+        })
+    }
+
+    /// Inner open path: actually constructs the pool. Public callers go
+    /// through [`DbPool::open`] which wraps this in `with_busy_retry`.
+    fn open_inner(path: &Path) -> Result<Self> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
         let writer = Connection::open_with_flags(path, flags).map_err(

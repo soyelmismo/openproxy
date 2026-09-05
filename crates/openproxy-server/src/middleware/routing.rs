@@ -276,5 +276,5 @@ fn record_model_not_found_usage_row(
         tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");
         return;
     };
-    let _ = openproxy_db::cost::record(&w, &input);
+    let _ = openproxy_db::cost::record_with_retry(&w, &input);
 }

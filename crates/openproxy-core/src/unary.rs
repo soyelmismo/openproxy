@@ -309,7 +309,7 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
         tracing::warn!("hot-path writer lock timeout on unary usage row; dropping");
         return;
     };
-    let _ = cost::record(&w, &input);
+    let _ = cost::record_with_retry(&w, &input);
 }
 
 pub fn apply_adapter_headers(

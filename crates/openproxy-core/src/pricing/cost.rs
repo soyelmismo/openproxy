@@ -264,6 +264,24 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     Ok(UsageId(rowid))
 }
 
+/// Hot-path wrapper around [`record`] that retries on transient
+/// `SQLITE_BUSY` from other writers (vacuum, backfill, concurrent
+/// inserts from a different process).
+///
+/// The hot-path callers all guard the writer with
+/// `try_writer_for(100ms)` to avoid starving chat requests behind a
+/// long admin query. Once that lock is held, the actual `INSERT` can
+/// still surface `SQLITE_BUSY` if the SQLite engine itself can't
+/// acquire the file-level write lock in time (e.g. another process
+/// is running vacuum). Without this wrapper the row is silently
+/// dropped, which loses a usage record. With it, we retry with
+/// 50ms+100ms backoff (150ms total ceiling), still well under the
+/// lock-hold window, and convert a transient `SQLITE_BUSY` into a
+/// successful insert.
+pub fn record_with_retry(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
+    openproxy_db::with_busy_retry("cost::record", || record(conn, input))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
