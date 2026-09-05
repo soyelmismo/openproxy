@@ -22,8 +22,10 @@
 use crate::error::Result;
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use crate::models::{self, Model};
+use openproxy_db::DbPool;
 use openproxy_db::combos;
 use openproxy_types::combos::{Combo, ComboTarget, Strategy};
+use openproxy_types::error::CoreError;
 use rusqlite::{Connection, OptionalExtension};
 
 fn fetch_healthy_account_ids(
@@ -210,6 +212,38 @@ pub fn resolve(conn: &Connection, model_str: &str) -> Result<RoutingPlan> {
         model: model_str.to_string(),
         hint,
     })
+}
+
+/// Async wrapper around [`resolve`] that moves the synchronous
+/// SQLite lookups off the Tokio worker thread.
+///
+/// `routing::resolve` performs multiple `SELECT`s against the
+/// `models`, `combos`, `providers` and `accounts` tables. Each of
+/// those reads takes the [`DbPool`] reader mutex, which is a
+/// blocking `parking_lot::Mutex::lock()`. Holding that lock on the
+/// Tokio worker is exactly the pattern the AGENTS §4.3 rules
+/// forbid ("Aislamiento de SQLite en Async" + "Prohibición de Locks
+/// a través de `.await`"). By spawning the work onto the blocking
+/// pool we keep the Tokio worker free for other requests.
+///
+/// [`DbPool`] is `Clone` and the clone is O(1) — every field is
+/// already an `Arc` — so the pool handle is cloned into the
+/// blocking closure by value. The `model` argument is likewise
+/// captured as an owned `String` so the blocking thread does not
+/// borrow from a stack frame owned by the caller.
+///
+/// `JoinError`s are mapped to [`CoreError::Internal`] — they only
+/// occur if the blocking task is cancelled or panics, which is a
+/// hard server bug, not a client-visible failure.
+pub async fn resolve_routing(db_pool: &DbPool, model: &str) -> Result<RoutingPlan> {
+    let pool = db_pool.clone();
+    let model = model.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.reader();
+        resolve(&conn, &model)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("resolve_routing join error: {e}")))?
 }
 
 fn try_resolve_direct_model(

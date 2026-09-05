@@ -210,10 +210,7 @@ pub async fn execute_transcribe(
     let started = Instant::now();
 
     // 1. Resolve routing.
-    let routing_plan = {
-        let r = db_pool.reader();
-        routing::resolve(&r, &parsed_body.model_name)?
-    };
+    let routing_plan = routing::resolve_routing(db_pool, &parsed_body.model_name).await?;
 
     // 2. Resolve audio targets.
     let targets = resolve_audio_targets(db_pool, routing_plan, api_key_id, started)?;
