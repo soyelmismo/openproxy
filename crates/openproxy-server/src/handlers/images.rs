@@ -238,8 +238,11 @@ async fn fetch_remote_image(
         )));
     }
 
+    let allow_private = cfg!(test)
+        || std::env::var("OPENPROXY_ALLOW_PRIVATE_IMAGES").is_ok_and(|v| v == "true" || v == "1");
+
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if openproxy_adapters::upstream::is_private_or_reserved(&ip) {
+        if !allow_private && openproxy_adapters::upstream::is_private_or_reserved(&ip) {
             return Err(ApiError(CoreError::Validation(
                 "private or reserved IP addresses are not allowed".into(),
             )));
@@ -252,7 +255,7 @@ async fn fetch_remote_image(
         })?;
 
         for addr in addrs {
-            if openproxy_adapters::upstream::is_private_or_reserved(&addr.ip()) {
+            if !allow_private && openproxy_adapters::upstream::is_private_or_reserved(&addr.ip()) {
                 return Err(ApiError(CoreError::Validation(
                     "private or reserved IP addresses are not allowed".into(),
                 )));
