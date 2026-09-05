@@ -417,16 +417,46 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
 /// value are skipped.
 ///
 /// Returns the total number of rows backfilled across both tables.
-fn fetch_unnormalized_rows(conn: &Connection, table: &str) -> Result<Vec<(String, String)>> {
-    let sql = match table {
-        "models" => "SELECT provider_id, model_id FROM models WHERE model_id_normalized IS NULL",
-        "model_capabilities_sync" => {
-            "SELECT provider_id, model_id FROM model_capabilities_sync WHERE model_id_normalized IS NULL"
+/// Tables that participate in the `model_id_normalized` backfill.
+/// Each variant carries a static SELECT SQL and the table name so the
+/// dispatch in [`fetch_unnormalized_rows`] and
+/// [`backfill_table_normalized`] is exhaustive at compile time — no
+/// `unreachable!()` fallback needed when a new table is added.
+#[derive(Clone, Copy)]
+enum BackfillTable {
+    Models,
+    ModelCapabilitiesSync,
+}
+
+impl BackfillTable {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Models => "models",
+            Self::ModelCapabilitiesSync => "model_capabilities_sync",
         }
-        _ => unreachable!("invalid table"),
-    };
+    }
+
+    const fn select_unnormalized(self) -> &'static str {
+        match self {
+            Self::Models => {
+                "SELECT provider_id, model_id FROM models \
+                 WHERE model_id_normalized IS NULL"
+            }
+            Self::ModelCapabilitiesSync => {
+                "SELECT provider_id, model_id FROM model_capabilities_sync \
+                 WHERE model_id_normalized IS NULL"
+            }
+        }
+    }
+}
+
+/// Returns rows that still have `model_id_normalized IS NULL`.
+fn fetch_unnormalized_rows(
+    conn: &Connection,
+    table: BackfillTable,
+) -> Result<Vec<(String, String)>> {
     let mut stmt = conn
-        .prepare(sql)
+        .prepare(table.select_unnormalized())
         .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], |row| {
@@ -438,24 +468,25 @@ fn fetch_unnormalized_rows(conn: &Connection, table: &str) -> Result<Vec<(String
 
 fn backfill_table_normalized(
     conn: &Connection,
-    table: &str,
+    table: BackfillTable,
     rows: &[(String, String)],
 ) -> Result<usize> {
     if rows.is_empty() {
         return Ok(0);
     }
+    let table_name = table.as_str();
     let mut total = 0;
     for chunk in rows.chunks(900 / 3) {
         let vals = openproxy_db::batch::values_placeholders(chunk.len(), 3);
-        let mut sql = String::with_capacity(160 + vals.len() + table.len() * 3);
+        let mut sql = String::with_capacity(160 + vals.len() + table_name.len() * 3);
         sql.push_str("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
         sql.push_str(&vals);
         sql.push_str(") UPDATE ");
-        sql.push_str(table);
+        sql.push_str(table_name);
         sql.push_str(" SET model_id_normalized = updates.normalized FROM updates WHERE ");
-        sql.push_str(table);
+        sql.push_str(table_name);
         sql.push_str(".provider_id = updates.provider_id AND ");
-        sql.push_str(table);
+        sql.push_str(table_name);
         sql.push_str(".model_id = updates.model_id");
 
         let mut norm_strings = Vec::with_capacity(chunk.len());
@@ -479,11 +510,11 @@ fn backfill_table_normalized(
 /// Backfill `model_id_normalized` for existing rows in both `models` and
 /// `model_capabilities_sync` that have NULL.
 pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
-    let model_rows = fetch_unnormalized_rows(conn, "models")?;
-    let sync_rows = fetch_unnormalized_rows(conn, "model_capabilities_sync")?;
+    let model_rows = fetch_unnormalized_rows(conn, BackfillTable::Models)?;
+    let sync_rows = fetch_unnormalized_rows(conn, BackfillTable::ModelCapabilitiesSync)?;
 
-    let total = backfill_table_normalized(conn, "models", &model_rows)?
-        + backfill_table_normalized(conn, "model_capabilities_sync", &sync_rows)?;
+    let total = backfill_table_normalized(conn, BackfillTable::Models, &model_rows)?
+        + backfill_table_normalized(conn, BackfillTable::ModelCapabilitiesSync, &sync_rows)?;
 
     if total > 0 {
         tracing::info!(
