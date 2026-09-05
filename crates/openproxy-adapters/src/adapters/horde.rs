@@ -224,7 +224,7 @@ impl ProviderAdapter for HordeAdapter {
         } else {
             api_key.trim()
         };
-        Some(("Authorization".into(), format!("Bearer {key}")))
+        Some(("Authorization".into(), crate::adapters::format_bearer(key)))
     }
 
     fn build_headers(
@@ -239,7 +239,7 @@ impl ProviderAdapter for HordeAdapter {
             api_key.trim()
         };
         let mut headers = Vec::with_capacity(4);
-        headers.push(("Authorization".into(), format!("Bearer {key}")));
+        headers.push(("Authorization".into(), crate::adapters::format_bearer(key)));
         headers.push(("apikey".into(), key.to_string()));
         headers.push((
             "Client-Agent".into(),

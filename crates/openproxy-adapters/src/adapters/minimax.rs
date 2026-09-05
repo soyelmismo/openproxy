@@ -160,7 +160,7 @@ async fn send_minimax_quota_request(
     url: &str,
 ) -> Result<bytes::Bytes> {
     let mut req = UpstreamRequest::get(url);
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::format_bearer(api_key)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     let cancel = CancellationToken::new();

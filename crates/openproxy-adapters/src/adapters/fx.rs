@@ -228,7 +228,7 @@ impl ProviderAdapter for FxAdapter {
         } else {
             api_key
         };
-        headers.push(("authorization".into(), format!("Bearer {key}")));
+        headers.push(("authorization".into(), crate::adapters::format_bearer(key)));
         headers.push(("content-type".into(), "application/json".into()));
         headers.push(("ai-language-model-id".into(), model.as_str().to_string()));
         headers

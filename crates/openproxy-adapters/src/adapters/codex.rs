@@ -234,7 +234,7 @@ fn build_codex_quota_request(access_token: &str, workspace_id: Option<&str>) -> 
     let mut req = UpstreamRequest::get(url);
     req.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+        http::HeaderValue::from_str(&crate::adapters::format_bearer(access_token))
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
     req.headers.insert(

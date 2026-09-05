@@ -242,7 +242,7 @@ pub trait ProviderAdapter: Send + Sync {
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config().auth_type {
             AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
-                Some(("Authorization".into(), format!("Bearer {api_key}")))
+                Some(("Authorization".into(), format_bearer(api_key)))
             }
             AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
             AdapterAuthType::XApiKey => Some(("x-api-key".into(), api_key.to_string())),
@@ -1075,6 +1075,14 @@ pub(crate) async fn upstream_get_json(
     serde_json::from_slice(&bytes).map_err(|e| format!("{url}: parse: {e}"))
 }
 
+/// Helper to construct a pre-allocated `Bearer` token string.
+pub(crate) fn format_bearer(api_key: &str) -> String {
+    let mut s = String::with_capacity(7 + api_key.len());
+    s.push_str("Bearer ");
+    s.push_str(api_key);
+    s
+}
+
 /// Map a header name to its typed `http::header::HeaderName` constant
 /// when one exists; return `None` for non-standard names. This keeps
 /// the common cases (`Authorization`, `Content-Type`, `User-Agent`)
@@ -1156,7 +1164,7 @@ pub(crate) async fn fetch_openai_models(
     provider_name: &str,
     target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
-    let auth = format!("Bearer {api_key}");
+    let auth = format_bearer(api_key);
     let body = upstream_get_json(upstream_client, url, &[("Authorization", &auth)])
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;

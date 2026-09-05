@@ -106,7 +106,7 @@ impl ProviderAdapter for ClineAdapter {
         } else {
             format!("workos:{access_token}")
         };
-        Some(("Authorization".into(), format!("Bearer {token}")))
+        Some(("Authorization".into(), crate::adapters::format_bearer(&token)))
     }
 
     fn models_url(&self) -> Option<String> {

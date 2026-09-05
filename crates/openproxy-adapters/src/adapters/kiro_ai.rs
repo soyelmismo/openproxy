@@ -119,7 +119,7 @@ async fn try_fetch_models_from_endpoint(
     endpoint: &str,
 ) -> Option<Vec<DiscoveredModel>> {
     let mut req = UpstreamRequest::get(endpoint);
-    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+    if let Ok(v) = HeaderValue::from_str(&crate::adapters::format_bearer(api_key)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(
@@ -362,7 +362,7 @@ async fn discover_kiro_profile_arn(
 ) -> Option<String> {
     let url = format!("{base_url}/");
     let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(r#"{"maxResults":10}"#));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::format_bearer(access_token)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(
@@ -432,7 +432,7 @@ fn build_kiro_usage_limits_request(
     };
 
     let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::format_bearer(access_token)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(

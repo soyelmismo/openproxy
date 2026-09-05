@@ -81,7 +81,7 @@ impl ProviderAdapter for OpenRouterAdapter {
             openproxy_types::error::CoreError::Internal("openrouter has no models_url".into())
         })?;
 
-        let auth = format!("Bearer {api_key}");
+        let auth = crate::adapters::format_bearer(api_key);
         let body = upstream_get_json(upstream_client, &url, &[("Authorization", &auth)])
             .await
             .map_err(openproxy_types::error::CoreError::UpstreamConnection)?;
