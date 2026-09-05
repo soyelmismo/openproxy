@@ -238,9 +238,13 @@ async fn fetch_remote_image(
         )));
     }
 
+    // Image fetches are gated by their own flag so that
+    // OPENPROXY_ALLOW_PRIVATE_UPSTREAMS (which covers the upstream
+    // provider dial path) cannot silently widen this attack surface:
+    // user-supplied image URLs are fetched by the server itself and
+    // must be opted into separately.
     let allow_private = cfg!(test)
-        || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
-            .is_ok_and(|v| v == "true" || v == "1");
+        || std::env::var("OPENPROXY_ALLOW_PRIVATE_IMAGES").is_ok_and(|v| v == "true" || v == "1");
 
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if !allow_private && openproxy_adapters::upstream::is_private_or_reserved(&ip) {

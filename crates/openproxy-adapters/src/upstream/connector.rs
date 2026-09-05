@@ -830,6 +830,20 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
 
     let key = cache_key(host, port);
     if let Some(cached) = get_cached_dns(key) {
+        // NOTE: DNS rebinding window — entries were validated at
+        // insertion time, but a malicious DNS record could flip to a
+        // private/reserved address within the 5-minute TTL.  We
+        // re-check on every cache hit to close this window without
+        // sacrificing the cache's latency benefit.
+        if !allow_private {
+            for addr in &cached {
+                if is_private_or_reserved(&addr.ip()) {
+                    return Err(io::Error::other(
+                        "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
+                    ));
+                }
+            }
+        }
         return Ok(cached);
     }
 
