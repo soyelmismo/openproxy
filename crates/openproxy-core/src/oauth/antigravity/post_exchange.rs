@@ -124,54 +124,58 @@ pub(crate) async fn bootstrap_project_id(
 
 /// Persist `project_id` (and optionally `email`) on the account row.
 ///
-/// Two UPDATEs:
+/// The write runs entirely inside a `spawn_blocking` task so the SQLite
+/// work never happens on a Tokio worker thread, and the writer lock is
+/// acquired with a bounded `try_writer_for` timeout so a long-running
+/// admin transaction cannot stall this write indefinitely.
 ///
 /// 1. Always: serialize `AntigravityProviderMeta { project_id }` into
 ///    `accounts.oauth_provider_specific`. The chat executor reads this
 ///    JSON envelope to embed `projectId` in upstream requests.
-/// 2. If `email` is `Some`: set `accounts.email` and backfill
+/// 2. If `email` is `Some`: also set `accounts.email` and backfill
 ///    `accounts.label` when it's currently empty (the COALESCE/NULLIF
 ///    combination preserves any user-supplied label).
-///
-/// Each `UPDATE` acquires the writer connection briefly inside a
-/// scoped block so the guard is released before any subsequent
-/// `.await`.
 pub(crate) async fn persist_post_exchange_meta(
     db_pool: &Arc<DbPool>,
     account_id: AccountId,
     project_id: String,
     email: Option<String>,
 ) -> Result<()> {
-    // 1. Always write the projectId envelope.
+    /// Bound the wait on the shared writer connection.
+    const WRITER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
     let meta = AntigravityProviderMeta {
         project_id: Some(project_id),
     };
     let meta_json = serde_json::to_string(&meta)
         .map_err(|e| CoreError::Internal(format!("antigravity meta serialize: {e}")))?;
-    {
-        let conn = db_pool.writer();
-        conn.execute(
-            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-            rusqlite::params![meta_json, account_id.0],
-        )
-        .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "antigravity post_exchange update project_id for account {}",
-            account_id.0
-        )))?;
-    }
-
-    // 2. Best-effort email + label backfill.
-    if let Some(ref email) = email {
-        let conn = db_pool.writer();
-        conn.execute(
-            "UPDATE accounts SET email = ?1, label = COALESCE(NULLIF(label, ''), ?1) WHERE id = ?2",
-            rusqlite::params![email, account_id.0],
-        )
-        .map_err(openproxy_db::error::map_db_error_ctx(format!(
-            "antigravity post_exchange update email and label for account {}",
-            account_id.0
-        )))?;
-    }
-
-    Ok(())
+    let pool = Arc::clone(db_pool);
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.try_writer_for(WRITER_LOCK_TIMEOUT).ok_or_else(|| {
+            CoreError::Internal(format!(
+                "antigravity post_exchange: writer lock not acquired within {WRITER_LOCK_TIMEOUT:?}"
+            ))
+        })?;
+        if let Some(ref email) = email {
+            conn.execute(
+                "UPDATE accounts SET oauth_provider_specific = ?1, email = ?2, \
+                 label = COALESCE(NULLIF(label, ''), ?2) WHERE id = ?3",
+                rusqlite::params![meta_json, email, account_id.0],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "antigravity post_exchange update meta + email for account",
+            ))?;
+        } else {
+            conn.execute(
+                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                rusqlite::params![meta_json, account_id.0],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "antigravity post_exchange update meta for account",
+            ))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("spawn_blocking join: {e}")))?
 }

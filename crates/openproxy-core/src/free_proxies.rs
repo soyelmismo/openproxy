@@ -1525,17 +1525,33 @@ fn apply_single_proxy_test_result(
 }
 
 pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::Result<FreeProxy> {
-    let test_url = {
-        let r = db_pool.reader();
-        openproxy_db::app_config::load_proxy_test_url(&r)
-            .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string())
+    /// Bound the wait on the shared reader/writer connections.
+    const LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    let id_owned = id.to_string();
+
+    // ── Phase 1: run everything that touches SQLite inside spawn_blocking ──
+    let (test_url, type_host_port_user_pass) = {
+        let pool = Arc::clone(&db_pool);
+        let id = id_owned.clone();
+        tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
+            let r = pool.try_reader_for(LOCK_TIMEOUT).ok_or_else(|| {
+                crate::error::CoreError::Internal(format!(
+                    "test_single_proxy: reader lock not acquired within {LOCK_TIMEOUT:?}"
+                ))
+            })?;
+            let test_url = openproxy_db::app_config::load_proxy_test_url(&r)
+                .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string());
+            let type_host_port_user_pass = fetch_proxy_test_target(&r, &id)?;
+            Ok((test_url, type_host_port_user_pass))
+        })
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("spawn_blocking join: {e}")))??
     };
 
-    let (r#type, host, port, username, password) = {
-        let r = db_pool.reader();
-        fetch_proxy_test_target(&r, id)?
-    };
+    let (r#type, host, port, username, password) = type_host_port_user_pass;
 
+    // ── Phase 2: real async network probe (stays on Tokio worker) ──
     let test_res = test_proxy_connection(
         &test_url,
         &r#type,
@@ -1546,13 +1562,23 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
     )
     .await;
 
-    let w = db_pool.writer();
-    apply_single_proxy_test_result(&w, id, test_res)?;
-
-    let p = get_proxy(&w, id)?.ok_or_else(|| crate::error::CoreError::NotFound {
-        what: "proxy".to_string(),
-        id: id.to_string(),
-    })?;
+    // ── Phase 3: persist result + re-fetch the proxy row in spawn_blocking ──
+    let pool = Arc::clone(&db_pool);
+    let id = id_owned;
+    let p = tokio::task::spawn_blocking(move || -> crate::error::Result<FreeProxy> {
+        let w = pool.try_writer_for(LOCK_TIMEOUT).ok_or_else(|| {
+            crate::error::CoreError::Internal(format!(
+                "test_single_proxy: writer lock not acquired within {LOCK_TIMEOUT:?}"
+            ))
+        })?;
+        apply_single_proxy_test_result(&w, &id, test_res)?;
+        get_proxy(&w, &id)?.ok_or_else(|| crate::error::CoreError::NotFound {
+            what: "proxy".to_string(),
+            id,
+        })
+    })
+    .await
+    .map_err(|e| crate::error::CoreError::Internal(format!("spawn_blocking join: {e}")))??;
 
     Ok(p)
 }
@@ -1627,21 +1653,43 @@ fn execute_proxy_batch_update(
 }
 
 pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
+    /// Bound the wait on the shared reader connection.
+    const READER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
     tokio::spawn(async move {
-        let proxies = {
-            let r = db_pool.reader();
-            fetch_background_test_proxies(&r)
+        // ── Phase 1: run all SQLite reads inside spawn_blocking ──
+        let initial = {
+            let pool = Arc::clone(&db_pool);
+            tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
+                let r = pool.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
+                    crate::error::CoreError::Internal(format!(
+                        "test_all_proxies_background: reader lock not acquired within {READER_LOCK_TIMEOUT:?}"
+                    ))
+                })?;
+                let proxies = fetch_background_test_proxies(&r);
+                let test_url = openproxy_db::app_config::load_proxy_test_url(&r)
+                    .unwrap_or_else(|_| {
+                        openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string()
+                    });
+                Ok((proxies, test_url))
+            })
+            .await
+        };
+        let (proxies, test_url) = match initial {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                tracing::error!("test_all_proxies_background: initial load failed: {e}");
+                return;
+            }
+            Err(e) => {
+                tracing::error!("test_all_proxies_background: spawn_blocking join: {e}");
+                return;
+            }
         };
 
         if proxies.is_empty() {
             return;
         }
-
-        let test_url = {
-            let r = db_pool.reader();
-            openproxy_db::app_config::load_proxy_test_url(&r)
-                .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string())
-        };
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
         let pool_writer = Arc::clone(&db_pool);
