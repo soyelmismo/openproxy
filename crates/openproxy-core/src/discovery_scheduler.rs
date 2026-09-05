@@ -1035,15 +1035,23 @@ mod tests {
             },
         );
 
-        // Advance a hair so the first tick of every task lands.
-        // Each of the 4 adapters should have been called exactly
-        // once. We step in 50ms chunks and yield between
-        // chunks to let the `current_thread` runtime drain.
-        for _ in 0..4 {
-            tokio::time::advance(Duration::from_millis(50)).await;
-            for _ in 0..32 {
-                tokio::task::yield_now().await;
+        // Wall-clock poll until every adapter's counter has
+        // reached 1. We deliberately do NOT advance virtual
+        // time here: the tick path uses
+        // `tokio::task::spawn_blocking` for DB I/O, and
+        // `spawn_blocking` completions are delivered on the
+        // global blocking thread pool — they cannot be driven
+        // by `tokio::time::advance` and need a real wall-clock
+        // hop. Under CI load the pool can be momentarily
+        // saturated, so a fixed virtual-time budget races
+        // against an unsynchronised thread. 2s is generous;
+        // a healthy run finishes in single-digit ms.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while counters.iter().any(|c| c.load(Ordering::SeqCst) == 0) {
+            if std::time::Instant::now() >= deadline {
+                break;
             }
+            tokio::task::yield_now().await;
         }
         for (pid, c) in provider_ids.iter().zip(counters.iter()) {
             let n = c.load(Ordering::SeqCst);
