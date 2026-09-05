@@ -90,10 +90,10 @@ fn collect_all_defs(value: &Value, defs: &mut serde_json::Map<String, Value>) {
 }
 
 fn fallback_unresolved_ref(map: &mut serde_json::Map<String, Value>, ref_path: &str) {
-    map.insert("type".to_string(), serde_json::json!("string"));
+    map.insert(String::from("type"), serde_json::json!("string"));
     if !map.contains_key("description") {
         map.insert(
-            "description".to_string(),
+            String::from("description"),
             Value::String(String::with_capacity(32 + ref_path.len())),
         );
     }
@@ -228,9 +228,10 @@ fn normalize_object_schema(map: &mut serde_json::Map<String, Value>) {
     tracing::warn!(
         "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
     );
-    let target_props = map
-        .entry("properties".to_string())
-        .or_insert_with(|| json!({}));
+    if !map.contains_key("properties") {
+        map.insert(String::from("properties"), json!({}));
+    }
+    let target_props = map.get_mut("properties").expect("Key was just inserted or verified to exist");
     merge_items_into_properties(target_props, &mut items);
 }
 
@@ -291,8 +292,9 @@ fn clean_properties(map: &mut serde_json::Map<String, Value>, depth: usize) {
     let nullable_keys = clean_and_collect_nullable(props, depth);
     update_required_for_dropped_or_nullable(map, &dropped_keys, &nullable_keys);
 
-    map.entry("type".to_string())
-        .or_insert_with(|| Value::String("object".to_string()));
+    if !map.contains_key("type") {
+        map.insert(String::from("type"), Value::String(String::from("object")));
+    }
 }
 
 fn clean_items(map: &mut serde_json::Map<String, Value>, depth: usize) {
@@ -301,8 +303,9 @@ fn clean_items(map: &mut serde_json::Map<String, Value>, depth: usize) {
     }
     if let Some(items) = map.get_mut("items") {
         clean_json_schema_recursive(items, true, depth + 1);
-        map.entry("type".to_string())
-            .or_insert_with(|| Value::String("array".to_string()));
+        if !map.contains_key("type") {
+            map.insert(String::from("type"), Value::String(String::from("array")));
+        }
     }
 }
 
@@ -333,12 +336,15 @@ fn clean_union_branches(map: &mut serde_json::Map<String, Value>, depth: usize) 
 }
 
 fn merge_union_properties(map: &mut serde_json::Map<String, Value>, v: Value) {
-    if let (Some(target_props), Value::Object(source_props)) = (
-        map.entry("properties".to_string())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()))
-            .as_object_mut(),
-        v,
-    ) {
+    if !map.contains_key("properties") {
+        map.insert(
+            String::from("properties"),
+            Value::Object(serde_json::Map::new()),
+        );
+    }
+    if let (Some(target_props), Value::Object(source_props)) =
+        (map.get_mut("properties").and_then(|v| v.as_object_mut()), v)
+    {
         for (pk, pv) in source_props {
             target_props.entry(pk).or_insert(pv);
         }
@@ -346,12 +352,12 @@ fn merge_union_properties(map: &mut serde_json::Map<String, Value>, v: Value) {
 }
 
 fn merge_union_required(map: &mut serde_json::Map<String, Value>, v: Value) {
-    if let (Some(target_req), Value::Array(source_req)) = (
-        map.entry("required".to_string())
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut(),
-        v,
-    ) {
+    if !map.contains_key("required") {
+        map.insert(String::from("required"), Value::Array(Vec::new()));
+    }
+    if let (Some(target_req), Value::Array(source_req)) =
+        (map.get_mut("required").and_then(|v| v.as_array_mut()), v)
+    {
         let mut seen: std::collections::HashSet<Value> = target_req.iter().cloned().collect();
         for rv in source_req {
             if seen.insert(rv.clone()) {
@@ -407,8 +413,8 @@ fn clean_unions_and_hints(map: &mut serde_json::Map<String, Value>, depth: usize
 
 fn wrap_bare_properties_node(map: &mut serde_json::Map<String, Value>, depth: usize) {
     let properties = std::mem::take(map);
-    map.insert("type".to_string(), Value::String("object".to_string()));
-    map.insert("properties".to_string(), Value::Object(properties));
+    map.insert(String::from("type"), Value::String(String::from("object")));
+    map.insert(String::from("properties"), Value::Object(properties));
 
     if let Some(Value::Object(props_map)) = map.get_mut("properties") {
         for v in props_map.values_mut() {
@@ -428,7 +434,7 @@ fn sanitize_required_fields(map: &mut serde_json::Map<String, Value>) {
             req_arr.clear();
         }
     }
-    map.insert("required".to_string(), required_val);
+    map.insert(String::from("required"), required_val);
 }
 
 fn infer_schema_type(map: &serde_json::Map<String, Value>) -> &'static str {
@@ -464,7 +470,7 @@ fn resolve_type_and_nullability(type_val: &Value, fallback: &str) -> (String, bo
         _ => {}
     }
 
-    let final_type = selected_type.unwrap_or_else(|| fallback.to_string());
+    let final_type = selected_type.unwrap_or_else(|| String::from(fallback));
     (final_type, is_nullable)
 }
 
@@ -475,7 +481,10 @@ fn normalize_type_field(map: &mut serde_json::Map<String, Value>) -> bool {
         } else {
             infer_schema_type(map)
         };
-        map.insert("type".to_string(), Value::String(default_type.to_string()));
+        map.insert(
+            String::from("type"),
+            Value::String(String::from(default_type)),
+        );
     }
 
     let fallback = infer_schema_type(map);
@@ -489,9 +498,10 @@ fn normalize_type_field(map: &mut serde_json::Map<String, Value>) -> bool {
 }
 
 fn append_nullable_description(map: &mut serde_json::Map<String, Value>) {
-    let desc_val = map
-        .entry("description".to_string())
-        .or_insert_with(|| Value::String(String::new()));
+    if !map.contains_key("description") {
+        map.insert(String::from("description"), Value::String(String::new()));
+    }
+    let desc_val = map.get_mut("description").expect("Key was just inserted or verified to exist");
     if let Value::String(s) = desc_val
         && !s.contains("nullable")
     {
@@ -509,7 +519,7 @@ fn normalize_enum_items(map: &mut serde_json::Map<String, Value>) {
     for item in arr {
         if !item.is_string() {
             *item = Value::String(if item.is_null() {
-                "null".to_string()
+                String::from("null")
             } else {
                 item.to_string()
             });
@@ -535,7 +545,7 @@ fn is_not_schema_payload(map: &serde_json::Map<String, Value>) -> bool {
 fn ensure_object_properties(map: &mut serde_json::Map<String, Value>) {
     if map.get("type").and_then(|t| t.as_str()) == Some("object") && !map.contains_key("properties")
     {
-        map.insert("properties".to_string(), serde_json::json!({}));
+        map.insert(String::from("properties"), serde_json::json!({}));
     }
 }
 
@@ -628,9 +638,13 @@ fn merge_into_existing_properties(
     if merged_properties.is_empty() {
         return;
     }
-    let existing_props = map
-        .entry("properties".to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !map.contains_key("properties") {
+        map.insert(
+            String::from("properties"),
+            Value::Object(serde_json::Map::new()),
+        );
+    }
+    let existing_props = map.get_mut("properties").expect("Key was just inserted or verified to exist");
     if let Value::Object(existing_map) = existing_props {
         for (k, v) in merged_properties {
             existing_map.entry(k).or_insert(v);
@@ -645,9 +659,10 @@ fn merge_into_existing_required(
     if merged_required.is_empty() {
         return;
     }
-    let existing_reqs = map
-        .entry("required".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
+    if !map.contains_key("required") {
+        map.insert(String::from("required"), Value::Array(Vec::new()));
+    }
+    let existing_reqs = map.get_mut("required").expect("Key was just inserted or verified to exist");
     if let Value::Array(req_arr) = existing_reqs {
         let mut current_reqs: std::collections::HashSet<String> = req_arr
             .iter()
@@ -700,13 +715,14 @@ fn merge_all_of(map: &mut serde_json::Map<String, Value>) {
 /// [NEW] 将提示信息追加到 description 字段
 /// 参考 CLIProxyAPI 的 Lazy Hint 策略
 fn append_hint_to_description(map: &mut serde_json::Map<String, Value>, hint: &str) {
-    let desc_val = map
-        .entry("description".to_string())
-        .or_insert_with(|| Value::String(String::new()));
+    if !map.contains_key("description") {
+        map.insert(String::from("description"), Value::String(String::new()));
+    }
+    let desc_val = map.get_mut("description").expect("Key was just inserted or verified to exist");
 
     if let Value::String(s) = desc_val {
         if s.is_empty() {
-            *s = hint.to_string();
+            *s = String::from(hint);
         } else if !s.contains(hint) {
             *s = format!("{s} {hint}");
         }
@@ -788,13 +804,13 @@ fn extract_best_schema_from_union(union_array: &[Value]) -> Option<(Value, Vec<S
 fn get_schema_type_name(schema: &Value) -> Option<String> {
     let obj = schema.as_object()?;
     if let Some(t) = obj.get("type").and_then(|t| t.as_str()) {
-        return Some(t.to_string());
+        return Some(String::from(t));
     }
     if obj.contains_key("properties") {
-        return Some("object".to_string());
+        return Some(String::from("object"));
     }
     if obj.contains_key("items") {
-        return Some("array".to_string());
+        return Some(String::from("array"));
     }
     None
 }
@@ -1020,7 +1036,7 @@ mod tests {
         assert!(
             schema["properties"]["location"]["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("[Constraint: minLen: 1, format: city]")
         );
 
@@ -1037,7 +1053,7 @@ mod tests {
         assert!(
             schema["properties"]["pattern"]["properties"]["regex"]["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("[Constraint: pattern: ^[a-z]+$]")
         );
 
@@ -1100,9 +1116,9 @@ mod tests {
         clean_json_schema(&mut schema);
 
         // 验证 missing_prop 被从 required 中移除
-        let required = schema["required"].as_array().unwrap();
+        let required = schema["required"].as_array().expect("Key was just inserted or verified to exist");
         assert_eq!(required.len(), 1);
-        assert_eq!(required[0].as_str().unwrap(), "existing_prop");
+        assert_eq!(required[0].as_str().expect("Key was just inserted or verified to exist"), "existing_prop");
     }
 
     // [NEW TEST] 验证 anyOf 类型提取
@@ -1226,7 +1242,7 @@ mod tests {
         assert_eq!(config["properties"]["recursive"]["type"], "boolean");
 
         // 3. 验证 required 被合并上来了
-        let req = config["required"].as_array().unwrap();
+        let req = config["required"].as_array().expect("Key was just inserted or verified to exist");
         assert!(req.iter().any(|v| v == "path"));
 
         // 4. 验证 anyOf 字段本身被移除
@@ -1273,13 +1289,13 @@ mod tests {
         assert!(
             schema["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("User name")
         );
         assert!(
             schema["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("(nullable)")
         );
     }
@@ -1527,7 +1543,7 @@ mod tests {
         assert!(
             external["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("Unresolved $ref"),
             "description should contain unresolved $ref hint"
         );
@@ -1538,7 +1554,7 @@ mod tests {
         assert!(
             missing["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("NonExistent")
         );
     }
@@ -1743,7 +1759,7 @@ mod tests {
         assert!(schema["properties"].get("extended_prop").is_some());
         assert_eq!(schema["properties"]["extended_prop"]["type"], "number");
 
-        let required = schema["required"].as_array().unwrap();
+        let required = schema["required"].as_array().expect("Key was just inserted or verified to exist");
         assert!(required.iter().any(|v| v == "base_prop"));
         assert!(required.iter().any(|v| v == "extended_prop"));
     }
@@ -1805,7 +1821,7 @@ mod tests {
         assert!(
             schema["description"]
                 .as_str()
-                .unwrap()
+                .expect("Key was just inserted or verified to exist")
                 .contains("Accepts: string | object")
         );
     }
