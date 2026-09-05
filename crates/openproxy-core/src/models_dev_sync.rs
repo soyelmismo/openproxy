@@ -426,7 +426,7 @@ fn fetch_unnormalized_rows(conn: &Connection, table: &str) -> Result<Vec<(String
         _ => unreachable!("invalid table"),
     };
     let mut stmt = conn
-        .prepare(&sql)
+        .prepare(sql)
         .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], |row| {

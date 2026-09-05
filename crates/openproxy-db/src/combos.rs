@@ -689,7 +689,7 @@ fn update_target_column<T: rusqlite::ToSql>(
         "cooldown_factor" => "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
         _ => unreachable!("invalid column"),
     };
-    conn.execute(&sql, params![value, target_id.0])
+    conn.execute(sql, params![value, target_id.0])
         .map_err(crate::error::map_db_error_ctx(format!(
             "update {column} for combo_target {}",
             target_id.0
@@ -1007,7 +1007,7 @@ fn update_combo_column<T: rusqlite::ToSql>(
         _ => unreachable!("invalid column"),
     };
     let affected =
-        conn.execute(&sql, params![value, id.0])
+        conn.execute(sql, params![value, id.0])
             .map_err(crate::error::map_db_error_ctx(format!(
                 "update {column} for combo {}",
                 id.0
