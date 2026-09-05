@@ -814,12 +814,35 @@ fn ensure_dns_sweep_started() {
 /// async DNS, with a simple in-memory cache (5m TTL) to avoid
 /// hitting getaddrinfo on every fresh dial.
 async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    let allow_private = cfg!(test)
+        || cfg!(feature = "ssrf-bypass")
+        || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
+            .is_ok_and(|v| v == "true" || v == "1");
+
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if !allow_private && is_private_or_reserved(&ip) {
+            return Err(io::Error::other(
+                "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
+            ));
+        }
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+
     let key = cache_key(host, port);
     if let Some(cached) = get_cached_dns(key) {
         return Ok(cached);
     }
 
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+    if !allow_private {
+        for addr in &addrs {
+            if is_private_or_reserved(&addr.ip()) {
+                return Err(io::Error::other(
+                    "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
+                ));
+            }
+        }
+    }
     let now = std::time::Instant::now();
     DNS_CACHE.insert(key, (addrs.clone(), now + DNS_TTL));
     ensure_dns_sweep_started();
