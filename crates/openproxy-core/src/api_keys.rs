@@ -670,7 +670,15 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
         return verify_api_key_exists(conn, id);
     }
 
-    let sql = format!("UPDATE api_keys SET {} WHERE id = ?", sets.join(", "));
+    let mut sql = String::with_capacity(32 + sets.iter().map(|s| s.len() + 2).sum::<usize>());
+    sql.push_str("UPDATE api_keys SET ");
+    for (i, set) in sets.iter().enumerate() {
+        if i > 0 {
+            sql.push_str(", ");
+        }
+        sql.push_str(set);
+    }
+    sql.push_str(" WHERE id = ?");
     bound.push(Box::new(id.0));
     let param_refs: Vec<&dyn rusqlite::ToSql> = bound
         .iter()
