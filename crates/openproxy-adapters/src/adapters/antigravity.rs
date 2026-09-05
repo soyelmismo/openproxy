@@ -260,7 +260,10 @@ impl ProviderAdapter for AntigravityAdapter {
         _model: &ModelId,
     ) -> Vec<(String, String)> {
         let mut headers_vec = Vec::with_capacity(10);
-        headers_vec.push(("Authorization".into(), crate::adapters::format_bearer(api_key)));
+        headers_vec.push((
+            "Authorization".into(),
+            crate::adapters::format_bearer(api_key),
+        ));
         headers_vec.push(("Content-Type".into(), "application/json".into()));
         headers_vec.extend(AntigravitySpoofer::new().headers());
 
