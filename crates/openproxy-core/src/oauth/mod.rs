@@ -555,13 +555,13 @@ type ProviderMutexMap = HashMap<Box<str>, Arc<tokio::sync::Mutex<()>>>;
 /// refreshes for sibling accounts under the same public client.
 #[derive(Default)]
 pub struct TokenRefreshCoordinator {
-    provider_mutexes: Arc<tokio::sync::Mutex<ProviderMutexMap>>,
+    provider_mutexes: Arc<std::sync::Mutex<ProviderMutexMap>>,
 }
 
 impl TokenRefreshCoordinator {
     pub fn new() -> Self {
         Self {
-            provider_mutexes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            provider_mutexes: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -571,15 +571,18 @@ impl TokenRefreshCoordinator {
         COORDINATOR.get_or_init(TokenRefreshCoordinator::new)
     }
 
-    async fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut map = self.provider_mutexes.lock().await;
+    fn mutex_for_provider(&self, provider_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>> {
+        let mut map = self
+            .provider_mutexes
+            .lock()
+            .map_err(|e| CoreError::Internal(format!("provider_mutexes lock poisoned: {e}")))?;
         if let Some(mutex) = map.get(provider_id) {
-            return Arc::clone(mutex);
+            return Ok(Arc::clone(mutex));
         }
-        Arc::clone(
+        Ok(Arc::clone(
             map.entry(Box::from(provider_id))
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-        )
+        ))
     }
 
     pub async fn refresh_and_store(&self, params: OAuthRefreshParams<'_>) -> Result<TokenResponse> {
@@ -592,73 +595,34 @@ impl TokenRefreshCoordinator {
             db,
             master_key,
         } = params;
-        let mutex = self.mutex_for_provider(provider_id).await;
+        let mutex = self.mutex_for_provider(provider_id)?;
         let _guard = mutex.lock().await;
 
-        match db {
-            DbRef::Pool(pool) => {
-                let token = provider
-                    .refresh_token(
-                        refresh_token,
-                        upstream_client,
-                        account_id,
-                        DbRef::Pool(pool),
-                    )
-                    .await?;
-                let expires_at = token_expires_at(token.expires_in);
-                tokio::task::block_in_place(|| {
-                    let conn = pool.writer();
-                    store_oauth_tokens(
-                        &conn,
-                        account_id,
-                        master_key,
-                        StoreOAuthTokensParams {
-                            access_token: &token.access_token,
-                            refresh_token: token.refresh_token.as_deref(),
-                            token_type: &token.token_type,
-                            expires_at: expires_at.as_deref(),
-                            scope: token.scope.as_deref(),
-                            provider_specific: provider
-                                .provider_specific_from_token(&token)
-                                .as_deref(),
-                            email: provider.email_from_token(&token).as_deref(),
-                        },
-                    )
-                })?;
-                Ok(token)
-            }
-            DbRef::Connection(conn_mutex) => {
-                let token = provider
-                    .refresh_token(
-                        refresh_token,
-                        upstream_client,
-                        account_id,
-                        DbRef::Connection(conn_mutex),
-                    )
-                    .await?;
-                let expires_at = token_expires_at(token.expires_in);
-                tokio::task::block_in_place(|| {
-                    let conn = conn_mutex.lock();
-                    store_oauth_tokens(
-                        &conn,
-                        account_id,
-                        master_key,
-                        StoreOAuthTokensParams {
-                            access_token: &token.access_token,
-                            refresh_token: token.refresh_token.as_deref(),
-                            token_type: &token.token_type,
-                            expires_at: expires_at.as_deref(),
-                            scope: token.scope.as_deref(),
-                            provider_specific: provider
-                                .provider_specific_from_token(&token)
-                                .as_deref(),
-                            email: provider.email_from_token(&token).as_deref(),
-                        },
-                    )
-                })?;
-                Ok(token)
-            }
-        }
+        let token = provider
+            .refresh_token(refresh_token, upstream_client, account_id, db)
+            .await?;
+        let expires_at = token_expires_at(token.expires_in);
+
+        tokio::task::block_in_place(|| {
+            db.with_conn(|conn| {
+                store_oauth_tokens(
+                    conn,
+                    account_id,
+                    master_key,
+                    StoreOAuthTokensParams {
+                        access_token: &token.access_token,
+                        refresh_token: token.refresh_token.as_deref(),
+                        token_type: &token.token_type,
+                        expires_at: expires_at.as_deref(),
+                        scope: token.scope.as_deref(),
+                        provider_specific: provider.provider_specific_from_token(&token).as_deref(),
+                        email: provider.email_from_token(&token).as_deref(),
+                    },
+                )
+            })
+        })?;
+
+        Ok(token)
     }
 }
 
