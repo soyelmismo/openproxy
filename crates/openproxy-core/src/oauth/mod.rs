@@ -572,7 +572,10 @@ impl TokenRefreshCoordinator {
     }
 
     fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut map = self.provider_mutexes.lock().unwrap();
+        let mut map = self
+            .provider_mutexes
+            .lock()
+            .expect("provider_mutexes lock poisoned");
         if let Some(mutex) = map.get(provider_id) {
             return Arc::clone(mutex);
         }
