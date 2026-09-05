@@ -683,7 +683,12 @@ fn update_target_column<T: rusqlite::ToSql>(
     column: &'static str,
     value: T,
 ) -> Result<()> {
-    let sql = format!("UPDATE combo_targets SET {column} = ?1 WHERE id = ?2");
+    let sql = match column {
+        "cooldown_base_secs" => "UPDATE combo_targets SET cooldown_base_secs = ?1 WHERE id = ?2",
+        "cooldown_max_secs" => "UPDATE combo_targets SET cooldown_max_secs = ?1 WHERE id = ?2",
+        "cooldown_factor" => "UPDATE combo_targets SET cooldown_factor = ?1 WHERE id = ?2",
+        _ => unreachable!("invalid column"),
+    };
     conn.execute(&sql, params![value, target_id.0])
         .map_err(crate::error::map_db_error_ctx(format!(
             "update {column} for combo_target {}",
@@ -774,11 +779,10 @@ fn apply_target_priority_chunks(
     for (chunk_idx, chunk) in ordered_ids.chunks(CHUNK_SIZE).enumerate() {
         let chunk_start_priority = chunk_idx * CHUNK_SIZE;
         let vals = crate::batch::values_placeholders(chunk.len(), 2);
-        let query = format!(
-            "WITH updates(id, priority) AS (VALUES {vals}) \
-             UPDATE combo_targets SET priority_order = updates.priority \
-             FROM updates WHERE combo_targets.id = updates.id AND combo_targets.combo_id = ?"
-        );
+        let mut query = String::with_capacity(160 + vals.len());
+        query.push_str("WITH updates(id, priority) AS (VALUES ");
+        query.push_str(&vals);
+        query.push_str(") UPDATE combo_targets SET priority_order = updates.priority FROM updates WHERE combo_targets.id = updates.id AND combo_targets.combo_id = ?");
 
         let mut params = Vec::with_capacity(chunk.len() * 2 + 1);
         for (i, tid) in chunk.iter().enumerate() {
@@ -995,7 +999,13 @@ fn update_combo_column<T: rusqlite::ToSql>(
     column: &'static str,
     value: T,
 ) -> Result<()> {
-    let sql = format!("UPDATE combos SET {column} = ?1 WHERE id = ?2");
+    let sql = match column {
+        "cooldown_base_secs" => "UPDATE combos SET cooldown_base_secs = ?1 WHERE id = ?2",
+        "cooldown_max_secs" => "UPDATE combos SET cooldown_max_secs = ?1 WHERE id = ?2",
+        "cooldown_factor" => "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
+        "preventive_rate_limit" => "UPDATE combos SET preventive_rate_limit = ?1 WHERE id = ?2",
+        _ => unreachable!("invalid column"),
+    };
     let affected =
         conn.execute(&sql, params![value, id.0])
             .map_err(crate::error::map_db_error_ctx(format!(
