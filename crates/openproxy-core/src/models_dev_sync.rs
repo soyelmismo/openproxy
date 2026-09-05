@@ -462,7 +462,7 @@ fn backfill_table_normalized(
             return Err(openproxy_types::error::CoreError::Internal(format!(
                 "unknown table {table}"
             )));
-        };
+        }
 
         let mut norm_strings = Vec::with_capacity(chunk.len());
         for (_, model_id) in chunk {
