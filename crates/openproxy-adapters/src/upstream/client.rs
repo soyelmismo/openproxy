@@ -79,7 +79,7 @@ impl UpstreamRequest {
 
     /// Build a POST with a JSON body and a `Content-Type: application/json` header.
     pub fn post_json(url: impl Into<String>, body: Bytes) -> Self {
-        let mut headers = HeaderMap::new();
+        let mut headers = HeaderMap::with_capacity(1);
         headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
@@ -108,7 +108,7 @@ impl UpstreamRequest {
     /// shape — it just ships the bytes through with the supplied
     /// Content-Type.
     pub fn post_multipart(url: impl Into<String>, content_type: &str, body: Bytes) -> Self {
-        let mut headers = HeaderMap::new();
+        let mut headers = HeaderMap::with_capacity(1);
         headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_str(content_type)
@@ -599,7 +599,8 @@ fn push_unique_source_str(parts: &mut Vec<String>, s: String) {
 #[cfg(feature = "upstream-hyper")]
 fn format_hyper_error(e: &hyper_util::client::legacy::Error) -> String {
     use std::error::Error as _;
-    let mut parts: Vec<String> = vec![e.to_string()];
+    let mut parts: Vec<String> = Vec::with_capacity(3);
+    parts.push(e.to_string());
     let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
     while let Some(c) = current {
         push_unique_source_str(&mut parts, c.to_string());

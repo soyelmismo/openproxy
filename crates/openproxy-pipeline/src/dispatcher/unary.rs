@@ -20,6 +20,7 @@ pub(super) fn populate_upstream_headers(
     upstream_request: &mut UpstreamRequest,
     headers: &[(String, String)],
 ) {
+    upstream_request.headers.reserve(headers.len());
     for (k, v) in headers {
         if let (Ok(name), Ok(value)) = (
             http::HeaderName::from_bytes(k.as_bytes()),
