@@ -22,7 +22,11 @@ pub struct OpenAIMessage {
     pub role: String,
     #[serde(default, deserialize_with = "deserialize_optional_content")]
     pub content: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_name",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -87,6 +91,14 @@ impl OpenAIMessage {
     pub fn extract_text(&self) -> String {
         self.extract_text_cow().into_owned()
     }
+
+    /// Sanitizes the `name` field according to OpenAI API validation:
+    /// - Strips `name` from `tool` role messages (OpenAI uses `tool_call_id`).
+    /// - For other roles, enforces `^[a-zA-Z0-9_-]{1,64}$`.
+    pub fn sanitize_name(&mut self) {
+        self.extra.remove("name");
+        self.name = sanitize_message_name(&self.role, self.name.as_deref());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +140,53 @@ where
     D: Deserializer<'de>,
 {
     Value::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_optional_name<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(Value::Number(n)) => Ok(Some(n.to_string())),
+        _ => Ok(None),
+    }
+}
+
+/// Sanitizes a message `name` field to conform to OpenAI API validation:
+/// - Must match `^[a-zA-Z0-9_-]{1,64}$`.
+/// - Role "tool" does not support `name` in OpenAI API (it uses `tool_call_id`).
+pub fn sanitize_message_name(role: &str, name: Option<&str>) -> Option<String> {
+    if role == "tool" {
+        return None;
+    }
+    let raw = name?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if !raw.chars().any(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return None;
+    }
+    let sanitized: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .take(64)
+        .collect();
+
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -338,5 +397,73 @@ mod tests {
             assert_eq!(TargetFormat::parse(fmt.as_str()).unwrap(), fmt);
         }
         assert!(TargetFormat::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_message_name() {
+        // Tool messages always drop name
+        assert_eq!(sanitize_message_name("tool", Some("get_weather")), None);
+        assert_eq!(sanitize_message_name("tool", Some("")), None);
+
+        // Empty / whitespace
+        assert_eq!(sanitize_message_name("user", Some("")), None);
+        assert_eq!(sanitize_message_name("user", Some("   ")), None);
+        assert_eq!(sanitize_message_name("user", None), None);
+
+        // Disallowed chars become underscores
+        assert_eq!(
+            sanitize_message_name("user", Some("John Doe")),
+            Some("John_Doe".into())
+        );
+        assert_eq!(
+            sanitize_message_name("assistant", Some("tool.call:1")),
+            Some("tool_call_1".into())
+        );
+        assert_eq!(
+            sanitize_message_name("system", Some("agent@domain/1")),
+            Some("agent_domain_1".into())
+        );
+
+        // Only invalid characters
+        assert_eq!(sanitize_message_name("user", Some("???")), None);
+
+        // Preserves valid characters and length truncation
+        assert_eq!(
+            sanitize_message_name("user", Some("valid-name_123")),
+            Some("valid-name_123".into())
+        );
+        let long = "a".repeat(100);
+        let sanitized = sanitize_message_name("user", Some(&long)).unwrap();
+        assert_eq!(sanitized.len(), 64);
+    }
+
+    #[test]
+    fn test_deserialize_and_sanitize_name() {
+        let json_empty = json!({
+            "role": "user",
+            "content": "hello",
+            "name": ""
+        });
+        let msg: OpenAIMessage = serde_json::from_value(json_empty).unwrap();
+        assert_eq!(msg.name, None);
+
+        let json_tool = json!({
+            "role": "tool",
+            "content": "result",
+            "name": "calc",
+            "tool_call_id": "call_123"
+        });
+        let mut msg_tool: OpenAIMessage = serde_json::from_value(json_tool).unwrap();
+        msg_tool.sanitize_name();
+        assert_eq!(msg_tool.name, None);
+
+        let json_spaces = json!({
+            "role": "assistant",
+            "content": "ok",
+            "name": "My Agent"
+        });
+        let mut msg_spaces: OpenAIMessage = serde_json::from_value(json_spaces).unwrap();
+        msg_spaces.sanitize_name();
+        assert_eq!(msg_spaces.name, Some("My_Agent".into()));
     }
 }

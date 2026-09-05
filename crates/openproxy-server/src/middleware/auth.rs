@@ -526,6 +526,9 @@ pub async fn auth_middleware(
     };
 
     sanitize_tool_calls(&mut parsed.messages);
+    for msg in &mut parsed.messages {
+        msg.sanitize_name();
+    }
     inject_deepseek_reasoning_if_needed(&mut parsed);
 
     if parsed.model.is_empty() && parts.uri.path().starts_with("/v1/images") {

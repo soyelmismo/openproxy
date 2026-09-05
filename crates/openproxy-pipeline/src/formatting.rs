@@ -31,20 +31,29 @@ impl TargetFormatter for OpenaiFormatter {
             messages_ref,
             stream,
         );
-        // "developer" role is only valid for native OpenAI; normalize to
-        // "system" so every OpenAI-compatible upstream accepts it.
-        if view.messages.iter().any(|m| m.role == "developer") {
+        // Normalize messages for OpenAI-compatible targets:
+        // - "developer" role is only valid for native OpenAI; normalize to "system".
+        // - Enforce valid `name` field: strip from "tool" role messages, sanitize to ^[a-zA-Z0-9_-]{1,64}$.
+        let needs_normalization = view.messages.iter().any(|m| {
+            m.role == "developer"
+                || (m.role == "tool" && m.name.is_some())
+                || m.name.as_deref().is_some_and(|n| {
+                    n.is_empty()
+                        || n.len() > 64
+                        || !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                })
+        });
+        if needs_normalization {
             view.messages = std::borrow::Cow::Owned(
                 view.messages
                     .iter()
                     .map(|m| {
-                        if m.role == "developer" {
-                            let mut patched = m.clone();
+                        let mut patched = m.clone();
+                        if patched.role == "developer" {
                             patched.role = "system".to_string();
-                            patched
-                        } else {
-                            m.clone()
                         }
+                        patched.sanitize_name();
+                        patched
                     })
                     .collect(),
             );
@@ -604,5 +613,115 @@ mod tests {
         let json_val: Value = serde_json::from_slice(&formatted).unwrap();
         assert!(json_val.get("disabled").is_none());
         assert_eq!(json_val.get("custom_val"), Some(&json!("ok")));
+    }
+
+    #[test]
+    fn test_openai_formatter_sanitizes_message_names() {
+        use openproxy_adapters::adapters::ProviderAdapterEnum;
+        use openproxy_adapters::adapters::nvidia_nim::NvidiaNimAdapter;
+        use openproxy_types::ModelId;
+        use openproxy_types::ModelRowId;
+        use openproxy_types::OpenAIRequest;
+        use openproxy_types::ProviderId;
+        use openproxy_types::TargetFormat;
+        use openproxy_types::models::Model;
+        use std::sync::Arc;
+
+        let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+
+        let messages = vec![
+            OpenAIMessage {
+                role: "developer".to_string(),
+                content: Some(json!("instruction")),
+                name: Some("Dev Lead".to_string()),
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("tool output")),
+                name: Some("calc.run".to_string()),
+                tool_call_id: Some("call_abc".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("hello")),
+                name: Some(String::new()),
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+        ];
+
+        let openai_req = OpenAIRequest {
+            model: "test-model".to_string(),
+            messages: messages.clone(),
+            ..Default::default()
+        };
+
+        let req = PipelineRequest {
+            request_id: openproxy_types::RequestId::new(),
+            trace_id: openproxy_types::TraceId::new(),
+            combo_id: openproxy_types::ComboId(1),
+            openai_request: Arc::new(openai_req),
+            client_disconnected: tokio::sync::watch::channel(None).1,
+            stream_sink: None,
+            api_key_id: None,
+            combo_override: None,
+            targets_override: None,
+            request_headers: std::collections::BTreeMap::new(),
+            request_body_json: None,
+            race_cancelled: false,
+            race_cancel: None,
+            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            compressed_messages: Arc::new(std::sync::OnceLock::new()),
+            proxy_override: None,
+        };
+
+        let model = Model {
+            row_id: ModelRowId(1),
+            provider_id: ProviderId::new("nvidia-nim"),
+            model_id: ModelId::new("deepseek-ai/deepseek-v4-flash-0731"),
+            display_name: Some("test".into()),
+            target_format: TargetFormat::Openai,
+            discovered_at: "2026-01-01T00:00:00Z".into(),
+            expires_at: None,
+            timeout_overrides_json: None,
+            active: true,
+            last_test_status: None,
+            last_test_at: None,
+            custom: false,
+            context_length: None,
+            max_output_tokens: None,
+            capabilities_json: None,
+            family: None,
+            model_type: "chat".into(),
+            input_modalities_json: None,
+            output_modalities_json: None,
+            ..Default::default()
+        };
+
+        let formatter = OpenaiFormatter;
+        let formatted = formatter
+            .format_request(&req, &model, &messages, false, &adapter)
+            .expect("formatting must succeed");
+
+        let json_val: Value = serde_json::from_slice(&formatted).unwrap();
+        let msgs = json_val.get("messages").unwrap().as_array().unwrap();
+
+        // developer normalized to system, name sanitized to Dev_Lead
+        assert_eq!(msgs[0].get("role").unwrap(), "system");
+        assert_eq!(msgs[0].get("name").unwrap(), "Dev_Lead");
+
+        // tool role strips name
+        assert_eq!(msgs[1].get("role").unwrap(), "tool");
+        assert!(msgs[1].get("name").is_none());
+
+        // empty name stripped
+        assert_eq!(msgs[2].get("role").unwrap(), "user");
+        assert!(msgs[2].get("name").is_none());
     }
 }
