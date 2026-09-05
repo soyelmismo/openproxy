@@ -418,10 +418,15 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
 ///
 /// Returns the total number of rows backfilled across both tables.
 fn fetch_unnormalized_rows(conn: &Connection, table: &str) -> Result<Vec<(String, String)>> {
-    let sql =
-        format!("SELECT provider_id, model_id FROM {table} WHERE model_id_normalized IS NULL");
+    let sql = match table {
+        "models" => "SELECT provider_id, model_id FROM models WHERE model_id_normalized IS NULL",
+        "model_capabilities_sync" => {
+            "SELECT provider_id, model_id FROM model_capabilities_sync WHERE model_id_normalized IS NULL"
+        }
+        _ => unreachable!("invalid table"),
+    };
     let mut stmt = conn
-        .prepare(&sql)
+        .prepare(sql)
         .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], |row| {
@@ -442,11 +447,16 @@ fn backfill_table_normalized(
     let mut total = 0;
     for chunk in rows.chunks(900 / 3) {
         let vals = openproxy_db::batch::values_placeholders(chunk.len(), 3);
-        let sql = format!(
-            "WITH updates(provider_id, model_id, normalized) AS (VALUES {vals}) \
-             UPDATE {table} SET model_id_normalized = updates.normalized FROM updates \
-             WHERE {table}.provider_id = updates.provider_id AND {table}.model_id = updates.model_id"
-        );
+        let mut sql = String::with_capacity(160 + vals.len() + table.len() * 3);
+        sql.push_str("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
+        sql.push_str(&vals);
+        sql.push_str(") UPDATE ");
+        sql.push_str(table);
+        sql.push_str(" SET model_id_normalized = updates.normalized FROM updates WHERE ");
+        sql.push_str(table);
+        sql.push_str(".provider_id = updates.provider_id AND ");
+        sql.push_str(table);
+        sql.push_str(".model_id = updates.model_id");
 
         let mut norm_strings = Vec::with_capacity(chunk.len());
         for (_, model_id) in chunk {
