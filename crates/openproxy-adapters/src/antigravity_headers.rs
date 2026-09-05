@@ -596,7 +596,7 @@ mod tests {
 #[cfg(test)]
 mod adversarial_dedup_tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     #[allow(dead_code)]
     static TEST_LOCK: Mutex<()> = Mutex::new(());
