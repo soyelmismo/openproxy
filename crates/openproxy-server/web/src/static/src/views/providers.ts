@@ -33,6 +33,7 @@ import { showCustomModelForm } from "../components/model-custom-form.js";
 import { OAuthLogin } from "../handlers/oauth-handlers.js";
 import { renderQuotaCell } from "./quota-cell.js";
 import { statusPillClass } from "../lib/constants.js";
+import { formatContextBadge } from "../lib/format.js";
 import {
   applySort,
   SORTABLE_COLUMNS,
@@ -131,15 +132,6 @@ function renderProviderIcon(p: Provider): TemplateResult {
   `;
 }
 
-function formatContext(tokens: number | null | undefined): TemplateResult {
-  if (tokens == null) return html`<span class="muted">—</span>`;
-  if (tokens >= 1_000_000) return html`${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1000) return html`${Math.round(tokens / 1000)}k`;
-  return html`${String(tokens)}`;
-}
-
-// Render the per-model capability badges. The server serialises
-// capabilities as a JSON string; bad input renders as an em-dash
 function renderCapabilityBadges(json: string | null | undefined, modelType?: string | null): TemplateResult {
   const badges: TemplateResult[] = [];
   if (modelType && modelType !== "chat") {
@@ -1256,8 +1248,8 @@ function renderModelRow(m: Model): TemplateResult {
       </div>
     </td>
     <td class="col-model-format" data-label="Format"><span class="chip format-chip">${m.target_format || "—"}</span></td>
-    <td class="col-model-context" data-label="Context"><span class="model-spec-val">${formatContext(m.context_length)}</span></td>
-    <td class="col-model-max-output" data-label="Max Output"><span class="model-spec-val">${formatContext(m.max_output_tokens)}</span></td>
+    <td class="col-model-context" data-label="Context"><span class="model-spec-val">${formatContextBadge(m.context_length)}</span></td>
+    <td class="col-model-max-output" data-label="Max Output"><span class="model-spec-val">${formatContextBadge(m.max_output_tokens)}</span></td>
     <td class="col-model-modality" data-label="Modality & Capabilities">
       <div class="model-modality-block">
         <div class="model-type-row">
@@ -1327,8 +1319,8 @@ function renderModelRow(m: Model): TemplateResult {
 
       <div class="card-meta-row">
         <span class="meta-chip accent">${m.target_format || "openai"}</span>
-        <span class="meta-chip">${formatContext(m.context_length)} ctx</span>
-        <span class="meta-chip">${formatContext(m.max_output_tokens)} out</span>
+        <span class="meta-chip">${formatContextBadge(m.context_length)} ctx</span>
+        <span class="meta-chip">${formatContextBadge(m.max_output_tokens)} out</span>
         ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
         ${m.family ? html`<span class="meta-chip">${m.family}</span>` : html``}
       </div>

@@ -256,6 +256,10 @@ export async function toggleProxySourceActive(id: string, e: Event): Promise<voi
   const src = state.proxySources.find((s) => s.id === id);
   if (!src) return;
 
+  // intentionally not using mutateAndRefresh because: Tier 3 —
+  // optimistic checkbox toggle with rollback on error (the catch
+  // restores `checkbox.checked`), which the helper's uniform
+  // error path cannot express.
   try {
     const payload = {
       name: src.name,

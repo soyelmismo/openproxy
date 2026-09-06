@@ -14,12 +14,12 @@ import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
-import { copyToClipboard } from "../lib/clipboard.js";
 import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
 import { icons } from "../lib/icons.js";
 import type { Model, ApiKey } from "../lib/types/api.js";
+import { renderResponsiveCardTable, type ResponsiveColumn } from "../components/render-responsive-card-table.js";
 
 // The api_key row shape. Defined locally (not in lib/types/api.ts)
 // because the server-side `pub struct ApiKey` lives in a separate
@@ -103,113 +103,7 @@ async function onDeleteKey(id: number, label: string | null): Promise<void> {
   }
 }
 
-async function onCopyPrefix(text: string, e: Event): Promise<void> {
-  e.preventDefault();
-  e.stopPropagation();
-  try {
-    await copyToClipboard(text);
-    showToast("Key prefix copied!", "success");
-  } catch (_err: unknown) {
-    showToast("Failed to copy", "error");
-  }
-}
-
 // ---- Templates ----
-
-function renderKeyRow(k: ApiKeyRow): TemplateResult {
-  const scopesList: string[] = k.scopes || [];
-  const scopes: string = scopesList.join(", ") || "—";
-  let allowedModels: string = "all";
-  if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
-  else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
-  else if (Array.isArray(k.allowed_models)) allowedModels = k.allowed_models.length + " models";
-  const blBadges: string[] = [];
-  if (Array.isArray(k.blacklisted_providers) && k.blacklisted_providers.length > 0) {
-    blBadges.push(`!prov: ${k.blacklisted_providers.join(",")}`);
-  }
-  if (Array.isArray(k.blacklisted_models) && k.blacklisted_models.length > 0) {
-    blBadges.push(`!models: ${k.blacklisted_models.length}`);
-  }
-  const restrictions: string = blBadges.length > 0
-    ? `${allowedModels} (${blBadges.join("; ")})`
-    : allowedModels;
-  const isActive: boolean = k.is_active && !k.revoked_at;
-  const statusClass: string = isActive ? "on active" : "off inactive";
-  const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
-  const label: string = k.label || "—";
-  const createdBy: TemplateResult = k.created_by ? html` <small class="key-created-by">(${k.created_by})</small>` : html``;
-  const prefix: string = k.key_prefix || "—";
-
-  return html`
-    <tr class="api-key-card-row ${isActive ? 'active' : 'inactive revoked'}">
-      <!-- Desktop Table Cells -->
-      <td class="col-key-label" data-label="Label">
-        <div class="key-label-wrapper">
-          <strong class="key-name">${label}</strong>${createdBy}
-        </div>
-      </td>
-      <td class="col-key-prefix" data-label="Prefix"><code class="key-prefix-code">${prefix}</code></td>
-      <td class="col-key-scopes" data-label="Scopes"><span class="key-scopes-text">${scopes}</span></td>
-      <td class="col-key-restrictions" data-label="Allowed models"><span class="chip key-restriction-chip">${restrictions}</span></td>
-      <td class="col-key-status" data-label="Status"><span class="status-pill ${statusClass}">${statusText}</span></td>
-      <td class="col-key-last-used" data-label="Last used"><span class="key-meta-time">${k.last_used_at || "never"}</span></td>
-      <td class="col-key-created" data-label="Created"><span class="key-meta-time">${k.created_at || "—"}</span></td>
-      <td class="col-key-actions" data-label="Actions">
-        <div class="key-actions-wrap">
-          <button class="small" @click=${() => onShowEditKey(k.id)}>${icons.pencil()} Edit</button>
-          <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>${icons.refresh()} Regenerate</button>
-          <button class="small" @click=${() => onViewKeyUsage(k.id)}>${icons.lightning()} Usage</button>
-          ${k.is_active && !k.revoked_at
-            ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
-            : html``}
-          <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>${icons.trash()} Delete</button>
-        </div>
-      </td>
-
-      <!-- Mobile Card Structure -->
-      <td class="mobile-key-card-cell">
-        <div class="k-card-header">
-          <div class="k-card-title-group">
-            <span class="k-card-name">${label}</span>
-            <span class="k-card-role">(${k.created_by ?? 'admin'})</span>
-            <code 
-              class="k-card-prefix" 
-              title="Click to copy prefix"
-              @click=${(e: Event) => onCopyPrefix(prefix, e)}
-            >
-              ${prefix}
-            </code>
-          </div>
-          <span class="k-card-status ${isActive ? 'active' : 'inactive'}">
-            ${statusText}
-          </span>
-        </div>
-
-        <div class="k-card-meta">
-          <span class="k-card-scopes">${scopes}</span>
-          <span class="k-card-chip" title="${restrictions}">${restrictions}</span>
-        </div>
-
-        <div class="k-card-dates">
-          <span>Used: ${k.last_used_at ?? 'never'}</span>
-          <span>Created: ${k.created_at || '—'}</span>
-        </div>
-
-        <div class="k-card-actions">
-          <button @click=${() => onShowEditKey(k.id)}>✎ Edit</button>
-          <button @click=${() => onViewKeyUsage(k.id)}>⚡ Usage</button>
-          <button @click=${() => onRegenerateKey(k.id, k.label)}>🔄 Regenerate</button>
-          <button @click=${() => onRevokeKey(k.id, k.label)} ?disabled=${!k.is_active || !!k.revoked_at}>Revoke</button>
-          <button class="danger btn-delete-icon" @click=${() => onDeleteKey(k.id, k.label)} title="Delete key">
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="icon">
-              <path d="M2.5 4.5h11M6 2h4M4 4.5v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-9M6.5 7v4.5M9.5 7v4.5"></path>
-            </svg>
-          </button>
-        </div>
-      </td>
-    </tr>
-  `;
-}
 
 function renderKeys(): TemplateResult {
   if (loadError) {
@@ -221,12 +115,97 @@ function renderKeys(): TemplateResult {
     `;
   }
   const keys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
+  const columns: ResponsiveColumn<ApiKeyRow>[] = [
+    {
+      key: "label",
+      label: "Label",
+      render: (k) => {
+        const label: string = k.label || "—";
+        const createdBy: TemplateResult = k.created_by ? html` <small class="key-created-by">(${k.created_by})</small>` : html``;
+        return html`<div class="key-label-wrapper"><strong class="key-name">${label}</strong>${createdBy}</div>`;
+      },
+    },
+    {
+      key: "key_prefix",
+      label: "Prefix",
+      render: (k) => html`<code class="key-prefix-code">${k.key_prefix || "—"}</code>`,
+    },
+    {
+      key: "scopes",
+      label: "Scopes",
+      render: (k) => html`<span class="key-scopes-text">${(k.scopes || []).join(", ") || "—"}</span>`,
+    },
+    {
+      key: "allowed_models",
+      label: "Allowed models",
+      render: (k) => {
+        let allowedModels: string = "all";
+        if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
+        else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
+        else if (Array.isArray(k.allowed_models)) allowedModels = k.allowed_models.length + " models";
+        const blBadges: string[] = [];
+        if (Array.isArray(k.blacklisted_providers) && k.blacklisted_providers.length > 0) {
+          blBadges.push(`!prov: ${k.blacklisted_providers.join(",")}`);
+        }
+        if (Array.isArray(k.blacklisted_models) && k.blacklisted_models.length > 0) {
+          blBadges.push(`!models: ${k.blacklisted_models.length}`);
+        }
+        const restrictions: string = blBadges.length > 0
+          ? `${allowedModels} (${blBadges.join("; ")})`
+          : allowedModels;
+        return html`<span class="chip key-restriction-chip">${restrictions}</span>`;
+      },
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (k) => {
+        const isActive: boolean = k.is_active && !k.revoked_at;
+        const statusClass: string = isActive ? "on active" : "off inactive";
+        const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
+        return html`<span class=${"status-pill " + statusClass}>${statusText}</span>`;
+      },
+    },
+    {
+      key: "last_used_at",
+      label: "Last used",
+      render: (k) => html`<span class="key-meta-time">${k.last_used_at || "never"}</span>`,
+    },
+    {
+      key: "created_at",
+      label: "Created",
+      render: (k) => html`<span class="key-meta-time">${k.created_at || "—"}</span>`,
+    },
+    {
+      key: "actions",
+      label: "Actions",
+      render: (k) => {
+        const isActive: boolean = k.is_active && !k.revoked_at;
+        return html`
+          <div class="key-actions-wrap">
+            <button class="small" @click=${() => onShowEditKey(k.id)}>${icons.pencil()} Edit</button>
+            <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>${icons.refresh()} Regenerate</button>
+            <button class="small" @click=${() => onViewKeyUsage(k.id)}>${icons.lightning()} Usage</button>
+            ${isActive
+              ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
+              : html``}
+            <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>${icons.trash()} Delete</button>
+          </div>
+        `;
+      },
+    },
+  ];
   const body: TemplateResult = keys.length === 0
     ? html`<p class="empty">No API keys yet. Create one to authenticate clients.</p>`
-    : html`<div class="table-wrap"><table class="keys-table api-keys-table responsive-card-table">
-        <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Allowed models</th><th>Status</th><th>Last used</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>${keys.map(renderKeyRow)}</tbody>
-      </table></div>`;
+    : html`
+        ${renderResponsiveCardTable<ApiKeyRow>({
+          columns,
+          rows: keys,
+          rowKey: (k) => k.id,
+          rowClass: (k) => (k.is_active && !k.revoked_at) ? "active" : "inactive revoked",
+          className: "keys-table api-keys-table",
+        })}
+      `;
   return html`
     <div class="page-header"><h2>API Keys</h2>
       <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} Create key</button></div>

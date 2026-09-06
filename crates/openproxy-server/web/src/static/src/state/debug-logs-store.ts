@@ -23,6 +23,10 @@
 // `latest_seq` and clears the badge.
 
 import { fetchDebugLogs } from "../lib/api.js";
+import {
+  createVisibilityAwareInterval,
+  type VisibilityAwareHandle,
+} from "../lib/visibility-aware-interval.js";
 
 // ----------------------------------------------------------------------------
 // Types
@@ -49,10 +53,11 @@ let latestSeq: number = 0;
 /** Current unviewed WARN+ERROR count. 0 hides the sidebar badge. */
 let unviewedCount: number = 0;
 
-/** 30s poll handle. Cleared on every tick and rescheduled inside the
- *  tick's `finally` so a slow request can't stack up two concurrent
- *  ticks. */
-let pollHandle: ReturnType<typeof setTimeout> | null = null;
+/** 30s visibility-aware poll handle. Async-aware (the next tick is
+ *  scheduled only after the previous one settles, so a slow request
+ *  can't stack up two concurrent ticks) and paused while the tab is
+ *  hidden. */
+let pollHandle: VisibilityAwareHandle | null = null;
 
 let initialized: boolean = false;
 
@@ -145,17 +150,8 @@ export async function refreshUnviewedCount(): Promise<void> {
 // Boot + lifecycle
 // ----------------------------------------------------------------------------
 
-/** Schedule the next 30s poll tick. We use `setTimeout` (not
- *  `setInterval`) so a slow request can't stack up two concurrent
- *  ticks — the next tick is scheduled inside the previous tick's
- *  `finally` AFTER the await resolves. */
+/** Start the 30s visibility-aware poll. */
 function schedulePoll(): void {
   if (pollHandle !== null) return;
-  pollHandle = setTimeout(() => {
-    pollHandle = null;
-    void (async () => {
-      try { await refreshUnviewedCount(); }
-      finally { schedulePoll(); }
-    })();
-  }, 30_000);
+  pollHandle = createVisibilityAwareInterval(() => refreshUnviewedCount(), 30_000);
 }

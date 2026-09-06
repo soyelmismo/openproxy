@@ -20,6 +20,7 @@ import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 // ---- PATCH helper (no re-render) ----
 //
@@ -298,15 +299,13 @@ async function onDrop(e: DragEvent): Promise<void> {
   newOrder.splice(adjustedIdx, 0, dragSourceId);
 
   const comboId = dragComboId;
-  try {
-    await api(`/combos/${comboId}/targets/reorder`, {
+  await mutateAndRefresh({
+    apiCall: () => api(`/combos/${comboId}/targets/reorder`, {
       method: "POST",
       body: JSON.stringify({ target_ids: newOrder }),
-    });
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error reordering");
-  }
+    }),
+    errorMessage: "Error reordering",
+  });
 }
 
 function onDragEnd(_e: DragEvent): void {
@@ -888,6 +887,11 @@ export async function resetCooldown(comboId: number, targetId: number): Promise<
 }
 
 export async function changePriority(comboId: number, targetId: number, delta: number): Promise<void> {
+  // intentionally not using mutateAndRefresh because: Tier 3 — the
+  // GET targets → compute → POST reorder chain has early-returns
+  // inside the try (no-op when the target is already at the edge);
+  // forcing it through the helper would fire a spurious
+  // requestUpdate() on those paths.
   try {
     const targets = await api(`/combos/${comboId}/targets`) as Array<{ id: number; priority_order: number }>;
     const sorted = [...targets].sort((a, b) => a.priority_order - b.priority_order);

@@ -1,23 +1,33 @@
+// state/clock-store.ts — global 250ms clock tick feeding relative
+// timestamps. Visibility-aware: the tick pauses while the tab is
+// hidden and runs once immediately on resume (no backlog), so
+// background tabs don't burn CPU re-rendering elapsed-time labels.
 
+import {
+  createVisibilityAwareInterval,
+  type VisibilityAwareHandle,
+} from "../lib/visibility-aware-interval.js";
+
+const CLOCK_TICK_MS = 250;
 
 class ClockStore {
   public nowMs: number = Date.now();
-  private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private intervalHandle: VisibilityAwareHandle | null = null;
   private subscribers = new Set<() => void>();
 
   public start() {
     if (this.intervalHandle) return;
-    this.intervalHandle = setInterval(() => {
+    this.intervalHandle = createVisibilityAwareInterval(() => {
       this.nowMs = Date.now();
       for (const sub of this.subscribers) {
         sub();
       }
-    }, 250);
+    }, CLOCK_TICK_MS);
   }
 
   public stop() {
     if (this.intervalHandle) {
-      clearInterval(this.intervalHandle);
+      this.intervalHandle.stop();
       this.intervalHandle = null;
     }
   }

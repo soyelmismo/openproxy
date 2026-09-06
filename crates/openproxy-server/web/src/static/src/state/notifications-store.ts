@@ -47,6 +47,10 @@ import { state } from "./index.js";
 import { isLoggedIn } from "./auth.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
+import {
+  createVisibilityAwareInterval,
+  type VisibilityAwareHandle,
+} from "../lib/visibility-aware-interval.js";
 import type {
   NotificationEvent,
   NotificationRow,
@@ -103,10 +107,12 @@ let dirty: boolean = false;
 const seenIds: Set<number> = new Set<number>();
 const SEEN_IDS_CAP: number = 1000;
 
-/** 30s poll handle for `GET /notifications/unread-count`. Cleared on
- *  every tick and rescheduled inside the tick's `finally` so a slow
- *  request can't stack up two concurrent ticks. */
-let pollHandle: ReturnType<typeof setTimeout> | null = null;
+/** 30s visibility-aware poll for `GET /notifications/unread-count`.
+ *  Async-aware (next tick scheduled only after the previous one
+ *  settles, so a slow request can't stack up two concurrent ticks)
+ *  and paused while the tab is hidden — the badge refreshes once on
+ *  resume instead of burning background requests. */
+let pollHandle: VisibilityAwareHandle | null = null;
 
 /** Debounce timer for the post-WS-event `refreshUnreadCount()` call.
  *  Multiple events arriving in quick succession coalesce into a
@@ -446,21 +452,12 @@ export function initNotificationsStore(): void {
   schedulePoll();
 }
 
-/** Schedule the next 30s poll tick. We use `setTimeout` (not
- *  `setInterval`) so a slow request can't stack up two concurrent
- *  ticks — the next tick is scheduled inside the previous tick's
- *  `finally` AFTER the await resolves. */
+/** Start the 30s visibility-aware poll. The callback goes through
+ *  `pollRefreshUnreadCount` which skips when `dirty` is set, so an
+ *  in-flight optimistic change can't be clobbered by a racing poll.
+ *  The next user-initiated `refreshUnreadCount()` clears dirty and
+ *  re-enables polling. */
 function schedulePoll(): void {
   if (pollHandle !== null) return;
-  pollHandle = setTimeout(() => {
-    pollHandle = null;
-    void (async () => {
-      // NOTIF-FIX: poll goes through `pollRefreshUnreadCount` which
-      // skips when `dirty` is set, so an in-flight optimistic change
-      // can't be clobbered by a racing poll. The next user-initiated
-      // `refreshUnreadCount()` clears dirty and re-enables polling.
-      try { await pollRefreshUnreadCount(); }
-      finally { schedulePoll(); }
-    })();
-  }, 30_000);
+  pollHandle = createVisibilityAwareInterval(() => pollRefreshUnreadCount(), 30_000);
 }

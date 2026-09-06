@@ -84,6 +84,8 @@ export async function refreshProvider(providerId: string, e: Event | null): Prom
 // Walk every provider and POST to its /refresh endpoint. Per-
 // provider failures are logged but don't abort the loop — a
 // single misbehaving upstream shouldn't block the rest.
+// intentionally not using mutateAndRefresh because: Tier 3 —
+// sequential multi-call loop with per-item error swallowing.
 export async function refreshAllProviders(): Promise<void> {
   try {
     const providers = await api("/providers") as Array<{ id: string }>;

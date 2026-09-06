@@ -27,6 +27,7 @@ import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 interface KeyRow {
   id: ApiKeyId;
@@ -366,6 +367,9 @@ export async function regenerateKey(id: number, label: string | null): Promise<v
     danger: true,
     confirmLabel: "Regenerate",
   }))) return;
+  // intentionally not using mutateAndRefresh because: Tier 4 critical
+  // flow — success path opens the plaintext-key modal instead of a
+  // toast + re-render.
   try {
     const result = await api(`/keys/${id}/regenerate`, { method: "POST" }) as KeyPlaintextResponse;
     showPlaintextKey(result.plaintext, result.key);
@@ -382,13 +386,12 @@ export async function revokeKey(id: number, label: string | null): Promise<void>
     danger: true,
     confirmLabel: "Revoke",
   }))) return;
-  try {
-    await api(`/keys/${id}/revoke`, { method: "POST" });
-    state.apiKeys = await api("/keys") as typeof state.apiKeys;
-    requestUpdate();
-  } catch (e: unknown) {
-    showApiError(e, "Error");
-  }
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api(`/keys/${id}/revoke`, { method: "POST" });
+      state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    },
+  });
 }
 
 export function viewKeyUsage(id: number): void {
@@ -403,11 +406,10 @@ export async function deleteKey(id: number, label: string | null): Promise<void>
     danger: true,
     confirmLabel: "Delete",
   }))) return;
-  try {
-    await api(`/keys/${id}`, { method: "DELETE" });
-    state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
-    requestUpdate();
-  } catch (e: unknown) {
-    showApiError(e, "Error");
-  }
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api(`/keys/${id}`, { method: "DELETE" });
+      state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
+    },
+  });
 }

@@ -31,6 +31,7 @@ import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 interface TestResult {
   status: number;
@@ -207,13 +208,12 @@ export async function deleteModel(rowId: number): Promise<void> {
     danger: true,
     confirmLabel: "Delete",
   }))) return;
-  try {
-    await api(`/models/${rowId}`, { method: "DELETE" });
-    state.models = state.models.filter((m) => m.row_id !== rowId);
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error");
-  }
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api(`/models/${rowId}`, { method: "DELETE" });
+      state.models = state.models.filter((m) => m.row_id !== rowId);
+    },
+  });
 }
 
 // ===== Selection (multi-select) =====

@@ -19,6 +19,7 @@ import { showToast } from "../components/toast.js";
 import { copyToClipboard } from "../lib/clipboard.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm, showPrompt } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 function summarizeApiKey(key: string): string {
   const trimmed = key.trim();
@@ -109,13 +110,12 @@ export async function deleteAccount(id: number): Promise<void> {
     danger: true,
     confirmLabel: "Delete",
   }))) return;
-  try {
-    await api("/accounts/" + id, { method: "DELETE" });
-    state.accounts = await api("/accounts") as typeof state.accounts;
-    requestUpdate();
-  } catch (e: unknown) {
-    showApiError(e, "Error");
-  }
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api("/accounts/" + id, { method: "DELETE" });
+      state.accounts = await api("/accounts") as typeof state.accounts;
+    },
+  });
 }
 
 export async function testAccount(id: number): Promise<void> {
@@ -195,17 +195,17 @@ export async function updateAccountLabel(id: number, currentLabel: string): Prom
   if (newLabel == null) return;
   const trimmed = newLabel.trim();
   if (trimmed === currentLabel) return;
-  
-  try {
-    await api("/accounts/" + id + "/label", {
-      method: "PATCH",
-      body: JSON.stringify({ label: trimmed || null }),
-    });
-    state.accounts = await api("/accounts") as typeof state.accounts;
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error updating label");
-  }
+
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api("/accounts/" + id + "/label", {
+        method: "PATCH",
+        body: JSON.stringify({ label: trimmed || null }),
+      });
+      state.accounts = await api("/accounts") as typeof state.accounts;
+    },
+    errorMessage: "Error updating label",
+  });
 }
 
 export async function copyAccountApiKey(id: number): Promise<void> {

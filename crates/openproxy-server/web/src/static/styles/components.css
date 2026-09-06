@@ -1110,3 +1110,39 @@ tr.dnd-dragging {
   resize: vertical;
   box-sizing: border-box;
 }
+
+/* ----- Responsive card table (generic helper) -----
+   Used by `components/render-responsive-card-table.ts`. Each cell
+   is given `data-label="<column header>"` so the mobile CSS can
+   render `<strong>label</strong><span>value</span>` pairs without
+   needing bespoke per-view markup. The desktop view is a plain
+   `<table>`. */
+@media (max-width: 768px) {
+  .responsive-card-table thead { display: none; }
+  .responsive-card-table tbody { display: flex; flex-direction: column; gap: var(--space-2); }
+  .responsive-card-row {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-1);
+  }
+  .responsive-card-row > td {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 0;
+    border: none;
+  }
+  .responsive-card-row > td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .responsive-card-row > td.hidden-mobile { display: none; }
+  .responsive-card-row > td.empty-row { display: block; text-align: center; }
+}

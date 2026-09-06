@@ -24,6 +24,7 @@ import { html, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { statusPillClass } from "../lib/constants.js";
 import { icons } from "../lib/icons.js";
+import { formatContextBadge } from "../lib/format.js";
 import {
   toggleModelSelection,
   testModel,
@@ -48,18 +49,6 @@ export function modelStatusPillClass(status: number | null): string {
   if (status >= 400 && status < 500) return "warn";
   if (status >= 500) return "off";
   return "";
-}
-
-// Format a token count for compact display. null/undefined render
-// as an em-dash inside a `.muted` span (so the column stays the
-// same width across rows). Anything above 1k uses `k`; above 1M
-// uses `M` with one decimal. Returns a TemplateResult so the
-// `.muted` em-dash renders as an element, not escaped text.
-export function formatContext(tokens: number | null | undefined): TemplateResult {
-  if (tokens == null) return html`<span class="muted">—</span>`;
-  if (tokens >= 1_000_000) return html`${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1000) return html`${Math.round(tokens / 1000)}k`;
-  return html`${String(tokens)}`;
 }
 
 // Render the per-model capability badges (vision/tools/reasoning/…).
@@ -106,8 +95,8 @@ export function renderModelRow(m: Model): TemplateResult {
       <td><code>${m.model_id}</code>${m.custom ? html`<span class="badge custom">custom</span>` : html``}</td>
       <td>${m.display_name || "—"}</td>
       <td>${m.target_format || "—"}</td>
-      <td>${formatContext(m.context_length)}</td>
-      <td>${formatContext(m.max_output_tokens)}</td>
+      <td>${formatContextBadge(m.context_length)}</td>
+      <td>${formatContextBadge(m.max_output_tokens)}</td>
       <td>${renderCapabilityBadges(m.capabilities_json, m.model_type)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
       <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
       <td class="last-test-cell">${lastTest}</td>

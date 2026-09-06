@@ -19,6 +19,7 @@ import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 import { PRIORITY_MODE_TOOLTIPS, PRIORITY_MODE_LABELS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 
@@ -229,12 +230,9 @@ export async function deleteCombo(id: number): Promise<void> {
     danger: true,
     confirmLabel: "Delete",
   }))) return;
-  try {
-    await api("/combos/" + id, { method: "DELETE" });
-    requestUpdate();
-  } catch (e: unknown) {
-    showApiError(e, "Error");
-  }
+  await mutateAndRefresh({
+    apiCall: () => api("/combos/" + id, { method: "DELETE" }),
+  });
 }
 
 export async function updateRaceSize(id: number, e: Event | null): Promise<void> {
@@ -392,6 +390,9 @@ export async function updateSelectionWindow(id: number, e: Event | null): Promis
 // original code used `window.event` to find the button, which is
 // non-standard; the e.target path is more reliable.
 export async function testAllTargets(comboId: number, e: Event | null): Promise<void> {
+  // intentionally not using mutateAndRefresh because: Tier 3 —
+  // button disable/relabel lifecycle (finally block) around the
+  // call; the helper has no hook for per-request UI affordances.
   const btn = e && e.target ? (e.target as HTMLElement).closest("button") : null;
   const oldText = btn ? btn.textContent : null;
   if (btn) { btn.disabled = true; btn.textContent = "Testing..."; }
