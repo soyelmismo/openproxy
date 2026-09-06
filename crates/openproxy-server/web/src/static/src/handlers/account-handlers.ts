@@ -11,15 +11,16 @@
 // auto-escapes interpolation so we no longer call `escapeHtml` /
 // `escapeAttr`.
 
-import { html, render } from 'lit-html';
+import { html } from 'lit-html';
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { copyToClipboard } from "../lib/clipboard.js";
-import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showApiError } from "../lib/ui-utils.js";
 import { showConfirm, showPrompt } from "../lib/show-confirm.js";
 import { mutateAndRefresh } from "../lib/mutate.js";
+import { renderOpModal } from "../components/render-op-modal.js";
 
 function summarizeApiKey(key: string): string {
   const trimmed = key.trim();
@@ -30,56 +31,48 @@ function summarizeApiKey(key: string): string {
 }
 
 export function showCreateAccount(providerId: string): void {
-  const wrapper = document.createElement("div");
-  ensureModalRoot().appendChild(wrapper);
-  render(html`
-    <div class="modal-bg" id="create-account-modal"
-         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
-      <div class="modal">
-        <div class="modal-header">
-          <h2>New account for ${providerId}</h2>
-          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
-        </div>
-        <form @submit=${(e: Event) => { e.preventDefault(); void createAccount(providerId, e, wrapper); }}>
-          <div class="modal-body">
-            <div class="field">
-              <label for="account-label">Label (optional)</label>
-              <input id="account-label" name="label" type="text" placeholder="auto-generated from key if empty">
-            </div>
-            <div class="field">
-              <label for="account-secret">API Key / Secret</label>
-              <input id="account-secret" name="secret" type="password" placeholder="paste the API key here">
-            </div>
-            <div class="field">
-              <label for="account-scopes">Scopes (comma separated)</label>
-              <input id="account-scopes" name="scopes" type="text" placeholder="chat,manage">
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
-            <button type="submit" class="primary">Create</button>
-          </div>
-        </form>
+  const handle = renderOpModal({
+    title: `New account for ${providerId}`,
+    body: html`
+      <div class="field">
+        <label for="account-label">Label (optional)</label>
+        <input id="account-label" name="label" type="text" placeholder="auto-generated from key if empty">
       </div>
-    </div>
-  `, wrapper);
+      <div class="field">
+        <label for="account-secret">API Key / Secret</label>
+        <input id="account-secret" name="secret" type="password" placeholder="paste the API key here">
+      </div>
+      <div class="field">
+        <label for="account-scopes">Scopes (comma separated)</label>
+        <input id="account-scopes" name="scopes" type="text" placeholder="chat,manage">
+      </div>
+    `,
+    actions: html`
+      <button type="button" @click=${() => handle.close()}>Cancel</button>
+      <button type="submit" class="primary"
+        @click=${(e: Event) => { e.preventDefault(); void createAccount(providerId, e, handle.close); }}>
+        Create
+      </button>
+    `,
+  });
 }
 
 export function closeCreateAccount(): void {
-  const m = document.getElementById("create-account-modal");
-  if (m) {
-    // The modal lives inside a wrapper div we created in
-    // showCreateAccount; remove the wrapper too so #modal-root
-    // stays clean.
-    const wrapper = m.parentElement;
-    m.remove();
-    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
-      wrapper.remove();
-    }
-  }
+  // Backwards-compat shim: the registry still exposes this as a
+  // data-action target. renderOpModal owns the wrapper, so we just
+  // close the most recent modal-bg in the modal-root.
+  const root = document.getElementById("modal-root");
+  if (!root) return;
+  const last = root.lastElementChild;
+  if (!last) return;
+  // Find the close button on the rendered dialog and synthesize a
+  // click — that goes through renderOpModal's own close() path so
+  // the keydown listener is also torn down.
+  const closeBtn = last.querySelector<HTMLButtonElement>(".close-btn");
+  closeBtn?.click();
 }
 
-export async function createAccount(providerId: string, e: Event, wrapper?: HTMLElement): Promise<void> {
+export async function createAccount(providerId: string, e: Event, close?: () => void): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
@@ -96,7 +89,7 @@ export async function createAccount(providerId: string, e: Event, wrapper?: HTML
   try {
     await api("/accounts", { method: "POST", body: JSON.stringify(body) });
     state.accounts = await api("/accounts") as typeof state.accounts;
-    if (wrapper) wrapper.remove(); else closeCreateAccount();
+    if (close) close(); else closeCreateAccount();
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
@@ -128,46 +121,38 @@ export async function testAccount(id: number): Promise<void> {
 }
 
 export function showUpdateAccountKey(id: number): void {
-  const wrapper = document.createElement("div");
-  ensureModalRoot().appendChild(wrapper);
-  render(html`
-    <div class="modal-bg" id="update-account-key-modal"
-         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
-      <div class="modal">
-        <div class="modal-header">
-          <h2>Update API key for account #${id}</h2>
-          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
-        </div>
-        <form @submit=${(e: Event) => { e.preventDefault(); void updateAccountKey(id, e, wrapper); }}>
-          <div class="modal-body">
-            <div class="field">
-              <label for="account-key">New API key</label>
-              <input id="account-key" name="api_key" type="password" placeholder="paste the new API key here">
-            </div>
-            <p><small>Leave empty and submit to <strong>clear</strong> the key (OAuth-only account).</small></p>
-          </div>
-          <div class="modal-footer">
-            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
-            <button type="submit" class="primary">Save key</button>
-          </div>
-        </form>
+  const handle = renderOpModal({
+    title: `Update API key for account #${id}`,
+    body: html`
+      <div class="field">
+        <label for="account-key">New API key</label>
+        <input id="account-key" name="api_key" type="password" placeholder="paste the new API key here">
       </div>
-    </div>
-  `, wrapper);
+      <p><small>Leave empty and submit to <strong>clear</strong> the key (OAuth-only account).</small></p>
+    `,
+    actions: html`
+      <button type="button" @click=${() => handle.close()}>Cancel</button>
+      <button type="submit" class="primary"
+        @click=${(e: Event) => { e.preventDefault(); void updateAccountKey(id, e, handle.close); }}>
+        Save key
+      </button>
+    `,
+  });
 }
 
 export function closeUpdateAccountKey(): void {
-  const m = document.getElementById("update-account-key-modal");
-  if (m) {
-    const wrapper = m.parentElement;
-    m.remove();
-    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
-      wrapper.remove();
-    }
-  }
+  // Backwards-compat shim: the registry still exposes this as a
+  // data-action target. renderOpModal owns the wrapper, so we just
+  // close the most recent modal-bg in the modal-root.
+  const root = document.getElementById("modal-root");
+  if (!root) return;
+  const last = root.lastElementChild;
+  if (!last) return;
+  const closeBtn = last.querySelector<HTMLButtonElement>(".close-btn");
+  closeBtn?.click();
 }
 
-export async function updateAccountKey(id: number, e: Event, wrapper?: HTMLElement): Promise<void> {
+export async function updateAccountKey(id: number, e: Event, close?: () => void): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
@@ -178,7 +163,7 @@ export async function updateAccountKey(id: number, e: Event, wrapper?: HTMLEleme
       body: JSON.stringify({ api_key: apiKey }),
     });
     state.accounts = await api("/accounts") as typeof state.accounts;
-    if (wrapper) wrapper.remove(); else closeUpdateAccountKey();
+    if (close) close(); else closeUpdateAccountKey();
     // We do NOT call requestUpdate() here — the API key is
     // not displayed in the underlying accounts table, so there's
     // nothing visible to refresh. A full rebuild would close any
