@@ -41,7 +41,7 @@ import {
   deselectAllModelsInModal,
   onTargetModelSearch,
   updateTargetWeight,
-} from "./combo-target-handlers.js";
+} from "./combo-target-handlers/index.js";
 import { showCreateKey, showEditKey, closeKeyForm, toggleExpiryAmount, createKey, updateKey, regenerateKey, revokeKey, viewKeyUsage, deleteKey } from "./key-handlers.js";
 import {
   showEditModel, updateModel,
@@ -57,7 +57,7 @@ import {
   confirmDeleteProvider, deleteProvider,
   toggleProviderActive, renameProviderPrompt, editProviderEndpointPrompt, bulkToggleModels,
   setHealth, refreshAccountQuota, refreshAllQuotas,
-} from "./provider-handlers.js";
+} from "./provider-handlers/index.js";
 import { exportConfig } from "./config-handlers.js";
 import { exportLogsCSV } from "./log-handlers.js";
 import {

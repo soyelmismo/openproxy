@@ -12,7 +12,7 @@ import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { showApiError } from '../../lib/ui-utils.js';
 import { icons } from '../../lib/icons.js';
-import { showCreateProvider } from '../../handlers/provider-handlers.js';
+import { showCreateProvider } from '../../handlers/provider-handlers/index.js';
 import { t } from '../../i18n/index.js';
 import type { Account, Provider } from '../../lib/types/api.js';
 import { loadError, renderProviderIcon } from './shared.js';

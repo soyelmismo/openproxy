@@ -26,7 +26,7 @@ import { icons } from '../../lib/icons.js';
 import {
   editProviderEndpointPrompt,
   editProviderHeadersPrompt,
-} from '../../handlers/provider-handlers.js';
+} from '../../handlers/provider-handlers/index.js';
 import type { Provider } from '../../lib/types/api.js';
 import {
   detailProviderId,
