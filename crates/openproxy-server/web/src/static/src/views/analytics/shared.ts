@@ -212,7 +212,13 @@ export function pivotMonthlyByProvider(
   }
 
   const allMonths = [...monthsSet].sort();
-  const months = allMonths.slice(-maxMonths);
+  // `Array.prototype.slice(-0)` is identical to `slice(0)` (JS coerces
+  // `-0` → `0`), so a `maxMonths` of `0` would silently return every
+  // month. Coerce to `0` and short-circuit: a caller asking for zero
+  // months has explicitly opted out of the window, so we honour it
+  // with an empty list rather than handing them the whole timeline.
+  const windowSize = Math.max(0, maxMonths | 0);
+  const months = windowSize === 0 ? [] : allMonths.slice(-windowSize);
   const monthSet = new Set(months);
 
   const totalsByProvider = new Map<string, number>();

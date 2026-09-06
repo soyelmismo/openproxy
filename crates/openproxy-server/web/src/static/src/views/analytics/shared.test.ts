@@ -117,16 +117,25 @@ describe("pivotMonthlyByProvider", () => {
     expect(pivot.grandTotal).toBe(65);
   });
 
-  it("maxMonths=0 currently falls through to 'all months' because of `slice(-0) === slice(0)`", () => {
-    // KNOWN BUG (regression-prone footgun): `allMonths.slice(-maxMonths)`
-    // with `maxMonths=0` becomes `slice(0)` — `-0` and `0` are equal in JS
-    // so the cap is silently ignored and every month is returned. Today
-    // no caller passes 0 (the type is a positive default of 6), so the bug
-    // is latent; this test pins the broken behavior and will start failing
-    // once @builder swaps `slice(-n)` for `slice(Math.max(0, n - len))`
-    // or guards `if (maxMonths <= 0) return empty`.
+  it("maxMonths=0 returns an empty matrix instead of falling through 'all months'", () => {
+    // Regression guard for the `slice(-0) === slice(0)` footgun: the
+    // caller explicitly asked for zero months, so we honour that with
+    // an empty window instead of silently returning the full timeline.
     const pivot = pivotMonthlyByProvider(PIVOT_ROWS, 10, 0);
-    expect(pivot.months).toEqual(["2025-11", "2025-12", "2026-01", "2026-02", "2026-03"]);
+    expect(pivot.months).toEqual([]);
+    expect(pivot.providers).toEqual([]);
+    expect(pivot.cells.size).toBe(0);
+    expect(pivot.totalsByProvider.size).toBe(0);
+    expect(pivot.totalsByMonth.size).toBe(0);
+    expect(pivot.grandTotal).toBe(0);
+  });
+
+  it("negative maxMonths is also clamped to zero (defensive)", () => {
+    // `slice(-(-3))` would be `slice(3)` and return the first 3 months
+    // ascending — also nonsensical. We clamp to 0 and return empty.
+    const pivot = pivotMonthlyByProvider(PIVOT_ROWS, 10, -3);
+    expect(pivot.months).toEqual([]);
+    expect(pivot.grandTotal).toBe(0);
   });
 
   it("omits providers whose data lies entirely outside the visible window", () => {
