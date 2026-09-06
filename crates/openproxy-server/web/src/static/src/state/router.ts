@@ -31,7 +31,7 @@ import { mountAnalytics } from "../views/analytics.js";
 import { mountLogs } from "../views/logs.js";
 import { mountConfig } from "../views/config.js";
 import { mountDebugLogs } from "../views/debug-logs.js";
-import { mountNotifications } from "../views/notifications.js";
+import { mountNotifications } from "../views/notifications/index.js";
 import { mountLogin } from "../views/login.js";
 import { mountProxies } from "../views/proxies.js";
 import { mountProxySources } from "../views/proxy-sources.js";
