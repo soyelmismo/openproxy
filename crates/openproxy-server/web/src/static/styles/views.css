@@ -836,27 +836,27 @@ html, body {
 }
 .log-type-tag--chat {
   background: rgba(59, 130, 246, 0.1);
-  color: #38bdf8;
+  color: var(--chart-blue-light);
   border-color: rgba(59, 130, 246, 0.25);
 }
 .log-type-tag--audio {
   background: rgba(234, 179, 8, 0.12);
-  color: #facc15;
+  color: var(--chart-yellow);
   border-color: rgba(234, 179, 8, 0.3);
 }
 .log-type-tag--image {
   background: rgba(236, 72, 153, 0.12);
-  color: #f472b6;
+  color: var(--chart-pink);
   border-color: rgba(236, 72, 153, 0.3);
 }
 .log-type-tag--embedding {
   background: rgba(168, 85, 247, 0.12);
-  color: #c084fc;
+  color: var(--chart-purple-light);
   border-color: rgba(168, 85, 247, 0.3);
 }
 .log-type-tag--video {
   background: rgba(249, 115, 22, 0.12);
-  color: #fb923c;
+  color: var(--chart-orange);
   border-color: rgba(249, 115, 22, 0.3);
 }
 
@@ -1642,7 +1642,7 @@ html, body {
 .log-phase--streaming    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); animation: phasePulse 2s ease-in-out infinite; }
 .log-phase--completed    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
 .log-phase--failed       { background: var(--color-error-soft); color: var(--color-error); border-color: var(--color-error); }
-.log-phase--cancelled    { background: #e8d5f5; color: #7b2d8e; border-color: #7b2d8e; }
+.log-phase--cancelled    { background: var(--chart-tint-purple); color: var(--chart-purple-darker); border-color: var(--chart-purple-darker); }
 .log-phase--predict_skipped { background: var(--color-surface-2); color: var(--color-text-muted); border-color: var(--color-border); }
 .status-pill.skipped     { background: var(--color-surface-2); color: var(--color-text-muted); border: 1px solid var(--color-border); }
 
@@ -2002,10 +2002,10 @@ table.monthly-matrix {
   letter-spacing: 0.03em;
   margin-right: var(--space-1);
 }
-.log-detail-role-system  { background: #e8e0f0; color: #6b3fa0; }
-.log-detail-role-assistant { background: #d4e8f0; color: #2a6496; }
-.log-detail-role-user    { background: #d8e8d0; color: #3a7a2a; }
-.log-detail-role-tool    { background: #f0e8d0; color: #8a6a00; }
+.log-detail-role-system  { background: var(--chart-tint-lavender); color: var(--chart-purple-dark); }
+.log-detail-role-assistant { background: var(--chart-tint-blue); color: #2a6496; }
+.log-detail-role-user    { background: var(--chart-tint-green); color: var(--chart-green-dark); }
+.log-detail-role-tool    { background: var(--chart-tint-gold); color: var(--chart-warn); }
 .log-detail-msg-preview {
   color: var(--color-text-muted);
   font-family: var(--font-mono);
@@ -3668,20 +3668,20 @@ abbr {
 .analytics-ranking-value strong { font-size: var(--fs-sm); }
 .analytics-ranking-value span { color: var(--color-text-muted); font-size: var(--fs-xs); }
 .analytics-ranking-track { grid-column: 1 / -1; height: 5px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
-.analytics-ranking-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2563eb, #7c3aed); }
+.analytics-ranking-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--chart-blue), var(--chart-violet)); }
 
 .analytics-latency-key { display: flex; justify-content: flex-end; gap: var(--space-3); padding: 0 var(--space-4); color: var(--color-text-muted); font-size: var(--fs-xs); }
 .analytics-latency-key span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: var(--space-1); border-radius: 50%; }
-.analytics-latency-key .p50::before { background: #60a5fa; }
-.analytics-latency-key .p95::before { background: #2563eb; }
+.analytics-latency-key .p50::before { background: var(--chart-blue-mid); }
+.analytics-latency-key .p95::before { background: var(--chart-blue); }
 .analytics-latency-list { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-3) var(--space-4) var(--space-4); }
 .analytics-latency-row-head { display: flex; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); font-size: var(--fs-xs); }
 .analytics-latency-row-head > span { display: flex; gap: var(--space-3); font-family: var(--font-mono); }
 .analytics-latency-row-head small { color: var(--color-text-muted); }
 .analytics-latency-track { position: relative; height: 8px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
 .analytics-latency-track span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; }
-.analytics-latency-track .p95 { background: #2563eb; }
-.analytics-latency-track .p50 { height: 4px; margin-top: 2px; background: #93c5fd; }
+.analytics-latency-track .p95 { background: var(--chart-blue); }
+.analytics-latency-track .p50 { height: 4px; margin-top: 2px; background: var(--chart-blue-xlight); }
 .analytics-throughput-foot { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border-soft); color: var(--color-text-muted); font-size: var(--fs-xs); }
 .analytics-throughput-foot span { margin-right: auto; }
 .analytics-throughput-foot strong { color: var(--color-text); font-family: var(--font-mono); }
@@ -4721,12 +4721,17 @@ abbr {
 
 /* =============================================================================
    Playground Reasoning (Thinking Process) & Markdown / Math Formatting
-   ============================================================================= */
+   ============================================================================= 
+   Follow-up (FU4): the rgba(99, 102, 241, ...) values below are the
+   indigo (#6366f1 -> --chart-indigo) with fixed alpha used inside
+   @keyframes box-shadow animations. They are intentionally left as
+   literal rgba() because keyframe interpolation with color-mix()
+   is not universally supported and these run at 60fps. */
 
 .playground-reasoning-card {
   background: var(--color-surface-2);
   border: var(--border-w) var(--border-style) var(--color-border);
-  border-left: 3px solid var(--color-primary, #6366f1);
+  border-left: 3px solid var(--color-primary, var(--chart-indigo));
   border-radius: var(--radius-md);
   margin-bottom: var(--space-3);
   overflow: hidden;
@@ -4776,7 +4781,7 @@ abbr {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--color-primary, #6366f1);
+  background: var(--color-primary, var(--chart-indigo));
   box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7);
   animation: thinkingPulse 1.5s infinite;
 }
@@ -4798,7 +4803,7 @@ abbr {
 
 .thinking-status-text {
   font-size: var(--fs-xs);
-  color: var(--color-primary, #6366f1);
+  color: var(--color-primary, var(--chart-indigo));
   font-weight: 500;
   font-style: italic;
 }
@@ -4986,8 +4991,8 @@ abbr {
 }
 
 .md-copy-btn.copied {
-  color: var(--color-success, #10b981);
-  border-color: var(--color-success, #10b981);
+  color: var(--color-success, var(--chart-green));
+  border-color: var(--color-success, var(--chart-green));
   font-weight: 600;
 }
 

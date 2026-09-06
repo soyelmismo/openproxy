@@ -113,6 +113,29 @@
   --color-scrollbar-thumb-hover: #54504a;
   --color-scrollbar-track:       transparent;
 
+  /* Chart & Badge colors — dark: more saturated / lighter for
+     contrast against the warm dark canvas. */
+  --chart-green:        #34d399;  /* emerald-400 */
+  --chart-green-dark:   #6fcf6f;  /* custom lifted */
+  --chart-blue-light:   #7dd3fc;  /* sky-300 */
+  --chart-blue:         #60a5fa;  /* blue-400 */
+  --chart-blue-mid:     #93c5fd;  /* blue-300 */
+  --chart-blue-xlight:  #bfdbfe;  /* blue-200 */
+  --chart-indigo:       #818cf8;  /* indigo-400 */
+  --chart-violet:       #a78bfa;  /* violet-400 */
+  --chart-purple-light: #d8b4fe;  /* purple-300 */
+  --chart-purple-dark:  #c4a0e0;  /* custom lifted */
+  --chart-purple-darker:#d4a0d8;  /* custom lifted */
+  --chart-pink:         #f9a8d4;  /* pink-300 */
+  --chart-yellow:       #fde047;  /* yellow-300 */
+  --chart-orange:       #fdba74;  /* orange-300 */
+  --chart-warn:         #d4b04a;  /* near warn lifted */
+  --chart-tint-blue:    #1e2a38;  /* dark blue surface */
+  --chart-tint-green:   #1e2a1e;  /* dark green surface */
+  --chart-tint-purple:  #2a1e2e;  /* dark purple surface */
+  --chart-tint-lavender:#28242e;  /* dark lavender surface */
+  --chart-tint-gold:    #2e2a1c;  /* dark gold surface */
+
   /* Dark mode lifts shadow opacity so elevated surfaces
      stay legible against the warm dark canvas. */
   --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.45);
@@ -176,5 +199,26 @@
     --color-scrollbar-thumb:       #3c3935;
     --color-scrollbar-thumb-hover: #54504a;
     --color-scrollbar-track:       transparent;
+
+    --chart-green:        #34d399;  /* emerald-400 */
+    --chart-green-dark:   #6fcf6f;  /* custom lifted */
+    --chart-blue-light:   #7dd3fc;  /* sky-300 */
+    --chart-blue:         #60a5fa;  /* blue-400 */
+    --chart-blue-mid:     #93c5fd;  /* blue-300 */
+    --chart-blue-xlight:  #bfdbfe;  /* blue-200 */
+    --chart-indigo:       #818cf8;  /* indigo-400 */
+    --chart-violet:       #a78bfa;  /* violet-400 */
+    --chart-purple-light: #d8b4fe;  /* purple-300 */
+    --chart-purple-dark:  #c4a0e0;  /* custom lifted */
+    --chart-purple-darker:#d4a0d8;  /* custom lifted */
+    --chart-pink:         #f9a8d4;  /* pink-300 */
+    --chart-yellow:       #fde047;  /* yellow-300 */
+    --chart-orange:       #fdba74;  /* orange-300 */
+    --chart-warn:         #d4b04a;  /* near warn lifted */
+    --chart-tint-blue:    #1e2a38;  /* dark blue surface */
+    --chart-tint-green:   #1e2a1e;  /* dark green surface */
+    --chart-tint-purple:  #2a1e2e;  /* dark purple surface */
+    --chart-tint-lavender:#28242e;  /* dark lavender surface */
+    --chart-tint-gold:    #2e2a1c;  /* dark gold surface */
   }
 }
