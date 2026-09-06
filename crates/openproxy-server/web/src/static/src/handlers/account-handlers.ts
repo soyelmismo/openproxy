@@ -201,11 +201,9 @@ export async function copyAccountApiKey(id: number): Promise<void> {
         await copyToClipboard(res.api_key);
         showToast("API key copied to clipboard", "success");
       } catch (_e: unknown) {
-        // Tech debt (Q5): last-resort native prompt so the operator can
-        // still read the key when both clipboard paths fail. Replace with
-        // a read-only modal (showBundleInModal pattern in log-detail.ts)
-        // in a later phase.
-        window.prompt("Copy your API key:", res.api_key);
+        // Both navigator.clipboard and execCommand failed — show a
+        // read-only modal so the operator can manually select+copy.
+        showApiKeyDisplay(res.api_key);
       }
     } else {
       showToast("No API key returned", "error");
@@ -213,5 +211,41 @@ export async function copyAccountApiKey(id: number): Promise<void> {
   } catch (err: unknown) {
     showApiError(err, "Error copying API key");
   }
+}
+
+/**
+ * Display an API key in a read-only modal so the operator can
+ * manually select and copy it. Used as a last-resort fallback when
+ * both clipboard paths (navigator.clipboard + execCommand) fail.
+ */
+function showApiKeyDisplay(apiKey: string): void {
+  const handle = renderOpModal({
+    title: "API Key Created",
+    body: html`
+      <p style="margin: 0 0 var(--space-3); color: var(--color-text-muted); font-size: var(--fs-sm);">
+        Copy this key. It will not be shown again.
+      </p>
+      <input
+        type="text"
+        readonly
+        .value=${apiKey}
+        style="width: 100%; padding: var(--space-2); font-family: var(--font-mono); font-size: var(--fs-sm); background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); user-select: all; cursor: text;"
+      />
+    `,
+    actions: html`
+      <button type="button" @click=${() => handle.close()}>Close</button>
+      <button type="button" class="primary"
+        @click=${async () => {
+          try {
+            await copyToClipboard(apiKey);
+            showToast("API key copied to clipboard", "success");
+            handle.close();
+          } catch {
+            showToast("Copy failed — select the text in the field above and press Ctrl+C", "warning");
+          }
+        }}
+      >Copy</button>
+    `,
+  });
 }
 
