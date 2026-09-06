@@ -35,7 +35,7 @@ import { mountNotifications } from "../views/notifications.js";
 import { mountLogin } from "../views/login.js";
 import { mountProxies } from "../views/proxies.js";
 import { mountProxySources } from "../views/proxy-sources.js";
-import { mountPlayground } from "../views/playground.js";
+import { mountPlayground } from "../views/playground/index.js";
 
 export type RouteName =
   | "home"
