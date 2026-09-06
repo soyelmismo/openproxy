@@ -356,7 +356,12 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
     const result = await api("/keys", { method: "POST", body: JSON.stringify(body) }) as KeyPlaintextResponse;
     if (wrapper) wrapper.remove();
     else closeKeyForm("self", e);
+    // Show the one-time secret first: a failed list refetch must never
+    // delay or drop the only plaintext display. Same refresh pattern
+    // as updateKey (plaintext-modal flows stay inline, see regenerateKey).
     showPlaintextKey(result.plaintext, result.key);
+    state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
   }

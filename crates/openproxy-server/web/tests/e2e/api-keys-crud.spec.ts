@@ -8,23 +8,19 @@ import { readFileSync } from 'node:fs';
  *
  * Server contract under test (crates/openproxy-server/src/handlers/admin/api_keys.rs):
  *   POST   /admin/api/keys          -> 200 {key, plaintext}
- *   GET    /admin/api/keys/:id      -> 200 ApiKey | 404 when missing   [BUG-2 below]
+ *   GET    /admin/api/keys/:id      -> 200 ApiKey | 404 {"error":{"code":"not_found"}} when missing
  *   PATCH  /admin/api/keys/:id      -> 200 {id}
  *   DELETE /admin/api/keys/:id      -> 200 {id, deleted:true}
  *
- * KNOWN BUGS this suite documents (do not "fix" the tests to hide them):
+ * Regression coverage for two previously-known bugs (both fixed):
  *
  * BUG-1 (UI, key-handlers.ts createKey): after creating a key the handler
- *   never refreshes state.apiKeys nor calls requestUpdate(); the list stays
- *   stale until the user navigates away and back. The test mirrors the only
- *   recovery a real user has (reload the view) and asserts the key exists
- *   after it.
+ *   must refresh state.apiKeys and call requestUpdate() so the new row
+ *   appears without a reload; the test asserts exactly that (no reload).
  *
  * BUG-2 (server, get_api_key): GET /admin/api/keys/:id for a missing id
- *   builds CoreError::Internal(...) instead of CoreError::NotFound, so the
- *   API answers 500 {"error":{"code":"internal"}} instead of 404. The spec
- *   requires 404/absence; the test asserts the contract (404) and fails
- *   until the handler is fixed.
+ *   must answer 404 {"error":{"code":"not_found"}} (CoreError::NotFound),
+ *   never 500. The second test in this file is the dedicated regression.
  */
 
 // `page.request` shares cookies only, not localStorage; the dashboard
@@ -81,12 +77,10 @@ test.describe('API keys CRUD', () => {
       expect(prefix).toBeTruthy();
       expect(prefix).not.toBe(plaintext);
 
-      // 6. Close the modal. BUG-1: createKey does not refresh the list, so the
-      //    row is absent until the view reloads. Assert the staleness explicitly
-      //    (documents the bug) and then reload — the only user-visible recovery.
+      // 6. Close the modal. createKey refreshes state.apiKeys and re-renders,
+      //    so the new row appears WITHOUT a reload (BUG-1 regression); the
+      //    table persists the prefix — never the plaintext secret.
       await page.getByRole('button', { name: "I've saved it" }).click();
-      await expect(page.locator('.keys-table')).not.toContainText(label); // BUG-1
-      await page.reload();
       const row = page.locator('tr[data-row-key]').filter({ hasText: label });
       await expect(row).toHaveCount(1);
       await expect(page.locator('.keys-table')).toContainText(prefix);
@@ -136,8 +130,7 @@ test.describe('API keys CRUD', () => {
       keyId = undefined;
 
       await expect(page.locator('.keys-table')).not.toContainText(editedLabel);
-      // Contract: 404 once deleted. Server currently answers 500 (BUG-2);
-      // this assertion is the regression signal for that fix.
+      // Contract: 404 once deleted (BUG-2 regression).
       const gone = await page.request.get(`/admin/api/keys/${deletedId}`, {
         headers: adminAuthHeaders(),
       });
@@ -153,9 +146,9 @@ test.describe('API keys CRUD', () => {
   });
 
   test('BUG-2: GET /admin/api/keys/:id answers 404 for a missing id', async ({ page }) => {
-    // Missing id, not derived from any seed row. Server currently maps
-    // get_api_key's not-found to CoreError::Internal -> 500. The contract
-    // (and every other not-found path in this API) is 404.
+    // Missing id, not derived from any seed row. Regression for the
+    // get_api_key handler: not-found must map to CoreError::NotFound
+    // (404 "not_found"), never CoreError::Internal (500).
     const missingId = 9_999_999;
     const r = await page.request.get(`/admin/api/keys/${missingId}`, {
       headers: adminAuthHeaders(),
