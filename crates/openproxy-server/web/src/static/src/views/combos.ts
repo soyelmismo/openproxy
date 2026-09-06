@@ -578,11 +578,18 @@ export async function mountCombos(opts: { detailId?: number } = {}): Promise<(()
         ]);
         return { combo, targets: targets || [] };
       },
-      render: (data) => {
+      onLoaded: (data) => {
+        // Sync the loader result into the module-local state ONCE per
+        // load — NOT on every render. Assigning inside `render`
+        // re-clobbers `detailTargets` with this closure's stale `data`
+        // on every requestUpdate, undoing external refreshes (e.g.
+        // onChangePriority / executeTargetReorder's post-reorder
+        // refetch) and leaving the target table showing the stale
+        // order. Same root cause as BUG-C2 (grid's state.combos).
         detailCombo = data.combo;
         detailTargets = data.targets;
-        return renderComboDetail();
       },
+      render: () => renderComboDetail(),
       loading: () => html`<div class="loading">${t("common.loading")}</div>`,
       error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,
     });
