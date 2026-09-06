@@ -116,3 +116,30 @@ hr {
 .error { color: var(--color-error); }
 .empty { color: var(--color-text-muted); font-style: italic; }
 .loading { color: var(--color-text-muted); padding: var(--space-4); }
+
+/* ==========
+   ACCESSIBILITY — prefers-reduced-motion, focus-visible
+   ========== */
+
+/* Suppress all animation/transition for users who opt out of
+   motion via their OS setting. The class is toggled by
+   motion-provider.ts which reads matchMedia("prefers-reduced-motion").
+   High specificity (.reduced-motion *) ensures these overrides
+   win in the cascade against per-element rules. */
+.reduced-motion,
+.reduced-motion * {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Focus-visible: visible ring only for keyboard navigation.
+   Mouse / touch clicks get no outline (smoother UX). */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}

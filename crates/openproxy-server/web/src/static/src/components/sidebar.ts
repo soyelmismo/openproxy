@@ -101,7 +101,15 @@ function applyActiveState(): void {
   if (!sb) return;
   sb.querySelectorAll("nav a").forEach((a: Element) => {
     const aEl = a as HTMLElement;
-    aEl.classList.toggle("active", isActive(aEl.getAttribute("href") || ""));
+    const active = isActive(aEl.getAttribute("href") || "");
+    aEl.classList.toggle("active", active);
+    // a11y: announce the current page to screen readers so they
+    // can convey which nav link is active without visual context.
+    if (active) {
+      aEl.setAttribute("aria-current", "page");
+    } else {
+      aEl.removeAttribute("aria-current");
+    }
   });
 }
 
