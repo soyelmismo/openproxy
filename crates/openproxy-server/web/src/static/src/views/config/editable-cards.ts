@@ -14,9 +14,11 @@
 // no args) keeps working.
 
 import { html, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { api } from "../../state/api.js";
 import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../../components/toast.js";
+import { t } from "../../i18n/index.js";
 import {
   card, errStr, getConfig, renderField, setBanner, validateNonNegInt,
   DEFAULT_TIMEOUTS, TIMEOUT_FIELDS,
@@ -63,13 +65,13 @@ async function patchTimeouts(values: Record<TimeoutKey, number>): Promise<boolea
     await api("/config/timeouts", { method: "PUT", body: JSON.stringify(values) });
     const cfg = getConfig();
     if (cfg?.timeouts) Object.assign(cfg.timeouts, values);
-    showToast("Timeouts updated — applies to next requests", "success");
-    setBanner("success", "Live — applies to next requests",
-      "The values below are persisted in the database and will take effect on the next request. Requests already in flight continue with the previous values.");
+    showToast(t("config.timeouts.toast.updated"), "success");
+    setBanner("success", t("config.banner.live_applies"),
+      t("config.banner.live_applies_body"));
     requestUpdate();
     return true;
   } catch (e: unknown) {
-    showToast("Error: " + errStr(e), "error");
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
     requestUpdate();
     return false;
   }
@@ -80,11 +82,11 @@ async function patchRecordingTtl(value: number): Promise<boolean> {
     await api("/config/recording-ttl", { method: "PUT", body: JSON.stringify({ recording_ttl_secs: value }) });
     const cfg = getConfig();
     if (cfg) cfg.recording_ttl_secs = value;
-    showToast(`Recording TTL set to ${value}s — applies on next prune tick`, "success");
+    showToast(t("config.recording_ttl.toast.set", { value }), "success");
     requestUpdate();
     return true;
   } catch (e: unknown) {
-    showToast("Error: " + errStr(e), "error");
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
     requestUpdate();
     return false;
   }
@@ -95,11 +97,11 @@ async function patchCompression(mode: string): Promise<boolean> {
     await api("/config/compression", { method: "PUT", body: JSON.stringify(mode) });
     const cfg = getConfig();
     if (cfg) cfg.compression = mode;
-    showToast(`Compression mode set to ${mode} — applies to next requests`, "success");
+    showToast(t("config.compression.toast.set", { mode }), "success");
     requestUpdate();
     return true;
   } catch (e: unknown) {
-    showToast("Error: " + errStr(e), "error");
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
     requestUpdate();
     return false;
   }
@@ -113,11 +115,11 @@ async function patchIdleChunkRetryable(val: boolean): Promise<boolean> {
     await api("/config/idle-chunk-retryable", { method: "PUT", body: JSON.stringify({ idle_chunk_retryable: val }) });
     const cfg = getConfig();
     if (cfg) cfg.idle_chunk_retryable = val;
-    showToast(`Idle chunk retryable set to ${val} — applies to next requests`, "success");
+    showToast(t("config.idle_chunk.toast.set", { value: String(val) }), "success");
     return true;
   } catch (e: unknown) {
     liveIdleChunkRetryable = prev; // revert
-    showToast("Error: " + errStr(e), "error");
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
     requestUpdate();
     return false;
   }
@@ -133,11 +135,11 @@ async function patchQuotaProtection(enabled: boolean, threshold: number): Promis
     if (cfg) {
       cfg.quota_protection = { enabled, threshold_percentage: threshold };
     }
-    showToast("Quota protection updated", "success");
+    showToast(t("config.quota.toast.updated"), "success");
     requestUpdate();
     return true;
   } catch (e: unknown) {
-    showToast("Error: " + errStr(e), "error");
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
     requestUpdate();
     return false;
   }
@@ -177,7 +179,7 @@ async function onRecordingTtlChange(e: Event): Promise<void> {
 async function onCompressionChange(e: Event): Promise<void> {
   const mode = (e.target as HTMLSelectElement).value;
   if (mode !== "off" && mode !== "lite" && mode !== "rtk" && mode !== "lite_rtk") {
-    showToast(`Invalid compression mode: ${mode}`, "error");
+    showToast(t("config.compression.toast.invalid", { mode }), "error");
     return;
   }
   const prev = liveCompression;
@@ -205,7 +207,7 @@ async function onQuotaThresholdChange(e: Event): Promise<void> {
     return;
   }
   if (n < 1 || n > 99) {
-    showToast("Threshold percentage must be between 1 and 99", "error");
+    showToast(t("config.quota.toast.invalid_threshold"), "error");
     requestUpdate();
     return;
   }
@@ -260,7 +262,7 @@ export async function configSaveCompression(): Promise<void> {
   if (!el) { showToast("compression_mode select missing from DOM", "error"); return; }
   const mode = el.value;
   if (mode !== "off" && mode !== "lite" && mode !== "rtk" && mode !== "lite_rtk") {
-    showToast(`Invalid compression mode: ${mode}`, "error");
+    showToast(t("config.compression.toast.invalid", { mode }), "error");
     return;
   }
   const ok = await patchCompression(mode);
@@ -280,8 +282,8 @@ export async function configSaveIdleChunkRetryable(): Promise<void> {
 // ── Card templates ──────────────────────────────────────────────────
 
 export function renderTimeoutsCard(): TemplateResult {
-  return card(html`Timeouts <small>(ms)</small>`, html`
-    <p class="muted">Precedence (highest wins): <code>model overrides</code> → <code>system default</code>. These values are the single source of truth for <code>connect</code>, <code>request_send</code>, and <code>total</code> across all providers. Per-model overrides (set on each model row) only affect <code>ttft</code> and <code>idle_chunk</code>. Editing these values takes effect on the next request; in-flight requests keep the previous value.</p>
+  return card(unsafeHTML(t("config.timeouts.title")), html`
+    <p class="muted">${unsafeHTML(t("config.timeouts.description"))}</p>
     <div class="config-grid">
       ${renderField("connect_ms", "timeouts.connect_ms", liveTimeouts.connect_ms, "DNS + TCP connect + TLS handshake (upstream phases: dns, dial, tls).", (e) => { void onTimeoutChange("connect_ms", e); }, { editable: true })}
       ${renderField("request_send_ms", "timeouts.request_send_ms", liveTimeouts.request_send_ms, "Max time to write request headers + body (upstream phase: write).", (e) => { void onTimeoutChange("request_send_ms", e); }, { editable: true })}
@@ -293,41 +295,41 @@ export function renderTimeoutsCard(): TemplateResult {
 }
 
 export function renderRecordingTtlCard(): TemplateResult {
-  return card(html`Recording TTL <small>(seconds)</small>`, html`
-    <p class="muted">How long recorded request/response bodies and headers stay in the live-log detail view before being cleared from the database. Metadata rows are kept for analytics.</p>
+  return card(unsafeHTML(t("config.recording_ttl.title")), html`
+    <p class="muted">${t("config.recording_ttl.description")}</p>
     <div class="config-grid">
       ${renderField("recording_ttl_secs", "recording_ttl_secs", liveRecordingTtl, "TTL in seconds. Use 0 to clear bodies on the next prune tick.", (e) => { void onRecordingTtlChange(e); }, { editable: true, step: 1 })}
     </div>
     <div class="config-actions" style="margin-top: 1rem;">
-      <button class="primary" data-action="configSaveRecordingTtl" @click=${configSaveRecordingTtl}>Save Recording TTL</button>
+      <button class="primary" data-action="configSaveRecordingTtl" @click=${configSaveRecordingTtl}>${t("config.recording_ttl.save")}</button>
     </div>
   `);
 }
 
 export function renderCompressionCard(): TemplateResult {
-  return card("Compression", html`
-    <p class="muted">Reduce upstream token usage by compressing messages before sending them. <code>Lite</code> applies safe text normalization (zero semantic change); <code>Rtk</code> adds CLI-aware output filtering (git, cargo, etc.). See <a href="https://github.com/rtk-ai/rtk" target="_blank">rtk.ai</a> for details.</p>
+  return card(t("config.compression.title"), html`
+    <p class="muted">${unsafeHTML(t("config.compression.description"))}</p>
     <div class="config-grid">
       <label class="config-field">
-        <span class="config-label">mode</span>
+        <span class="config-label">${t("config.compression.mode_label")}</span>
         <select name="compression_mode" aria-label="Compression mode" @change=${onCompressionChange}>
-          <option value="off" ?selected=${liveCompression === "off"}>Off</option>
-          <option value="lite" ?selected=${liveCompression === "lite"}>Lite</option>
-          <option value="rtk" ?selected=${liveCompression === "rtk"}>Rtk</option>
-          <option value="lite_rtk" ?selected=${liveCompression === "lite_rtk"}>Lite + Rtk</option>
+          <option value="off" ?selected=${liveCompression === "off"}>${t("config.compression.off")}</option>
+          <option value="lite" ?selected=${liveCompression === "lite"}>${t("config.compression.lite")}</option>
+          <option value="rtk" ?selected=${liveCompression === "rtk"}>${t("config.compression.rtk")}</option>
+          <option value="lite_rtk" ?selected=${liveCompression === "lite_rtk"}>${t("config.compression.lite_rtk")}</option>
         </select>
-        <span class="config-help">Which compression strategy to apply on every request. Changes apply to the <strong>next</strong> request.</span>
+        <span class="config-help">${unsafeHTML(t("config.compression.help"))}</span>
       </label>
     </div>
   `);
 }
 
 export function renderIdleChunkCard(): TemplateResult {
-  return card("Idle Chunk Retryable", html`
-    <p class="muted">When enabled, idle chunk timeouts (max gap between SSE chunks) are treated as retryable: the pipeline falls through to the next target instead of aborting. When disabled (default), idle chunk timeouts return an error immediately.</p>
+  return card(t("config.idle_chunk.title"), html`
+    <p class="muted">${t("config.idle_chunk.description")}</p>
     <div class="config-grid">
       <label class="config-field">
-        <span class="config-label">idle_chunk_retryable</span>
+        <span class="config-label">${t("config.idle_chunk.label")}</span>
         <button type="button" role="switch" aria-checked=${liveIdleChunkRetryable ? "true" : "false"}
                 class="toggle-btn ${liveIdleChunkRetryable ? "on" : "off"}"
                 @click=${() => { void onToggleIdleChunkRetryable(); }}>
@@ -335,33 +337,33 @@ export function renderIdleChunkCard(): TemplateResult {
         </button>
         <input type="checkbox" name="idle_chunk_retryable" ?checked=${liveIdleChunkRetryable} class="sr-only">
         <span class="config-help">${liveIdleChunkRetryable
-          ? "ON — idle chunk timeouts allow retry via next target"
-          : "OFF — idle chunk timeouts return error immediately (default)"}</span>
+          ? t("config.idle_chunk.help_on")
+          : t("config.idle_chunk.help_off")}</span>
       </label>
     </div>
   `);
 }
 
 export function renderQuotaCard(): TemplateResult {
-  return card("Quota Protection", html`
-    <p class="muted">Enable dynamic account quota rotation and protection. When active, accounts with exhausted or low quota (below the reserve threshold) are bypassed and rotated dynamically for the requested model.</p>
+  return card(t("config.quota.title"), html`
+    <p class="muted">${t("config.quota.description")}</p>
     <div class="config-grid">
       <label class="config-field">
-        <span class="config-label">Enabled</span>
+        <span class="config-label">${t("config.quota.enabled")}</span>
         <button type="button" role="switch" aria-checked=${liveQuotaProtectionEnabled ? "true" : "false"}
                 class="toggle-btn ${liveQuotaProtectionEnabled ? "on" : "off"}"
                 @click=${() => { void onToggleQuotaProtection(); }}>
           <span class="toggle-thumb"></span>
         </button>
         <span class="config-help">${liveQuotaProtectionEnabled
-          ? "ON — Bypasses exhausted/protected accounts"
-          : "OFF — Quota-based routing disabled (default)"}</span>
+          ? t("config.quota.help_on")
+          : t("config.quota.help_off")}</span>
       </label>
       <label class="config-field">
-        <span class="config-label">Reserve Threshold (%)</span>
+        <span class="config-label">${t("config.quota.reserve_threshold")}</span>
         <input type="number" min="1" max="99" name="quota_protection.threshold_percentage" .value=${String(liveQuotaProtectionThreshold)}
                @change=${onQuotaThresholdChange} @input=${onQuotaThresholdChange}>
-        <span class="config-help">Accounts dropping below this remaining fraction percentage are protected and avoided if other candidate accounts have quota (1-99).</span>
+        <span class="config-help">${t("config.quota.help_threshold")}</span>
       </label>
     </div>
   `);

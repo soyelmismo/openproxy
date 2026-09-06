@@ -8,6 +8,7 @@ import { requestUpdate } from '../../state/reactive.js';
 import { showToast } from '../../components/toast.js';
 import { icons } from '../../lib/icons.js';
 import { copyToClipboard } from '../../lib/clipboard.js';
+import { t } from '../../i18n/index.js';
 import type { ModalityType, PlaygroundState } from './shared.js';
 import { generateId } from './shared.js';
 import { generateCurlCommand } from './curl.js';
@@ -49,7 +50,7 @@ export function clearPlayground(st: PlaygroundState): void {
   }
   resetExecutionState(st);
   requestUpdate();
-  showToast('Playground cleared', 'info');
+  showToast(t('playground.header.cleared'), 'info');
 }
 
 function copyTextToClipboard(text: string, label = 'Content'): void {
@@ -64,15 +65,15 @@ function renderStatusBadge(st: PlaygroundState): TemplateResult {
   const isErr = (status !== null && status >= 400) || st.responseError !== null;
 
   if (st.isLoading) {
-    return html`<span class="playground-live-badge live-generating"><span class="pulse-dot"></span> Generating…</span>`;
+    return html`<span class="playground-live-badge live-generating"><span class="pulse-dot"></span> ${t('playground.status.generating')}</span>`;
   }
   if (isOk) {
-    return html`<span class="playground-live-badge live-done"><span class="status-dot"></span> Ready (${st.currentMetrics.totalLatencyMs || 0}ms)</span>`;
+    return html`<span class="playground-live-badge live-done"><span class="status-dot"></span> ${t('playground.status.ready', { ms: st.currentMetrics.totalLatencyMs || 0 })}</span>`;
   }
   if (isErr) {
-    return html`<span class="playground-live-badge live-error">${icons.warning()} ${status ? `HTTP ${status}` : 'Error'}</span>`;
+    return html`<span class="playground-live-badge live-error">${icons.warning()} ${status ? `HTTP ${status}` : t('playground.metrics.error')}</span>`;
   }
-  return html`<span class="playground-live-badge live-idle"><span class="status-dot"></span> Idle</span>`;
+  return html`<span class="playground-live-badge live-idle"><span class="status-dot"></span> ${t('playground.status.idle')}</span>`;
 }
 
 interface StudioHeaderCallbacks {
@@ -99,7 +100,7 @@ export function renderStudioHeader(st: PlaygroundState, callbacks: StudioHeaderC
     <div class="playground-studio-header">
       <div class="playground-studio-title-area">
         <div class="playground-title-row">
-          <h2 class="playground-studio-title">Playground</h2>
+          <h2 class="playground-studio-title">${t('playground.title')}</h2>
           ${renderStatusBadge(st)}
         </div>
       </div>
@@ -110,25 +111,25 @@ export function renderStudioHeader(st: PlaygroundState, callbacks: StudioHeaderC
           class="segmented-item ${st.modality === 'chat' ? 'active' : ''}"
           @click=${() => switchModality('chat')}
         >
-          <span class="seg-icon">${icons.chat()}</span> Chat
+          <span class="seg-icon">${icons.chat()}</span> ${t('playground.modality.chat')}
         </button>
         <button
           class="segmented-item ${st.modality === 'image' ? 'active' : ''}"
           @click=${() => switchModality('image')}
         >
-          <span class="seg-icon">${icons.image()}</span> Image Studio
+          <span class="seg-icon">${icons.image()}</span> ${t('playground.modality.image')}
         </button>
         <button
           class="segmented-item ${st.modality === 'embedding' ? 'active' : ''}"
           @click=${() => switchModality('embedding')}
         >
-          <span class="seg-icon">${icons.embedding()}</span> Embeddings
+          <span class="seg-icon">${icons.embedding()}</span> ${t('playground.modality.embedding')}
         </button>
         <button
           class="segmented-item ${st.modality === 'audio' ? 'active' : ''}"
           @click=${() => switchModality('audio')}
         >
-          <span class="seg-icon">${icons.audio()}</span> Audio Transcription
+          <span class="seg-icon">${icons.audio()}</span> ${t('playground.modality.audio')}
         </button>
       </div>
 
@@ -136,16 +137,16 @@ export function renderStudioHeader(st: PlaygroundState, callbacks: StudioHeaderC
       <div class="playground-studio-actions">
         ${st.isLoading
           ? html`<button class="playground-run-btn btn-danger" @click=${cancelRequest}>
-              ${icons.pause()} Stop
+              ${icons.pause()} ${t('playground.header.stop')}
             </button>`
           : html`<button class="playground-run-btn btn-primary" @click=${() => void executeRequest()} title="Execute Request (Ctrl+Enter)">
-              ${icons.play()} Run <kbd class="playground-kbd">Ctrl+↵</kbd>
+              ${icons.play()} ${t('playground.header.run')} <kbd class="playground-kbd">Ctrl+↵</kbd>
             </button>`}
         <button class="playground-action-btn" @click=${copyCurlToClipboard} title="Copy as cURL command">
-          ${icons.copy()} Copy cURL
+          ${icons.copy()} ${t('playground.header.copy_curl')}
         </button>
         <button class="playground-action-btn text-muted" @click=${() => clearPlayground(st)} title="Clear conversation or inputs">
-          ${icons.trash()} Clear
+          ${icons.trash()} ${t('playground.header.clear')}
         </button>
       </div>
     </div>

@@ -7,6 +7,7 @@
 import { requestUpdate } from '../../state/reactive.js';
 import { showToast } from '../../components/toast.js';
 import { getToken } from '../../state/auth.js';
+import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 import { generateId } from './shared.js';
 import { getEffectiveApiKeyFromState } from './curl.js';
@@ -55,14 +56,14 @@ export async function executeRequest(st: PlaygroundState, ensureDefaultModel: (s
 
   const key = getEffectiveApiKeyFromState(st);
   if (!key && !getToken()) {
-    showToast('Please provide an API Key or log in to send requests', 'error');
+    showToast(t('playground.request.api_key_error'), 'error');
     return;
   }
 
   ensureDefaultModel(st);
   const effectiveModel = st.selectedModelId || st.customModelInput.trim();
   if (!effectiveModel) {
-    showToast('Please select or enter a Model Target', 'error');
+    showToast(t('playground.request.model_error'), 'error');
     return;
   }
 
@@ -84,7 +85,7 @@ export async function executeRequest(st: PlaygroundState, ensureDefaultModel: (s
     }
   } catch (err: unknown) {
     if (st.abortController?.signal.aborted) {
-      st.responseError = 'Request stopped by user.';
+      st.responseError = t('playground.request.stopped');
     } else {
       const msg = err instanceof Error ? err.message : String(err);
       st.responseError = msg;

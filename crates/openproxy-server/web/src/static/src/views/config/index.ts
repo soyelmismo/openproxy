@@ -13,9 +13,11 @@
 // re-exported because `handlers/registry.ts` imports them by name.
 
 import { html, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { api } from "../../state/api.js";
 import { requestUpdate } from "../../state/reactive.js";
 import { createView } from "../../lib/view-utils.js";
+import { t } from "../../i18n/index.js";
 import {
   card, getConfig, getBanner, renderStaticField, setBanner, setConfig,
   type ConfigPayload,
@@ -49,19 +51,19 @@ function renderStaticRegion(cfg: ConfigPayload): TemplateResult {
   const cb = cfg.circuit_breaker || {};
   const rc = cfg.racing || {};
   return html`<details class="config-static-region">
-    <summary>Server defaults (read-only — edit config.toml and restart)</summary>
-    ${card("Retries", html`<div class="config-static-display">
+    <summary>${t("config.static.readonly_summary")}</summary>
+    ${card(t("config.static.retries"), html`<div class="config-static-display">
       ${renderStaticField("max_attempts", r.max_attempts)}
       ${renderStaticField("backoff_base_ms", r.backoff_base_ms)}
       ${renderStaticField("backoff_factor", r.backoff_factor)}
       ${renderStaticField("backoff_jitter_pct", r.backoff_jitter_pct)}
       ${renderStaticField("combo_max_attempts", r.combo_max_attempts)}
     </div>`)}
-    ${card("Circuit Breaker", html`<div class="config-static-display">
+    ${card(t("config.static.circuit_breaker"), html`<div class="config-static-display">
       ${renderStaticField("failure_threshold", cb.failure_threshold)}
       ${renderStaticField("unhealthy_duration_ms", cb.unhealthy_duration_ms)}
     </div>`)}
-    ${card("Racing", html`<div class="config-static-display">
+    ${card(t("config.static.racing"), html`<div class="config-static-display">
       ${renderStaticField("default_race_size", rc.default_race_size)}
       ${renderStaticField("max_race_size", rc.max_race_size)}
       ${renderStaticField("abort_grace_ms", rc.abort_grace_ms)}
@@ -73,22 +75,22 @@ function renderStaticRegion(cfg: ConfigPayload): TemplateResult {
 
 function renderConfig(): TemplateResult {
   if (loading) {
-    return html`<div class="page-header"><h2>Config</h2></div>
-      <div class="loading">Loading...</div>`;
+    return html`<div class="page-header"><h2>${t("config.title")}</h2></div>
+      <div class="loading">${t("common.loading")}</div>`;
   }
   if (errorMsg) {
-    return html`<div class="page-header"><h2>Config</h2></div>
+    return html`<div class="page-header"><h2>${t("config.title")}</h2></div>
       <div class="banner banner-error">${errorMsg}</div>`;
   }
   const cfg = getConfig();
   if (!cfg) {
-    return html`<div class="page-header"><h2>Config</h2></div>
-      <div class="loading">Loading...</div>`;
+    return html`<div class="page-header"><h2>${t("config.title")}</h2></div>
+      <div class="loading">${t("common.loading")}</div>`;
   }
   const banner = getBanner();
 
   return html`
-    <div class="page-header"><h2>Config</h2></div>
+    <div class="page-header"><h2>${t("config.title")}</h2></div>
     <div class="banner banner-${banner.kind}">
       <strong>${banner.title}</strong>
       ${banner.body}
@@ -103,13 +105,13 @@ function renderConfig(): TemplateResult {
     </div>
     ${renderStaticRegion(cfg)}
     <details class="config-details">
-      <summary>What does the precedence chain look like?</summary>
-      <p>The pipeline resolves the effective timeouts on every request via <code>openproxy_core::timeouts::resolve</code>:</p>
+      <summary>${t("config.precedence.title")}</summary>
+      <p>${unsafeHTML(t("config.precedence.body"))}</p>
       <ol>
-        <li>Start with the system defaults shown above (this view). These are the single source of truth for <code>connect</code>, <code>request_send</code>, and <code>total</code> — there are no per-provider overrides anymore.</li>
-        <li>Override <code>ttft</code> and <code>idle_chunk</code> from <code>models.timeout_overrides_json</code> if the target model sets them.</li>
+        <li>${unsafeHTML(t("config.precedence.step1"))}</li>
+        <li>${unsafeHTML(t("config.precedence.step2"))}</li>
       </ol>
-      <p>Per-model overrides live in the database (not in <code>config.toml</code>), so they <em>can</em> change without a restart — but they are not exposed in this view. Use the Providers / Combos detail screens for those.</p>
+      <p>${unsafeHTML(t("config.precedence.per_model_note"))}</p>
     </details>`;
 }
 
@@ -131,8 +133,8 @@ export async function mountConfig(): Promise<(() => void) | void> {
       // when a VACUUM completes)
       if (vacuumPollHandle) clearInterval(vacuumPollHandle);
       vacuumPollHandle = setInterval(() => void pollVacuumStatus(), 5000);
-      setBanner("info", "Live values.",
-        "The values below are the ones the server is currently using. Timeouts, Recording TTL, Compression, the Idle Chunk Retryable flag, and Database Maintenance are editable; the other sections reflect the loaded config.toml.");
+      setBanner("info", t("config.banner.live_values"),
+        t("config.banner.live_values_body"));
       loading = false;
       requestUpdate();
     },

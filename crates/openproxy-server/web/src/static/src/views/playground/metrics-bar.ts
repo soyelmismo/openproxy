@@ -5,6 +5,7 @@
 // counts or payload size.
 
 import { html, type TemplateResult } from 'lit-html';
+import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 
 function computeTokensPerSec(st: PlaygroundState): string | null {
@@ -27,21 +28,21 @@ export function renderMetricsBar(st: PlaygroundState): TemplateResult {
   return html`
     <div class="playground-metrics-bar">
       <div class="playground-metric">
-        <span class="metric-label">Status</span>
+         <span class="metric-label">${t('playground.metrics.status')}</span>
         <span class="status-pill ${isOk ? 'on' : isErr ? 'off' : ''}">
           ${status ? `${status} ${st.currentMetrics.statusText || ''}` : st.responseError ? 'Error' : '—'}
         </span>
       </div>
 
       <div class="playground-metric">
-        <span class="metric-label">Latency</span>
+         <span class="metric-label">${t('playground.metrics.latency')}</span>
         <span class="metric-value">${st.currentMetrics.totalLatencyMs !== null ? `${st.currentMetrics.totalLatencyMs} ms` : '—'}</span>
       </div>
 
       ${st.currentMetrics.ttftMs !== null
         ? html`
             <div class="playground-metric">
-              <span class="metric-label">TTFT</span>
+               <span class="metric-label">${t('playground.metrics.ttft')}</span>
               <span class="metric-value">${st.currentMetrics.ttftMs} ms</span>
             </div>
           `
@@ -50,7 +51,7 @@ export function renderMetricsBar(st: PlaygroundState): TemplateResult {
       ${tokensPerSec !== null
         ? html`
             <div class="playground-metric">
-              <span class="metric-label">Speed</span>
+               <span class="metric-label">${t('playground.metrics.speed')}</span>
               <span class="metric-value">${tokensPerSec}</span>
             </div>
           `
@@ -59,7 +60,7 @@ export function renderMetricsBar(st: PlaygroundState): TemplateResult {
       ${st.currentMetrics.totalTokens !== null
         ? html`
             <div class="playground-metric">
-              <span class="metric-label">Tokens</span>
+               <span class="metric-label">${t('playground.metrics.tokens')}</span>
               <span class="metric-value">
                 ${st.currentMetrics.totalTokens}
                 ${st.currentMetrics.promptTokens !== null ? html`<small class="text-muted">(${st.currentMetrics.promptTokens}p / ${st.currentMetrics.completionTokens || 0}c)</small>` : html``}
@@ -69,7 +70,7 @@ export function renderMetricsBar(st: PlaygroundState): TemplateResult {
         : st.currentMetrics.payloadSizeBytes !== null
         ? html`
             <div class="playground-metric">
-              <span class="metric-label">Size</span>
+               <span class="metric-label">${t('playground.metrics.size')}</span>
               <span class="metric-value">${Math.round(st.currentMetrics.payloadSizeBytes / 10.24) / 100} KB</span>
             </div>
           `

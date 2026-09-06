@@ -11,6 +11,7 @@ import { html, type TemplateResult } from "lit-html";
 import { api } from "../../state/api.js";
 import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../../components/toast.js";
+import { t } from "../../i18n/index.js";
 import { card, errStr, type VacuumStatus } from "./shared.js";
 
 // ── Maintenance / VACUUM state ──────────────────────────────────────
@@ -71,10 +72,10 @@ async function patchMaintenance(): Promise<void> {
         usage_retention_days: liveUsageRetentionDays,
       }),
     });
-    showToast("Maintenance config updated", "success");
+    showToast(t("config.maintenance.toast.updated"), "success");
     requestUpdate();
   } catch (e: unknown) {
-    showToast("Error: " + errStr(e), "error");
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
   }
 }
 
@@ -85,16 +86,16 @@ async function triggerVacuum(): Promise<void> {
   try {
     const result = await api("/debug/vacuum", { method: "POST" }) as { vacuumed?: boolean; partial?: boolean; integrity_check?: string; message?: string };
     if (result.partial) {
-      showToast("VACUUM partial: " + (result.message || "see details"), "warning");
+      showToast(t("config.maintenance.toast.vacuum_partial", { message: result.message || "see details" }), "warning");
     } else {
-      showToast("VACUUM completed successfully", "success");
+      showToast(t("config.maintenance.toast.vacuum_ok"), "success");
     }
   } catch (e: unknown) {
     // VACUUM failed — the error message includes repair instructions
     // if the DB is corrupt. Show it as a toast and also try the
     // recover endpoint for diagnostics.
     const errMsg = errStr(e);
-    showToast("VACUUM failed: " + errMsg, "error");
+    showToast(t("config.maintenance.toast.vacuum_failed", { message: errMsg }), "error");
     // If the error mentions "disk I/O" or "integrity", auto-trigger
     // the recover diagnostic so the operator sees the repair instructions.
     if (errMsg.includes("disk I/O") || errMsg.includes("integrity")) {
@@ -103,7 +104,7 @@ async function triggerVacuum(): Promise<void> {
         if (recovery.needs_manual_repair && recovery.instructions) {
           // Show the repair instructions in a more prominent way —
           // a longer-lived toast with the full instructions.
-          showToast("DB needs manual repair. Check console for instructions.", "error");
+          showToast(t("config.maintenance.toast.repair_needed"), "error");
           console.error("=== DATABASE REPAIR INSTRUCTIONS ===\n" + recovery.instructions + "\n=== END INSTRUCTIONS ===");
         }
       } catch {
@@ -120,33 +121,33 @@ async function triggerVacuum(): Promise<void> {
 
 export function renderMaintenanceCard(): TemplateResult {
   const vacuumBtnLabel = vacuumStatus.in_progress
-    ? "⏳ VACUUM in progress…"
-    : "🧹 Run VACUUM now";
+    ? t("config.maintenance.vacuum_in_progress")
+    : t("config.maintenance.vacuum_run");
   const lastRunText = vacuumStatus.last_run
     ? new Date(vacuumStatus.last_run).toLocaleString()
-    : "never";
+    : t("config.maintenance.never");
   const lastResultText = vacuumStatus.last_result
-    ? (vacuumStatus.last_result === "ok" ? "✅ ok" : "❌ " + vacuumStatus.last_result)
+    ? (vacuumStatus.last_result === "ok" ? t("config.maintenance.result_ok") : t("config.maintenance.result_failed", { result: vacuumStatus.last_result }))
     : "—";
   const nextScheduledText = vacuumStatus.next_scheduled
     ? new Date(vacuumStatus.next_scheduled).toLocaleString()
-    : (liveAutoVacuum ? "scheduled (next tick)" : "disabled");
-  return card("Database Maintenance", html`
+    : (liveAutoVacuum ? t("config.maintenance.next_scheduled_tick") : t("config.maintenance.next_disabled"));
+  return card(t("config.maintenance.title"), html`
     <div class="config-field">
       <label class="checkbox-label">
         <input type="checkbox" ?checked=${liveAutoVacuum} @change=${(e: Event) => { liveAutoVacuum = (e.target as HTMLInputElement).checked; void patchMaintenance(); }}>
-        <span>Automatic VACUUM</span>
+        <span>${t("config.maintenance.auto_vacuum")}</span>
       </label>
-      <p class="muted">When enabled, the server runs VACUUM every ${liveVacuumIntervalHours}h to compact freed pages. Disable to run VACUUM only manually.</p>
+      <p class="muted">${t("config.maintenance.auto_vacuum_desc", { hours: liveVacuumIntervalHours })}</p>
     </div>
     <div class="config-field">
-      <label>VACUUM interval (hours)</label>
+      <label>${t("config.maintenance.vacuum_interval")}</label>
       <input type="number" inputmode="numeric" min="1" max="168" .value=${String(liveVacuumIntervalHours)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 1) { liveVacuumIntervalHours = v; void patchMaintenance(); } }}>
     </div>
     <div class="config-field">
-      <label>Usage retention (days)</label>
+      <label>${t("config.maintenance.usage_retention")}</label>
       <input type="number" inputmode="numeric" min="0" max="365" .value=${String(liveUsageRetentionDays)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 0) { liveUsageRetentionDays = v; void patchMaintenance(); } }}>
-      <p class="muted">Rows older than this are deleted hourly. 0 = keep forever (not recommended).</p>
+      <p class="muted">${t("config.maintenance.usage_retention_desc")}</p>
     </div>
     <div class="config-field">
       <button class="primary"
@@ -156,11 +157,11 @@ export function renderMaintenanceCard(): TemplateResult {
       </button>
     </div>
     <div class="config-field">
-      <span class="label">Last run:</span> <span class="value">${lastRunText}</span>
-      <span class="label" style="margin-left:1rem;">Result:</span> <span class="value">${lastResultText}</span>
+      <span class="label">${t("config.maintenance.last_run")}</span> <span class="value">${lastRunText}</span>
+      <span class="label" style="margin-left:1rem;">${t("config.maintenance.result")}</span> <span class="value">${lastResultText}</span>
     </div>
     <div class="config-field">
-      <span class="label">Next scheduled:</span> <span class="value">${nextScheduledText}</span>
+      <span class="label">${t("config.maintenance.next_scheduled")}</span> <span class="value">${nextScheduledText}</span>
     </div>
   `);
 }

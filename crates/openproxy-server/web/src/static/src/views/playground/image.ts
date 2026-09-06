@@ -7,6 +7,7 @@
 
 import { html, type TemplateResult } from 'lit-html';
 import { requestUpdate } from '../../state/reactive.js';
+import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 import { renderResponseInspector } from './inspector.js';
 
@@ -19,19 +20,19 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
           class="submode-btn ${st.imageMode === 'generation' ? 'active' : ''}"
           @click=${() => { st.imageMode = 'generation'; requestUpdate(); }}
         >
-          Text-to-Image (/generations)
+           ${t('playground.image.gen_mode')}
         </button>
         <button
           class="submode-btn ${st.imageMode === 'edit' ? 'active' : ''}"
           @click=${() => { st.imageMode = 'edit'; requestUpdate(); }}
         >
-          Inpainting & Img2Img (/edits)
+           ${t('playground.image.edit_mode')}
         </button>
         <button
           class="submode-btn ${st.imageMode === 'variation' ? 'active' : ''}"
           @click=${() => { st.imageMode = 'variation'; requestUpdate(); }}
         >
-          Image Variations (/variations)
+           ${t('playground.image.var_mode')}
         </button>
       </div>
 
@@ -40,7 +41,7 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
         ? html`
             <div class="playground-grid-2" style="margin-bottom: var(--space-3);">
               <div class="field">
-                <label class="field-label">Source Base Image (Required)</label>
+                <label class="field-label">${t('playground.image.source_label')}</label>
                 <div class="playground-file-dropzone">
                   <input
                     type="file"
@@ -56,7 +57,7 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
                   ${st.imageSourceFile
                     ? html`
                         <div class="file-loaded-info">
-                          <small><strong>Loaded:</strong> ${st.imageSourceFile.name} (${Math.round(st.imageSourceFile.size / 1024)} KB)</small>
+                          <small><strong>${t('playground.image.source_loaded')}</strong> ${st.imageSourceFile.name} (${Math.round(st.imageSourceFile.size / 1024)} KB)</small>
                           <button
                             class="button small danger"
                             @click=${(e: Event) => {
@@ -65,16 +66,16 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
                               requestUpdate();
                             }}
                           >
-                            Remove
+                            ${t('playground.image.remove')}
                           </button>
                         </div>
                       `
-                    : html`<p class="text-muted" style="margin:0;">📁 Click or drop base image (PNG/JPEG)</p>`}
+                     : html`<p class="text-muted" style="margin:0;">${t('playground.image.source_dropzone')}</p>`}
                 </div>
               </div>
 
               <div class="field">
-                <label class="field-label">Alpha Mask (Optional for Inpainting)</label>
+                <label class="field-label">${t('playground.image.mask_label')}</label>
                 <div class="playground-file-dropzone">
                   <input
                     type="file"
@@ -90,7 +91,7 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
                   ${st.imageMaskFile
                     ? html`
                         <div class="file-loaded-info">
-                          <small><strong>Mask:</strong> ${st.imageMaskFile.name} (${Math.round(st.imageMaskFile.size / 1024)} KB)</small>
+                          <small><strong>${t('playground.image.mask_loaded')}</strong> ${st.imageMaskFile.name} (${Math.round(st.imageMaskFile.size / 1024)} KB)</small>
                           <button
                             class="button small danger"
                             @click=${(e: Event) => {
@@ -99,11 +100,11 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
                               requestUpdate();
                             }}
                           >
-                            Remove
+                            ${t('playground.image.remove')}
                           </button>
                         </div>
                       `
-                    : html`<p class="text-muted" style="margin:0;">🎭 Click or drop transparency mask (PNG)</p>`}
+                     : html`<p class="text-muted" style="margin:0;">${t('playground.image.mask_dropzone')}</p>`}
                 </div>
               </div>
             </div>
@@ -113,7 +114,7 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
       <!-- Prompt Editor -->
       <div class="playground-image-prompt-card">
         <label class="field-label">
-          Prompt ${st.imageMode === 'variation' ? '(Optional Guidance)' : '(Required)'}
+           ${t('playground.image.prompt_label', { mode: st.imageMode === 'variation' ? t('playground.image.prompt_optional') : t('playground.image.prompt_required') })}
         </label>
         <textarea
           class="playground-image-prompt-textarea"
@@ -127,7 +128,7 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
 
         <!-- Diffusion / Horde Directive Chips -->
         <div class="playground-directives-bar" style="margin-top: var(--space-2); margin-bottom: 0;">
-          <span class="directives-label">Directives:</span>
+           <span class="directives-label">${t('playground.image.directives_label')}</span>
           <button class="directive-chip" @click=${() => insertImageDirective(st, '<lora:name:1.0>')}>
             + &lt;lora:…&gt;
           </button>
@@ -152,7 +153,7 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
         </div>
 
         <div class="field" style="margin-top: var(--space-3);">
-          <label class="field-label">Negative Prompt (Elements to avoid)</label>
+           <label class="field-label">${t('playground.image.negative_label')}</label>
           <input
             type="text"
             placeholder="blurry, distorted, artifacts, lowres, text, watermark…"
@@ -170,12 +171,12 @@ export function renderImageStudioWorkspace(st: PlaygroundState): TemplateResult 
             <div class="playground-lightbox-overlay" @click=${() => { st.lightboxImageUrl = null; requestUpdate(); }}>
               <div class="playground-lightbox-modal" @click=${(e: Event) => e.stopPropagation()}>
                 <div class="lightbox-header">
-                  <span>High Resolution View</span>
+                   <span>${t('playground.image.view')}</span>
                   <button class="icon-btn" @click=${() => { st.lightboxImageUrl = null; requestUpdate(); }}>✕</button>
                 </div>
                 <img src=${st.lightboxImageUrl} alt="High resolution preview" class="lightbox-img" />
                 <div class="lightbox-footer">
-                  <a class="button small primary" href=${st.lightboxImageUrl} download="image.png" target="_blank">Download High-Res</a>
+                   <a class="button small primary" href=${st.lightboxImageUrl} download="image.png" target="_blank">${t('playground.image.download')}</a>
                 </div>
               </div>
             </div>

@@ -21,6 +21,7 @@ import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { createView } from '../../lib/view-utils.js';
 import { icons } from '../../lib/icons.js';
+import { t } from '../../i18n/index.js';
 import type { Model, Provider, Account, Combo } from '../../lib/types/api.js';
 import type { PlaygroundState } from './shared.js';
 import {
@@ -59,7 +60,7 @@ function renderEmbeddingWorkspace(st: PlaygroundState): TemplateResult {
     <div class="playground-workspace-column">
       <div class="playground-card">
         <div class="playground-card-header">
-          <h3>Embedding Input Vectorizer</h3>
+          <h3>${t('playground.embedding.title')}</h3>
           <button
             class="button small"
             @click=${() => {
@@ -68,13 +69,13 @@ function renderEmbeddingWorkspace(st: PlaygroundState): TemplateResult {
               requestUpdate();
             }}
           >
-            Sample Text
+            ${t('playground.embedding.sample_text')}
           </button>
         </div>
 
         <div class="field">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <label class="field-label">Input Text</label>
+            <label class="field-label">${t('playground.embedding.input_text')}</label>
             <label class="playground-switch-label" style="font-size: var(--fs-xs);">
               <input
                 type="checkbox"
@@ -84,12 +85,12 @@ function renderEmbeddingWorkspace(st: PlaygroundState): TemplateResult {
                   requestUpdate();
                 }}
               />
-              <span>${st.embeddingIsArray ? 'Batch mode (newline separated)' : 'Single string'}</span>
+              <span>${st.embeddingIsArray ? t('playground.embedding.batch_mode') : t('playground.embedding.single_string')}</span>
             </label>
           </div>
           <textarea
             rows="6"
-            placeholder="Enter text strings to vectorize into dense float embeddings…"
+            placeholder=${t('playground.embedding.placeholder')}
             .value=${st.embeddingInput}
             @input=${(e: Event) => {
               st.embeddingInput = (e.target as HTMLTextAreaElement).value;
@@ -108,11 +109,11 @@ function renderAudioWorkspace(st: PlaygroundState): TemplateResult {
     <div class="playground-workspace-column">
       <div class="playground-card">
         <div class="playground-card-header">
-          <h3>Audio Transcription (Whisper)</h3>
+          <h3>${t('playground.audio.title')}</h3>
         </div>
 
         <div class="field">
-          <label class="field-label">Upload Audio (.mp3, .wav, .m4a, .ogg, .webm)</label>
+          <label class="field-label">${t('playground.audio.upload_label')}</label>
           <div class="playground-file-dropzone">
             <input
               type="file"
@@ -128,19 +129,19 @@ function renderAudioWorkspace(st: PlaygroundState): TemplateResult {
             ${st.audioFile
               ? html`
                   <div class="playground-file-info">
-                    <strong>Selected:</strong> ${st.audioFile.name} (${Math.round(st.audioFile.size / 1024)} KB)
+                    <strong>${t('playground.audio.selected')}</strong> ${st.audioFile.name} (${Math.round(st.audioFile.size / 1024)} KB)
                     <audio controls src=${URL.createObjectURL(st.audioFile)} style="margin-top: var(--space-2); width: 100%;"></audio>
                   </div>
                 `
-              : html`<p class="text-muted">${icons.audio()} Click or drag an audio file here</p>`}
+              : html`<p class="text-muted">${icons.audio()} ${t('playground.audio.dropzone')}</p>`}
           </div>
         </div>
 
         <div class="field" style="margin-top: var(--space-2);">
-          <label class="field-label">Prompt Guide / Context Vocabulary (Optional)</label>
+          <label class="field-label">${t('playground.audio.prompt_label')}</label>
           <input
             type="text"
-            placeholder="Optional glossary or context to guide transcription…"
+            placeholder=${t('playground.audio.prompt_placeholder')}
             .value=${st.audioPrompt}
             @input=${(e: Event) => {
               st.audioPrompt = (e.target as HTMLInputElement).value;
@@ -163,7 +164,7 @@ function renderPlayground(): TemplateResult {
 
   if (st.loadError) {
     return html`
-      <div class="page-header"><h2>Playground</h2></div>
+      <div class="page-header"><h2>${t('playground.title')}</h2></div>
       <div class="banner banner-error">${st.loadError}</div>
     `;
   }

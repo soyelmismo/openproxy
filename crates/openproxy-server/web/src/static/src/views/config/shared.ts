@@ -185,6 +185,6 @@ export function renderStaticField(label: string, value: number | null | undefine
   return html`<div class="field"><span class="label">${label}</span><span class="value">${display}</span></div>`;
 }
 
-export function card(title: string | TemplateResult, body: TemplateResult): TemplateResult {
+export function card(title: unknown, body: TemplateResult): TemplateResult {
   return html`<section class="card"><div class="section-header"><h3>${title}</h3></div>${body}</section>`;
 }

@@ -8,6 +8,7 @@
 // All reads/writes go through the shared PlaygroundState reference.
 
 import { html, type TemplateResult } from 'lit-html';
+import { t } from '../../i18n/index.js';
 import { state } from '../../state/index.js';
 import { showToast } from '../../components/toast.js';
 import { requestUpdate } from '../../state/reactive.js';
@@ -95,7 +96,7 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
               requestUpdate();
             }}
           >
-            Formatted
+             ${t('playground.inspector.formatted')}
           </button>
           <button
             class="detail-tab ${st.activeResponseTab === 'raw' ? 'active' : ''}"
@@ -104,7 +105,7 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
               requestUpdate();
             }}
           >
-            Raw JSON
+             ${t('playground.inspector.raw_json')}
           </button>
           <button
             class="detail-tab ${st.activeResponseTab === 'headers' ? 'active' : ''}"
@@ -113,7 +114,7 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
               requestUpdate();
             }}
           >
-            Headers
+             ${t('playground.inspector.headers')}
           </button>
           ${st.modality === 'chat' && st.chatStream
             ? html`
@@ -124,7 +125,7 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
                     requestUpdate();
                   }}
                 >
-                  Stream (${st.streamChunks.length})
+                   ${t('playground.inspector.stream', { count: st.streamChunks.length })}
                 </button>
               `
             : html``}
@@ -138,9 +139,9 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
                 copyText(st.rawResponseText, 'Raw response');
               }
             }}
-            title="Copy response body"
-          >
-            Copy
+             title=${t('playground.inspector.copy_response')}
+           >
+             ${t('playground.inspector.copy')}
           </button>
         </div>
       </div>
@@ -152,15 +153,15 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
           ? renderFormattedResponse(st)
           : st.activeResponseTab === 'raw'
           ? html`
-              <pre class="playground-code-view"><code>${st.parsedResponseJson ? JSON.stringify(st.parsedResponseJson, null, 2) : (st.rawResponseText || 'No response received yet.')}</code></pre>
+               <pre class="playground-code-view"><code>${st.parsedResponseJson ? JSON.stringify(st.parsedResponseJson, null, 2) : (st.rawResponseText || t('playground.inspector.no_response'))}</code></pre>
             `
           : st.activeResponseTab === 'headers'
           ? html`
               <table class="playground-headers-table">
-                <thead><tr><th>Header</th><th>Value</th></tr></thead>
+                 <thead><tr><th>${t('playground.inspector.header')}</th><th>${t('playground.inspector.value')}</th></tr></thead>
                 <tbody>
                   ${Object.keys(st.responseHeaders).length === 0
-                    ? html`<tr><td colspan="2" class="text-muted">No headers available</td></tr>`
+                     ? html`<tr><td colspan="2" class="text-muted">${t('playground.inspector.no_headers')}</td></tr>`
                     : Object.entries(st.responseHeaders).map(
                         ([k, v]) => html`<tr><td><code>${k}</code></td><td>${v}</td></tr>`,
                       )}
@@ -170,7 +171,7 @@ export function renderResponseInspector(st: PlaygroundState): TemplateResult {
           : html`
               <div class="playground-stream-log">
                 ${st.streamChunks.length === 0
-                  ? html`<p class="text-muted" style="padding: var(--space-4); text-align: center;">No stream chunks captured yet.</p>`
+                   ? html`<p class="text-muted" style="padding: var(--space-4); text-align: center;">${t('playground.inspector.no_stream')}</p>`
                   : st.streamChunks.map(
                       (c) => html`
                         <div class="stream-chunk-row">
@@ -206,14 +207,14 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
       <!-- Target & Auth Card -->
       <div class="playground-sidebar-card">
         <div class="playground-sidebar-header">
-          <h4>Target & Authentication</h4>
+           <h4>${t('playground.sidebar.target_title')}</h4>
           <span class="badge badge-info">${st.modality.toUpperCase()}</span>
         </div>
 
         <div class="playground-sidebar-body">
           <!-- API Key Source -->
           <div class="field">
-            <label class="field-label">API Key Auth</label>
+             <label class="field-label">${t('playground.sidebar.api_key_auth')}</label>
             <select
               .value=${st.keySource}
               @change=${(e: Event) => {
@@ -221,7 +222,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                 requestUpdate();
               }}
             >
-              <option value="session">Admin Session Token</option>
+               <option value="session">${t('playground.sidebar.session_token')}</option>
               ${apiKeys.map(
                 (k) => html`<option value="key:${k.key_prefix}">${k.label || 'API Key'} (${k.key_prefix}…)</option>`,
               )}
@@ -232,7 +233,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
           ${st.keySource === 'custom'
             ? html`
                 <div class="field">
-                  <label class="field-label">Custom Bearer Key</label>
+                  <label class="field-label">${t('playground.sidebar.custom_key')}</label>
                   <input
                     type="password"
                     placeholder="sk-..."
@@ -247,7 +248,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
 
           <!-- Provider Selector -->
           <div class="field">
-            <label class="field-label">Provider</label>
+             <label class="field-label">${t('playground.sidebar.provider')}</label>
             <select
               .value=${st.selectedProviderId}
               @change=${(e: Event) => {
@@ -265,14 +266,14 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                 requestUpdate();
               }}
             >
-              <option value="">(Auto / Any Provider)</option>
+               <option value="">${t('playground.sidebar.any_provider')}</option>
               ${providers.map((p) => html`<option value=${p.id}>${p.name || p.id}</option>`)}
             </select>
           </div>
 
           <!-- Account Dropdown Select -->
           <div class="field">
-            <label class="field-label">Account Routing</label>
+             <label class="field-label">${t('playground.sidebar.account_routing')}</label>
             <select
               .value=${st.selectedAccountId}
               @change=${(e: Event) => {
@@ -280,7 +281,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                 requestUpdate();
               }}
             >
-              <option value="">(Auto / Priority Routing)</option>
+               <option value="">${t('playground.sidebar.auto_routing')}</option>
               ${matchingAccounts.map(
                 (a) => html`<option value=${String(a.id)}>
                   #${a.id} ${a.label ? `(${a.label})` : ''} — [${a.health_status}]
@@ -292,7 +293,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
           <!-- Model Target: Textual Search + Filtered Dropdown -->
           <div class="field">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <label class="field-label" style="margin-bottom: 0;">Model Target</label>
+               <label class="field-label" style="margin-bottom: 0;">${t('playground.sidebar.model_target')}</label>
               ${st.selectedProviderId
                 ? html`<button
                     class="btn-text-action"
@@ -310,7 +311,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                       }
                     }}
                   >
-                    ↻ Refresh
+                     ${t('playground.sidebar.refresh')}
                   </button>`
                 : html``}
             </div>
@@ -319,7 +320,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
             <div style="position: relative; margin-bottom: 6px;">
               <input
                 type="text"
-                placeholder="Search or type custom model..."
+                 placeholder=${t('playground.sidebar.model_search')}
                 .value=${st.modelSearchQuery}
                 @input=${(e: Event) => {
                   st.modelSearchQuery = (e.target as HTMLInputElement).value;
@@ -366,7 +367,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                 >
                   ${displayedModels.length === 0
                     ? html`<option value=${st.selectedModelId || st.modelSearchQuery}>
-                        ${st.selectedModelId ? `Custom: ${st.selectedModelId}` : 'No matching models (using input)'}
+                         ${st.selectedModelId ? `Custom: ${st.selectedModelId}` : t('playground.sidebar.no_models')}
                       </option>`
                     : displayedModels.map(
                         (m) =>
@@ -384,7 +385,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
       <!-- Hyperparameters & Settings Card -->
       <div class="playground-sidebar-card">
         <div class="playground-sidebar-header">
-          <h4>Parameters</h4>
+           <h4>${t('playground.sidebar.parameters')}</h4>
         </div>
 
         <div class="playground-sidebar-body">

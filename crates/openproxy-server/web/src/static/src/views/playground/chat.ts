@@ -13,6 +13,7 @@
 import { html, type TemplateResult } from 'lit-html';
 import { requestUpdate } from '../../state/reactive.js';
 import { icons } from '../../lib/icons.js';
+import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 import {
   copyText,
@@ -39,8 +40,8 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
           }}
         >
           <div class="header-left">
-            <span class="system-tag">SYSTEM</span>
-            <span class="system-title">System Instructions</span>
+            <span class="system-tag">${t('playground.chat.system')}</span>
+            <span class="system-title">${t('playground.chat.system_instructions')}</span>
           </div>
           <button class="system-toggle-btn" type="button">
             ${st.systemInstructionsExpanded ? icons.caretUp() : icons.caretDown()}
@@ -52,7 +53,7 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
                 <textarea
                   class="playground-system-textarea"
                   rows="3"
-                  placeholder="Enter system prompt / behavioral guidelines..."
+                  placeholder=${t('playground.chat.system_placeholder')}
                   .value=${st.systemInstruction}
                   @input=${(e: Event) => {
                     st.systemInstruction = (e.target as HTMLTextAreaElement).value;
@@ -79,9 +80,9 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
                       requestUpdate();
                     }}
                   >
-                    <option value="user">User</option>
-                    <option value="assistant">Assistant</option>
-                    <option value="system">System</option>
+                     <option value="user">${t('playground.chat.user')}</option>
+                     <option value="assistant">${t('playground.chat.assistant')}</option>
+                     <option value="system">${t('playground.chat.system')}</option>
                   </select>
                   <span class="msg-token-badge">~${approxTokens} tokens</span>
                   <span class="msg-index-num">#${index + 1}</span>
@@ -89,14 +90,14 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
                 <div class="msg-card-actions">
                   <button
                     class="icon-btn"
-                    title="Copy message"
-                    @click=${() => copyText(msg.content, 'Message')}
+                     title=${t('playground.chat.copy_message')}
+                     @click=${() => copyText(msg.content, 'Message')}
                   >
                     ${icons.copy()}
                   </button>
                   <button
                     class="icon-btn danger"
-                    title="Delete message"
+                     title=${t('playground.chat.delete_message')}
                     @click=${() => {
                       st.chatMessages = st.chatMessages.filter((m) => m.id !== msg.id);
                       if (st.chatMessages.length === 0) {
@@ -112,7 +113,7 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
               <textarea
                 class="playground-msg-card-textarea"
                 rows=${Math.max(2, Math.min(10, Math.ceil(msg.content.length / 80)))}
-                placeholder="Message content..."
+                 placeholder=${t('playground.chat.message_placeholder')}
                 .value=${msg.content}
                 @input=${(e: Event) => {
                   msg.content = (e.target as HTMLTextAreaElement).value;
@@ -125,27 +126,27 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
 
       <!-- Directives & Prompt Helpers Bar -->
       <div class="playground-directives-bar">
-        <span class="directives-label">Directives:</span>
+         <span class="directives-label">${t('playground.chat.directives_label')}</span>
         <button class="directive-chip" @click=${() => insertChatDirective(st, 'Respond exclusively in valid, parseable JSON.')}>
-          ${icons.plus()} JSON Mode
+           ${icons.plus()} ${t('playground.chat.directive_json')}
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective(st, 'Please format all code inside fenced markdown blocks with syntax highlighting.')}>
-          ${icons.plus()} Code formatting
+           ${icons.plus()} ${t('playground.chat.directive_code')}
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective(st, 'Use clear Markdown headers, bold highlights, and clean bullet points.')}>
-          ${icons.plus()} Markdown
+           ${icons.plus()} ${t('playground.chat.directive_markdown')}
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective(st, 'Be direct, concise, and eliminate conversational filler.')}>
-          ${icons.plus()} Concise
+           ${icons.plus()} ${t('playground.chat.directive_concise')}
         </button>
         <button class="directive-chip" @click=${() => insertChatDirective(st, 'Think step-by-step and provide detailed reasoning.')}>
-          ${icons.plus()} Step-by-step
+           ${icons.plus()} ${t('playground.chat.directive_step_by_step')}
         </button>
         <button class="directive-chip-add" @click=${() => {
           st.chatMessages.push({ id: generateId(), role: 'user', content: '' });
           requestUpdate();
         }}>
-          ${icons.plus()} Add Message
+           ${icons.plus()} ${t('playground.chat.add_message')}
         </button>
       </div>
 
@@ -154,7 +155,7 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
         <textarea
           class="playground-composer-textarea"
           rows="3"
-          placeholder="Type a message or instruction... (Press Ctrl+Enter to send)"
+           placeholder=${t('playground.chat.composer_placeholder')}
           .value=${st.composerContent}
           @input=${(e: Event) => {
             st.composerContent = (e.target as HTMLTextAreaElement).value;
@@ -167,9 +168,9 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
           }}
         ></textarea>
         <div class="playground-composer-footer">
-          <span class="composer-shortcut-hint">
-            <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run
-          </span>
+             <span class="composer-shortcut-hint">
+             <kbd>Ctrl</kbd> + <kbd>Enter</kbd> ${t('playground.chat.composer_hint')}
+           </span>
           <div class="composer-actions">
             <button
               class="button small"
@@ -181,10 +182,10 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
                 }
               }}
             >
-              ${icons.plus()} Add to Thread
+               ${icons.plus()} ${t('playground.chat.add_to_thread')}
             </button>
             <button class="button primary small" @click=${FIRE_RUN_EVENT}>
-              Send Prompt ${icons.send()}
+               ${t('playground.chat.send_prompt')} ${icons.send()}
             </button>
           </div>
         </div>
@@ -235,7 +236,7 @@ export async function executeChatRequest(
   }
 
   if (messages.length === 0) {
-    throw new Error('Please add at least one message or system prompt.');
+    throw new Error(t('playground.chat.no_messages'));
   }
 
   const payload: Record<string, unknown> = {
