@@ -22,7 +22,7 @@ import { renderSidebar } from "../components/sidebar.js";
 // resolves the import to the .js at runtime; the not-yet-typed
 // returns flow through as `unknown`, which is fine for the
 // router since we don't introspect what they return.
-import { mountHome } from "../views/home.js";
+import { mountHome } from "../views/home/index.js";
 import { mountCombos } from "../views/combos.js";
 import { mountKeys } from "../views/keys.js";
 import { mountKeyUsage } from "../views/key-usage.js";
@@ -113,7 +113,7 @@ const ROUTES: readonly Route[] = [
     return mountDebugLogs(main);
   }) as ViewMount },
   { name: "config", pattern: /^#?\/config$/, mount: lazyMount(
-    () => import('../views/config.js'), 'mountConfig',
+    () => import('../views/config/index.js'), 'mountConfig',
   ) },
   { name: "proxies", pattern: /^#?\/proxies$/, mount: mountProxies as ViewMount },
   { name: "proxy-sources", pattern: /^#?\/proxy-sources$/, mount: mountProxySources as ViewMount },
