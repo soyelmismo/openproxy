@@ -154,27 +154,3 @@ export function isSystemPayload(p: unknown): p is SystemPayload {
     // `details` is `unknown` so any value is acceptable.
   );
 }
-
-/** Query string for `GET /admin/api/notifications`.
- *  @see crates/openproxy-server/src/handlers/admin.rs:4810
- *  `NotificationsQuery`. */
-export interface NotificationsListQuery {
-  unread_only?: boolean;
-  limit?: number;
-  before_id?: number;
-}
-
-/** Response body of `GET /admin/api/notifications/unread-count`.
- *  `{ "count": <n> }`.
- *
- *  NOTIF-FIX: previously this type (and the store's `refreshUnreadCount`
- *  consumer) declared the field as `unread_count`, which never matched
- *  the server's actual response field name (`count`). The mismatch meant
- *  the client never applied the server's count — only optimistic WS
- *  increments accumulated, producing the inflated "99" badge with an
- *  empty list. The server handler is in
- *  `crates/openproxy-server/src/handlers/admin.rs::notifications_unread_count`
- *  and returns `serde_json::json!({ "count": count })`. */
-export interface NotificationsUnreadCountResponse {
-  count: number;
-}

@@ -3328,7 +3328,7 @@ export async function mountPlayground(): Promise<(() => void) | void> {
         api('/models') as Promise<Model[]>,
         (state.providers.length === 0 ? api('/providers') : Promise.resolve(state.providers)) as Promise<Provider[]>,
         (state.combos.length === 0 ? api('/combos') : Promise.resolve(state.combos)) as Promise<Combo[]>,
-        (state.apiKeys.length === 0 ? api('/keys') : Promise.resolve(state.apiKeys)) as Promise<unknown[]>,
+        (state.apiKeys.length === 0 ? api('/keys') : Promise.resolve(state.apiKeys)) as Promise<typeof state.apiKeys>,
         (state.accounts.length === 0 ? api('/accounts') : Promise.resolve(state.accounts)) as Promise<Account[]>,
       ]);
       state.models = models;

@@ -19,7 +19,7 @@ import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
 import { icons } from "../lib/icons.js";
-import type { Model } from "../lib/types/api.js";
+import type { Model, ApiKey } from "../lib/types/api.js";
 
 // The api_key row shape. Defined locally (not in lib/types/api.ts)
 // because the server-side `pub struct ApiKey` lives in a separate
@@ -31,20 +31,7 @@ import type { Model } from "../lib/types/api.js";
 // (null = all, [] = empty whitelist, [...]= explicit list),
 // `is_active`, `revoked_at`, `last_used_at`, `created_at`,
 // `created_by`. Everything is nullable where the DB allows it.
-interface ApiKeyRow {
-  id: number;
-  label: string | null;
-  key_prefix: string | null;
-  scopes: string[] | null;
-  allowed_models: string[] | null | unknown;
-  blacklisted_providers?: string[] | null;
-  blacklisted_models?: string[] | null;
-  is_active: boolean;
-  revoked_at: string | null;
-  last_used_at: string | null;
-  created_at: string | null;
-  created_by: string | null;
-}
+type ApiKeyRow = ApiKey;
 
 // Shape of the POST /keys/:id/regenerate response.
 interface KeyPlaintextResponse {

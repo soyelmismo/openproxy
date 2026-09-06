@@ -375,8 +375,41 @@ export interface ComboSummary {
 }
 
 // ----------------------------------------------------------------------------
-// Usage
+// API keys
 // ----------------------------------------------------------------------------
+
+/** Fila de la tabla `api_keys` serializada por `GET /admin/keys`.
+ *  Refleja `openproxy_core::api_keys::ApiKey` con `key_hash` omitido
+ *  (`#[serde(skip_serializing)]`). `allowed_models` / `allowed_combos`
+ *  / `blacklisted_*` son `null` = sin restricción.
+ *  @see crates/openproxy-core/src/api_keys.rs:28 */
+export interface ApiKey {
+  id: ApiKeyId;
+  /** First 12 chars of the plaintext (e.g. `"op_live_abc"`). */
+  key_prefix: string | null;
+  label: string | null;
+  /** Decoded `scopes_json`; defaults to `["chat"]` for legacy rows. */
+  scopes: string[];
+  /** `null` = all models allowed. */
+  allowed_models: string[] | null;
+  /** `null` = all combos allowed. */
+  allowed_combos: number[] | null;
+  /** `null` = no restriction. */
+  blacklisted_providers: string[] | null;
+  /** `null` = no restriction. */
+  blacklisted_models: string[] | null;
+  is_active: boolean;
+  revoked_at: string | null;
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+
+// ----------
+// Usage
+// ----------
 
 /** Stage transition de un request in-flight. Lo emite el pipeline y lo
  *  re-emite el WS de live-log al dashboard. NO se persiste a DB.

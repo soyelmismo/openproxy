@@ -910,7 +910,7 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
     apiKeys = apiKeysResp;
 
     if (providers) state.providers = providers;
-    if (apiKeys) state.apiKeys = apiKeys;
+    if (apiKeys) state.apiKeys = apiKeys as typeof state.apiKeys;
 
     loading = false;
     requestUpdate();
