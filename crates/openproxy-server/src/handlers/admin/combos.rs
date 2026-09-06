@@ -348,6 +348,18 @@ fn apply_combo_general_updates(
         let rs = u8::try_from(n).unwrap_or(0);
         core_combos::update_combo(w, id, Some(rs))?;
     }
+    if let Some(v) = body.get("strategy") {
+        // Same validation set as CreateComboInput: `update_strategy`
+        // parses via `Strategy::parse`, so an unknown value answers
+        // 400 with CoreError::Validation instead of being silently
+        // dropped. `null` is rejected (the column is NOT NULL).
+        let strategy = v.as_str().ok_or_else(|| {
+            ApiError(CoreError::Validation(
+                "strategy must be a string when present".into(),
+            ))
+        })?;
+        core_combos::update_strategy(w, id, strategy)?;
+    }
     if let Some(cw) = parse_nullable_i64(body, "context_window")? {
         core_combos::update_context_window(w, id, cw)?;
     }
