@@ -2142,36 +2142,6 @@ table.monthly-matrix {
   outline-offset: -1px;
 }
 
-/* ----- Donut chart ----- */
-.donut-wrap {
-  display: flex;
-  gap: var(--space-4);
-  align-items: center;
-  flex-wrap: wrap;
-}
-.donut-legend {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-size: var(--fs-sm);
-}
-.donut-legend-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-.donut-dot {
-  width: 10px;
-  height: 10px;
-  display: inline-block;
-  border: 1px solid var(--color-border);
-}
-
-/* ----- Sparkline ----- */
-.sparkline {
-  opacity: 0.8;
-}
-
 /* ----- Config refactor: editable vs static regions ----- */
 .config-editable-region {
   display: grid;

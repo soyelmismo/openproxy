@@ -1,11 +1,13 @@
-//! Inline SVG chart components — no external library, keeps the bundle lean.
-//!
-//! All charts are pure functions that return an SVG string. The caller
+//! Inline SVG daily-usage chart — no external library, keeps the
+//! bundle lean. Pure function returning an SVG string; the caller
 //! injects it into the DOM via `innerHTML`.
 //!
 //! Design: follows the Dell 1996 retro aesthetic — 1px black strokes,
 //! square data points, no soft shadows, no gradients. Chart series
 //! colors come from the `--chart-*` CSS custom properties.
+//!
+//! Interactive charts (line/sparkline/time-series) live in
+//! `uplot-chart.ts` (uPlot).
 
 import type { ByDayRow } from "../lib/types/api";
 
@@ -141,71 +143,6 @@ export function dailyUsageChart(
   </svg>`;
 }
 
-// ── Sparkline ───────────────────────────────────────────────────────
-
-/** A tiny inline sparkline for table cells. ~60×16px. */
-export function sparkline(values: number[], color: string = CHART_COLORS[0]!): string {
-  if (values.length === 0) return "";
-  const w = 60;
-  const h = 16;
-  const max = Math.max(1, ...values);
-  const min = Math.min(0, ...values);
-  const range = max - min || 1;
-  const step = values.length > 1 ? w / (values.length - 1) : 0;
-  const path = values
-    .map((v, i) => `${i === 0 ? "M" : "L"} ${(i * step).toFixed(1)} ${(h - ((v - min) / range) * h).toFixed(1)}`)
-    .join(" ");
-  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px;display:inline-block;vertical-align:middle;">
-    <path d="${path}" fill="none" stroke="${color}" stroke-width="1" />
-  </svg>`;
-}
-
-// ── Status distribution donut ───────────────────────────────────────
-
-export interface StatusSlice {
-  label: string;
-  count: number;
-  color: string;
-}
-
-/** A donut chart showing HTTP status distribution. ~160×160px. */
-export function statusDonut(slices: StatusSlice[]): string {
-  const total = slices.reduce((s, x) => s + x.count, 0);
-  if (total === 0) {
-    return `<div class="chart-empty muted">No data.</div>`;
-  }
-  const cx = 80, cy = 80, r = 60, rInner = 35;
-  let angle = -Math.PI / 2; // start at top
-  const arcs: string[] = [];
-  for (const s of slices) {
-    const frac = s.count / total;
-    if (frac === 0) continue;
-    const end = angle + frac * 2 * Math.PI;
-    const largeArc = frac > 0.5 ? 1 : 0;
-    const x1 = cx + r * Math.cos(angle);
-    const y1 = cy + r * Math.sin(angle);
-    const x2 = cx + r * Math.cos(end);
-    const y2 = cy + r * Math.sin(end);
-    const xi1 = cx + rInner * Math.cos(end);
-    const yi1 = cy + rInner * Math.sin(end);
-    const xi2 = cx + rInner * Math.cos(angle);
-    const yi2 = cy + rInner * Math.sin(angle);
-    arcs.push(
-      `<path d="M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} L ${xi1.toFixed(1)} ${yi1.toFixed(1)} A ${rInner} ${rInner} 0 ${largeArc} 0 ${xi2.toFixed(1)} ${yi2.toFixed(1)} Z" fill="${s.color}" stroke="var(--color-border)" stroke-width="0.5" />`
-    );
-    angle = end;
-  }
-  const pct = (n: number) => `${((n / total) * 100).toFixed(0)}%`;
-  const legend = slices
-    .filter(s => s.count > 0)
-    .map(s => `<div class="donut-legend-item"><span class="donut-dot" style="background:${s.color}"></span>${s.label}: <strong>${s.count}</strong> <span class="muted">(${pct(s.count)})</span></div>`)
-    .join("");
-  return `<div class="donut-wrap">
-    <svg viewBox="0 0 160 160" style="width:140px;height:140px;">${arcs.join("")}</svg>
-    <div class="donut-legend">${legend}</div>
-  </div>`;
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────
 
 function formatTick(n: number): string {
@@ -219,62 +156,4 @@ function formatCost(n: number): string {
   if (n >= 1) return n.toFixed(2);
   if (n > 0) return n.toFixed(3);
   return "0";
-}
-
-// ── KPI tile ────────────────────────────────────────────────────────
-
-export interface KpiTileOpts {
-  label: string;
-  value: string;
-  /** Optional sub-value (e.g. "↑ 12% vs yesterday"). */
-  sub?: string;
-  /** Optional trend: "up" | "down" | null. */
-  trend?: "up" | "down" | null;
-  /** Optional CSS class for the value color. */
-  valueClass?: string;
-}
-
-/** Render a single KPI tile as an HTML string. */
-export function kpiTile(opts: KpiTileOpts): string {
-  const trendIcon = opts.trend === "up" ? "▲" : opts.trend === "down" ? "▼" : "";
-  const trendClass = opts.trend === "up" ? "kpi-trend-up" : opts.trend === "down" ? "kpi-trend-down" : "";
-  const sub = opts.sub ? `<div class="kpi-sub ${trendClass}">${trendIcon} ${opts.sub}</div>` : "";
-  return `<div class="kpi-tile">
-    <div class="kpi-label">${opts.label}</div>
-    <div class="kpi-value ${opts.valueClass || ""}">${opts.value}</div>
-    ${sub}
-  </div>`;
-}
-
-// ── Preset selector ─────────────────────────────────────────────────
-
-export interface PresetSelectorOpts {
-  current: string;
-  onChange: (preset: string) => void;
-}
-
-const PRESETS: Array<{ value: string; label: string }> = [
-  { value: "today", label: "Today" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
-  { value: "this_month", label: "This month" },
-  { value: "last_month", label: "Last month" },
-  { value: "last_6_months", label: "6 months" },
-  { value: "ytd", label: "YTD" },
-  { value: "custom", label: "All time" },
-];
-
-/** Render a preset selector button group. */
-export function presetSelector(opts: PresetSelectorOpts): string {
-  const buttons = PRESETS.map(p =>
-    `<button class="preset-btn ${p.value === opts.current ? "active" : ""}" data-preset="${p.value}">${p.label}</button>`
-  ).join("");
-  return `<div class="preset-selector">${buttons}</div>`;
-}
-
-/** Wire up preset selector button clicks. Call after innerHTML. */
-export function wirePresetSelector(container: HTMLElement, onChange: (preset: string) => void): void {
-  container.querySelectorAll<HTMLButtonElement>(".preset-btn").forEach(btn => {
-    btn.addEventListener("click", () => onChange(btn.dataset["preset"] || "custom"));
-  });
 }
