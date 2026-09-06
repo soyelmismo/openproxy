@@ -25,9 +25,8 @@ import {
   createInitialPlaygroundState,
   bindPlaygroundState,
   generateId,
-  getEffectiveApiKeyFromState,
-  generateCurlCommand,
 } from './shared.js';
+import { getEffectiveApiKeyFromState, generateCurlCommand } from './curl.js';
 import { renderChatWorkspace, executeChatRequest } from './chat.js';
 import { renderImageStudioWorkspace } from './image.js';
 import {

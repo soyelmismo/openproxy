@@ -17,17 +17,17 @@ import type { Model, Provider, Account } from '../../lib/types/api.js';
 import type { PlaygroundState } from './shared.js';
 import {
   inferModelTypeFrontend,
-  renderMarkdownAndMath,
   extractThinkingProcess,
-  generateCurlCommand,
   copyText,
 } from './shared.js';
+import { renderMarkdownAndMath } from '../../lib/markdown.js';
+import { generateCurlCommand } from './curl.js';
 import {
   renderChatHyperparams,
   renderImageHyperparams,
   renderEmbeddingHyperparams,
   renderAudioHyperparams,
-} from './shared.js';
+} from './hyperparams.js';
 
 function getFilteredModels(st: PlaygroundState): Array<{ id: string; name: string; type: string; provider: string; isCombo?: boolean }> {
   const models = (state.models as Model[]) || [];
