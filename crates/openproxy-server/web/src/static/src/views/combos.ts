@@ -590,10 +590,15 @@ export async function mountCombos(opts: { detailId?: number } = {}): Promise<(()
 
   return createView<Combo[]>({
     loader: () => api("/combos") as Promise<Combo[]>,
-    render: (combos) => {
+    // Sync the loader result into `state.combos` ONCE per load — NOT on
+    // every render. Assigning inside `render` re-clobbers `state.combos`
+    // with this closure's stale `data` on every requestUpdate, undoing
+    // external refreshes (e.g. createCombo's post-POST refetch) and
+    // leaving the grid showing a stale list.
+    onLoaded: (combos) => {
       state.combos = combos;
-      return renderComboGrid();
     },
+    render: () => renderComboGrid(),
     loading: () => html`<div class="loading">${t("common.loading")}</div>`,
     empty: () => false, // renderComboGrid handles empty state internally
     error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,

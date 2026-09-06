@@ -232,13 +232,18 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildComboBodyFromForm(target);
-  try {
-    await api("/combos", { method: "POST", body: JSON.stringify(body) });
-    if (wrapper) wrapper.remove(); else closeCreateCombo();
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error");
-  }
+  // POST /combos answers `{ "id": n }` — not a full Combo — so the grid
+  // (which renders from `state.combos`, populated only by the route
+  // loader) is refreshed by re-fetching GET /combos into the state
+  // BEFORE `requestUpdate()`. The modal closes only after the POST
+  // succeeded; a failed POST keeps it open with the form intact.
+  await mutateAndRefresh({
+    apiCall: () => api("/combos", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: async () => {
+      if (wrapper) wrapper.remove(); else closeCreateCombo();
+      state.combos = (await api("/combos")) as Combo[];
+    },
+  });
 }
 
 export async function deleteCombo(id: number): Promise<void> {
