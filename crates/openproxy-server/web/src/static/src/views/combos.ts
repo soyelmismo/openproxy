@@ -11,7 +11,8 @@
 import { html, type TemplateResult } from 'lit-html';
 import { state, type ComboTestResult } from "../state/index.js";
 import { api } from "../state/api.js";
-import { mountView, requestUpdate } from "../state/reactive.js";
+import { requestUpdate } from "../state/reactive.js";
+import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
@@ -558,28 +559,42 @@ function renderComboGrid(): TemplateResult {
 
 // ---- Mount ----
 
-export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
-  const el = document.getElementById("main");
-  if (!el) return;
+interface ComboDetailData {
+  combo: Combo | null;
+  targets: ComboTargetWithModel[];
+}
 
+export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
   if (opts.detailId) {
     detailComboId = opts.detailId;
     detailCombo = null;
     detailTargets = [];
-    const cleanup = mountView(el, renderComboDetail);
-    try {
-      const [combo, targets] = await Promise.all([
-        api("/combos/" + opts.detailId).catch(() => null) as Promise<Combo | null>,
-        api("/combos/" + opts.detailId + "/targets") as Promise<ComboTargetWithModel[]>,
-      ]);
-      detailCombo = combo;
-      detailTargets = targets || [];
-      requestUpdate();
-    } catch { detailCombo = null; requestUpdate(); }
-    return cleanup;
+    return createView<ComboDetailData>({
+      loader: async () => {
+        const [combo, targets] = await Promise.all([
+          api("/combos/" + opts.detailId).catch(() => null) as Promise<Combo | null>,
+          api("/combos/" + opts.detailId + "/targets") as Promise<ComboTargetWithModel[]>,
+        ]);
+        return { combo, targets: targets || [] };
+      },
+      render: (data) => {
+        detailCombo = data.combo;
+        detailTargets = data.targets;
+        return renderComboDetail();
+      },
+      loading: () => html`<div class="loading">Loading...</div>`,
+      error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,
+    });
   }
 
-  state.combos = await api("/combos") as Combo[];
-  const cleanup = mountView(el, renderComboGrid);
-  return cleanup;
+  return createView<Combo[]>({
+    loader: () => api("/combos") as Promise<Combo[]>,
+    render: (combos) => {
+      state.combos = combos;
+      return renderComboGrid();
+    },
+    loading: () => html`<div class="loading">Loading...</div>`,
+    empty: () => false, // renderComboGrid handles empty state internally
+    error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,
+  });
 }
