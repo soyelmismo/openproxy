@@ -18,6 +18,7 @@ import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
 import { icons } from "../lib/icons.js";
+import { t } from "../i18n/index.js";
 import type { Model, ApiKey } from "../lib/types/api.js";
 import { renderResponsiveCardTable, type ResponsiveColumn } from "../components/render-responsive-card-table.js";
 
@@ -53,27 +54,27 @@ function onViewKeyUsage(id: number): void {
 async function onRegenerateKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
   if (!(await showConfirm({
-    title: "Regenerate key",
-    message: `Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`,
+    title: t("keys.list.confirm.regenerate.title"),
+    message: t("keys.list.confirm.regenerate.message", { label: display }),
     danger: true,
-    confirmLabel: "Regenerate",
+    confirmLabel: t("keys.list.confirm.regenerate.confirm"),
   }))) return;
   try {
     const result = (await api(`/keys/${id}/regenerate`, { method: "POST" })) as KeyPlaintextResponse;
     showPlaintextKey(result.plaintext, result.key);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    showToast("Error: " + msg, "error");
+    showToast(t("keys.list.toast.error_prefix") + msg, "error");
   }
 }
 
 async function onRevokeKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
   if (!(await showConfirm({
-    title: "Revoke key",
-    message: `Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`,
+    title: t("keys.list.confirm.revoke.title"),
+    message: t("keys.list.confirm.revoke.message", { label: display }),
     danger: true,
-    confirmLabel: "Revoke",
+    confirmLabel: t("keys.list.confirm.revoke.confirm"),
   }))) return;
   try {
     await api(`/keys/${id}/revoke`, { method: "POST" });
@@ -81,17 +82,17 @@ async function onRevokeKey(id: number, label: string | null): Promise<void> {
     requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    showToast("Error: " + msg, "error");
+    showToast(t("keys.list.toast.error_prefix") + msg, "error");
   }
 }
 
 async function onDeleteKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
   if (!(await showConfirm({
-    title: "Delete key",
-    message: `Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`,
+    title: t("keys.list.confirm.delete.title"),
+    message: t("keys.list.confirm.delete.message", { label: display }),
     danger: true,
-    confirmLabel: "Delete",
+    confirmLabel: t("keys.list.confirm.delete.confirm"),
   }))) return;
   try {
     await api(`/keys/${id}`, { method: "DELETE" });
@@ -99,8 +100,42 @@ async function onDeleteKey(id: number, label: string | null): Promise<void> {
     requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    showToast("Error: " + msg, "error");
+    showToast(t("keys.list.toast.error_prefix") + msg, "error");
   }
+}
+
+// ---- Helpers ----
+
+function formatAllowedModels(k: ApiKeyRow): string {
+  let allowedModels: string;
+  if (k.allowed_models === null || k.allowed_models === undefined) {
+    allowedModels = t("keys.list.cell.allowed_all");
+  } else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) {
+    allowedModels = t("keys.list.cell.allowed_empty");
+  } else if (Array.isArray(k.allowed_models)) {
+    allowedModels = t("keys.list.cell.allowed_models", { count: k.allowed_models.length });
+  } else {
+    allowedModels = t("keys.list.cell.allowed_all");
+  }
+
+  const blBadges: string[] = [];
+  if (Array.isArray(k.blacklisted_providers) && k.blacklisted_providers.length > 0) {
+    blBadges.push(t("keys.list.cell.blacklist_providers", { list: k.blacklisted_providers.join(",") }));
+  }
+  if (Array.isArray(k.blacklisted_models) && k.blacklisted_models.length > 0) {
+    blBadges.push(t("keys.list.cell.blacklist_models", { count: k.blacklisted_models.length }));
+  }
+
+  return blBadges.length > 0
+    ? `${allowedModels} (${blBadges.join("; ")})`
+    : allowedModels;
+}
+
+function formatKeyStatus(k: ApiKeyRow) {
+  const isActive = k.is_active && !k.revoked_at;
+  if (k.revoked_at) return { text: t("keys.list.status.revoked"), cssClass: "off inactive" };
+  if (isActive) return { text: t("keys.list.status.active"), cssClass: "on active" };
+  return { text: t("keys.list.status.inactive"), cssClass: "off inactive" };
 }
 
 // ---- Templates ----
@@ -108,8 +143,8 @@ async function onDeleteKey(id: number, label: string | null): Promise<void> {
 function renderKeys(): TemplateResult {
   if (loadError) {
     return html`
-      <div class="page-header"><h2>API Keys</h2>
-        <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} Create key</button></div>
+      <div class="page-header"><h2>${t("keys.list.heading")}</h2>
+        <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} ${t("keys.list.btn.create")}</button></div>
       </div>
       <div class="banner banner-error">${loadError}</div>
     `;
@@ -118,7 +153,7 @@ function renderKeys(): TemplateResult {
   const columns: ResponsiveColumn<ApiKeyRow>[] = [
     {
       key: "label",
-      label: "Label",
+      label: t("keys.list.col.label"),
       render: (k) => {
         const label: string = k.label || "—";
         const createdBy: TemplateResult = k.created_by ? html` <small class="key-created-by">(${k.created_by})</small>` : html``;
@@ -127,76 +162,58 @@ function renderKeys(): TemplateResult {
     },
     {
       key: "key_prefix",
-      label: "Prefix",
+      label: t("keys.list.col.prefix"),
       render: (k) => html`<code class="key-prefix-code">${k.key_prefix || "—"}</code>`,
     },
     {
       key: "scopes",
-      label: "Scopes",
+      label: t("keys.list.col.scopes"),
       render: (k) => html`<span class="key-scopes-text">${(k.scopes || []).join(", ") || "—"}</span>`,
     },
     {
       key: "allowed_models",
-      label: "Allowed models",
-      render: (k) => {
-        let allowedModels: string = "all";
-        if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
-        else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
-        else if (Array.isArray(k.allowed_models)) allowedModels = k.allowed_models.length + " models";
-        const blBadges: string[] = [];
-        if (Array.isArray(k.blacklisted_providers) && k.blacklisted_providers.length > 0) {
-          blBadges.push(`!prov: ${k.blacklisted_providers.join(",")}`);
-        }
-        if (Array.isArray(k.blacklisted_models) && k.blacklisted_models.length > 0) {
-          blBadges.push(`!models: ${k.blacklisted_models.length}`);
-        }
-        const restrictions: string = blBadges.length > 0
-          ? `${allowedModels} (${blBadges.join("; ")})`
-          : allowedModels;
-        return html`<span class="chip key-restriction-chip">${restrictions}</span>`;
-      },
+      label: t("keys.list.col.allowed_models"),
+      render: (k) => html`<span class="chip key-restriction-chip">${formatAllowedModels(k)}</span>`,
     },
     {
       key: "status",
-      label: "Status",
+      label: t("keys.list.col.status"),
       render: (k) => {
-        const isActive: boolean = k.is_active && !k.revoked_at;
-        const statusClass: string = isActive ? "on active" : "off inactive";
-        const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
-        return html`<span class=${"status-pill " + statusClass}>${statusText}</span>`;
+        const { text, cssClass } = formatKeyStatus(k);
+        return html`<span class=${"status-pill " + cssClass}>${text}</span>`;
       },
     },
     {
       key: "last_used_at",
-      label: "Last used",
-      render: (k) => html`<span class="key-meta-time">${k.last_used_at || "never"}</span>`,
+      label: t("keys.list.col.last_used"),
+      render: (k) => html`<span class="key-meta-time">${k.last_used_at || t("keys.list.cell.last_used_never")}</span>`,
     },
     {
       key: "created_at",
-      label: "Created",
+      label: t("keys.list.col.created"),
       render: (k) => html`<span class="key-meta-time">${k.created_at || "—"}</span>`,
     },
     {
       key: "actions",
-      label: "Actions",
+      label: t("keys.list.col.actions"),
       render: (k) => {
         const isActive: boolean = k.is_active && !k.revoked_at;
         return html`
           <div class="key-actions-wrap">
-            <button class="small" @click=${() => onShowEditKey(k.id)}>${icons.pencil()} Edit</button>
-            <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>${icons.refresh()} Regenerate</button>
-            <button class="small" @click=${() => onViewKeyUsage(k.id)}>${icons.lightning()} Usage</button>
+            <button class="small" @click=${() => onShowEditKey(k.id)}>${icons.pencil()} ${t("keys.list.btn.edit")}</button>
+            <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>${icons.refresh()} ${t("keys.list.btn.regenerate")}</button>
+            <button class="small" @click=${() => onViewKeyUsage(k.id)}>${icons.lightning()} ${t("keys.list.btn.usage")}</button>
             ${isActive
-              ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
+              ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>${t("keys.list.btn.revoke")}</button>`
               : html``}
-            <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>${icons.trash()} Delete</button>
+            <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>${icons.trash()} ${t("keys.list.btn.delete")}</button>
           </div>
         `;
       },
     },
   ];
   const body: TemplateResult = keys.length === 0
-    ? html`<p class="empty">No API keys yet. Create one to authenticate clients.</p>`
+    ? html`<p class="empty">${t("keys.list.empty")}</p>`
     : html`
         ${renderResponsiveCardTable<ApiKeyRow>({
           columns,
@@ -207,8 +224,8 @@ function renderKeys(): TemplateResult {
         })}
       `;
   return html`
-    <div class="page-header"><h2>API Keys</h2>
-      <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} Create key</button></div>
+    <div class="page-header"><h2>${t("keys.list.heading")}</h2>
+      <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} ${t("keys.list.btn.create")}</button></div>
     </div>
     ${body}
   `;

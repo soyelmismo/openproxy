@@ -114,15 +114,15 @@ function formatTimeAgo(isoString: string | null): string {
   const date = new Date(isoString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  if (diffMs < 0) return "Just now";
+  if (diffMs < 0) return t("proxies.list.time.just_now");
   const diffSecs = Math.floor(diffMs / 1000);
-  if (diffSecs < 60) return `${diffSecs}s ago`;
+  if (diffSecs < 60) return t("proxies.list.time.seconds", { count: diffSecs });
   const diffMins = Math.floor(diffSecs / 60);
-  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffMins < 60) return t("proxies.list.time.minutes", { count: diffMins });
   const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffHours < 24) return t("proxies.list.time.hours", { count: diffHours });
   const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
+  return t("proxies.list.time.days", { count: diffDays });
 }
 
 function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateResult {
@@ -146,7 +146,7 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
                 requestUpdate();
               }
             }}
-            placeholder="Proxy test URL..."
+            placeholder=${t("proxies.list.test_url_placeholder")}
             style="width: 100%; max-width: 320px; min-width: 0; padding: 0.35rem 0.5rem; border-radius: var(--radius-sm); border: var(--border-w) var(--border-style) var(--color-border);"
           />
           ${isSavingTestUrl ? html`<span class="spinner" style="width: 14px; height: 14px;"></span>` : ""}
@@ -185,7 +185,7 @@ function renderKpisDashboard(total: number, alive: number, dead: number, avgLate
       </div>
       <div class="kpi-card kpi-latency">
         <div class="kpi-title">${t("proxies.kpi.avg_latency")}</div>
-        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>ms</small>` : "—"}</div>
+        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>${t("proxies.list.avg_latency_unit")}</small>` : "—"}</div>
       </div>
     </div>
   `;
@@ -256,8 +256,11 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
       label: t("proxies.table.col_status"),
       render: (p) => {
         const isAlive = p.status === "alive";
-        const statusLabel = isAlive ? "ALIVE" : (p.status === "dead" ? "DEAD" : p.status.toUpperCase());
-        const statusClass = isAlive ? "alive on" : (p.status === "dead" ? "dead off" : "unknown");
+        const isDead = p.status === "dead";
+        const statusLabel = isAlive
+          ? t("proxies.list.status.alive")
+          : (isDead ? t("proxies.list.status.dead") : p.status.toUpperCase());
+        const statusClass = isAlive ? "alive on" : (isDead ? "dead off" : "unknown");
         return html`
           <span class=${"status-pill " + statusClass}>
             <span class="status-dot"></span>
@@ -280,7 +283,7 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
         if (p.latency_ms < 300) cls = "latency-low";
         else if (p.latency_ms < 800) cls = "latency-medium";
         else cls = "latency-high";
-        return html`<span class=${cls}>${p.latency_ms} ms</span>`;
+        return html`<span class=${cls}>${p.latency_ms} ${t("proxies.list.latency_unit")}</span>`;
       },
     },
     {
@@ -290,7 +293,7 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
     },
     {
       key: "actions",
-      label: "Actions",
+      label: t("proxies.list.col.actions"),
       render: (p) => html`
         <div class="proxy-actions-wrap">
           <button class="small" @click=${() => void testProxy(p.id)}>${icons.flask()} ${t("common.retry")}</button>
@@ -309,13 +312,13 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
       className: "proxies-table",
     })}
     <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
-      <span>Page ${page}</span>
+      <span>${t("proxies.list.pagination.page", { page })}</span>
       <div style="display: flex; gap: 0.5rem;">
         <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>
-          ← Previous
+          ${t("proxies.list.pagination.previous")}
         </button>
         <button class="secondary small" ?disabled=${!hasNextPage} @click=${() => { if (hasNextPage) { currentPage++; fetchFilteredProxies(); } }}>
-          Next →
+          ${t("proxies.list.pagination.next")}
         </button>
       </div>
     </div>
@@ -341,7 +344,7 @@ function renderProxies(): TemplateResult {
   const uniqueSources = summary.sources || [];
   const uniqueProtocols = summary.protocols || [];
 
-  const syncBtnLabel = isSyncing ? "Syncing..." : t("proxies.btn.sync");
+  const syncBtnLabel = isSyncing ? t("proxies.list.btn.sync_progress") : t("proxies.btn.sync");
   const hasPrevPage = currentPage > 1;
   const hasNextPage = proxies.length === 50;
 

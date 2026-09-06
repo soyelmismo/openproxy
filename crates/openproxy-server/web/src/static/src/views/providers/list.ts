@@ -13,6 +13,7 @@ import { requestUpdate } from '../../state/reactive.js';
 import { showApiError } from '../../lib/ui-utils.js';
 import { icons } from '../../lib/icons.js';
 import { showCreateProvider } from '../../handlers/provider-handlers.js';
+import { t } from '../../i18n/index.js';
 import type { Account, Provider } from '../../lib/types/api.js';
 import { loadError, renderProviderIcon } from './shared.js';
 
@@ -57,7 +58,7 @@ function renderProviderCard(p: Provider, accounts: Account[]): TemplateResult {
     <div class="provider-card-header">
       <div class="provider-icon" data-format=${p.format}>${renderProviderIcon(p)}</div>
       <div class="provider-info">
-        <h3>${p.name}${p.active ? html`` : html` <small class="inactive-suffix">(inactive)</small>`}</h3>
+        <h3>${p.name}${p.active ? html`` : html` <small class="inactive-suffix">${t("providers.list.card.inactive_suffix")}</small>`}</h3>
         <code>${p.id}</code>
       </div>
     </div>
@@ -69,12 +70,12 @@ function renderProviderCard(p: Provider, accounts: Account[]): TemplateResult {
     </div>
     <div class="provider-card-footer">
       <div class="stat">
-        <label>Accounts</label>
+        <label>${t("providers.list.card.accounts")}</label>
         <value>${accounts.length}</value>
-        ${unhealthyAccs > 0 ? html`<span class="badge badge-error">${unhealthyAccs} down</span>` : html``}
+        ${unhealthyAccs > 0 ? html`<span class="badge badge-error">${t("providers.list.card.unhealthy_badge", { count: unhealthyAccs })}</span>` : html``}
       </div>
       <div class="stat">
-        <label>Models</label>
+        <label>${t("providers.list.card.models")}</label>
         <value>${activeModels}/${totalModels}</value>
       </div>
     </div>
@@ -84,10 +85,10 @@ function renderProviderCard(p: Provider, accounts: Account[]): TemplateResult {
 export function renderProvidersGrid(): TemplateResult {
   if (loadError) {
     return html`
-      <div class="page-header"><h2>Providers</h2>
+      <div class="page-header"><h2>${t("providers.list.heading")}</h2>
         <div class="actions">
-          <button @click=${onRefreshAllProviders}>Refresh all</button>
-          <button class="primary" @click=${onShowCreateProvider}>+ Add provider</button>
+          <button @click=${onRefreshAllProviders}>${t("providers.list.btn.refresh_all")}</button>
+          <button class="primary" @click=${onShowCreateProvider}>+ ${t("providers.list.btn.add")}</button>
         </div>
       </div>
       <div class="banner banner-error">${loadError}</div>
@@ -97,19 +98,19 @@ export function renderProvidersGrid(): TemplateResult {
   const cards: TemplateResult =
     list.length === 0
       ? html`<div class="empty-state">
-          <h3>No providers configured</h3>
-          <p>Add a provider to get started.</p>
-          <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} Add provider</button>
+          <h3>${t("providers.list.empty.title")}</h3>
+          <p>${t("providers.list.empty.subtitle")}</p>
+          <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} ${t("providers.list.btn.add")}</button>
         </div>`
       : html`<div class="provider-grid">${list.map((p) => {
           const accounts = (state.accounts || []).filter((a) => a.provider_id === p.id);
           return renderProviderCard(p, accounts);
         })}</div>`;
   return html`
-    <div class="page-header"><h2>Providers</h2>
+    <div class="page-header"><h2>${t("providers.list.heading")}</h2>
       <div class="actions">
-        <button @click=${onRefreshAllProviders}>${icons.refresh()} Refresh all</button>
-        <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} Add provider</button>
+        <button @click=${onRefreshAllProviders}>${icons.refresh()} ${t("providers.list.btn.refresh_all")}</button>
+        <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} ${t("providers.list.btn.add")}</button>
       </div>
     </div>
     ${cards}
