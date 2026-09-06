@@ -1,5 +1,6 @@
 // handlers/registry.ts — central map from `data-action` attribute
 import { showToast } from "../components/toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../state/router.js";
 // installs a single document-level listener that dispatches clicks
 // / changes / submits based on data-action / data-arg-* attrs.
@@ -255,8 +256,8 @@ export const HANDLERS = {
   // the OAuth "Copy" button in views/providers.js.
   copyAuthUrl(): void {
     const el = document.getElementById("oauth-auth-url") as HTMLInputElement | null;
-    if (el && navigator.clipboard) {
-      navigator.clipboard.writeText(el.value || "").catch(() => {});
+    if (el) {
+      copyToClipboard(el.value || "").catch(() => { /* ignore — silent best-effort */ });
     }
   },
 

@@ -30,6 +30,7 @@ import type { Model } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 
 interface TestResult {
   status: number;
@@ -200,7 +201,12 @@ export async function testModel(rowId: number, _modelId: string, _e: Event | nul
 }
 
 export async function deleteModel(rowId: number): Promise<void> {
-  if (!confirm("Delete this model? Combo targets referencing it will be removed too.")) return;
+  if (!(await showConfirm({
+    title: "Delete model",
+    message: "Delete this model? Combo targets referencing it will be removed too.",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/models/${rowId}`, { method: "DELETE" });
     state.models = state.models.filter((m) => m.row_id !== rowId);
@@ -344,7 +350,11 @@ function updateBulkBar(): void {
 async function bulkSetSelected(_providerId: string, active: boolean): Promise<void> {
   const ids = Array.from(state.selectedModels);
   if (ids.length === 0) return;
-  if (!confirm(`${active ? "Enable" : "Disable"} ${ids.length} models?`)) return;
+  if (!(await showConfirm({
+    title: active ? "Enable models" : "Disable models",
+    message: `${active ? "Enable" : "Disable"} ${ids.length} models?`,
+    confirmLabel: active ? "Enable" : "Disable",
+  }))) return;
   // Per-row toggle in parallel: each toggle is its own atomic
   // UPDATE on the server. The previous bulk-toggle endpoint
   // applied to *all* non-custom rows of the provider, which is
@@ -393,7 +403,11 @@ export function bulkDisableSelected(_providerId: string): Promise<void> { return
 export async function bulkTestSelected(_providerId: string): Promise<void> {
   const ids = Array.from(state.selectedModels);
   if (ids.length === 0) return;
-  if (!confirm(`Test ${ids.length} models sequentially?`)) return;
+  if (!(await showConfirm({
+    title: "Test models",
+    message: `Test ${ids.length} models sequentially?`,
+    confirmLabel: "Test",
+  }))) return;
   for (const rowId of ids) {
     try {
       const btn = document.getElementById(`test-btn-${rowId}`) as HTMLButtonElement | null;
@@ -435,7 +449,12 @@ export async function bulkTestSelected(_providerId: string): Promise<void> {
 export async function bulkDeleteSelected(_providerId: string): Promise<void> {
   const ids = Array.from(state.selectedModels);
   if (ids.length === 0) return;
-  if (!confirm(`Delete ${ids.length} models? This cannot be undone.`)) return;
+  if (!(await showConfirm({
+    title: "Delete models",
+    message: `Delete ${ids.length} models? This cannot be undone.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   await Promise.all(ids.map((rowId) =>
     api("/models/" + rowId, { method: "DELETE" })
       .catch((err: unknown) => console.error("Failed delete", rowId, err))

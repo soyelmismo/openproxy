@@ -24,6 +24,8 @@ import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { flashButton, showApiError } from "../lib/ui-utils.js";
+import { copyToClipboard } from "../lib/clipboard.js";
+import { showConfirm, showPrompt } from "../lib/show-confirm.js";
 import { icons } from "../lib/icons.js";
 import { showCreateProvider, editProviderEndpointPrompt, editProviderHeadersPrompt } from "../handlers/provider-handlers.js";
 import { showCreateAccount, showUpdateAccountKey, updateAccountLabel, copyAccountApiKey } from "../handlers/account-handlers.js";
@@ -190,7 +192,7 @@ function onShowCreateProvider(): void {
 // ---- Handlers: detail header ----
 
 async function onRenameProvider(providerId: string, currentName: string): Promise<void> {
-  const newName = prompt(`Rename provider "${providerId}":`, currentName);
+  const newName = await showPrompt(`Rename provider "${providerId}"`, "New provider name:", currentName);
   if (newName == null) return;
   const trimmed = newName.trim();
   if (trimmed === "") {
@@ -200,7 +202,11 @@ async function onRenameProvider(providerId: string, currentName: string): Promis
   if (trimmed === currentName) return;
   const collision = state.providers.find((p) => p.id !== providerId && p.name === trimmed);
   if (collision) {
-    if (!confirm(`A provider with this name already exists (${collision.id}). Use this name anyway?`)) return;
+    if (!(await showConfirm({
+      title: "Name collision",
+      message: `A provider with this name already exists (${collision.id}). Use this name anyway?`,
+      confirmLabel: "Use anyway",
+    }))) return;
   }
   try {
     await api("/providers/" + encodeURIComponent(providerId), {
@@ -264,11 +270,15 @@ async function onRefreshProvider(providerId: string, e: Event | null): Promise<v
 
 async function onToggleProviderActive(providerId: string, newActive: boolean): Promise<void> {
   if (!newActive) {
-    const ok = confirm(
-      `Deactivate provider "${providerId}"?\n\n` +
-      `Its accounts and models will be preserved, but it won't be ` +
-      `usable in combos until you reactivate it.`
-    );
+    const ok = await showConfirm({
+      title: "Deactivate provider",
+      message:
+        `Deactivate provider "${providerId}"?\n\n` +
+        `Its accounts and models will be preserved, but it won't be ` +
+        `usable in combos until you reactivate it.`,
+      danger: true,
+      confirmLabel: "Deactivate",
+    });
     if (!ok) return;
   }
   try {
@@ -284,12 +294,17 @@ async function onToggleProviderActive(providerId: string, newActive: boolean): P
 }
 
 async function onConfirmDeleteProvider(providerId: string): Promise<void> {
-  const typed = prompt(`Type the provider ID to confirm deletion: ${providerId}`);
+  const typed = await showPrompt("Delete provider", `Type the provider ID to confirm deletion: ${providerId}`);
   if (typed !== providerId) {
     if (typed != null) showToast(`Provider id "${typed}" does not match. Nothing was deleted.`, "error");
     return;
   }
-  if (!confirm(`Really delete ${providerId}? This cascades to all its accounts and models.`)) return;
+  if (!(await showConfirm({
+    title: "Really delete?",
+    message: `Really delete ${providerId}? This cascades to all its accounts and models.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api("/providers/" + encodeURIComponent(providerId), { method: "DELETE" });
     state.providers = state.providers.filter((p) => p.id !== providerId);
@@ -309,8 +324,8 @@ function onOAuthSubmitManualCallback(): void { void OAuthLogin.submitManualCallb
 
 function onCopyAuthUrl(): void {
   const el = document.getElementById("oauth-auth-url") as HTMLInputElement | null;
-  if (el && navigator.clipboard) {
-    navigator.clipboard.writeText(el.value || "").catch(() => { /* ignore */ });
+  if (el) {
+    copyToClipboard(el.value || "").catch(() => { /* ignore — silent best-effort */ });
   }
 }
 
@@ -379,7 +394,11 @@ async function onRefreshAllQuotas(providerId: string): Promise<void> {
     showToast(`No accounts with quota support for ${providerId}.`, "info");
     return;
   }
-  if (!confirm(`Refresh quota for ${supported.length} accounts?`)) return;
+  if (!(await showConfirm({
+    title: "Refresh quota",
+    message: `Refresh quota for ${supported.length} accounts?`,
+    confirmLabel: "Refresh",
+  }))) return;
   for (const a of supported) {
     try {
       await api("/accounts/" + a.id + "/refresh-quota", { method: "POST" });
@@ -435,7 +454,11 @@ async function onBulkToggleModels(providerId: string, active: boolean): Promise<
   const msg = active
     ? `Enable ${toToggleCount} non-custom models? (${customCount} custom models will not be touched)`
     : `Disable ${toToggleCount} non-custom models? (${customCount} custom models will not be touched)`;
-  if (!confirm(msg)) return;
+  if (!(await showConfirm({
+    title: active ? "Enable models" : "Disable models",
+    message: msg,
+    confirmLabel: active ? "Enable" : "Disable",
+  }))) return;
   try {
     await api("/models/bulk-toggle", {
       method: "POST",
@@ -627,7 +650,11 @@ function onClearModelSelection(): void {
 async function onBulkSetSelected(providerId: string, active: boolean): Promise<void> {
   const ids = Array.from(state.selectedModels).map((n) => Number(n));
   if (ids.length === 0) return;
-  if (!confirm(`${active ? "Enable" : "Disable"} ${ids.length} models?`)) return;
+  if (!(await showConfirm({
+    title: active ? "Enable models" : "Disable models",
+    message: `${active ? "Enable" : "Disable"} ${ids.length} models?`,
+    confirmLabel: active ? "Enable" : "Disable",
+  }))) return;
   try {
     await Promise.all(ids.map((rowId) =>
       api("/models/" + rowId + "/toggle", {
@@ -651,7 +678,11 @@ async function onBulkTestSelected(providerId: string): Promise<void> {
   void providerId; // providerId unused — kept for handler-shape parity
   const ids = Array.from(state.selectedModels).map((n) => Number(n));
   if (ids.length === 0) return;
-  if (!confirm(`Test ${ids.length} models sequentially?`)) return;
+  if (!(await showConfirm({
+    title: "Test models",
+    message: `Test ${ids.length} models sequentially?`,
+    confirmLabel: "Test",
+  }))) return;
   try {
     for (const rowId of ids) {
       const btn = document.getElementById(`test-btn-${rowId}`) as HTMLButtonElement | null;
@@ -698,7 +729,12 @@ async function onBulkTestSelected(providerId: string): Promise<void> {
 async function onBulkDeleteSelected(providerId: string): Promise<void> {
   const ids = Array.from(state.selectedModels).map((n) => Number(n));
   if (ids.length === 0) return;
-  if (!confirm(`Delete ${ids.length} models? This cannot be undone.`)) return;
+  if (!(await showConfirm({
+    title: "Delete models",
+    message: `Delete ${ids.length} models? This cannot be undone.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await Promise.all(ids.map((rowId) =>
       api("/models/" + rowId, { method: "DELETE" })
@@ -811,7 +847,12 @@ async function onTestModel(rowId: number, e: Event | null): Promise<void> {
 }
 
 async function onDeleteModel(rowId: number): Promise<void> {
-  if (!confirm("Delete this model? Combo targets referencing it will be removed too.")) return;
+  if (!(await showConfirm({
+    title: "Delete model",
+    message: "Delete this model? Combo targets referencing it will be removed too.",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/models/${rowId}`, { method: "DELETE" });
     state.models = state.models.filter((m) => m.row_id !== rowId);
@@ -1188,17 +1229,7 @@ async function onCopyUsageModel(text: string, e: Event): Promise<void> {
   e.preventDefault();
   e.stopPropagation();
   try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      showToast("Copied: " + text, "success");
-      return;
-    }
-    const el = document.createElement("textarea");
-    el.value = text;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
+    await copyToClipboard(text);
     showToast("Copied: " + text, "success");
   } catch (err: unknown) {
     showToast("Failed to copy", "error");

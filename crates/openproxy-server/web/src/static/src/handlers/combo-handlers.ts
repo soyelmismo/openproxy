@@ -18,6 +18,7 @@ import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 
 import { PRIORITY_MODE_TOOLTIPS, PRIORITY_MODE_LABELS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 
@@ -222,7 +223,12 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
 }
 
 export async function deleteCombo(id: number): Promise<void> {
-  if (!confirm("Delete combo " + id + "?")) return;
+  if (!(await showConfirm({
+    title: "Delete combo",
+    message: "Delete combo " + id + "?",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api("/combos/" + id, { method: "DELETE" });
     requestUpdate();
@@ -237,8 +243,7 @@ export async function updateRaceSize(id: number, e: Event | null): Promise<void>
   try {
     await api("/combos/" + id, { method: "PATCH", body: JSON.stringify({ race_size: val }) });
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
     requestUpdate();
   }
 }

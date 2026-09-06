@@ -14,6 +14,7 @@ import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
 import { showAddTarget } from "../handlers/combo-target-handlers.js";
 import { icons } from "../lib/icons.js";
@@ -118,7 +119,12 @@ async function onUpdateTargetWeight(targetId: number, e: Event): Promise<void> {
   } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
 }
 async function onDeleteCombo(): Promise<void> {
-  if (!detailComboId || !confirm(`Delete combo "${detailCombo?.name ?? detailComboId}"?`)) return;
+  if (!detailComboId || !(await showConfirm({
+    title: "Delete combo",
+    message: `Delete combo "${detailCombo?.name ?? detailComboId}"?`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/combos/${detailComboId}`, { method: "DELETE" });
     location.hash = "#/combos";
@@ -138,7 +144,12 @@ async function onUpdateStrategy(e: Event): Promise<void> {
   await patchCombo(detailComboId!, { strategy: val });
 }
 async function onDeleteTarget(targetId: number): Promise<void> {
-  if (!confirm("Are you sure you want to remove this target from the combo?")) return;
+  if (!(await showConfirm({
+    title: "Remove target",
+    message: "Are you sure you want to remove this target from the combo?",
+    danger: true,
+    confirmLabel: "Remove",
+  }))) return;
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "DELETE" });
     detailTargets = detailTargets.filter((t) => t.id !== targetId);

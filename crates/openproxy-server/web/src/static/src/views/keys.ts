@@ -5,8 +5,8 @@
 // listeners; the create/edit modal HTML is still built by
 // `handlers/key-handlers.ts` (it lives at <body> level so it
 // survives re-renders). Regenerate / revoke / delete are written
-// locally so they can use `showToast()` for errors (no `alert()`)
-// and call `requestUpdate()` instead of `rerenderCurrentView()`.
+// locally so they can use `showToast()` for errors and call
+// `requestUpdate()` instead of `rerenderCurrentView()`.
 
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
@@ -14,6 +14,8 @@ import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
+import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
 import { icons } from "../lib/icons.js";
@@ -63,7 +65,12 @@ function onViewKeyUsage(id: number): void {
 
 async function onRegenerateKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`)) return;
+  if (!(await showConfirm({
+    title: "Regenerate key",
+    message: `Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`,
+    danger: true,
+    confirmLabel: "Regenerate",
+  }))) return;
   try {
     const result = (await api(`/keys/${id}/regenerate`, { method: "POST" })) as KeyPlaintextResponse;
     showPlaintextKey(result.plaintext, result.key);
@@ -75,7 +82,12 @@ async function onRegenerateKey(id: number, label: string | null): Promise<void> 
 
 async function onRevokeKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`)) return;
+  if (!(await showConfirm({
+    title: "Revoke key",
+    message: `Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`,
+    danger: true,
+    confirmLabel: "Revoke",
+  }))) return;
   try {
     await api(`/keys/${id}/revoke`, { method: "POST" });
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
@@ -88,7 +100,12 @@ async function onRevokeKey(id: number, label: string | null): Promise<void> {
 
 async function onDeleteKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`)) return;
+  if (!(await showConfirm({
+    title: "Delete key",
+    message: `Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/keys/${id}`, { method: "DELETE" });
     state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
@@ -103,17 +120,7 @@ async function onCopyPrefix(text: string, e: Event): Promise<void> {
   e.preventDefault();
   e.stopPropagation();
   try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      showToast("Key prefix copied!", "success");
-      return;
-    }
-    const el = document.createElement("textarea");
-    el.value = text;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
+    await copyToClipboard(text);
     showToast("Key prefix copied!", "success");
   } catch (_err: unknown) {
     showToast("Failed to copy", "error");

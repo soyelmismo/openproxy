@@ -19,6 +19,7 @@ import type { Account, Model, ComboSummary, ComboTargetWithModel } from "../lib/
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 
 // ---- PATCH helper (no re-render) ----
 //
@@ -842,7 +843,12 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
 }
 
 export async function deleteTarget(comboId: number, targetId: number): Promise<void> {
-  if (!confirm("Delete target " + targetId + "?")) return;
+  if (!(await showConfirm({
+    title: "Delete target",
+    message: "Delete target " + targetId + "?",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/combos/${comboId}/targets/${targetId}`, { method: "DELETE" });
     showToast("Target deleted.", "success");
@@ -953,7 +959,12 @@ export function clearTargetSelection(): void {
 export async function bulkDeleteSelectedTargets(comboId: number): Promise<void> {
   const ids = Array.from(state.selectedTargets);
   if (ids.length === 0) return;
-  if (!confirm(`Delete ${ids.length} targets? This cannot be undone.`)) return;
+  if (!(await showConfirm({
+    title: "Delete targets",
+    message: `Delete ${ids.length} targets? This cannot be undone.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   await Promise.all(ids.map((tid) =>
     api(`/combos/${comboId}/targets/${tid}`, { method: "DELETE" })
       .catch((e: unknown) => console.error("Failed delete target", tid, e))

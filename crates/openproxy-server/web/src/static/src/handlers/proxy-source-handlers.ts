@@ -6,6 +6,7 @@ import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 import type { ProxySource } from "../lib/types/api.js";
 
 export async function reloadProxySources(): Promise<void> {
@@ -234,7 +235,12 @@ export async function updateProxySource(
 export async function deleteProxySource(id: string): Promise<void> {
   const src = state.proxySources.find((s) => s.id === id);
   const name = src ? src.name : id;
-  if (!confirm(`Are you sure you want to delete source '${name}'?`)) return;
+  if (!(await showConfirm({
+    title: "Delete proxy source",
+    message: `Are you sure you want to delete source '${name}'?`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/proxy-sources/${id}`, { method: "DELETE" });
     showToast(`Proxy source '${name}' deleted`, "success");

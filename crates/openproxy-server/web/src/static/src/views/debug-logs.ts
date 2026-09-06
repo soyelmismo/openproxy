@@ -25,6 +25,7 @@ import { fetchDebugLogs, clearDebugLogs } from "../lib/api.js";
 import { icons } from "../lib/icons.js";
 import type { FetchDebugLogsOpts } from "../lib/api.js";
 import { showToast } from "../components/toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import type { DebugLogEntry } from "../lib/types/api.js";
 // B1 (Bug 3): mark the debug-log entries as viewed on every
@@ -72,29 +73,14 @@ function formatTime(ts: string): string {
   return t.slice(idx + 1).replace(/Z$/, "");
 }
 
-// Clipboard write with a legacy fallback for non-secure contexts
-// (where `navigator.clipboard` is unavailable — e.g. plain HTTP).
-async function copyToClipboard(text: string): Promise<boolean> {
+// Thin wrapper preserving the old `Promise<boolean>` return shape so
+// the call-sites below can keep their `if (ok) ... else showToast(...)`
+// branching without churning the visible flow.
+async function copyToClipboardOk(text: string): Promise<boolean> {
   try {
-    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch (_e: unknown) {
-    // Fall through to the legacy fallback.
-  }
-  try {
-    const ta: HTMLTextAreaElement = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    ta.setAttribute("readonly", "");
-    document.body.appendChild(ta);
-    ta.select();
-    const ok: boolean = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
-  } catch (_e: unknown) {
+    await copyToClipboard(text);
+    return true;
+  } catch {
     return false;
   }
 }
@@ -152,7 +138,7 @@ let filterTraceId: string = "";
 
 async function onCopyCell(val: string): Promise<void> {
   if (!val) return;
-  const ok: boolean = await copyToClipboard(val);
+  const ok: boolean = await copyToClipboardOk(val);
   if (ok) showToast(`Copied: ${val}`, "success");
   else showToast("Clipboard write failed (browser blocked it).", "error");
 }
@@ -164,7 +150,7 @@ async function onCopyAll(): Promise<void> {
   }
   // Newest-first to match the on-screen order.
   const md: string = buildMarkdown(entries.slice().reverse());
-  const ok: boolean = await copyToClipboard(md);
+  const ok: boolean = await copyToClipboardOk(md);
   if (ok) showToast(`Copied ${entries.length} entries as Markdown.`, "success");
   else showToast("Clipboard write failed (browser blocked it).", "error");
 }

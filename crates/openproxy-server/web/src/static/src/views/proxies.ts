@@ -16,6 +16,7 @@ import {
   reloadProxies,
 } from "../handlers/proxy-handlers.js";
 import { showToast } from "../components/toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 import { t } from "../i18n/index.js";
 
 interface FreeProxyRow {
@@ -129,17 +130,7 @@ async function onCopyProxy(text: string, e: Event): Promise<void> {
   e.preventDefault();
   e.stopPropagation();
   try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      showToast("Proxy copied!", "success");
-      return;
-    }
-    const el = document.createElement("textarea");
-    el.value = text;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
+    await copyToClipboard(text);
     showToast("Proxy copied!", "success");
   } catch (_err: unknown) {
     showToast("Failed to copy", "error");

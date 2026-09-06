@@ -13,6 +13,7 @@
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { showToast } from "./toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 import { ensureModalRoot } from "../lib/ui-utils.js";
 import { liveLogsStore } from "../state/live-logs-store.js";
 import { icons, endpointIcon } from "../lib/icons.js";
@@ -1262,32 +1263,11 @@ function renderLogDetailTabs(currentTab: string, rawJson: unknown): TemplateResu
 export async function copyRawJson(rawJson: unknown, _e?: Event): Promise<void> {
   const text = typeof rawJson === "string" ? rawJson : JSON.stringify(rawJson, null, 2);
   try {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-      await navigator.clipboard.writeText(text);
-      showToast("Log JSON copiado al portapapeles.", "success");
-      return;
-    }
-  } catch (err) {
-    console.warn("[openproxy] navigator.clipboard.writeText failed:", err);
+    await copyToClipboard(text);
+    showToast("Log JSON copiado al portapapeles.", "success");
+  } catch (_err) {
+    showToast("No se pudo copiar el JSON al portapapeles.", "warning");
   }
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    ta.setAttribute("readonly", "");
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    if (ok) {
-      showToast("Log JSON copiado al portapapeles.", "success");
-      return;
-    }
-  } catch (fallbackErr) {
-    console.warn("[openproxy] execCommand fallback failed:", fallbackErr);
-  }
-  showToast("No se pudo copiar el JSON al portapapeles.", "warning");
 }
 
 let currentActiveTab: string = "request";
@@ -1898,9 +1878,9 @@ function summarizeRequestBody(body: unknown): string {
  *  bundle, and writes it to the clipboard. Shows a toast for
  *  success / failure.
  *
- *  Includes a fallback for non-secure contexts (HTTP, not localhost)
- *  where `navigator.clipboard` is unavailable: creates a hidden
- *  textarea, selects it, and calls `document.execCommand("copy")`. */
+ *  Delegates the clipboard write (and its HTTP fallback) to
+ *  `lib/clipboard.ts`. If both paths fail, shows the bundle in a
+ *  modal so the user can manually select+copy. */
 export async function copyDebugBundle(): Promise<void> {
   const attempt = state.logs.selectedIdentity ? liveLogsStore.selectDetail(state.logs.selectedIdentity) : null;
   let row: LogDetailLog | null = null;
@@ -1928,37 +1908,13 @@ export async function copyDebugBundle(): Promise<void> {
   }
   const bundle: string = buildDebugBundle(row);
   try {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-      await navigator.clipboard.writeText(bundle);
-      showToast("Debug bundle copied to clipboard.", "success");
-      return;
-    }
-  } catch (err) {
-    console.warn("[openproxy] navigator.clipboard.writeText failed, trying execCommand fallback:", err);
+    await copyToClipboard(bundle);
+    showToast("Debug bundle copied to clipboard.", "success");
+  } catch (_err) {
+    // Last-resort fallback: Show the bundle in a modal so the user can manually select+copy.
+    showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
+    showToast("Copy unavailable — bundle shown in a window for manual copy.", "warning");
   }
-
-  // Fallback for non-HTTPS / non-secure contexts (e.g. LAN IP HTTP access)
-  try {
-    const ta: HTMLTextAreaElement = document.createElement("textarea");
-    ta.value = bundle;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    ta.setAttribute("readonly", "");
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    if (ok) {
-      showToast("Debug bundle copied to clipboard.", "success");
-      return;
-    }
-  } catch (fallbackErr) {
-    console.warn("[openproxy] execCommand fallback failed:", fallbackErr);
-  }
-
-  // Last-resort fallback: Show the bundle in a modal so the user can manually select+copy.
-  showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
-  showToast("Copy unavailable — bundle shown in a window for manual copy.", "warning");
 }
 
 /** Last-resort fallback: show the bundle in a modal window so the

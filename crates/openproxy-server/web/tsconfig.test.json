@@ -6,6 +6,6 @@
     "noEmit": true,
     "types": ["@playwright/test", "node"]
   },
-  "include": ["tests/e2e/**/*", "playwright.config.cjs"],
+  "include": ["tests/e2e/**/*", "playwright.config.js"],
   "exclude": ["node_modules", "src/static/dist", "tests/e2e/.tsbuild"]
 }

@@ -22,6 +22,7 @@ import { getToken } from '../state/auth.js';
 import { requestUpdate } from '../state/reactive.js';
 import { createView } from '../lib/view-utils.js';
 import { showToast } from '../components/toast.js';
+import { copyToClipboard } from '../lib/clipboard.js';
 import { icons } from '../lib/icons.js';
 import type { Model, Provider, Account, Combo } from '../lib/types/api.js';
 
@@ -197,40 +198,11 @@ function copyText(text: string, label = 'Content'): void {
     showToast(`${label} copied to clipboard!`, 'info');
   };
 
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    navigator.clipboard
-      .writeText(text)
-      .then(notify)
-      .catch(() => {
-        fallbackCopyText(text, notify);
-      });
-  } else {
-    fallbackCopyText(text, notify);
-  }
-}
-
-function fallbackCopyText(text: string, cb?: () => void): void {
-  try {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-9999px';
-    textArea.style.top = '0';
-    textArea.style.opacity = '0';
-    textArea.setAttribute('readonly', '');
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    const successful = document.execCommand('copy');
-    document.body.removeChild(textArea);
-    if (successful) {
-      if (cb) cb();
-    } else {
+  copyToClipboard(text)
+    .then(notify)
+    .catch(() => {
       showToast('Copy failed — please copy manually', 'error');
-    }
-  } catch (_err) {
-    showToast('Copy failed — please copy manually', 'error');
-  }
+    });
 }
 
 function insertChatDirective(directive: string): void {
@@ -2128,13 +2100,9 @@ if (typeof window !== 'undefined') {
         }, 1600);
       };
 
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        navigator.clipboard.writeText(code).then(onCopied).catch(() => {
-          fallbackCopyText(code, onCopied);
-        });
-      } else {
-        fallbackCopyText(code, onCopied);
-      }
+      copyToClipboard(code).then(onCopied).catch(() => {
+        showToast('Copy failed — please copy manually', 'error');
+      });
     };
   }
 }

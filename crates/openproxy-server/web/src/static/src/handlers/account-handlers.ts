@@ -16,7 +16,9 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm, showPrompt } from "../lib/show-confirm.js";
 
 function summarizeApiKey(key: string): string {
   const trimmed = key.trim();
@@ -101,7 +103,12 @@ export async function createAccount(providerId: string, e: Event, wrapper?: HTML
 }
 
 export async function deleteAccount(id: number): Promise<void> {
-  if (!confirm("Delete account #" + id + "?")) return;
+  if (!(await showConfirm({
+    title: "Delete account",
+    message: "Delete account #" + id + "?",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api("/accounts/" + id, { method: "DELETE" });
     state.accounts = await api("/accounts") as typeof state.accounts;
@@ -184,7 +191,7 @@ export async function updateAccountKey(id: number, e: Event, wrapper?: HTMLEleme
 }
 
 export async function updateAccountLabel(id: number, currentLabel: string): Promise<void> {
-  const newLabel = prompt(`Rename account label:`, currentLabel || "");
+  const newLabel = await showPrompt("Rename account label", "New label:", currentLabel || "");
   if (newLabel == null) return;
   const trimmed = newLabel.trim();
   if (trimmed === currentLabel) return;
@@ -205,24 +212,15 @@ export async function copyAccountApiKey(id: number): Promise<void> {
   try {
     const res = await api("/accounts/" + id + "/api-key", { method: "GET" }) as { api_key?: string };
     if (res && res.api_key) {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(res.api_key);
+      try {
+        await copyToClipboard(res.api_key);
         showToast("API key copied to clipboard", "success");
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = res.api_key;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          showToast("API key copied to clipboard", "success");
-        } catch (err) {
-          prompt("Copy your API key:", res.api_key);
-        }
-        textArea.remove();
+      } catch (_e: unknown) {
+        // Tech debt (Q5): last-resort native prompt so the operator can
+        // still read the key when both clipboard paths fail. Replace with
+        // a read-only modal (showBundleInModal pattern in log-detail.ts)
+        // in a later phase.
+        window.prompt("Copy your API key:", res.api_key);
       }
     } else {
       showToast("No API key returned", "error");

@@ -25,7 +25,8 @@ import {
 import type { Model, Provider, ApiKeyId } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-import { ensureModalRoot } from "../lib/ui-utils.js";
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 
 interface KeyRow {
   id: ApiKeyId;
@@ -231,8 +232,7 @@ export async function showEditKey(id: number): Promise<void> {
   let key: KeyRow;
   try { key = await api("/keys/" + id) as KeyRow; }
   catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
     return;
   }
   const wrapper = document.createElement("div");
@@ -338,8 +338,7 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
     else closeKeyForm("self", e);
     showPlaintextKey(result.plaintext, result.key);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showApiError(err, "Error");
   }
 }
 
@@ -355,33 +354,40 @@ export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Pr
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showApiError(err, "Error");
   }
 }
 
 export async function regenerateKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`)) return;
+  if (!(await showConfirm({
+    title: "Regenerate key",
+    message: `Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`,
+    danger: true,
+    confirmLabel: "Regenerate",
+  }))) return;
   try {
     const result = await api(`/keys/${id}/regenerate`, { method: "POST" }) as KeyPlaintextResponse;
     showPlaintextKey(result.plaintext, result.key);
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
   }
 }
 
 export async function revokeKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`)) return;
+  if (!(await showConfirm({
+    title: "Revoke key",
+    message: `Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`,
+    danger: true,
+    confirmLabel: "Revoke",
+  }))) return;
   try {
     await api(`/keys/${id}/revoke`, { method: "POST" });
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
     requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
   }
 }
 
@@ -391,13 +397,17 @@ export function viewKeyUsage(id: number): void {
 
 export async function deleteKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`)) return;
+  if (!(await showConfirm({
+    title: "Delete key",
+    message: `Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/keys/${id}`, { method: "DELETE" });
     state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
     requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
   }
 }

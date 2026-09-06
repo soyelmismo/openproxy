@@ -22,7 +22,7 @@ const options = {
   // embedded into the Rust binary via rust-embed and wastes 1.4MB of
   // RAM. For development debugging, run `node build.mjs --sourcemap`.
   sourcemap: process.argv.includes('--sourcemap'),
-  minify: false,
+  minify: !isWatch,
   legalComments: 'eof',
   packages: 'bundle',
   logLevel: 'info',

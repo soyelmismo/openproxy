@@ -3,6 +3,7 @@
 
 import { html, render } from 'lit-html';
 import { showToast } from "./toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 
 export interface KeyMetadata {
   label?: string | null;
@@ -26,16 +27,10 @@ export function showPlaintextKey(plaintext: string, metadata: KeyMetadata | null
             <button id="copy-key-btn" type="button" @click=${async (e: Event) => {
               const btn = e.target as HTMLButtonElement;
               try {
-                await navigator.clipboard.writeText(plaintext);
+                await copyToClipboard(plaintext);
                 btn.textContent = "Copied!";
               } catch (_e: unknown) {
-                const ta: HTMLTextAreaElement = document.createElement("textarea");
-                ta.value = plaintext;
-                document.body.appendChild(ta);
-                ta.select();
-                try { document.execCommand("copy"); btn.textContent = "Copied!"; }
-                catch (__err: unknown) { showToast("Copy failed", "error"); }
-                finally { document.body.removeChild(ta); }
+                showToast("Copy failed", "error");
               }
             }}>Copy</button>
           </div>

@@ -19,6 +19,7 @@ import { extractApiErrorMessage } from "../lib/escape.js";
 import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
 import { requestUpdate } from "../state/reactive.js";
 import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
+import { showConfirm, showPrompt } from "../lib/show-confirm.js";
 import { showToast } from "../components/toast.js";
 
 interface RefreshResult {
@@ -205,7 +206,12 @@ export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<v
 // still hit `window.deleteProvider`. The dashboard's "Delete"
 // button uses `confirmDeleteProvider` (two-step: type the id).
 export async function deleteProvider(id: string): Promise<void> {
-  if (!confirm(`Delete provider ${id}? This will cascade-delete its accounts and models.`)) return;
+  if (!(await showConfirm({
+    title: "Delete provider",
+    message: `Delete provider ${id}? This will cascade-delete its accounts and models.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api("/providers/" + encodeURIComponent(id), { method: "DELETE" });
     state.providers = state.providers.filter((p) => p.id !== id);
@@ -222,14 +228,19 @@ export async function deleteProvider(id: string): Promise<void> {
 // catch most misclicks. The second step is a plain confirm for
 // the final go-ahead.
 export async function confirmDeleteProvider(providerId: string): Promise<void> {
-  const typed = prompt(`Type the provider ID to confirm deletion: ${providerId}`);
+  const typed = await showPrompt("Delete provider", `Type the provider ID to confirm deletion: ${providerId}`);
   if (typed !== providerId) {
     if (typed != null) {
-      alert(`Provider id "${typed}" does not match. Nothing was deleted.`);
+      showToast(`Provider id "${typed}" does not match. Nothing was deleted.`, "warning");
     }
     return;
   }
-  if (!confirm(`Really delete ${providerId}? This cascades to all its accounts and models.`)) return;
+  if (!(await showConfirm({
+    title: "Really delete?",
+    message: `Really delete ${providerId}? This cascades to all its accounts and models.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api("/providers/" + encodeURIComponent(providerId), { method: "DELETE" });
     state.providers = state.providers.filter((p) => p.id !== providerId);
@@ -248,7 +259,7 @@ export async function confirmDeleteProvider(providerId: string): Promise<void> {
     // POST .../active to deactivate it" instead of a generic
     // "Error: 400: ...".
     const friendly = extractApiErrorMessage(err) || (err instanceof Error ? err.message : String(err));
-    alert("Cannot delete: " + friendly);
+    showToast("Cannot delete: " + friendly, "error");
   }
 }
 
@@ -263,11 +274,15 @@ export async function confirmDeleteProvider(providerId: string): Promise<void> {
 // safe and the user clearly intended it by clicking "Activate".
 export async function toggleProviderActive(providerId: string, newActive: boolean): Promise<void> {
   if (!newActive) {
-    const ok = confirm(
-      `Deactivate provider "${providerId}"?\n\n` +
-      `Its accounts and models will be preserved, but it won't be ` +
-      `usable in combos until you reactivate it.`
-    );
+    const ok = await showConfirm({
+      title: "Deactivate provider",
+      message:
+        `Deactivate provider "${providerId}"?\n\n` +
+        `Its accounts and models will be preserved, but it won't be ` +
+        `usable in combos until you reactivate it.`,
+      danger: true,
+      confirmLabel: "Deactivate",
+    });
     if (!ok) return;
   }
   try {
@@ -288,7 +303,7 @@ export async function toggleProviderActive(providerId: string, newActive: boolea
 // `/admin/providers/:id` already exists in the backend, this
 // is just the UX.
 export async function renameProviderPrompt(providerId: string, currentName: string): Promise<void> {
-  const newName = prompt(`Rename provider "${providerId}":`, currentName);
+  const newName = await showPrompt(`Rename provider "${providerId}"`, "New provider name:", currentName);
   if (newName == null) return; // cancel
   const trimmed = newName.trim();
   if (trimmed === "") {
@@ -303,10 +318,13 @@ export async function renameProviderPrompt(providerId: string, currentName: stri
     (p) => p.id !== providerId && p.name === trimmed,
   );
   if (collision) {
-    const ok = confirm(
-      `A provider with this name already exists (${collision.id}). ` +
-      `Use this name anyway?`
-    );
+    const ok = await showConfirm({
+      title: "Name collision",
+      message:
+        `A provider with this name already exists (${collision.id}). ` +
+        `Use this name anyway?`,
+      confirmLabel: "Use anyway",
+    });
     if (!ok) return;
   }
 
@@ -323,7 +341,11 @@ export async function renameProviderPrompt(providerId: string, currentName: stri
 }
 
 export async function editProviderEndpointPrompt(providerId: string, currentBaseUrl: string): Promise<void> {
-  const newUrl = prompt(`Edit endpoint (base URL) for provider "${providerId}":\n(e.g., https://api.openai.com/v1)`, currentBaseUrl);
+  const newUrl = await showPrompt(
+    `Edit endpoint for provider "${providerId}"`,
+    "Base URL:\n(e.g., https://api.openai.com/v1)",
+    currentBaseUrl,
+  );
   if (newUrl == null) return; // cancel
   const trimmed = newUrl.trim();
   if (trimmed === "") {
@@ -717,7 +739,11 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
   const msg = active
     ? `Enable ${toToggleCount} non-custom models? (${customCount} custom models will not be touched)`
     : `Disable ${toToggleCount} non-custom models? (${customCount} custom models will not be touched)`;
-  if (!confirm(msg)) return;
+  if (!(await showConfirm({
+    title: active ? "Enable models" : "Disable models",
+    message: msg,
+    confirmLabel: active ? "Enable" : "Disable",
+  }))) return;
   try {
     await api("/models/bulk-toggle", {
       method: "POST",
@@ -825,7 +851,11 @@ export async function refreshAllQuotas(providerId: string): Promise<void> {
     showToast("No accounts with quota support for " + providerId + ".", "info");
     return;
   }
-  if (!confirm(`Refresh quota for ${supported.length} accounts?`)) return;
+  if (!(await showConfirm({
+    title: "Refresh quota",
+    message: `Refresh quota for ${supported.length} accounts?`,
+    confirmLabel: "Refresh",
+  }))) return;
   for (const a of supported) {
     try {
       await api("/accounts/" + a.id + "/refresh-quota", { method: "POST" });

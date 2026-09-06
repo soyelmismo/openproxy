@@ -6,6 +6,7 @@ import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 import { t } from "../i18n/index.js";
 
 export async function reloadProxies(queryParams?: Record<string, string | number | undefined>): Promise<void> {
@@ -114,7 +115,12 @@ export async function updateProxyTestUrl(url: string): Promise<void> {
 }
 
 export async function deleteProxy(id: string): Promise<void> {
-  if (!confirm("Are you sure you want to delete this proxy?")) return;
+  if (!(await showConfirm({
+    title: "Delete proxy",
+    message: "Are you sure you want to delete this proxy?",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/proxies/${id}`, { method: "DELETE" });
     showToast(t("proxies.toast.delete_success"), "success");
