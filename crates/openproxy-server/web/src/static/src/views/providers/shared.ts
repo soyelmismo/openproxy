@@ -8,6 +8,7 @@
 // "kitchen sink".
 
 import { html, type TemplateResult } from 'lit-html';
+import { state } from '../../state/index.js';
 import type { ModelSort } from '../../components/model-table.js';
 import type { Provider } from '../../lib/types/api.js';
 
@@ -30,6 +31,33 @@ export interface ProviderDetailUiState {
   // arbitrary keys (none in this codebase, but the spec said "no
   // behavior changes").
   [key: string]: unknown;
+}
+
+// ---- Per-provider UI-state accessors (detail view) ----
+//
+// Split out of the former detail.ts monolith (FU1). The models
+// section (models.ts) reads/writes these on every filter/sort/page
+// interaction and detail.ts seeds the defaults on first render, so
+// they live next to the `ProviderDetailUiState` type they operate on.
+
+export function getProviderUi(providerId: string): ProviderDetailUiState {
+  const raw = state.providerDetail[providerId] as
+    | Partial<ProviderDetailUiState>
+    | undefined;
+  return {
+    filter: raw?.filter ?? 'all',
+    search: raw?.search ?? '',
+    sort: raw?.sort ?? null,
+    page: raw?.page ?? 1,
+    pageSize: raw?.pageSize ?? 50,
+  };
+}
+
+export function setProviderUi(
+  providerId: string,
+  ui: ProviderDetailUiState,
+): void {
+  state.providerDetail[providerId] = ui;
 }
 
 // ---- Module-local state shared by index + detail ----
@@ -131,4 +159,46 @@ export function renderProviderIcon(p: Provider): TemplateResult {
     <img src=${src} alt=${p.name} class="provider-favicon" @error=${onImgError} loading="lazy" />
     <span style="display: none;">${fallback}</span>
   `;
+}
+
+// ---- Capability badges ----
+//
+// Split out of the former detail.ts monolith (FU1). Renders the
+// vision/tools/reasoning/… badges parsed from a model's
+// `capabilities_json` (accepts the raw JSON string or a pre-parsed
+// object; bad input renders as an em-dash instead of throwing).
+// A simpler variant also exists in components/model-table.ts — this
+// one additionally surfaces the non-chat `modelType` badge.
+
+export function renderCapabilityBadges(
+  json: string | null | undefined,
+  modelType?: string | null,
+): TemplateResult {
+  const badges: TemplateResult[] = [];
+  if (modelType && modelType !== 'chat') {
+    badges.push(html`<span class="cap-badge">${modelType}</span>`);
+  }
+  if (json != null) {
+    let caps: unknown;
+    if (typeof json === 'string') {
+      try {
+        caps = JSON.parse(json) as unknown;
+      } catch {
+        // ignore — fall through with caps = undefined; renderCapabilityBadges
+        // handles both null and undefined gracefully below.
+      }
+    } else {
+      caps = json;
+    }
+    if (caps && typeof caps === 'object') {
+      const c = caps as Record<string, unknown>;
+      if (c['vision']) badges.push(html`<span class="cap-badge">vision</span>`);
+      if (c['tool_calling']) badges.push(html`<span class="cap-badge">tools</span>`);
+      if (c['reasoning']) badges.push(html`<span class="cap-badge">reasoning</span>`);
+      if (c['thinking']) badges.push(html`<span class="cap-badge">thinking</span>`);
+      if (c['structured_output']) badges.push(html`<span class="cap-badge">json</span>`);
+      if (c['attachment']) badges.push(html`<span class="cap-badge">attach</span>`);
+    }
+  }
+  return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;
 }
