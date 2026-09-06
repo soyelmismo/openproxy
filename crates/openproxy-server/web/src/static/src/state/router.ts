@@ -93,7 +93,7 @@ const ROUTES: readonly Route[] = [
   // the preset directly off `location.hash`. Other routes are
   // unaffected.
   { name: "analytics", pattern: /^#?\/analytics(?:\?.*)?$/, mount: lazyMount(
-    () => import('../views/analytics.js'), 'mountAnalytics',
+    () => import('../views/analytics/index.js'), 'mountAnalytics',
   ) },
   { name: "logs", pattern: /^#?\/logs(?:\?.*)?$/, mount: mountLogs as ViewMount },
   // Debug Logs polls `/admin/debug/logs` on a 2s chained-setTimeout
