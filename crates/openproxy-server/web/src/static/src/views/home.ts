@@ -68,7 +68,7 @@ import {
   createSparkline,
   observeResize,
   CHART_COLORS,
-} from "../components/uplot-chart.js";
+} from "../components/uplot-chart/index.js";
 
 // ============================================================================
 // Module-local state

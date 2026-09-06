@@ -9,7 +9,7 @@ import { html, type TemplateResult } from "lit-html";
 import {
   buildDailyUsageChart,
   observeResize,
-} from "../../components/uplot-chart.js";
+} from "../../components/uplot-chart/index.js";
 import { t } from "../../i18n/index.js";
 import {
   byDay,
