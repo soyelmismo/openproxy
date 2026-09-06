@@ -288,7 +288,26 @@ function calculateExpiry(amount: string, unit: string): string | null {
   return now.toISOString();
 }
 
-function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
+/** Read a `keyForm` from the DOM and produce the JSON body sent to
+ *  `/admin/keys` (POST) or `/admin/keys/:id` (PATCH).
+ *
+ *  Three-state encoding for the blacklist fields mirrors the Rust
+ *  PATCH semantics:
+ *   - empty input  → `null`     (don't touch the list)
+ *   - " "          → `[]`       (explicitly clear every entry)
+ *   - non-empty    → trimmed list of distinct entries
+ *
+ *  `calculateExpiry("never", ...)` returns `null` (clear the expiry)
+ *  while any non-empty amount coerces to an ISO-8601 timestamp in
+ *  the future. Empty amount → `null` (defensive).
+ *
+ *  Returns `null` when validation fails (no scopes selected). The
+ *  caller is expected to surface the error via `showToast` and bail.
+ *
+ *  Pure w.r.t. the global DOM (only reads the form) and `Intl`/Date;
+ *  no network calls. Exported for direct unit testing in
+ *  `key-handlers.test.ts`. */
+export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   const scopes: string[] = Array.from(form.querySelectorAll<HTMLInputElement>('input[name="scopes"]:checked'))
     .map((input) => input.value);
   if (scopes.length === 0) { showToast("Pick at least one scope.", "error"); return null; }

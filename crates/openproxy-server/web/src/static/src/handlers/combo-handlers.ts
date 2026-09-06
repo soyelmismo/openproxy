@@ -166,10 +166,21 @@ export function onCreateCooldownModeChange(): void {
   if (label) label.setAttribute("title", COOLDOWN_MODE_TOOLTIPS[mode]);
 }
 
-export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void> {
-  const target = e.target;
-  if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
+/** Read the create-combo form and produce the JSON body sent to
+ *  `POST /admin/combos`.
+ *
+ *  Always-present fields keep their server defaults when the form is
+ *  blank (`name` is `""`, `strategy` is `"priority"`, `race_size` is
+ *  `1`, `preventive_rate_limit` is `false`). Optional fields
+ *  (`lkgp_exploration_rate`, `selection_window_secs`, the three
+ *  `cooldown_*` knobs) are OMITTED from the body when blank or NaN
+ *  so the Rust deserializer uses its server-side defaults — empty
+ *  strings would fail u64/f64 coercion on the backend.
+ *
+ *  Pure (only `form` reads + numeric parsing). Exported for unit
+ *  testing in `combo-handlers.test.ts`. */
+export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput {
+  const f = new FormData(form);
   const priorityMode = String(f.get("priority_mode") || "strict");
   const cooldownMode = String(f.get("cooldown_mode") || "flat");
   const body: CreateComboInput = {
@@ -214,6 +225,13 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
       if (!Number.isNaN(factor)) body.cooldown_factor = factor;
     }
   }
+  return body;
+}
+
+export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void> {
+  const target = e.target;
+  if (!(target instanceof HTMLFormElement)) return;
+  const body = buildComboBodyFromForm(target);
   try {
     await api("/combos", { method: "POST", body: JSON.stringify(body) });
     if (wrapper) wrapper.remove(); else closeCreateCombo();

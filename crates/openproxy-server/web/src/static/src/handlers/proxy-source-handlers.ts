@@ -100,19 +100,38 @@ export function showAddProxySource(): void {
   );
 }
 
+/** Read the proxy-source form and produce the JSON body sent to
+ *  `POST /admin/proxy-sources` (create) and `PUT
+ *  /admin/proxy-sources/:id` (update).
+ *
+ *  Always-present fields (`name`, `url`) are trimmed; `priority`
+ *  falls back to `0` when missing/blank; `active` is a checkbox
+ *  whose value is the literal string `"on"` when ticked.
+ *
+ *  Pure (only `form` reads + trim/number coercion). Exported for
+ *  unit testing in `proxy-source-handlers.test.ts`. The inferred
+ *  return type is `Name`-like; tests assert against it via
+ *  `toEqual`. */
+export function buildProxySourceBodyFromForm(form: HTMLFormElement) {
+  const f = new FormData(form);
+  return {
+    name: (f.get("name") || "").toString().trim(),
+    url: (f.get("url") || "").toString().trim(),
+    priority: Number(f.get("priority") || 0),
+    active: f.get("active") === "on",
+  };
+}
+
 export async function createProxySource(e: Event, wrapper: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const name = (f.get("name") || "").toString().trim();
-  const url = (f.get("url") || "").toString().trim();
-  const priority = Number(f.get("priority") || 0);
-  const active = f.get("active") === "on";
+  const body = buildProxySourceBodyFromForm(target);
+  const { name } = body;
 
   try {
     await api("/proxy-sources", {
       method: "POST",
-      body: JSON.stringify({ name, url, priority, active }),
+      body: JSON.stringify(body),
     });
     showToast(`Proxy source '${name}' added`, "success");
     wrapper.remove();
@@ -213,16 +232,13 @@ export async function updateProxySource(
 ): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const name = (f.get("name") || "").toString().trim();
-  const url = (f.get("url") || "").toString().trim();
-  const priority = Number(f.get("priority") || 0);
-  const active = f.get("active") === "on";
+  const body = buildProxySourceBodyFromForm(target);
+  const { name } = body;
 
   try {
     await api(`/proxy-sources/${id}`, {
       method: "PUT",
-      body: JSON.stringify({ name, url, priority, active }),
+      body: JSON.stringify(body),
     });
     showToast(`Proxy source '${name}' updated`, "success");
     wrapper.remove();

@@ -217,20 +217,45 @@ export function showAddCustomProxy(): void {
   );
 }
 
+/** Body shape for `POST /admin/proxies`. Mirrors the Rust
+ *  `CreateCustomProxyRequest` so consumers can `satisfies`-validate
+ *  the builder's inferred return type. */
+export interface CreateCustomProxyBody {
+  host: string;
+  port: number;
+  type: string;
+  country_code: string | null;
+}
+
+/** Read the add-custom-proxy form and produce the JSON body sent to
+ *  `POST /admin/proxies`.
+ *
+ *  `host` is trimmed by the browser's `required` validation, `port`
+ *  is the raw numeric input (server-side `u16` check), `type` is a
+ *  `<select>` defaulted to `"http"`, and `country_code` is uppercased
+ *  or `null` when blank (the `null` is significant — `""` would
+ *  become `Some("")` in Rust).
+ *
+ *  Pure (only `form` reads + `Number`/`.toUpperCase()`). Exported
+ *  for unit testing in `proxy-handlers.test.ts`. */
+export function buildCustomProxyBodyFromForm(form: HTMLFormElement): CreateCustomProxyBody {
+  const f = new FormData(form);
+  const countryRaw = f.get("country_code");
+  const country_code = countryRaw && countryRaw.toString().trim() !== ""
+    ? countryRaw.toString().trim().toUpperCase()
+    : null;
+  return {
+    host: (f.get("host") || "").toString(),
+    port: Number(f.get("port")),
+    type: (f.get("type") || "http").toString(),
+    country_code,
+  };
+}
+
 export async function createCustomProxy(e: Event, wrapper: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const host = (f.get("host") || "").toString();
-  const port = Number(f.get("port"));
-  const type = (f.get("type") || "http").toString();
-  const country_code = f.get("country_code")?.toString().toUpperCase() || null;
-  const body = {
-    host,
-    port,
-    type,
-    country_code,
-  };
+  const body = buildCustomProxyBodyFromForm(target);
   try {
     await api("/proxies", { method: "POST", body: JSON.stringify(body) });
     showToast(

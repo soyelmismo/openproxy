@@ -334,23 +334,38 @@ export function deselectAllModelsInModal(): void {
   onModelCheckboxChange();
 }
 
+/** Read the "add as sub-combo" branch of the add-target form and
+ *  produce the JSON body sent to `POST /admin/combos/:id/targets`.
+ *
+ *  Shape follows the `AddTargetInput` XOR contract: `sub_combo_id`
+ *  is set and `model_row_id`/`account_id` are explicitly `null`
+ *  (not omitted — the Rust deserializer rejects `Option`/`Some(null)`
+ *  mismatches). `provider_id` is the literal `"combo"` marker.
+ *
+ *  Pure (only `form` reads + `parseInt`). Exported for unit testing
+ *  in `add-target-modal.test.ts`. The inferred return type matches
+ *  `AddTargetInput` with `sub_combo_id: number` set; tests assert
+ *  against it via `toEqual`. */
+export function buildSubComboTargetBodyFromForm(form: HTMLFormElement) {
+  const f = new FormData(form);
+  return {
+    provider_id: "combo",
+    account_id: null,
+    model_row_id: null,
+    sub_combo_id: parseInt(String(f.get("sub_combo_id"))),
+    priority_order: parseInt(String(f.get("priority_order"))),
+  };
+}
+
 export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
   const checked = document.querySelector('input[name="target_kind"]:checked') as HTMLInputElement | null;
   const kind = checked ? checked.value : "";
 
   if (kind === "combo") {
-    const subComboId = parseInt(String(f.get("sub_combo_id")));
-    if (!subComboId) { showToast("Select a sub-combo first.", "error"); return; }
-    const body = {
-      provider_id: "combo",
-      account_id: null,
-      model_row_id: null,
-      sub_combo_id: subComboId,
-      priority_order: parseInt(String(f.get("priority_order"))),
-    };
+    const body = buildSubComboTargetBodyFromForm(target);
+    if (!body.sub_combo_id) { showToast("Select a sub-combo first.", "error"); return; }
     try {
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });
       if (wrapper) wrapper.remove(); else closeAddTarget();
