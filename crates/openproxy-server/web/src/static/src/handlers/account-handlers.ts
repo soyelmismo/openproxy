@@ -111,15 +111,6 @@ export async function deleteAccount(id: number): Promise<void> {
   });
 }
 
-export async function testAccount(id: number): Promise<void> {
-  try {
-    const res = await api("/accounts/" + id + "/test", { method: "POST" }) as { status?: string; ok?: boolean } | null;
-    showToast(`Account #${id}: ${res && res.status ? res.status : "tested"}`, res && res.ok ? "success" : "info");
-  } catch (e: unknown) {
-    showApiError(e, "Account test failed");
-  }
-}
-
 export function showUpdateAccountKey(id: number): void {
   const handle = renderOpModal({
     title: `Update API key for account #${id}`,
