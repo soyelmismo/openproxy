@@ -69,7 +69,7 @@ import { toggleSidebar, toggleMobileNav, closeMobileNav, logout } from "../compo
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
-import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail.js";
+import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail/index.js";
 import { syncProxies, testProxy, testAllProxies, deleteProxy, showAddCustomProxy } from "./proxy-handlers.js";
 import { showAddProxySource, showEditProxySource, deleteProxySource, testProxySource } from "./proxy-source-handlers.js";
 

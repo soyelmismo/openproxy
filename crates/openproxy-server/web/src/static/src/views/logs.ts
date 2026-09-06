@@ -12,7 +12,7 @@ import {
 } from "../state/ws.js";
 import { fetchRecordingState, toggleRecording } from "../handlers/log-handlers.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
-import { openLogDetail } from "../components/log-detail.js";
+import { openLogDetail } from "../components/log-detail/index.js";
 import { liveLogsStore, type AttemptState } from "../state/live-logs-store.js";
 import { clockStore } from "../state/clock-store.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
