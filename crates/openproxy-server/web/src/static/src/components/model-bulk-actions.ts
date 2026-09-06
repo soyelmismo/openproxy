@@ -20,7 +20,7 @@ import {
   bulkTestSelected,
   bulkDeleteSelected,
   clearModelSelection,
-} from "../handlers/model-handlers.js";
+} from "../handlers/model-handlers/index.js";
 
 export function renderBulkActionsBar(providerId: string): TemplateResult {
   return html`

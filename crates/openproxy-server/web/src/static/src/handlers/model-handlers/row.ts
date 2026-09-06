@@ -1,119 +1,30 @@
-// handlers/model-handlers.ts — model-level handlers.
+// handlers/model-handlers/row.ts — per-row model handlers,
+// multi-select management, and the shared bulk-bar DOM patch.
 //
-// Per spec §3 + §13.8 we do not attach to `window.*`. Every
-// function here is exported by name and registered in
-// handlers/registry.ts so the central data-action shim can find
-// it.
-//
-// Naming convention: functions that take an `e` event as a
-// trailing argument (submit handlers) receive the DOM event last
-// in the shim dispatch. Functions that take a single `id`-style
-// argument receive it as `arg1`. Functions that need a button
-// reference (e.g. testModel) take the event element as a
-// trailing argument so they can disable + relabel the button
-// while in flight.
-//
-// Migrated to lit-html: the legacy "Edit model" modal is rendered
-// into a wrapper `<div>` under `#modal-root` via `render()`. All
-// `data-action` attributes have been replaced with direct
-// `@click` / `@submit` handlers; lit-html auto-escapes the model
-// id / display name so we no longer call `escapeAttr` /
-// `appendModal`.
+// The bulk-bar helper (`updateBulkBar`) and the `TestResult`
+// interface are exported from here because both this module and
+// bulk.ts reference them.
 
-import { state } from "../state/index.js";
-import { api } from "../state/api.js";
+import { state } from "../../state/index.js";
+import { api } from "../../state/api.js";
 import { html, render } from "lit-html";
-import { renderModelRows, getVisibleModelRowIds, updateFilterTabCounts, syncSelectAllCheckbox, applySort, syncModelRowActive } from "../components/model-table.js";
-import { renderBulkActionsBar } from "../components/model-bulk-actions.js";
-import { statusPillClass } from "../lib/constants.js";
-import type { Model } from "../lib/types/api.js";
-import { requestUpdate } from "../state/reactive.js";
-import { showToast } from "../components/toast.js";
-import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
-import { showConfirm } from "../lib/show-confirm.js";
-import { mutateAndRefresh } from "../lib/mutate.js";
+import {
+  renderModelRows,
+  getVisibleModelRowIds,
+  updateFilterTabCounts,
+  syncSelectAllCheckbox,
+  applySort,
+  syncModelRowActive,
+} from "../../components/model-table.js";
+import { renderBulkActionsBar } from "../../components/model-bulk-actions.js";
+import { statusPillClass } from "../../lib/constants.js";
+import { requestUpdate } from "../../state/reactive.js";
+import { flashButton, showApiError } from "../../lib/ui-utils.js";
 
-interface TestResult {
+export interface TestResult {
   status: number;
   elapsed_ms: number;
   row_id?: number;
-}
-
-// ===== Edit model (legacy) =====
-//
-// The legacy "Edit model" modal is preserved for backwards
-// compatibility — older UI surfaces still call it. New code
-// should use the in-table Enable/Disable buttons instead.
-
-export async function showEditModel(rowId: number): Promise<void> {
-  if (!state.modelsComplete) {
-    state.models = await api("/models") as Model[];
-    state.modelsComplete = true;
-  }
-  const m = (state.models || []).find((x) => x.row_id === rowId);
-  if (!m) { showToast("Model row not found", "error"); return; }
-  const wrapper = document.createElement("div");
-  ensureModalRoot().appendChild(wrapper);
-  // Mount on <body> via #modal-root (not #main) so the 3s background
-  // poll doesn't destroy the form mid-edit. lit-html auto-escapes
-  // the model id / display name so we no longer call `escapeAttr`.
-  render(html`
-    <div class="modal-bg" id="edit-model-modal"
-         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
-      <div class="modal">
-        <div class="modal-header">
-          <h2>Edit model row #${rowId}</h2>
-          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
-        </div>
-        <form @submit=${(e: Event) => { e.preventDefault(); void updateModel(rowId, e, wrapper); }}>
-          <div class="modal-body">
-            <div class="field">
-              <label>Model id</label>
-              <input name="model_id" type="text" .value=${m.model_id || ""} required>
-            </div>
-            <div class="field">
-              <label>Display name</label>
-              <input name="display_name" type="text" .value=${m.display_name || ""}>
-            </div>
-            <div class="field">
-              <label>Active</label>
-              <select name="active">
-                <option value="true" ?selected=${!!m.active}>yes</option>
-                <option value="false" ?selected=${!m.active}>no</option>
-              </select>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
-            <button type="submit" class="primary">Save</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  `, wrapper);
-}
-
-export async function updateModel(rowId: number, e: Event, wrapper?: HTMLElement): Promise<void> {
-  const target = e.target;
-  if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const body = {
-    model_id: f.get("model_id"),
-    display_name: f.get("display_name") || null,
-    active: f.get("active") === "true",
-  };
-  try {
-    await api("/models/" + rowId, { method: "PATCH", body: JSON.stringify(body) });
-    state.models = await api("/models") as Model[];
-    if (wrapper) wrapper.remove();
-    else {
-      const modalBg = target.closest(".modal-bg");
-      if (modalBg) modalBg.remove();
-    }
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error");
-  }
 }
 
 // ===== Per-row model handlers =====
@@ -201,29 +112,8 @@ export async function testModel(rowId: number, _modelId: string, _e: Event | nul
   }
 }
 
-export async function deleteModel(rowId: number): Promise<void> {
-  if (!(await showConfirm({
-    title: "Delete model",
-    message: "Delete this model? Combo targets referencing it will be removed too.",
-    danger: true,
-    confirmLabel: "Delete",
-  }))) return;
-  await mutateAndRefresh({
-    apiCall: async () => {
-      await api(`/models/${rowId}`, { method: "DELETE" });
-      state.models = state.models.filter((m) => m.row_id !== rowId);
-    },
-  });
-}
-
 // ===== Selection (multi-select) =====
-//
-// The selection is a Set of model row_ids. It is cleared at the
-// top of `renderProviderDetail` so a navigation between
-// providers never leaks selections across providers. The bulk-
-// actions bar and the per-row `tr.selected` class both re-derive
-// from the Set on every render, so the only mutation points
-// are these four functions.
+// The selection is a Set of model row_ids cleared on provider navigation.
 
 export function toggleModelSelection(rowId: number, e: Event | null): void {
   const target = e && e.target && e.target instanceof HTMLInputElement ? e.target : null;
@@ -293,14 +183,7 @@ export function clearModelSelection(): void {
 // than a full re-render — we only touch the bar's "N selected"
 // counter, then re-paint the bar so its buttons (which don't
 // change) are intact.
-//
-// We import the bar template lazily to avoid a circular import
-// (model-bulk-actions.js doesn't import this file, but a static
-// import here would be hoisted to the top of the module and
-// components → state → handler dependencies don't actually form
-// a cycle, so the dynamic import is overkill — we use a static
-// import at the top of the file).
-function updateBulkBar(): void {
+export function updateBulkBar(): void {
   const tbody = document.getElementById("models-tbody");
   if (!tbody) return;
   const section = tbody.closest("section");
@@ -343,125 +226,6 @@ function updateBulkBar(): void {
       render(renderBulkActionsBar(providerId), wrapper);
     }
   }
-}
-
-// ===== Bulk enable / disable / test / delete =====
-
-async function bulkSetSelected(_providerId: string, active: boolean): Promise<void> {
-  const ids = Array.from(state.selectedModels);
-  if (ids.length === 0) return;
-  if (!(await showConfirm({
-    title: active ? "Enable models" : "Disable models",
-    message: `${active ? "Enable" : "Disable"} ${ids.length} models?`,
-    confirmLabel: active ? "Enable" : "Disable",
-  }))) return;
-  // Per-row toggle in parallel: each toggle is its own atomic
-  // UPDATE on the server. The previous bulk-toggle endpoint
-  // applied to *all* non-custom rows of the provider, which is
-  // exactly the over-broad behavior the per-row selection is
-  // meant to escape.
-  await Promise.all(ids.map((rowId) =>
-    api("/models/" + rowId + "/toggle", {
-      method: "POST",
-      body: JSON.stringify({ active }),
-    }).catch((err: unknown) => console.error("Failed toggle", rowId, err))
-  ));
-  state.models = await api("/models") as Model[];
-  // Targeted DOM patch — for each toggled row, sync the
-  // active-state UI in place. Clear the selection (uncheck all,
-  // remove `selected` classes, hide the bulk bar, reset master
-  // checkbox). We do NOT call requestUpdate() — a full
-  // rebuild would close any open `<select>` and steal focus from
-  // the search input. Mirrors patchComboField in combo-handlers.ts.
-  for (const rowId of ids) {
-    const rid = Number(rowId);
-    if (!Number.isFinite(rid)) continue;
-    const m = (state.models || []).find((x) => x.row_id === rid);
-    if (m) syncModelRowActive(rid, m.active);
-  }
-  state.selectedModels.clear();
-  document.querySelectorAll<HTMLInputElement>(
-    '#models-tbody input[type="checkbox"]'
-  ).forEach((cb) => { cb.checked = false; });
-  document.querySelectorAll("tr[id^='model-row-'].selected").forEach((row) => {
-    row.classList.remove("selected");
-  });
-  updateBulkBar();
-  syncSelectAllCheckbox([]);
-  // Refresh the (All / Active / Inactive) counts on the filter
-  // tabs so the totals reflect the new state.
-  const ctx = state.currentView && state.currentView.context;
-  if (ctx) {
-    const allProviderModels = (state.models || []).filter((mm) => mm.provider_id === ctx);
-    updateFilterTabCounts(ctx, allProviderModels);
-  }
-}
-
-export function bulkEnableSelected(_providerId: string): Promise<void> { return bulkSetSelected(_providerId, true); }
-export function bulkDisableSelected(_providerId: string): Promise<void> { return bulkSetSelected(_providerId, false); }
-
-export async function bulkTestSelected(_providerId: string): Promise<void> {
-  const ids = Array.from(state.selectedModels);
-  if (ids.length === 0) return;
-  if (!(await showConfirm({
-    title: "Test models",
-    message: `Test ${ids.length} models sequentially?`,
-    confirmLabel: "Test",
-  }))) return;
-  for (const rowId of ids) {
-    try {
-      const btn = document.getElementById(`test-btn-${rowId}`) as HTMLButtonElement | null;
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = "Testing...";
-      }
-      const result = (await api(`/models/${rowId}/test`, { method: "POST" })) as TestResult;
-      const row = document.getElementById(`model-row-${rowId}`);
-      if (row) {
-        const cell = row.querySelector(".last-test-cell");
-        if (cell instanceof HTMLElement) {
-          render(html`<span class="status-pill ${statusPillClass(result.status)}">${result.status}</span> <small>${result.elapsed_ms}ms</small>`, cell);
-        }
-      }
-      if (btn) {
-        if (result.status >= 200 && result.status < 300) {
-          btn.textContent = "✓";
-          btn.style.background = "#a6e3a1";
-        } else {
-          btn.textContent = "✗ " + result.status;
-          btn.style.background = "#f38ba8";
-        }
-        setTimeout(() => {
-          btn.textContent = "Test";
-          btn.style.background = "";
-          btn.disabled = false;
-        }, 1500);
-      }
-    } catch (err: unknown) {
-      console.error("Test failed", rowId, err);
-    }
-  }
-  // Refresh the models cache so the background poll is a no-op
-  // and the next render shows the up-to-date last_test_* columns.
-  state.models = await api("/models") as Model[];
-}
-
-export async function bulkDeleteSelected(_providerId: string): Promise<void> {
-  const ids = Array.from(state.selectedModels);
-  if (ids.length === 0) return;
-  if (!(await showConfirm({
-    title: "Delete models",
-    message: `Delete ${ids.length} models? This cannot be undone.`,
-    danger: true,
-    confirmLabel: "Delete",
-  }))) return;
-  await Promise.all(ids.map((rowId) =>
-    api("/models/" + rowId, { method: "DELETE" })
-      .catch((err: unknown) => console.error("Failed delete", rowId, err))
-  ));
-  state.models = await api("/models") as Model[];
-  state.selectedModels.clear();
-  requestUpdate();
 }
 
 // ===== Filter / search =====
@@ -593,42 +357,6 @@ export async function updateAutoActivate(providerId: string, e: Event | null): P
     // combo-handlers.ts for the rationale. The user's input
     // already shows their text; a re-render would close any
     // other open input on the page and steal focus.
-  }
-}
-
-// ===== Custom model form =====
-//
-// Re-exported from components/model-custom-form.js so the data-
-// action shim has a single place to find them.
-
-export { showCustomModelForm, closeCustomModelForm } from "../components/model-custom-form.js";
-
-// POST /admin/models/custom — hand-create a model row. The
-// server stamps the row with `custom = 1` and `active = 1` so
-// it's routable as soon as the modal closes. We do the close-
-// modal-then-refetch dance to avoid the re-render of the parent
-// clobbering the modal mid-close.
-export async function createCustomModel(providerId: string, e: Event): Promise<void> {
-  const target = e.target;
-  if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const body = {
-    provider_id: providerId,
-    model_id: f.get("model_id"),
-    display_name: f.get("display_name") || null,
-    model_type: f.get("model_type") || "chat",
-    target_format: f.get("target_format"),
-    ttl_seconds: parseInt(String(f.get("ttl_seconds"))) || 0,
-  };
-  try {
-    await api("/models/custom", { method: "POST", body: JSON.stringify(body) });
-    const modalBg = target.closest(".modal-bg");
-    if (modalBg) modalBg.remove();
-    state.models = await api("/models") as Model[];
-    state.modelsComplete = true;
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error");
   }
 }
 

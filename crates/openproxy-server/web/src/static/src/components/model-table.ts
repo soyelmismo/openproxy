@@ -31,7 +31,7 @@ import {
   toggleModel,
   deleteModel,
   cycleProviderSort,
-} from "../handlers/model-handlers.js";
+} from "../handlers/model-handlers/index.js";
 import type { Model } from "../lib/types/api.js";
 
 // Map an HTTP status code to a status-pill CSS class. The server

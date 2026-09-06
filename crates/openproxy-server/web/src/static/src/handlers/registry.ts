@@ -50,7 +50,7 @@ import {
   bulkEnableSelected, bulkDisableSelected, bulkTestSelected, bulkDeleteSelected,
   updateProviderFilter, updateAutoActivate, createCustomModel, showCustomModelForm, closeCustomModelForm,
   cycleProviderSort,
-} from "./model-handlers.js";
+} from "./model-handlers/index.js";
 import {
   refreshProvider, refreshAllProviders,
   showCreateProvider, closeCreateProvider, createProvider,
@@ -68,7 +68,7 @@ import { mountThemeToggle } from "../components/theme-toggle.js";
 import { toggleSidebar, toggleMobileNav, closeMobileNav, logout } from "../components/sidebar.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
-import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
+import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config/index.js";
 import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail/index.js";
 import { syncProxies, testProxy, testAllProxies, deleteProxy, showAddCustomProxy } from "./proxy-handlers.js";
 import { showAddProxySource, showEditProxySource, deleteProxySource, testProxySource } from "./proxy-source-handlers.js";

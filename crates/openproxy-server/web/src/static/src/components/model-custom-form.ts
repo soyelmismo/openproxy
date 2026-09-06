@@ -17,7 +17,7 @@
 
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
-import { createCustomModel } from "../handlers/model-handlers.js";
+import { createCustomModel } from "../handlers/model-handlers/index.js";
 import { ensureModalRoot } from "../lib/ui-utils.js";
 import type { Provider } from "../lib/types/api.js";
 
