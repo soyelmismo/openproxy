@@ -85,7 +85,7 @@ main#main,
   background: transparent;
   border: none;
   font-family: var(--font-display);
-  font-size: 1.1rem;
+  font-size: var(--fs-lg);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -910,7 +910,7 @@ html, body {
   }
 
   .m-header-top-row h2 {
-    font-size: 1.1rem !important;
+    font-size: var(--fs-lg) !important;
     font-weight: 700 !important;
     margin: 0 !important;
   }
@@ -2472,7 +2472,7 @@ table td { border-color: var(--color-border-soft) !important; }
 }
 .page-header h2 { margin: 0; font-size: var(--fs-xl); font-weight: 700; }
 @media (max-width: 640px) {
-  .page-header h2 { font-size: 1.1rem; }
+  .page-header h2 { font-size: var(--fs-lg); }
 }
 .page-header .actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 
@@ -3919,7 +3919,7 @@ abbr {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 .seg-icon {
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
 }
 
 .playground-studio-actions {
@@ -5676,7 +5676,7 @@ abbr {
   }
   .account-edit-icon {
     color: var(--color-text-muted);
-    font-size: 0.85rem;
+    font-size: var(--fs-sm);
     cursor: pointer;
     flex-shrink: 0;
   }

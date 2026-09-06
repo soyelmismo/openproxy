@@ -112,6 +112,11 @@
   --color-scrollbar-thumb:       #3c3935;
   --color-scrollbar-thumb-hover: #54504a;
   --color-scrollbar-track:       transparent;
+
+  /* Dark mode lifts shadow opacity so elevated surfaces
+     stay legible against the warm dark canvas. */
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.45);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.55);
 }
 
 /* ---------- prefers-color-scheme fallback ----------
