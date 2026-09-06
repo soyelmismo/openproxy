@@ -23,7 +23,7 @@ import { renderSidebar } from "../components/sidebar.js";
 // returns flow through as `unknown`, which is fine for the
 // router since we don't introspect what they return.
 import { mountHome } from "../views/home.js";
-import { mountProviders } from "../views/providers.js";
+import { mountProviders } from "../views/providers/index.js";
 import { mountCombos } from "../views/combos.js";
 import { mountKeys } from "../views/keys.js";
 import { mountKeyUsage } from "../views/key-usage.js";
