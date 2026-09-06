@@ -57,8 +57,9 @@ export {
 
 // ---- local helpers used only by the tab renderers below ----
 
-/** Shared by renderRequestTab / renderResponseTab consumers (modal.ts). */
-export function statusPillClass(s: string | null | undefined): string {
+/** Maps string status values ("ok"|"error"|"timeout"...) to CSS pill classes.
+ *  Note: distinct from lib/constants.ts statusPillClass which maps numeric HTTP codes. */
+export function stringStatusPillClass(s: string | null | undefined): string {
   if (s === "ok" || s === "success") return "ok";
   if (s === "error" || s === "failed" || s === "unhealthy") return "err";
   if (s === "timeout" || s === "rate_limited" || s === "degraded") return "warn";

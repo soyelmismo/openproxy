@@ -1381,9 +1381,9 @@ html, body {
 }
 
 /* ==========================================================================
-   DESKTOP ONLY (min-width: 769px)
+   DESKTOP ONLY (min-width: 768px)
    ========================================================================== */
-@media (min-width: 769px) {
+@media (min-width: 768px) {
   .log-detail-modal-wrapper .modal,
   .log-detail-modal .modal {
     max-width: 860px;
@@ -3129,8 +3129,8 @@ abbr {
   font-size: var(--fs-sm);
 }
 
-/* ----- Responsive: tablet (769-1023px) ----- */
-@media (max-width: 1024px) and (min-width: 769px) {
+/* ----- Responsive: tablet (768-1024px) ----- */
+@media (max-width: 1024px) and (min-width: 768px) {
   .home-kpi-grid {
     grid-template-columns: repeat(2, 1fr);
   }

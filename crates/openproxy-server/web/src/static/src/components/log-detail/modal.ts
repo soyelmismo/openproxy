@@ -36,7 +36,7 @@ import {
   readString,
   renderRequestTab,
   renderResponseTab,
-  statusPillClass,
+  stringStatusPillClass,
 } from "./index.js";
 
 export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
@@ -93,7 +93,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     : (log.usage && log.usage.cost != null ? log.usage.cost
       : (log.cost_usd != null ? log.cost_usd : null));
   const status: string = log.status || (log.status_code != null ? String(log.status_code) : "—");
-  const statusClass: string = statusPillClass(
+  const statusClass: string = stringStatusPillClass(
     log.status_code != null
       ? (log.status_code >= 200 && log.status_code < 300 ? "ok" : (log.status_code >= 400 ? "error" : "warn"))
       : (log.status || "warn")
