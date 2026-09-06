@@ -23,19 +23,29 @@ import { renderSidebar } from "../components/sidebar.js";
 // returns flow through as `unknown`, which is fine for the
 // router since we don't introspect what they return.
 import { mountHome } from "../views/home.js";
-import { mountProviders } from "../views/providers/index.js";
 import { mountCombos } from "../views/combos.js";
 import { mountKeys } from "../views/keys.js";
 import { mountKeyUsage } from "../views/key-usage.js";
-import { mountAnalytics } from "../views/analytics.js";
 import { mountLogs } from "../views/logs.js";
-import { mountConfig } from "../views/config.js";
 import { mountDebugLogs } from "../views/debug-logs.js";
-import { mountNotifications } from "../views/notifications/index.js";
 import { mountLogin } from "../views/login.js";
 import { mountProxies } from "../views/proxies.js";
 import { mountProxySources } from "../views/proxy-sources.js";
-import { mountPlayground } from "../views/playground/index.js";
+
+// Lazy-loaded heavy views. Each chunk is fetched on first navigation
+// and cached by the browser for subsequent visits. This keeps the
+// core bundle under ~400KB while deferring ~500KB of view code.
+
+function lazyMount(
+  importFn: () => Promise<{ [key: string]: unknown }>,
+  exportName: string,
+): ViewMount {
+  return async (ctx: string) => {
+    const mod = await importFn();
+    const mount = mod[exportName] as ViewMount;
+    return mount(ctx);
+  };
+}
 
 export type RouteName =
   | "home"
@@ -65,8 +75,13 @@ interface Route {
 
 const ROUTES: readonly Route[] = [
   { name: "home", pattern: /^#?\/?$/, mount: mountHome as ViewMount },
-  { name: "providers", pattern: /^#?\/providers$/, mount: mountProviders as ViewMount },
-  { name: "provider-detail", pattern: /^#?\/providers\/(.+)$/, mount: ((ctx: string) => mountProviders({ detailId: decodeURIComponent(ctx) })) as ViewMount },
+  { name: "providers", pattern: /^#?\/providers$/, mount: lazyMount(
+    () => import('../views/providers/index.js'), 'mountProviders',
+  ) },
+  { name: "provider-detail", pattern: /^#?\/providers\/(.+)$/, mount: (async (ctx: string) => {
+    const mod = await import('../views/providers/index.js');
+    return mod.mountProviders({ detailId: decodeURIComponent(ctx) });
+  }) as ViewMount },
   { name: "combos", pattern: /^#?\/combos$/, mount: mountCombos as ViewMount },
   { name: "combo-detail", pattern: /^#?\/combos\/(\d+)$/, mount: ((ctx: string) => mountCombos({ detailId: parseInt(ctx, 10) })) as ViewMount },
   { name: "keys", pattern: /^#?\/keys$/, mount: mountKeys as ViewMount },
@@ -77,7 +92,9 @@ const ROUTES: readonly Route[] = [
   // trailing `?...` without capturing it — `mountAnalytics` reads
   // the preset directly off `location.hash`. Other routes are
   // unaffected.
-  { name: "analytics", pattern: /^#?\/analytics(?:\?.*)?$/, mount: mountAnalytics as ViewMount },
+  { name: "analytics", pattern: /^#?\/analytics(?:\?.*)?$/, mount: lazyMount(
+    () => import('../views/analytics.js'), 'mountAnalytics',
+  ) },
   { name: "logs", pattern: /^#?\/logs(?:\?.*)?$/, mount: mountLogs as ViewMount },
   // Debug Logs polls `/admin/debug/logs` on a 2s chained-setTimeout
   // loop. The view returns a cleanup function that cancels the
@@ -95,16 +112,22 @@ const ROUTES: readonly Route[] = [
     if (!main) return;
     return mountDebugLogs(main);
   }) as ViewMount },
-  { name: "config", pattern: /^#?\/config$/, mount: mountConfig as ViewMount },
+  { name: "config", pattern: /^#?\/config$/, mount: lazyMount(
+    () => import('../views/config.js'), 'mountConfig',
+  ) },
   { name: "proxies", pattern: /^#?\/proxies$/, mount: mountProxies as ViewMount },
   { name: "proxy-sources", pattern: /^#?\/proxy-sources$/, mount: mountProxySources as ViewMount },
-  { name: "playground", pattern: /^#?\/playground$/, mount: mountPlayground as ViewMount },
+  { name: "playground", pattern: /^#?\/playground$/, mount: lazyMount(
+    () => import('../views/playground/index.js'), 'mountPlayground',
+  ) },
   // Notifications tray (F4). The view mounts at `#/notifications` and
   // manages its own state (list, filter, DnD overlay, WS subscription
   // via the notifications store). It returns a cleanup function that
   // unsubscribes from the store's event stream so navigating away
   // doesn't leak the listener.
-  { name: "notifications", pattern: /^#?\/notifications$/, mount: mountNotifications as ViewMount },
+  { name: "notifications", pattern: /^#?\/notifications$/, mount: lazyMount(
+    () => import('../views/notifications/index.js'), 'mountNotifications',
+  ) },
   // Login (DASHBOARD-FIX Bug 2/Step 2d). The ONLY route accessible
   // without a token — the auth gate in `navigate()` redirects every
   // other route here when `isLoggedIn()` is false. Pattern is

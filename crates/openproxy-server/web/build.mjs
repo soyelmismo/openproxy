@@ -1,7 +1,9 @@
 // build.mjs — esbuild bundler for the openproxy dashboard frontend.
 //
-// Bundles all TS source + lit-html into a single app.js that the
-// browser can load without import maps or a dev server.
+// Bundles all TS source + lit-html into code-split chunks: a small
+// core bundle (app.js) plus lazy-loaded chunks for heavy views
+// (playground, providers, notifications, analytics, config).
+// `rust-embed` picks up everything under `dist/` automatically.
 
 import { build, context } from 'esbuild';
 import { fileURLToPath } from 'url';
@@ -17,18 +19,19 @@ const options = {
   bundle: true,
   format: 'esm',
   target: 'es2022',
-  outfile: join(outDir, 'app.js'),
-  // No sourcemap in production builds — the .map file (1.4MB) gets
-  // embedded into the Rust binary via rust-embed and wastes 1.4MB of
-  // RAM. For development debugging, run `node build.mjs --sourcemap`.
+  outdir: outDir,
+  splitting: true,
+  chunkNames: 'chunks/[name]-[hash]',
+  // No sourcemap in production builds — the .map file gets embedded
+  // into the Rust binary via rust-embed and wastes RAM. For
+  // development debugging, run `node build.mjs --sourcemap`.
   sourcemap: process.argv.includes('--sourcemap'),
   minify: !isWatch,
   legalComments: 'eof',
   packages: 'bundle',
   logLevel: 'info',
   // Treat .css imports as plain text strings so the uPlot wrapper can
-  // inline the chart CSS via a <style> tag at runtime. This keeps the
-  // bundle as a single app.js (no separate .css output to ship / link).
+  // inline the chart CSS via a <style> tag at runtime.
   loader: { '.css': 'text' },
 };
 
@@ -38,5 +41,5 @@ if (isWatch) {
   console.log('Watching for changes...');
 } else {
   await build(options);
-  console.log('Build complete: ' + join(outDir, 'app.js'));
+  console.log('Build complete: ' + outDir);
 }
