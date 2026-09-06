@@ -17,7 +17,7 @@ import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
-import { showAddTarget } from "../handlers/combo-target-handlers.js";
+import { showAddTarget } from "../handlers/combo-target-handlers/index.js";
 import { icons } from "../lib/icons.js";
 import { statusPillClass, PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 import type {
