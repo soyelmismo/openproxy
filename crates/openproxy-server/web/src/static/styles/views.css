@@ -2471,7 +2471,7 @@ table td { border-color: var(--color-border-soft) !important; }
   margin-bottom: var(--space-3); flex-wrap: wrap; gap: var(--space-2);
 }
 .page-header h2 { margin: 0; font-size: var(--fs-xl); font-weight: 700; }
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   .page-header h2 { font-size: 1.1rem; }
 }
 .page-header .actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
@@ -3160,7 +3160,7 @@ abbr {
 }
 
 /* ----- Responsive: tablet (769-1023px) ----- */
-@media (max-width: 1023px) and (min-width: 769px) {
+@media (max-width: 1024px) and (min-width: 769px) {
   .home-kpi-grid {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -3573,8 +3573,8 @@ abbr {
   font-family: var(--font-mono);
 }
 
-/* ----- Responsive: tablet (≤900px) — analytics grid collapses to 1 col ----- */
-@media (max-width: 900px) {
+/* ----- Responsive: tablet (≤1024px) — analytics grid collapses to 1 col ----- */
+@media (max-width: 1024px) {
   .analytics-charts-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -3587,7 +3587,7 @@ abbr {
 }
 
 /* ----- Responsive: mobile (<640px) — shorter charts, stacked race stats ----- */
-@media (max-width: 639px) {
+@media (max-width: 640px) {
   .analytics-race-stats {
     grid-template-columns: 1fr;
   }
@@ -3745,7 +3745,7 @@ abbr {
 .analytics-errors-table time { color: var(--color-text-muted); white-space: nowrap; }
 .analytics-error-link { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--color-border-soft); border-radius: 50%; font-weight: 700; }
 
-@media (max-width: 1100px) {
+@media (max-width: 1024px) {
   .analytics-primary-grid { grid-template-columns: minmax(0, 1fr); }
   .analytics-status-legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 var(--space-4); }
 }
@@ -3757,7 +3757,7 @@ abbr {
   .analytics-range-row .preset-selector { width: 100%; }
   .analytics-chart-container { height: 280px; }
 }
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   .analytics-dashboard { gap: var(--space-4); }
   .analytics-metrics { grid-template-columns: 1fr; gap: var(--space-2); }
   .analytics-metric-card { padding: var(--space-2); }
@@ -3985,7 +3985,7 @@ abbr {
   gap: var(--space-4);
   align-items: start;
 }
-@media (max-width: 1080px) {
+@media (max-width: 1024px) {
   .playground-studio-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -4353,7 +4353,7 @@ abbr {
   max-width: 100%;
   box-sizing: border-box;
 }
-@media (max-width: 1080px) {
+@media (max-width: 1024px) {
   .playground-inspector-sidebar {
     width: 100%;
     position: static;
