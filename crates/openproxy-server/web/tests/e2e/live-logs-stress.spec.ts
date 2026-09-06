@@ -1,3 +1,6 @@
+// Test de carga sintética de UI: routeWebSocket intercepta el WS real del servidor
+// e inyecta un burst de 1000 filas de logs sobre la conexión viva.
+// Protege la regresión de leak de DOM y del modal de detalle bajo alto volumen.
 import { test, expect, type Page } from '@playwright/test';
 
 test.describe('Live Logs Stress Test', () => {
