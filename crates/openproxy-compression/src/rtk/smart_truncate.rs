@@ -157,4 +157,27 @@ mod tests {
         assert!(result.ends_with("line 98\nline 99"));
         assert!(result.contains("[rtk:truncated"));
     }
+
+    #[test]
+    fn test_truncation_preserves_priority_middle_lines() {
+        let mut lines = Vec::new();
+        for i in 0..50 {
+            if i == 25 {
+                lines.push("ERROR: unexpected failure in core loop".to_string());
+            } else {
+                lines.push(format!("normal output line {i}"));
+            }
+        }
+        let text = lines.join("\n");
+        let config = CompiledTruncateConfig {
+            max_lines: 10,
+            head_lines: 3,
+            tail_lines: 3,
+            priority_patterns: default_priority(),
+        };
+        let (result, truncated, dropped) = smart_truncate(&text, &config);
+        assert!(truncated);
+        assert!(dropped > 0);
+        assert!(result.contains("ERROR: unexpected failure in core loop"));
+    }
 }
