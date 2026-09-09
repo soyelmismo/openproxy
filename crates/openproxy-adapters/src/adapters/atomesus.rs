@@ -358,4 +358,41 @@ mod tests {
 
         assert_eq!(res_passthrough, already_atomesus);
     }
+
+    #[test]
+    fn test_atomesus_build_full_prompt_complex() {
+        let adapter = AtomesusAdapter::new();
+        let target = dummy_resolved_target();
+
+        let body = bytes::Bytes::from(
+            serde_json::json!({
+                "messages": [
+                    { "role": "system", "content": "Be concise." },
+                    {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": "Part 1" },
+                            { "type": "text", "text": "Part 2" }
+                        ]
+                    },
+                    { "role": "assistant", "content": "Understood." },
+                    { "role": "user", "content": "Next question" }
+                ]
+            })
+            .to_string(),
+        );
+
+        let res = adapter
+            .wrap_request_body(
+                body,
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .expect("wrap_request_body failed");
+
+        let v: serde_json::Value = serde_json::from_slice(&res).expect("json parse failed");
+        let expected_msg = "[System Instructions]\nBe concise.\n\nPart 1\nPart 2\n\n[Assistant]\nUnderstood.\n\nNext question";
+        assert_eq!(v["message"], expected_msg);
+    }
 }
