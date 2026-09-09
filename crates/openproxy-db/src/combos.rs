@@ -843,6 +843,32 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
     Ok(())
 }
 
+/// Update the routing `strategy` of a combo. The string is parsed via
+/// [`Strategy::parse`] — the same validation the create path applies —
+/// so an unknown value surfaces as [`CoreError::Validation`] instead of
+/// landing in the DB only to trip the schema CHECK constraint.
+///
+/// NOTE: the `combos.strategy` CHECK in migration 000001 currently
+/// admits only `priority` and `round_robin`; `shuffle` parses but is
+/// rejected by SQLite with a [`CoreError::Database`] — identical to
+/// the create path.
+pub fn update_strategy(conn: &Connection, id: ComboId, strategy: &str) -> Result<()> {
+    let parsed = Strategy::parse(strategy).map_err(CoreError::Validation)?;
+    let affected = conn
+        .execute(
+            "UPDATE combos SET strategy = ?1 WHERE id = ?2",
+            params![parsed.as_str(), id.0],
+        )
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update strategy for combo {}",
+            id.0
+        )))?;
+    if affected == 0 {
+        return Err(CoreError::ComboNotFound(id.0));
+    }
+    Ok(())
+}
+
 pub fn clear_targets(conn: &Connection, combo_id: ComboId) -> Result<()> {
     conn.execute(
         "DELETE FROM combo_targets WHERE combo_id = ?1",
@@ -1521,6 +1547,40 @@ mod tests {
         } else {
             panic!("Expected Database error with CHECK constraint failure, got {err:?}");
         }
+    }
+
+    #[test]
+    fn test_update_strategy() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        let combo_id = create_combo(&conn, "test_update_strategy", Strategy::Priority, 1)
+            .expect("create combo failed");
+
+        // Happy path: a known strategy is persisted.
+        update_strategy(&conn, combo_id, "round_robin").expect("update strategy failed");
+        let combo = get_combo(&conn, combo_id)
+            .expect("get combo failed")
+            .expect("combo not found");
+        assert_eq!(combo.strategy, Strategy::RoundRobin);
+
+        // Unknown values surface as Validation and never land in the DB.
+        let err =
+            update_strategy(&conn, combo_id, "fifo").expect_err("invalid strategy should fail");
+        assert!(
+            matches!(err, CoreError::Validation(ref msg) if msg.contains("invalid strategy")),
+            "Expected Validation error, got {err:?}"
+        );
+        let unchanged = get_combo(&conn, combo_id)
+            .expect("get combo failed")
+            .expect("combo not found");
+        assert_eq!(unchanged.strategy, Strategy::RoundRobin);
+
+        // A missing combo surfaces as ComboNotFound, like the sibling
+        // per-field updates.
+        let err = update_strategy(&conn, ComboId(9_999), "priority")
+            .expect_err("missing combo should fail");
+        assert!(matches!(err, CoreError::ComboNotFound(9_999)));
     }
 
     #[test]

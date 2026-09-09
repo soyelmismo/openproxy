@@ -2,7 +2,6 @@
 // Migrated to lit-html: uses render() instead of innerHTML.
 
 import { html, render, type TemplateResult } from 'lit-html';
-import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
 import { state } from "../state/index.js";
 import { mountThemeToggle } from "./theme-toggle.js";
 import { t } from "../i18n/index.js";
@@ -46,6 +45,30 @@ interface SidebarLink {
 }
 interface SidebarGroup { label: string; links: SidebarLink[]; }
 
+/** Q18: the 12 sidebar navigation glyphs are centralized in
+ *  `lib/icons.ts` (section "Navigation (sidebar)"). This lookup maps
+ *  the route-level nav names to their icon constructors so the
+ *  sidebar contains no inline SVG markup. */
+const NAV_ICONS: Record<NavIconName, (cls?: string) => TemplateResult> = {
+  home: icons.navHome,
+  providers: icons.navProviders,
+  combos: icons.navCombos,
+  keys: icons.navKeys,
+  playground: icons.navPlayground,
+  analytics: icons.navAnalytics,
+  logs: icons.navLogs,
+  "debug-logs": icons.navDebugLogs,
+  config: icons.navConfig,
+  notifications: icons.navNotifications,
+  proxies: icons.navProxies,
+  "proxy-sources": icons.navProxySources,
+};
+
+/** Resolve a nav icon by name via the centralized `icons` registry. */
+function navIcon(name: NavIconName): TemplateResult {
+  return NAV_ICONS[name]();
+}
+
 const HOME_LINK: SidebarLink = { href: "#/", icon: "home", label: "Home" };
 
 const GROUPS: readonly SidebarGroup[] = [
@@ -68,26 +91,6 @@ const GROUPS: readonly SidebarGroup[] = [
   ]},
 ];
 
-function navIconSvg(name: NavIconName): TemplateResult {
-  const svgs = {
-    home: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 7 L8 2 L14 7 V14 H2 Z"/><path d="M6 14 V10 H10 V14"/></svg>`,
-    providers: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="3" width="12" height="3" rx="0.5"/><rect x="2" y="7" width="12" height="3" rx="0.5"/><rect x="2" y="11" width="12" height="3" rx="0.5"/><circle cx="4" cy="4.5" r="0.4" fill="currentColor" stroke="none"/><circle cx="4" cy="8.5" r="0.4" fill="currentColor" stroke="none"/><circle cx="4" cy="12.5" r="0.4" fill="currentColor" stroke="none"/></svg>`,
-    combos: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="9" height="9" rx="1"/><rect x="5" y="5" width="9" height="9" rx="1"/></svg>`,
-    keys: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="5" cy="5" r="2.5"/><path d="M6.8 6.8 L13 13"/><path d="M11 11 L13 9"/><path d="M9 13 L11 11"/></svg>`,
-    playground: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3 L3 13 L13 8 Z"/><path d="M9 3 L13 3 M11 1.5 L11 4.5"/></svg>`,
-    proxies: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><circle cx="8" cy="4" r="2.5"/><circle cx="3" cy="12" r="2.5"/><circle cx="13" cy="12" r="2.5"/><path d="M5.5 10.5 L6.5 9 M10.5 10.5 L9.5 9"/></svg>`,
-    "proxy-sources": `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1 V3.5 M8 12.5 V15 M1 8 H3.5 M12.5 8 H15"/></svg>`,
-    analytics: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 14 H14"/><rect x="3" y="9" width="2.5" height="5"/><rect x="6.75" y="5" width="2.5" height="9"/><rect x="10.5" y="7" width="2.5" height="7"/></svg>`,
-    logs: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M2 8 H5 L7 3 L9 13 L11 8 H14"/></svg>`,
-    "debug-logs": `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><ellipse cx="8" cy="9" rx="3.5" ry="4"/><circle cx="8" cy="4" r="1.2"/><path d="M8 5 V5.5"/><path d="M4.5 7 L2 6 M4.5 9 L1.5 9 M4.5 11 L2.5 12.5"/><path d="M11.5 7 L14 6 M11.5 9 L14.5 9 M11.5 11 L13.5 12.5"/></svg>`,
-    config: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="2.5"/><path d="M8 1 V3.5 M8 12.5 V15 M1 8 H3.5 M12.5 8 H15 M3 3 L4.8 4.8 M11.2 11.2 L13 13 M3 13 L4.8 11.2 M11.2 4.8 L13 3"/></svg>`,
-    // Bell-ish glyph. The dot is filled via stroke="currentColor" so
-    // it inherits the active link colour.
-    notifications: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 12 H13 L11.5 10 V7 a3.5 3.5 0 0 0 -7 0 V10 Z"/><path d="M6.5 12 V12.5 a1.5 1.5 0 0 0 3 0 V12"/></svg>`,
-  } satisfies Record<NavIconName, string>;
-  return html`${unsafeHTML(svgs[name] || "")}`;
-}
-
 function isActive(href: string): boolean {
   if (href === "#/") return location.hash === "#/" || location.hash === "";
   return location.hash.startsWith(href);
@@ -98,7 +101,15 @@ function applyActiveState(): void {
   if (!sb) return;
   sb.querySelectorAll("nav a").forEach((a: Element) => {
     const aEl = a as HTMLElement;
-    aEl.classList.toggle("active", isActive(aEl.getAttribute("href") || ""));
+    const active = isActive(aEl.getAttribute("href") || "");
+    aEl.classList.toggle("active", active);
+    // a11y: announce the current page to screen readers so they
+    // can convey which nav link is active without visual context.
+    if (active) {
+      aEl.setAttribute("aria-current", "page");
+    } else {
+      aEl.removeAttribute("aria-current");
+    }
   });
 }
 
@@ -134,7 +145,7 @@ function renderLink(l: SidebarLink, collapsed: boolean): TemplateResult {
     }
   }
   return html`<a href=${l.href} data-nav=${l.href} title=${l.label}>
-    <span class="nav-icon" aria-hidden="true">${navIconSvg(l.icon)}</span><span class="nav-label" ?hidden=${collapsed}> ${l.label}</span>${badge}
+    <span class="nav-icon" aria-hidden="true">${navIcon(l.icon)}</span><span class="nav-label" ?hidden=${collapsed}> ${l.label}</span>${badge}
   </a>`;
 }
 

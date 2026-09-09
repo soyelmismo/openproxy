@@ -11,6 +11,7 @@
 import { bootstrapTheme } from "./state/theme.js";
 import { mountShell } from "./components/shell.js";
 import { loadSidebarCollapsedFromStorage } from "./components/sidebar.js";
+import { installMotionProvider } from "./components/motion-provider.js";
 import { startBgPoll } from "./state/bg-poll.js";
 import { installRouter, navigate } from "./state/router.js";
 import { HANDLERS, collectArgs } from "./handlers/registry.js";
@@ -126,6 +127,7 @@ document.addEventListener("submit", (e: Event) => {
 // short-circuit the wait, but for an MVP this is fine — the i18n
 // pack is ~5 KB and is served from the same origin as the SPA shell.
 async function boot(): Promise<void> {
+  installMotionProvider();
   await loadLang("en");
   bootstrapTheme();
   // Hydrate the sidebar collapse flag from localStorage before the

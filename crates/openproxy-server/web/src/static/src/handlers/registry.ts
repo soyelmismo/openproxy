@@ -1,5 +1,6 @@
 // handlers/registry.ts — central map from `data-action` attribute
 import { showToast } from "../components/toast.js";
+import { copyToClipboard } from "../lib/clipboard.js";
 import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../state/router.js";
 // installs a single document-level listener that dispatches clicks
 // / changes / submits based on data-action / data-arg-* attrs.
@@ -23,7 +24,7 @@ import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../stat
 //   * For self-only closures (closeKeyForm, etc.) the listener
 //     passes the bound element (data-arg1="self") as the arg.
 
-import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, testAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey } from "./account-handlers.js";
+import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey } from "./account-handlers.js";
 import {
   showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, updateContextWindow, testAllTargets,
   onCreatePriorityModeChange, onCreateCooldownModeChange,
@@ -40,7 +41,7 @@ import {
   deselectAllModelsInModal,
   onTargetModelSearch,
   updateTargetWeight,
-} from "./combo-target-handlers.js";
+} from "./combo-target-handlers/index.js";
 import { showCreateKey, showEditKey, closeKeyForm, toggleExpiryAmount, createKey, updateKey, regenerateKey, revokeKey, viewKeyUsage, deleteKey } from "./key-handlers.js";
 import {
   showEditModel, updateModel,
@@ -49,14 +50,14 @@ import {
   bulkEnableSelected, bulkDisableSelected, bulkTestSelected, bulkDeleteSelected,
   updateProviderFilter, updateAutoActivate, createCustomModel, showCustomModelForm, closeCustomModelForm,
   cycleProviderSort,
-} from "./model-handlers.js";
+} from "./model-handlers/index.js";
 import {
   refreshProvider, refreshAllProviders,
   showCreateProvider, closeCreateProvider, createProvider,
   confirmDeleteProvider, deleteProvider,
   toggleProviderActive, renameProviderPrompt, editProviderEndpointPrompt, bulkToggleModels,
   setHealth, refreshAccountQuota, refreshAllQuotas,
-} from "./provider-handlers.js";
+} from "./provider-handlers/index.js";
 import { exportConfig } from "./config-handlers.js";
 import { exportLogsCSV } from "./log-handlers.js";
 import {
@@ -67,8 +68,8 @@ import { mountThemeToggle } from "../components/theme-toggle.js";
 import { toggleSidebar, toggleMobileNav, closeMobileNav, logout } from "../components/sidebar.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
-import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
-import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail.js";
+import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config/index.js";
+import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail/index.js";
 import { syncProxies, testProxy, testAllProxies, deleteProxy, showAddCustomProxy } from "./proxy-handlers.js";
 import { showAddProxySource, showEditProxySource, deleteProxySource, testProxySource } from "./proxy-source-handlers.js";
 
@@ -102,7 +103,6 @@ export const HANDLERS = {
   createAccount,        // signature: (providerId, e)  — submit handler
   closeCreateAccount,
   deleteAccount,
-  testAccount,
   showUpdateAccountKey,
   updateAccountKey,     // signature: (id, e)          — submit handler
   closeUpdateAccountKey,
@@ -255,8 +255,8 @@ export const HANDLERS = {
   // the OAuth "Copy" button in views/providers.js.
   copyAuthUrl(): void {
     const el = document.getElementById("oauth-auth-url") as HTMLInputElement | null;
-    if (el && navigator.clipboard) {
-      navigator.clipboard.writeText(el.value || "").catch(() => {});
+    if (el) {
+      copyToClipboard(el.value || "").catch(() => { /* ignore — silent best-effort */ });
     }
   },
 

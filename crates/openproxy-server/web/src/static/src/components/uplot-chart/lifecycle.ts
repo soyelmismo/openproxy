@@ -1,0 +1,330 @@
+// components/uplot-chart/lifecycle.ts
+// ==========
+// Chart instance lifecycle: CSS injection, create / resize / dispose,
+// and shared rendering primitives (Catmull-Rom smooth spline, default
+// Options builder, sparkline factory).
+//
+// Public API: `injectUplotCss`, `createLiveChart`, `createSparkline`,
+// `resizeChart`, `observeResize`, `smoothSpline`, `smoothPath`,
+// `LiveChartOpts`, `ChartData`.
+
+import uPlot from "uplot";
+import uplotCss from "uplot/dist/uPlot.min.css";
+
+// ----------
+// CSS injection
+// ----------
+
+let cssInjected = false;
+
+/** Inject uPlot's stylesheet into <head> as a <style> tag. Idempotent. */
+export function injectUplotCss(): void {
+  if (cssInjected) return;
+  if (typeof document === "undefined") return;
+  const style: HTMLStyleElement = document.createElement("style");
+  style.setAttribute("data-uplot-css", "");
+  style.textContent = uplotCss;
+  document.head.appendChild(style);
+  cssInjected = true;
+}
+
+// ----------
+// Types
+// ----------
+
+/** A data series for uPlot. The first array is the X-axis (timestamps in
+ *  seconds since epoch); subsequent arrays are the Y values per series.
+ *  Matches uPlot's `AlignedData` type. */
+export type ChartData = uPlot.AlignedData;
+
+/** Input shape for `createLiveChart`. The caller provides series, scales,
+ *  and axes — the wrapper fills in the rest (legend, cursor, select).
+ *
+ *  We use the concrete `uPlot.Series[]` / `uPlot.Scales` / `uPlot.Axis[]`
+ *  types (not `uPlot.Options["series"]` etc.) because the Options-keyed
+ *  variants are `T | undefined` (the Options interface marks them
+ *  optional). The strict `exactOptionalPropertyTypes` tsconfig flag then
+ *  rejects assigning `undefined` back to the optional `Options.series` /
+ *  `Options.scales` / `Options.axes` fields. Using the concrete types
+ *  sidesteps that — these properties are always defined when we build the
+ *  final Options object. */
+export interface LiveChartOpts {
+  series: uPlot.Series[];
+  scales: uPlot.Scales;
+  axes: uPlot.Axis[];
+  initialData?: ChartData;
+  legend?: uPlot.Legend;
+}
+
+// ----------
+// Live chart (full-size, axes visible)
+// ----------
+
+/** Sensible defaults shared by all full-size charts. Keeps a live legend
+ *  for exact hover values while disabling selection and drag-to-zoom.
+ *
+ *  We construct the full Options object in one go (rather than mutating
+ *  a base) because the strict tsconfig has `exactOptionalPropertyTypes` —
+ *  assigning `undefined` to an optional property is an error. */
+function buildOptions(
+  width: number,
+  height: number,
+  series: uPlot.Series[],
+  scales: uPlot.Scales,
+  axes: uPlot.Axis[],
+  legend: uPlot.Legend,
+): uPlot.Options {
+  return {
+    width,
+    height,
+    legend,
+    cursor: {
+      drag: { x: false, y: false },
+      // Keep the cursor focus ring (shows X/Y values on hover) — useful
+      // for inspecting a specific point in time. No drag-to-zoom.
+    },
+    // `Select` extends `BBox` which requires left/top/width/height —
+    // we provide zeros alongside `show: false` to satisfy the type.
+    select: { show: false, left: 0, top: 0, width: 0, height: 0 },
+    padding: [32, 20, 10, 14],
+    series,
+    scales,
+    axes,
+  };
+}
+
+/** Create a uPlot instance for live time-series data. The series / scales /
+ *  axes config is passed in by the caller (the home view uses the
+ *  `buildThroughputChart` / `buildStatusCodesChart` / `buildLatencyChart`
+ *  helpers below to construct these).
+ *
+ *  The chart starts empty (`[[]]` data) and is populated via `setData(...)`
+ *  on each throttled re-render. We never recreate the chart — `setData`
+ *  is the only mutation path. */
+export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uPlot {
+  injectUplotCss();
+  // CRITICAL: read the container's ACTUAL size, not a fallback.
+  // If clientWidth is 0 (container not yet laid out by the browser),
+  // defer creation by one animation frame so the layout has a chance
+  // to compute. Creating a uPlot with a 600px default when the
+  // container is actually 400px causes the canvas to overflow, which
+  // pushes the layout wider, which triggers ResizeObserver, which
+  // calls setSize with the new (larger) width — the chart-grows-
+  // without-bound bug.
+  const w: number = container.clientWidth || 300;
+  const h: number = container.clientHeight || 200;
+  const data: ChartData = opts.initialData ?? [[]];
+  const u: uPlot = new uPlot(
+    buildOptions(
+      w,
+      h,
+      opts.series,
+      opts.scales,
+      opts.axes,
+      opts.legend ?? { show: true, live: true },
+    ),
+    data,
+    container,
+  );
+  // Force a resize on the next frame — the container may have been
+  // laid out between the `clientWidth` read above and now. This also
+  // catches the case where uPlot's own CSS (`.uplot { width: min-content }`,
+  // overridden by our global `.uplot { width: 100% !important }`)
+  // causes a transient size mismatch on first paint.
+  requestAnimationFrame(() => {
+    resizeChart(u, container);
+  });
+  return u;
+}
+
+/** Smooth Catmull-Rom cubic spline path builder for uPlot. */
+export function smoothSpline(): uPlot.Series.PathBuilder {
+  return (u: uPlot, seriesIdx: number, idx0: number, idx1: number): uPlot.Series.Paths | null => {
+    const xdata = u.data[0];
+    const ydata = u.data[seriesIdx];
+    if (!xdata || !ydata || xdata.length === 0) return null;
+
+    const scaleKey = u.series[seriesIdx]?.scale || "y";
+    const stroke = new Path2D();
+    const fill = new Path2D();
+
+    const points: Array<[number, number]> = [];
+    for (let i = idx0; i <= idx1; i++) {
+      const val = ydata[i];
+      if (val != null && Number.isFinite(val)) {
+        const x = u.valToPos(xdata[i]!, "x", true);
+        const y = u.valToPos(val, scaleKey, true);
+        points.push([x, y]);
+      }
+    }
+
+    if (points.length === 0) return null;
+
+    stroke.moveTo(points[0]![0], points[0]![1]);
+    if (points.length === 1) {
+      stroke.lineTo(points[0]![0], points[0]![1]);
+    } else if (points.length === 2) {
+      stroke.lineTo(points[1]![0], points[1]![1]);
+    } else {
+      for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[i === 0 ? i : i - 1]!;
+        const p1 = points[i]!;
+        const p2 = points[i + 1]!;
+        const p3 = points[i + 2 < points.length ? i + 2 : i + 1]!;
+
+        const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+        const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+        const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+        const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+
+        stroke.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
+      }
+    }
+
+    const hasFill = Boolean(u.series[seriesIdx]?.fill);
+    if (hasFill) {
+      fill.addPath(stroke);
+      const bottomY = u.valToPos(0, scaleKey, true);
+      const lastPoint = points[points.length - 1]!;
+      const firstPoint = points[0]!;
+      fill.lineTo(lastPoint[0], bottomY);
+      fill.lineTo(firstPoint[0], bottomY);
+      fill.closePath();
+    }
+
+    return {
+      stroke,
+      fill: hasFill ? fill : null,
+    };
+  };
+}
+
+export const smoothPath: uPlot.Series.PathBuilder = smoothSpline();
+
+// ----------
+// Sparkline (minimal — no axes, no legend, no cursor)
+// ----------
+
+/** Create a tiny sparkline uPlot for KPI tile thumbnails. Single series,
+ *  no axes, no legend, no cursor — just the line. The caller populates it
+ *  via `setData([[xs...], [ys...]])` on each re-render.
+ *
+ *  The X values can be anything (we use indices 0..n-1); the X axis is
+ *  hidden, so the scale doesn't matter. */
+export function createSparkline(container: HTMLElement, color: string): uPlot {
+  injectUplotCss();
+  const w: number = container.clientWidth || 100;
+  const h: number = container.clientHeight || 34;
+  const opts: uPlot.Options = {
+    width: w,
+    height: h,
+    legend: { show: false },
+    cursor: { show: false },
+    select: { show: false, left: 0, top: 0, width: 0, height: 0 },
+    padding: [4, 0, 4, 0],
+    series: [
+      {}, // X-axis (hidden)
+      {
+        stroke: color,
+        width: 1.5,
+        paths: smoothPath,
+        points: { show: false },
+      },
+    ],
+    scales: {
+      x: { time: false },
+      // Pad the Y range so zero and peak values never clip against container edges.
+      y: {
+        auto: true,
+        range: (_u: uPlot, min: number, max: number): [number, number] => {
+          if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+          if (max === min) return [Math.max(0, min - 0.5), min + 0.5];
+          const pad = (max - min) * 0.12;
+          return [Math.max(0, min - pad), max + pad];
+        },
+      },
+    },
+    axes: [
+      { show: false },
+      { show: false },
+    ],
+  };
+  const u: uPlot = new uPlot(opts, [[]], container);
+  // Same rAF resize as createLiveChart — see that function for the
+  // rationale (container may not be laid out yet at creation time).
+  requestAnimationFrame(() => {
+    resizeChart(u, container);
+  });
+  return u;
+}
+
+// ----------
+// Resize handling
+// ----------
+
+export function resizeChart(u: uPlot, container: HTMLElement): void {
+  // Read the container's CONTENT width and height via clientWidth/clientHeight.
+  // If clientWidth or clientHeight is 0 (container display:none or not laid out), skip.
+  const w: number = container.clientWidth;
+  const h: number = container.clientHeight;
+  if (w <= 0 || h <= 0) return;
+  // Guard against no-op resizes (uPlot triggers a full redraw on every
+  // setSize call, even if the size hasn't changed).
+  if (u.width === w && u.height === h) return;
+  u.setSize({ width: w, height: h });
+}
+
+/** Attach a ResizeObserver that keeps the chart sized to its container.
+ *  Returns a disposer — call it on view unmount to release the observer.
+ *
+ *  Falls back to `window.resize` if ResizeObserver is unavailable (very
+ *  old browsers — uPlot's targets are evergreen, so this is defensive).
+ *
+ *  DEBOUNCE: ResizeObserver can fire in a tight loop if the chart's
+ *  own setSize() triggers a container reflow (which re-fires the
+ *  observer). We debounce with a requestAnimationFrame coalescer + a
+ *  guard in `resizeChart` that skips the call if the size hasn't
+ *  actually changed. Without this, the chart's canvas reflowing the
+ *  container could re-fire the observer 60+ times/sec.
+ *
+ *  INITIAL SIZING PASS: `ro.observe(container)` causes the observer
+ *  to fire once asynchronously with the container's current size.
+ *  That fire is enough in the common case, but it can deliver a 0x0
+ *  size if the container is briefly `display:none` or not yet laid
+ *  out at observe() time (the chart is then stuck at the fallback
+ *  600x200 from `createLiveChart` until the next real resize event).
+ *  We schedule an explicit `resizeChart()` via rAF right after
+ *  observe() so the chart self-corrects on the next frame even if
+ *  the observer's initial fire is delayed or delivers 0x0. The
+ *  `resizeChart` no-op guard makes this redundant in the happy path
+ *  but costs nothing. */
+export function observeResize(u: uPlot, container: HTMLElement): () => void {
+  if (typeof ResizeObserver === "undefined") {
+    const handler = (): void => resizeChart(u, container);
+    window.addEventListener("resize", handler);
+    // Initial sizing pass for the no-ResizeObserver fallback.
+    requestAnimationFrame(handler);
+    return () => window.removeEventListener("resize", handler);
+  }
+  let rafId: number | null = null;
+  const scheduleResize = (): void => {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      resizeChart(u, container);
+    });
+  };
+  const ro: ResizeObserver = new ResizeObserver(scheduleResize);
+  ro.observe(container);
+  // Explicit initial sizing pass — see the docstring above. Uses the
+  // same rAF coalescer so it merges with any observer fire that
+  // happened to land first.
+  scheduleResize();
+  return () => {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    ro.disconnect();
+  };
+}

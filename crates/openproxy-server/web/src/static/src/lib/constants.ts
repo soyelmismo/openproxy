@@ -1,21 +1,20 @@
 // lib/constants.ts — app-wide constants. Kept here so the views
 // and handlers do not litter the codebase with magic strings/numbers.
 
+import { t } from "../i18n/index.js";
 import type { PriorityMode, CooldownMode } from "./types/api.js";
 
 // Human-readable label for each server-side stage. The server keys
 // are kept in the data-stage attribute (and CSS) so styling can
 // target them directly; the cell body shows the friendlier label.
-export const STAGE_LABELS = {
-  started: "procesando payload",
-  connecting: "conectando a upstream",
-  waiting_ttft: "esperando ttft",
-  streaming: "recibiendo streaming",
-  completed: "completado",
-  failed: "falló",
-  cancelled: "cancelado",
-  predict_skipped: "predict skipped",
-} as const;
+//
+// Resolved via i18n at call time so the labels are translatable.
+// The keys follow the `stage.<key>` namespace in i18n/en.json
+// (e.g. `stage.started`, `stage.connecting`). When the key is
+// missing, the raw stage key is returned as a visible fallback.
+export function getStageLabel(stage: string): string {
+  return t(`stage.${stage}`) || stage;
+}
 
 // Live logs WS reconnect backoff in ms.
 //

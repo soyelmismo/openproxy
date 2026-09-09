@@ -11,12 +11,15 @@
 import { html, type TemplateResult } from 'lit-html';
 import { state, type ComboTestResult } from "../state/index.js";
 import { api } from "../state/api.js";
-import { mountView, requestUpdate } from "../state/reactive.js";
+import { requestUpdate } from "../state/reactive.js";
+import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
-import { showAddTarget } from "../handlers/combo-target-handlers.js";
+import { showAddTarget } from "../handlers/combo-target-handlers/index.js";
 import { icons } from "../lib/icons.js";
+import { t } from "../i18n/index.js";
 import { statusPillClass, PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 import type {
   Combo,
@@ -59,7 +62,7 @@ async function patchCombo(id: number, body: Record<string, unknown>): Promise<vo
     if (combo) Object.assign(combo, body);
     requestUpdate();
   } catch (err: unknown) {
-    showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error");
+    showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error");
   }
 }
 
@@ -112,38 +115,48 @@ async function onUpdateTargetWeight(targetId: number, e: Event): Promise<void> {
   if (!Number.isFinite(val) || val < 1) return;
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "PATCH", body: JSON.stringify({ weight: val }) });
-    const t = detailTargets.find((t) => t.id === targetId);
-    if (t) t.weight = val;
+    const t2 = detailTargets.find((t2) => t2.id === targetId);
+    if (t2) t2.weight = val;
     requestUpdate();
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  } catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 async function onDeleteCombo(): Promise<void> {
-  if (!detailComboId || !confirm(`Delete combo "${detailCombo?.name ?? detailComboId}"?`)) return;
+  if (!detailComboId || !(await showConfirm({
+    title: t("combos.confirm.delete_title"),
+    message: t("combos.confirm.delete_message", { name: detailCombo?.name ?? String(detailComboId) }),
+    danger: true,
+    confirmLabel: t("combos.confirm.delete_btn"),
+  }))) return;
   try {
     await api(`/combos/${detailComboId}`, { method: "DELETE" });
     location.hash = "#/combos";
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  } catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 
 async function onToggleTargetActive(targetId: number, currentActive: boolean): Promise<void> {
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "PATCH", body: JSON.stringify({ active: !currentActive }) });
-    const t = detailTargets.find((t) => t.id === targetId);
-    if (t) t.active = !currentActive;
+    const tgt = detailTargets.find((tgt) => tgt.id === targetId);
+    if (tgt) tgt.active = !currentActive;
     requestUpdate();
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  } catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 async function onUpdateStrategy(e: Event): Promise<void> {
   const val = (e.target as HTMLSelectElement).value;
   await patchCombo(detailComboId!, { strategy: val });
 }
 async function onDeleteTarget(targetId: number): Promise<void> {
-  if (!confirm("Are you sure you want to remove this target from the combo?")) return;
+  if (!(await showConfirm({
+    title: t("combos.confirm.remove_title"),
+    message: t("combos.confirm.remove_message"),
+    danger: true,
+    confirmLabel: t("combos.confirm.remove_btn"),
+  }))) return;
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}`, { method: "DELETE" });
     detailTargets = detailTargets.filter((t) => t.id !== targetId);
     requestUpdate();
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  } catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 async function onChangePriority(targetId: number, delta: number): Promise<void> {
   try {
@@ -160,15 +173,15 @@ async function onChangePriority(targetId: number, delta: number): Promise<void> 
     await api(`/combos/${detailComboId}/targets/reorder`, { method: "POST", body: JSON.stringify({ target_ids: ordered.map((t) => t.id) }) });
     detailTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
     requestUpdate();
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  } catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 async function onResetCooldown(targetId: number): Promise<void> {
   try {
     await api(`/combos/${detailComboId}/targets/${targetId}/clear-cooldown`, { method: "POST" });
-    const t = detailTargets.find((t) => t.id === targetId);
-    if (t) { t.in_cooldown = false; t.cooldown_until = null; t.cooldown_reason = null; }
+    const target = detailTargets.find((target) => target.id === targetId);
+    if (target) { target.in_cooldown = false; target.cooldown_until = null; target.cooldown_reason = null; }
     requestUpdate();
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  } catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 
 async function onUpdateTargetCooldownMode(targetId: number, e: Event): Promise<void> {
@@ -179,11 +192,11 @@ async function onUpdateTargetCooldownMode(targetId: number, e: Event): Promise<v
       method: "PATCH",
       body: JSON.stringify({ cooldown_mode: val }),
     });
-    const t = detailTargets.find((x) => x.id === targetId);
-    if (t) t.cooldown_mode = val as CooldownMode | null;
+    const target = detailTargets.find((x) => x.id === targetId);
+    if (target) target.cooldown_mode = val as CooldownMode | null;
     requestUpdate();
   } catch (err: unknown) {
-    showToast("Error updating target cooldown: " + (err instanceof Error ? err.message : String(err)), "error");
+    showToast(t("combos.toast.error_updating_cooldown", { message: err instanceof Error ? err.message : String(err) }), "error");
   }
 }
 
@@ -197,11 +210,11 @@ async function onUpdateTargetCooldownBase(targetId: number, e: Event): Promise<v
       method: "PATCH",
       body: JSON.stringify({ cooldown_base_secs: val }),
     });
-    const t = detailTargets.find((x) => x.id === targetId);
-    if (t) t.cooldown_base_secs = val;
+    const target = detailTargets.find((x) => x.id === targetId);
+    if (target) target.cooldown_base_secs = val;
     requestUpdate();
   } catch (err: unknown) {
-    showToast("Error updating target cooldown base: " + (err instanceof Error ? err.message : String(err)), "error");
+    showToast(t("combos.toast.error_updating_cooldown_base", { message: err instanceof Error ? err.message : String(err) }), "error");
   }
 }
 
@@ -229,9 +242,9 @@ async function onTestAllTargets(e: Event): Promise<void> {
 // which gave no visible feedback on the row itself.
 async function onTestTarget(targetId: number, modelRowId: number | null, e: Event): Promise<void> {
   const btn = (e && e.target instanceof HTMLButtonElement ? e.target : null) as HTMLButtonElement | null;
-  if (!modelRowId) { showToast("No model to test for this target", "warning"); return; }
+  if (!modelRowId) { showToast(t("combos.target.no_model_to_test"), "warning"); return; }
   const oldText = btn ? btn.textContent : null;
-  if (btn) { btn.disabled = true; btn.textContent = "Testing..."; }
+  if (btn) { btn.disabled = true; btn.textContent = t("combos.target.testing"); }
   try {
     const result = await api(`/models/${modelRowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
     if (result.status >= 200 && result.status < 300) {
@@ -262,12 +275,12 @@ async function onTestTarget(targetId: number, modelRowId: number | null, e: Even
     requestUpdate();
   } catch (err: unknown) {
     if (btn) flashButton(btn, "✗", "#f38ba8");
-    showToast("Test failed: " + (err instanceof Error ? err.message : String(err)), "error");
+    showToast(t("combos.target.test_failed", { message: err instanceof Error ? err.message : String(err) }), "error");
   } finally {
     if (btn) {
       setTimeout(() => {
         btn.disabled = false;
-        btn.textContent = oldText || "Test";
+        btn.textContent = oldText || t("combos.target.test_btn");
       }, 1500);
     }
   }
@@ -281,7 +294,7 @@ function priorityModeOptions(selected: PriorityMode): TemplateResult {
 }
 function cooldownModeOptions(selected: CooldownMode): TemplateResult {
   const modes: CooldownMode[] = ["flat", "exponential", "none"];
-  return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${m === "flat" ? "Flat" : m === "exponential" ? "Exponential" : "Disabled (None)"}</option>`)}`;
+  return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${m === "flat" ? t("combos.detail.mode.flat") : m === "exponential" ? t("combos.detail.mode.exponential") : t("combos.detail.mode.disabled")}</option>`)}`;
 }
 
 function renderPriorityModeBar(combo: Combo): TemplateResult {
@@ -289,18 +302,18 @@ function renderPriorityModeBar(combo: Combo): TemplateResult {
   let params: TemplateResult = html``;
   if (pm === "lkgp") {
     const rate = combo.lkgp_exploration_rate != null ? String(combo.lkgp_exploration_rate) : "";
-    params = html`<details class="combo-mode-params" open><summary>Parameters</summary><div class="combo-mode-params-body">
+    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
       <label><abbr title=${PARAM_TOOLTIPS.exploration_rate}>Exploration Rate (0.0–1.0)</abbr>
         <input type="number" min="0" max="1" step="0.05" .value=${rate} placeholder="0.1" @change=${(e: Event) => onFloatInput("lkgp_exploration_rate", e)} @input=${(e: Event) => onFloatInput("lkgp_exploration_rate", e)} class="cw-input"></label></div></details>`;
   } else if (pm === "least_used" || pm === "p2c") {
     const win = combo.selection_window_secs != null ? String(combo.selection_window_secs) : "";
-    params = html`<details class="combo-mode-params" open><summary>Parameters</summary><div class="combo-mode-params-body">
+    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
       <label><abbr title=${PARAM_TOOLTIPS.window_secs}>Window (s)</abbr>
         <input type="number" min="1" .value=${win} placeholder="3600" @change=${(e: Event) => onNumInput("selection_window_secs", e)} @input=${(e: Event) => onNumInput("selection_window_secs", e)} class="cw-input"></label></div></details>`;
   } else if (pm === "weighted") {
-    params = html`<details class="combo-mode-params" open><summary>Parameters</summary><div class="combo-mode-params-body"><span class="muted">Set per-target weights in the targets table below.</span></div></details>`;
+    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body"><span class="muted">${t("combos.detail.weighted_hint")}</span></div></details>`;
   }
-  return html`<div class="combo-settings-bar"><label><abbr title=${PRIORITY_MODE_TOOLTIPS[pm]}>Priority mode</abbr><select @change=${onUpdatePriorityMode}>${priorityModeOptions(pm)}</select></label>${params}</div>`;
+  return html`<div class="combo-settings-bar"><label><abbr title=${PRIORITY_MODE_TOOLTIPS[pm]}>${t("combos.detail.priority_mode")}</abbr><select @change=${onUpdatePriorityMode}>${priorityModeOptions(pm)}</select></label>${params}</div>`;
 }
 
 function renderCooldownBar(combo: Combo): TemplateResult {
@@ -308,12 +321,12 @@ function renderCooldownBar(combo: Combo): TemplateResult {
   const base = combo.cooldown_base_secs != null ? String(combo.cooldown_base_secs) : "";
   const factor = combo.cooldown_factor != null ? String(combo.cooldown_factor) : "";
   const max = combo.cooldown_max_secs != null ? String(combo.cooldown_max_secs) : "";
-  const params = cm === "exponential" ? html`<details class="combo-mode-params" open><summary>Parameters</summary><div class="combo-mode-params-body">
+  const params = cm === "exponential" ? html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
     <label><abbr title=${PARAM_TOOLTIPS.base_secs}>Base (s)</abbr><input type="number" min="1" .value=${base} placeholder="60" @change=${(e: Event) => onNumInput("cooldown_base_secs", e)} @input=${(e: Event) => onNumInput("cooldown_base_secs", e)} class="cw-input"></label>
     <label><abbr title=${PARAM_TOOLTIPS.factor}>Factor</abbr><input type="number" min="2" .value=${factor} placeholder="2" @change=${(e: Event) => onNumInput("cooldown_factor", e)} @input=${(e: Event) => onNumInput("cooldown_factor", e)} class="cw-input"></label>
     <label><abbr title=${PARAM_TOOLTIPS.max_secs}>Max (s)</abbr><input type="number" min="1" .value=${max} placeholder="3600" @change=${(e: Event) => onNumInput("cooldown_max_secs", e)} @input=${(e: Event) => onNumInput("cooldown_max_secs", e)} class="cw-input"></label>
   </div></details>` : html``;
-  return html`<div class="combo-settings-bar"><label><abbr title=${COOLDOWN_MODE_TOOLTIPS[cm]}>Cooldown mode</abbr><select @change=${onUpdateCooldownMode}>${cooldownModeOptions(cm)}</select></label>${params}</div>`;
+  return html`<div class="combo-settings-bar"><label><abbr title=${COOLDOWN_MODE_TOOLTIPS[cm]}>${t("combos.detail.cooldown_mode")}</abbr><select @change=${onUpdateCooldownMode}>${cooldownModeOptions(cm)}</select></label>${params}</div>`;
 }
 
 let touchDragState: {
@@ -383,14 +396,14 @@ async function executeTargetReorder(draggedId: number, dropTargetId: number): Pr
   try {
     currentTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
   } catch {
-    showToast("Reorder failed: could not fetch current targets", "error");
+    showToast(t("combos.toast.reorder_failed", { message: "could not fetch current targets" }), "error");
     return;
   }
   const ordered = [...currentTargets].sort((a, b) => a.priority_order - b.priority_order);
   const fromIdx = ordered.findIndex((x) => x.id === draggedId);
   const toIdx = ordered.findIndex((x) => x.id === dropTargetId);
   if (fromIdx < 0 || toIdx < 0) {
-    showToast("Reorder failed: target not found in current list", "error");
+    showToast(t("combos.toast.reorder_failed", { message: "target not found in current list" }), "error");
     return;
   }
   const [moved] = ordered.splice(fromIdx, 1);
@@ -403,41 +416,41 @@ async function executeTargetReorder(draggedId: number, dropTargetId: number): Pr
     });
     detailTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
     requestUpdate();
-    showToast("Target priority updated", "success");
+    showToast(t("combos.toast.target_priority_updated"), "success");
   } catch (err: unknown) {
-    showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error");
+    showToast(t("combos.toast.reorder_failed", { message: err instanceof Error ? err.message : String(err) }), "error");
   }
 }
 
-function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): TemplateResult {
-  const isSub = t.sub_combo_id != null;
-  const cdBadge = t.in_cooldown ? html` <span class="badge badge-cooldown" title="Cooldown — ${t.cooldown_reason ?? ""} until ${t.cooldown_until ?? ""}">⏸</span>` : html``;
-  const inactiveBadge = (t.provider_active === false)
-    ? html` <span class="badge badge-inactive" title="Provider is inactive — this target is not used for routing. Reactivate the provider in the Providers page to enable it.">⚠ inactive</span>`
+function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): TemplateResult {
+  const isSub = target.sub_combo_id != null;
+  const cdBadge = target.in_cooldown ? html` <span class="badge badge-cooldown" title=${t("combos.target.cooldown_badge_title", { reason: target.cooldown_reason ?? "", until: target.cooldown_until ?? "" })}>⏸</span>` : html``;
+  const inactiveBadge = (target.provider_active === false)
+    ? html` <span class="badge badge-inactive" title=${t("combos.target.provider_inactive_title")}>⚠ inactive</span>`
     : html``;
-  const targetInactiveBadge = (t.active === false)
-    ? html` <span class="badge badge-inactive" title="Target is inactive — not used for routing.">⏸ inactive</span>`
+  const targetInactiveBadge = (target.active === false)
+    ? html` <span class="badge badge-inactive" title=${t("combos.target.target_inactive_title")}>⏸ inactive</span>`
     : html``;
-  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${t.sub_combo_name ?? "#" + t.sub_combo_id}</span>` : html`${t.model_display_name || t.model_id || "row #" + t.model_row_id}${cdBadge}${inactiveBadge}${targetInactiveBadge}`;
-  const providerCell = isSub ? html`<span class="virtual-provider">${t.provider_id}</span>` : html`<a href="#/providers/${encodeURIComponent(t.provider_id)}">${t.provider_id}</a>`;
-  const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
-  const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);
-  const weightCell = showWeight ? (isSub ? html`<td class="col-target-weight" data-label="Weight"><em>n/a</em></td>` : html`<td class="col-target-weight" data-label="Weight"><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
-  const cooldownCell = isSub ? html`<td class="col-target-cooldown" data-label="Cooldown"><em>sub-combo</em></td>` : html`<td class="col-target-cooldown" data-label="Cooldown">
+  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${target.sub_combo_name ?? "#" + target.sub_combo_id}</span>` : html`${target.model_display_name || target.model_id || "row #" + target.model_row_id}${cdBadge}${inactiveBadge}${targetInactiveBadge}`;
+  const providerCell = isSub ? html`<span class="virtual-provider">${target.provider_id}</span>` : html`<a href="#/providers/${encodeURIComponent(target.provider_id)}">${target.provider_id}</a>`;
+  const accountCell = isSub ? html`<em>${t("combos.target.na")}</em>` : (target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`);
+  const contextCell = isSub ? html`<em>${t("combos.target.sub_combo")}</em>` : (target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`);
+  const weightCell = showWeight ? (isSub ? html`<td class="col-target-weight" data-label=${t("combos.detail.col.weight")}><em>${t("combos.target.na")}</em></td>` : html`<td class="col-target-weight" data-label=${t("combos.detail.col.weight")}><input type="number" min="1" .value=${String(target.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(target.id, e)} @input=${(e: Event) => onUpdateTargetWeight(target.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
+  const cooldownCell = isSub ? html`<td class="col-target-cooldown" data-label=${t("combos.detail.col.cooldown")}><em>${t("combos.target.sub_combo")}</em></td>` : html`<td class="col-target-cooldown" data-label=${t("combos.detail.col.cooldown")}>
     <div style="display:flex;align-items:center;gap:4px">
-      <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:95px" @change=${(e: Event) => onUpdateTargetCooldownMode(t.id, e)}>
-        <option value="" ?selected=${!t.cooldown_mode && t.cooldown_base_secs == null}>Inherit</option>
-        <option value="none" ?selected=${t.cooldown_mode === "none" || t.cooldown_base_secs === 0}>Disabled</option>
-        <option value="flat" ?selected=${t.cooldown_mode === "flat" && t.cooldown_base_secs !== 0}>Flat</option>
-        <option value="exponential" ?selected=${t.cooldown_mode === "exponential" && t.cooldown_base_secs !== 0}>Exponential</option>
+      <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:95px" @change=${(e: Event) => onUpdateTargetCooldownMode(target.id, e)}>
+        <option value="" ?selected=${!target.cooldown_mode && target.cooldown_base_secs == null}>${t("combos.target.inherit")}</option>
+        <option value="none" ?selected=${target.cooldown_mode === "none" || target.cooldown_base_secs === 0}>${t("combos.target.disabled")}</option>
+        <option value="flat" ?selected=${target.cooldown_mode === "flat" && target.cooldown_base_secs !== 0}>${t("combos.detail.mode.flat")}</option>
+        <option value="exponential" ?selected=${target.cooldown_mode === "exponential" && target.cooldown_base_secs !== 0}>${t("combos.detail.mode.exponential")}</option>
       </select>
-      ${(t.cooldown_mode === "flat" || t.cooldown_mode === "exponential") ? html`<input type="number" min="0" placeholder="sec" style="width:48px;font-size:0.75rem;padding:2px 4px" .value=${t.cooldown_base_secs != null ? String(t.cooldown_base_secs) : ""} @change=${(e: Event) => onUpdateTargetCooldownBase(t.id, e)} class="cw-input" title="Base seconds (0 = disabled)">` : html``}
+      ${(target.cooldown_mode === "flat" || target.cooldown_mode === "exponential") ? html`<input type="number" min="0" placeholder="sec" style="width:48px;font-size:0.75rem;padding:2px 4px" .value=${target.cooldown_base_secs != null ? String(target.cooldown_base_secs) : ""} @change=${(e: Event) => onUpdateTargetCooldownBase(target.id, e)} class="cw-input" title=${t("combos.target.cooldown_base_title")}>` : html``}
     </div>
   </td>`;
   const testResults: ComboTestResult[] | undefined = detailComboId != null
     ? state.comboTestResults[detailComboId]
     : undefined;
-  const tr = testResults?.find((r) => r.target_id === t.id);
+  const tr = testResults?.find((r) => r.target_id === target.id);
   let lastTestCell: TemplateResult;
   if (!tr) {
     lastTestCell = html`<span class="muted">—</span>`;
@@ -450,8 +463,8 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
     const err = tr.error_msg ? html` <small title=${tr.error_msg}>${tr.error_msg}</small>` : html``;
     lastTestCell = html`<span class=${"status-pill " + cls}>${String(tr.status)}</span>${ms}${err}`;
   }
-  return html`<tr draggable="true" data-drag-id=${String(t.id)} class="combo-target-card-row"
-    @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(t.id)); (e.target as HTMLElement).classList.add("dragging"); }}
+  return html`<tr draggable="true" data-drag-id=${String(target.id)} class="combo-target-card-row"
+    @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(target.id)); (e.target as HTMLElement).classList.add("dragging"); }}
     @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
     @dragover=${(e: DragEvent) => { e.preventDefault(); const row = (e.currentTarget as HTMLElement); row.classList.add("drag-over"); }}
     @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
@@ -459,39 +472,39 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
       e.preventDefault();
       (e.currentTarget as HTMLElement).classList.remove("drag-over");
       const draggedId = parseInt(e.dataTransfer?.getData("text/plain") || "0", 10);
-      if (!draggedId || draggedId === t.id || !detailComboId) return;
-      await executeTargetReorder(draggedId, t.id);
+      if (!draggedId || draggedId === target.id || !detailComboId) return;
+      await executeTargetReorder(draggedId, target.id);
     }}
   >
     <td class="drag-handle col-target-drag"
-        title="Drag to reorder (touch & hold or mouse drag)"
-        @touchstart=${(e: TouchEvent) => onTouchStartHandle(t.id, e)}
+        title=${t("combos.detail.col.drag_title")}
+        @touchstart=${(e: TouchEvent) => onTouchStartHandle(target.id, e)}
         @touchmove=${(e: TouchEvent) => onTouchMoveHandle(e)}
         @touchend=${() => void onTouchEndHandle()}
         @touchcancel=${() => void onTouchEndHandle()}>${icons.dragHandle()}</td>
-    <td class="col-target-order" data-label="#">${t.priority_order}</td>
-    <td class="col-target-provider" data-label="Provider">${providerCell}</td>
-    <td class="col-target-account" data-label="Account">${accountCell}</td>
-    <td class="col-target-model" data-label="Model"><div class="target-model-title">${modelCell}</div></td>
-    <td class="col-target-context" data-label="Context">${contextCell}</td>
+    <td class="col-target-order" data-label=${t("combos.detail.col.priority")}>${target.priority_order}</td>
+    <td class="col-target-provider" data-label=${t("combos.detail.col.provider")}>${providerCell}</td>
+    <td class="col-target-account" data-label=${t("combos.detail.col.account")}>${accountCell}</td>
+    <td class="col-target-model" data-label=${t("combos.detail.col.model")}><div class="target-model-title">${modelCell}</div></td>
+    <td class="col-target-context" data-label=${t("combos.detail.col.context")}>${contextCell}</td>
     ${weightCell}
     ${cooldownCell}
-    <td class="last-test-cell col-target-test-status" data-label="Last test">${lastTestCell}</td>
-    <td class="col-target-actions" data-label="Actions">
+    <td class="last-test-cell col-target-test-status" data-label=${t("combos.detail.col.last_test")}>${lastTestCell}</td>
+    <td class="col-target-actions" data-label=${t("combos.detail.col.actions")}>
       <div class="target-actions-wrap">
-        ${!isSub ? html`<button class="small primary" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>${icons.flask()} Test</button>` : html``}
-        <button class="small" title=${t.active !== false ? "Deactivate target" : "Activate target"} @click=${() => onToggleTargetActive(t.id, t.active !== false)}>${t.active !== false ? html`${icons.pause()} Pause` : html`${icons.play()} Resume`}</button>
-        <button class="small reorder-btn" title="Move Up" @click=${() => onChangePriority(t.id, -1)}>${icons.caretUp()}</button>
-        <button class="small reorder-btn" title="Move Down" @click=${() => onChangePriority(t.id, 1)}>${icons.caretDown()}</button>
-        ${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>${icons.refresh()} Reset CD</button>` : html``}
-        <button class="small danger" title="Remove target" @click=${() => onDeleteTarget(t.id)}>${icons.close()}</button>
+        ${!isSub ? html`<button class="small primary" title=${t("combos.target.test_title")} @click=${(e: Event) => onTestTarget(target.id, target.model_row_id, e)}>${icons.flask()} ${t("combos.target.test_btn")}</button>` : html``}
+        <button class="small" title=${target.active !== false ? t("combos.target.deactivate_title") : t("combos.target.activate_title")} @click=${() => onToggleTargetActive(target.id, target.active !== false)}>${target.active !== false ? html`${icons.pause()} ${t("combos.target.pause")}` : html`${icons.play()} ${t("combos.target.resume")}`}</button>
+        <button class="small reorder-btn" title=${t("combos.target.move_up_title")} @click=${() => onChangePriority(target.id, -1)}>${icons.caretUp()}</button>
+        <button class="small reorder-btn" title=${t("combos.target.move_down_title")} @click=${() => onChangePriority(target.id, 1)}>${icons.caretDown()}</button>
+        ${target.in_cooldown && !isSub ? html`<button class="small" title=${t("combos.target.reset_cd_title")} @click=${() => onResetCooldown(target.id)}>${icons.refresh()} ${t("combos.target.reset_cd")}</button>` : html``}
+        <button class="small danger" title=${t("combos.target.remove_title")} @click=${() => onDeleteTarget(target.id)}>${icons.close()}</button>
       </div>
     </td>
   </tr>`;
 }
 
 function renderComboDetail(): TemplateResult {
-  if (!detailCombo) return html`<div class="loading">Loading...</div>`;
+  if (!detailCombo) return html`<div class="loading">${t("combos.target.load_error")}</div>`;
   const combo = detailCombo;
   const pm = priorityModeOf(combo);
   const showWeight = pm === "weighted";
@@ -503,12 +516,12 @@ function renderComboDetail(): TemplateResult {
   const effectiveCw = overrideCw ?? autoCw;
   const effectiveCwLabel = effectiveCw != null ? formatTokens(effectiveCw) : "—";
   const cds = targets.filter((t) => t.in_cooldown);
-  const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>Weight</abbr></th>` : html``;
+  const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>${t("combos.detail.col.weight")}</abbr></th>` : html``;
   return html`
-    <div class="page-header"><a href="#/combos" class="back-link">${icons.arrowLeft()} All combos</a><h2>${combo.name}</h2>
+    <div class="page-header"><a href="#/combos" class="back-link">${icons.arrowLeft()} ${t("combos.detail.back")}</a><h2>${combo.name}</h2>
       <div class="actions">
         <label style="display:inline-flex;align-items:center;gap:5px;font-size:0.85rem;">
-          Strategy:
+          ${t("combos.detail.strategy")}
           <select style="padding:3px 6px;font-size:0.8rem;border-radius:var(--radius-sm);" .value=${combo.strategy} @change=${onUpdateStrategy}>
             <option value="priority" ?selected=${combo.strategy === "priority"}>priority</option>
             <option value="round_robin" ?selected=${combo.strategy === "round_robin"}>round_robin</option>
@@ -516,29 +529,29 @@ function renderComboDetail(): TemplateResult {
           </select>
         </label>
         <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
-        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title="Rate Limit Preventivo: Predice 429s por target y salta proactivamente al siguiente target del combo sin consumir intentos.">
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title=${t("combos.detail.predictive_rl_hint")}>
           <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${onTogglePreventiveRateLimit}>
-          ${icons.lightning()} Predictive RL
+          ${icons.lightning()} ${t("combos.detail.predictive_rl")}
         </label>
-        <label>Race size: <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${onUpdateRaceSize} @input=${onUpdateRaceSize} class="race-input"></label>
-        <button class="danger" @click=${onDeleteCombo}>Delete</button></div></div>
-    <div class="combo-context-window-bar"><label>Context window:
-      <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${onUpdateContextWindow} @input=${onUpdateContextWindow} class="cw-input" title="Override context window (tokens). Empty = auto-compute."></label>
-      <span class="cw-hint">Auto: <strong>${autoCwLabel}</strong> · Effective: <strong>${effectiveCwLabel}</strong></span></div>
+        <label>${t("combos.detail.race_size")} <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${onUpdateRaceSize} @input=${onUpdateRaceSize} class="race-input"></label>
+        <button class="danger" @click=${onDeleteCombo}>${t("combos.detail.delete")}</button></div></div>
+    <div class="combo-context-window-bar"><label>${t("combos.detail.context_window")}
+      <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${onUpdateContextWindow} @input=${onUpdateContextWindow} class="cw-input" title=${t("combos.detail.override_hint")}></label>
+      <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })} · ${t("combos.detail.effective", { value: effectiveCwLabel })}</span></div>
     ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
-    ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
-    <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
-      <div class="actions"><button @click=${onTestAllTargets}>${icons.flask()} Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} Add target</button></div></div>
-      ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
-        <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Cooldown</th><th>Last test</th><th>Actions</th></tr></thead>
+    ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
+    <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
+      <div class="actions"><button @click=${onTestAllTargets}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>
+      ${targets.length === 0 ? html`<p class="empty">${t("combos.detail.targets_empty")}</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
+        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;
 }
 
 function renderComboGrid(): TemplateResult {
   const list = state.combos || [];
-  return html`<div class="page-header"><h2>Combos</h2><div class="actions"><button class="primary" @click=${() => showCreateCombo()}>${icons.plus()} Create combo</button></div></div>
-    ${list.length === 0 ? html`<p class="empty">No combos yet. Create one to start routing.</p>` : html`<div class="combo-grid">${list.map((c) => {
+  return html`<div class="page-header"><h2>${t("combos.grid.title")}</h2><div class="actions"><button class="primary" @click=${() => showCreateCombo()}>${icons.plus()} ${t("combos.grid.create")}</button></div></div>
+    ${list.length === 0 ? html`<p class="empty">${t("combos.grid.empty")}</p>` : html`<div class="combo-grid">${list.map((c) => {
       const pm = priorityModeOf(c);
       const pmChip = pm === "strict" ? html`` : html` · <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>`;
       return html`<a class="combo-card" href="#/combos/${c.id}"><h3>${c.name}</h3><div class="provider-meta"><span class="chip">${c.strategy}</span>${pmChip} · race ${c.race_size}</div></a>`;
@@ -547,28 +560,54 @@ function renderComboGrid(): TemplateResult {
 
 // ---- Mount ----
 
-export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
-  const el = document.getElementById("main");
-  if (!el) return;
+interface ComboDetailData {
+  combo: Combo | null;
+  targets: ComboTargetWithModel[];
+}
 
+export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
   if (opts.detailId) {
     detailComboId = opts.detailId;
     detailCombo = null;
     detailTargets = [];
-    const cleanup = mountView(el, renderComboDetail);
-    try {
-      const [combo, targets] = await Promise.all([
-        api("/combos/" + opts.detailId).catch(() => null) as Promise<Combo | null>,
-        api("/combos/" + opts.detailId + "/targets") as Promise<ComboTargetWithModel[]>,
-      ]);
-      detailCombo = combo;
-      detailTargets = targets || [];
-      requestUpdate();
-    } catch { detailCombo = null; requestUpdate(); }
-    return cleanup;
+    return createView<ComboDetailData>({
+      loader: async () => {
+        const [combo, targets] = await Promise.all([
+          api("/combos/" + opts.detailId).catch(() => null) as Promise<Combo | null>,
+          api("/combos/" + opts.detailId + "/targets") as Promise<ComboTargetWithModel[]>,
+        ]);
+        return { combo, targets: targets || [] };
+      },
+      onLoaded: (data) => {
+        // Sync the loader result into the module-local state ONCE per
+        // load — NOT on every render. Assigning inside `render`
+        // re-clobbers `detailTargets` with this closure's stale `data`
+        // on every requestUpdate, undoing external refreshes (e.g.
+        // onChangePriority / executeTargetReorder's post-reorder
+        // refetch) and leaving the target table showing the stale
+        // order. Same root cause as BUG-C2 (grid's state.combos).
+        detailCombo = data.combo;
+        detailTargets = data.targets;
+      },
+      render: () => renderComboDetail(),
+      loading: () => html`<div class="loading">${t("common.loading")}</div>`,
+      error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,
+    });
   }
 
-  state.combos = await api("/combos") as Combo[];
-  const cleanup = mountView(el, renderComboGrid);
-  return cleanup;
+  return createView<Combo[]>({
+    loader: () => api("/combos") as Promise<Combo[]>,
+    // Sync the loader result into `state.combos` ONCE per load — NOT on
+    // every render. Assigning inside `render` re-clobbers `state.combos`
+    // with this closure's stale `data` on every requestUpdate, undoing
+    // external refreshes (e.g. createCombo's post-POST refetch) and
+    // leaving the grid showing a stale list.
+    onLoaded: (combos) => {
+      state.combos = combos;
+    },
+    render: () => renderComboGrid(),
+    loading: () => html`<div class="loading">${t("common.loading")}</div>`,
+    empty: () => false, // renderComboGrid handles empty state internally
+    error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,
+  });
 }

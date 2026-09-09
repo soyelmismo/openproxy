@@ -306,4 +306,93 @@ mod tests {
         let v_empty: serde_json::Value = serde_json::from_slice(&res_empty).unwrap();
         assert_eq!(v_empty["message"], "");
     }
+
+    #[test]
+    fn test_atomesus_wrap_request_body_formatting_and_passthrough() {
+        let adapter = AtomesusAdapter::new();
+        let target = dummy_resolved_target();
+
+        // 1. Array content in messages & role formatting
+        let body_messages = bytes::Bytes::from(
+            serde_json::json!({
+                "messages": [
+                    { "role": "system", "content": "Be concise" },
+                    { "role": "user", "content": [{"text": "Hello"}, {"text": "world"}] },
+                    { "role": "assistant", "content": "I am ready." }
+                ]
+            })
+            .to_string(),
+        );
+
+        let res = adapter
+            .wrap_request_body(
+                body_messages,
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .unwrap();
+
+        let v: serde_json::Value = serde_json::from_slice(&res).unwrap();
+        let expected_msg =
+            "[System Instructions]\nBe concise\n\nHello\nworld\n\n[Assistant]\nI am ready.";
+        assert_eq!(v["message"], expected_msg);
+
+        // 2. Pass-through when "message" key is already present
+        let already_atomesus = bytes::Bytes::from(
+            serde_json::json!({
+                "message": "Custom direct message",
+                "mode": "fast"
+            })
+            .to_string(),
+        );
+
+        let res_passthrough = adapter
+            .wrap_request_body(
+                already_atomesus.clone(),
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .unwrap();
+
+        assert_eq!(res_passthrough, already_atomesus);
+    }
+
+    #[test]
+    fn test_atomesus_build_full_prompt_complex() {
+        let adapter = AtomesusAdapter::new();
+        let target = dummy_resolved_target();
+
+        let body = bytes::Bytes::from(
+            serde_json::json!({
+                "messages": [
+                    { "role": "system", "content": "Be concise." },
+                    {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": "Part 1" },
+                            { "type": "text", "text": "Part 2" }
+                        ]
+                    },
+                    { "role": "assistant", "content": "Understood." },
+                    { "role": "user", "content": "Next question" }
+                ]
+            })
+            .to_string(),
+        );
+
+        let res = adapter
+            .wrap_request_body(
+                body,
+                TargetFormat::Atomesus,
+                &ModelId::new("atomesus-1-5-fast"),
+                &target,
+            )
+            .expect("wrap_request_body failed");
+
+        let v: serde_json::Value = serde_json::from_slice(&res).expect("json parse failed");
+        let expected_msg = "[System Instructions]\nBe concise.\n\nPart 1\nPart 2\n\n[Assistant]\nUnderstood.\n\nNext question";
+        assert_eq!(v["message"], expected_msg);
+    }
 }

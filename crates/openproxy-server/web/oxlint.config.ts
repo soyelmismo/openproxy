@@ -5,7 +5,7 @@ export default defineConfig({
     "**/dist/**",
     "**/node_modules/**",
     "tools/oxlint/**",
-    "playwright.config.ts",
+    "playwright.config.js",
     "tests/**",
   ],
   jsPlugins: [

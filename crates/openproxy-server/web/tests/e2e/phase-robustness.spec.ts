@@ -482,9 +482,9 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
   // this attempt — that's the §4.2 synth-on-row contract.
   expect(obs.stageInMap).toBe('completed');
   // The phase label rendered in the DOM is the friendly
-  // `completado` (the `STAGE_LABELS.completed` mapping in
-  // `lib/constants.ts:22`).
-  expect((obs.phaseText ?? '').toLowerCase()).toContain('completado');
+  // label resolved via `getStageLabel('completed')` in
+  // `lib/constants.ts` (i18n key `stage.completed` → "Completed").
+  expect((obs.phaseText ?? '').toLowerCase()).toContain('completed');
 });
 
 });

@@ -6,6 +6,7 @@ import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
 import type { ProxySource } from "../lib/types/api.js";
 
 export async function reloadProxySources(): Promise<void> {
@@ -99,19 +100,38 @@ export function showAddProxySource(): void {
   );
 }
 
+/** Read the proxy-source form and produce the JSON body sent to
+ *  `POST /admin/proxy-sources` (create) and `PUT
+ *  /admin/proxy-sources/:id` (update).
+ *
+ *  Always-present fields (`name`, `url`) are trimmed; `priority`
+ *  falls back to `0` when missing/blank; `active` is a checkbox
+ *  whose value is the literal string `"on"` when ticked.
+ *
+ *  Pure (only `form` reads + trim/number coercion). Exported for
+ *  unit testing in `proxy-source-handlers.test.ts`. The inferred
+ *  return type is `Name`-like; tests assert against it via
+ *  `toEqual`. */
+export function buildProxySourceBodyFromForm(form: HTMLFormElement) {
+  const f = new FormData(form);
+  return {
+    name: (f.get("name") || "").toString().trim(),
+    url: (f.get("url") || "").toString().trim(),
+    priority: Number(f.get("priority") || 0),
+    active: f.get("active") === "on",
+  };
+}
+
 export async function createProxySource(e: Event, wrapper: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const name = (f.get("name") || "").toString().trim();
-  const url = (f.get("url") || "").toString().trim();
-  const priority = Number(f.get("priority") || 0);
-  const active = f.get("active") === "on";
+  const body = buildProxySourceBodyFromForm(target);
+  const { name } = body;
 
   try {
     await api("/proxy-sources", {
       method: "POST",
-      body: JSON.stringify({ name, url, priority, active }),
+      body: JSON.stringify(body),
     });
     showToast(`Proxy source '${name}' added`, "success");
     wrapper.remove();
@@ -212,16 +232,13 @@ export async function updateProxySource(
 ): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
-  const name = (f.get("name") || "").toString().trim();
-  const url = (f.get("url") || "").toString().trim();
-  const priority = Number(f.get("priority") || 0);
-  const active = f.get("active") === "on";
+  const body = buildProxySourceBodyFromForm(target);
+  const { name } = body;
 
   try {
     await api(`/proxy-sources/${id}`, {
       method: "PUT",
-      body: JSON.stringify({ name, url, priority, active }),
+      body: JSON.stringify(body),
     });
     showToast(`Proxy source '${name}' updated`, "success");
     wrapper.remove();
@@ -234,7 +251,12 @@ export async function updateProxySource(
 export async function deleteProxySource(id: string): Promise<void> {
   const src = state.proxySources.find((s) => s.id === id);
   const name = src ? src.name : id;
-  if (!confirm(`Are you sure you want to delete source '${name}'?`)) return;
+  if (!(await showConfirm({
+    title: "Delete proxy source",
+    message: `Are you sure you want to delete source '${name}'?`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
   try {
     await api(`/proxy-sources/${id}`, { method: "DELETE" });
     showToast(`Proxy source '${name}' deleted`, "success");
@@ -250,6 +272,10 @@ export async function toggleProxySourceActive(id: string, e: Event): Promise<voi
   const src = state.proxySources.find((s) => s.id === id);
   if (!src) return;
 
+  // intentionally not using mutateAndRefresh because: Tier 3 —
+  // optimistic checkbox toggle with rollback on error (the catch
+  // restores `checkbox.checked`), which the helper's uniform
+  // error path cannot express.
   try {
     const payload = {
       name: src.name,

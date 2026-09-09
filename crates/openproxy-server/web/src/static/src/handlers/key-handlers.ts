@@ -25,7 +25,9 @@ import {
 import type { Model, Provider, ApiKeyId } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-import { ensureModalRoot } from "../lib/ui-utils.js";
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 interface KeyRow {
   id: ApiKeyId;
@@ -231,8 +233,7 @@ export async function showEditKey(id: number): Promise<void> {
   let key: KeyRow;
   try { key = await api("/keys/" + id) as KeyRow; }
   catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
     return;
   }
   const wrapper = document.createElement("div");
@@ -287,7 +288,26 @@ function calculateExpiry(amount: string, unit: string): string | null {
   return now.toISOString();
 }
 
-function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
+/** Read a `keyForm` from the DOM and produce the JSON body sent to
+ *  `/admin/keys` (POST) or `/admin/keys/:id` (PATCH).
+ *
+ *  Three-state encoding for the blacklist fields mirrors the Rust
+ *  PATCH semantics:
+ *   - empty input  → `null`     (don't touch the list)
+ *   - " "          → `[]`       (explicitly clear every entry)
+ *   - non-empty    → trimmed list of distinct entries
+ *
+ *  `calculateExpiry("never", ...)` returns `null` (clear the expiry)
+ *  while any non-empty amount coerces to an ISO-8601 timestamp in
+ *  the future. Empty amount → `null` (defensive).
+ *
+ *  Returns `null` when validation fails (no scopes selected). The
+ *  caller is expected to surface the error via `showToast` and bail.
+ *
+ *  Pure w.r.t. the global DOM (only reads the form) and `Intl`/Date;
+ *  no network calls. Exported for direct unit testing in
+ *  `key-handlers.test.ts`. */
+export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   const scopes: string[] = Array.from(form.querySelectorAll<HTMLInputElement>('input[name="scopes"]:checked'))
     .map((input) => input.value);
   if (scopes.length === 0) { showToast("Pick at least one scope.", "error"); return null; }
@@ -336,10 +356,14 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
     const result = await api("/keys", { method: "POST", body: JSON.stringify(body) }) as KeyPlaintextResponse;
     if (wrapper) wrapper.remove();
     else closeKeyForm("self", e);
+    // Show the one-time secret first: a failed list refetch must never
+    // delay or drop the only plaintext display. Same refresh pattern
+    // as updateKey (plaintext-modal flows stay inline, see regenerateKey).
     showPlaintextKey(result.plaintext, result.key);
+    state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showApiError(err, "Error");
   }
 }
 
@@ -355,34 +379,43 @@ export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Pr
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showApiError(err, "Error");
   }
 }
 
 export async function regenerateKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`)) return;
+  if (!(await showConfirm({
+    title: "Regenerate key",
+    message: `Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`,
+    danger: true,
+    confirmLabel: "Regenerate",
+  }))) return;
+  // intentionally not using mutateAndRefresh because: Tier 4 critical
+  // flow — success path opens the plaintext-key modal instead of a
+  // toast + re-render.
   try {
     const result = await api(`/keys/${id}/regenerate`, { method: "POST" }) as KeyPlaintextResponse;
     showPlaintextKey(result.plaintext, result.key);
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
   }
 }
 
 export async function revokeKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`)) return;
-  try {
-    await api(`/keys/${id}/revoke`, { method: "POST" });
-    state.apiKeys = await api("/keys") as typeof state.apiKeys;
-    requestUpdate();
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
-  }
+  if (!(await showConfirm({
+    title: "Revoke key",
+    message: `Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`,
+    danger: true,
+    confirmLabel: "Revoke",
+  }))) return;
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api(`/keys/${id}/revoke`, { method: "POST" });
+      state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    },
+  });
 }
 
 export function viewKeyUsage(id: number): void {
@@ -391,13 +424,16 @@ export function viewKeyUsage(id: number): void {
 
 export async function deleteKey(id: number, label: string | null): Promise<void> {
   const display = label || ("#" + id);
-  if (!confirm(`Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`)) return;
-  try {
-    await api(`/keys/${id}`, { method: "DELETE" });
-    state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
-    requestUpdate();
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
-  }
+  if (!(await showConfirm({
+    title: "Delete key",
+    message: `Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`,
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
+  await mutateAndRefresh({
+    apiCall: async () => {
+      await api(`/keys/${id}`, { method: "DELETE" });
+      state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
+    },
+  });
 }

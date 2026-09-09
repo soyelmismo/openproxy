@@ -116,6 +116,28 @@
   --color-scrollbar-thumb-hover: #a5b0bf;
   --color-scrollbar-track:       transparent;
 
+  /* ----- Chart & Badge colors ----- */
+  --chart-green:        #10b981;  /* emerald-500 */
+  --chart-green-dark:   #3a7a2a;  /* custom */
+  --chart-blue-light:   #38bdf8;  /* sky-400 */
+  --chart-blue:         #2563eb;  /* blue-600 */
+  --chart-blue-mid:     #60a5fa;  /* blue-400 */
+  --chart-blue-xlight:  #93c5fd;  /* blue-300 */
+  --chart-indigo:       #6366f1;  /* indigo-500 */
+  --chart-violet:       #7c3aed;  /* violet-600 */
+  --chart-purple-light: #c084fc;  /* purple-400 */
+  --chart-purple-dark:  #6b3fa0;  /* custom */
+  --chart-purple-darker:#7b2d8e;  /* custom */
+  --chart-pink:         #f472b6;  /* pink-400 */
+  --chart-yellow:       #facc15;  /* yellow-400 */
+  --chart-orange:       #fb923c;  /* orange-400 */
+  --chart-warn:         #8a6a00;  /* near warn */
+  --chart-tint-blue:    #d4e8f0;  /* light blue */
+  --chart-tint-green:   #d8e8d0;  /* light green */
+  --chart-tint-purple:  #e8d5f5;  /* light purple */
+  --chart-tint-lavender:#e8e0f0;  /* light lavender */
+  --chart-tint-gold:    #f0e8d0;  /* light gold */
+
   /* ----- Spacing ----- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -161,6 +183,8 @@
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
   --shadow-md: 0 10px 30px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.15);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.20);
 
   /* ----- Layout ----- */
   --layout-sidebar-w:          200px;

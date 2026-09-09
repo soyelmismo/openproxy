@@ -15,6 +15,7 @@ import type {
   Combo,
   FreeProxy,
   ProxySource,
+  ApiKey,
 } from "../lib/types/api.js";
 
 // ----------------------------------------------------------------------------
@@ -165,10 +166,8 @@ export interface DashboardState {
   proxies: FreeProxy[];
   proxySources: ProxySource[];
   proxySummary: ProxySummary | null;
-  /** Cached API key rows. The shape is provider-specific; the
-   *  dashboard views hydrate it from `/admin/api-keys`. Kept
-   *  loose here (out of G3 scope — G4 will narrow it). */
-  apiKeys: unknown[];
+  /** Cached API key rows. @see crates/openproxy-core/src/api_keys.rs */
+  apiKeys: ApiKey[];
   /** Health payload from /admin/health. `null` until the first
    *  tick resolves, or if the request fails. The bg-poll only
    *  reads `.status` (and `.message` for tooltips). */

@@ -18,6 +18,8 @@ import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
+import { showConfirm } from "../lib/show-confirm.js";
+import { mutateAndRefresh } from "../lib/mutate.js";
 
 import { PRIORITY_MODE_TOOLTIPS, PRIORITY_MODE_LABELS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 
@@ -164,10 +166,21 @@ export function onCreateCooldownModeChange(): void {
   if (label) label.setAttribute("title", COOLDOWN_MODE_TOOLTIPS[mode]);
 }
 
-export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void> {
-  const target = e.target;
-  if (!(target instanceof HTMLFormElement)) return;
-  const f = new FormData(target);
+/** Read the create-combo form and produce the JSON body sent to
+ *  `POST /admin/combos`.
+ *
+ *  Always-present fields keep their server defaults when the form is
+ *  blank (`name` is `""`, `strategy` is `"priority"`, `race_size` is
+ *  `1`, `preventive_rate_limit` is `false`). Optional fields
+ *  (`lkgp_exploration_rate`, `selection_window_secs`, the three
+ *  `cooldown_*` knobs) are OMITTED from the body when blank or NaN
+ *  so the Rust deserializer uses its server-side defaults — empty
+ *  strings would fail u64/f64 coercion on the backend.
+ *
+ *  Pure (only `form` reads + numeric parsing). Exported for unit
+ *  testing in `combo-handlers.test.ts`. */
+export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput {
+  const f = new FormData(form);
   const priorityMode = String(f.get("priority_mode") || "strict");
   const cooldownMode = String(f.get("cooldown_mode") || "flat");
   const body: CreateComboInput = {
@@ -212,23 +225,37 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
       if (!Number.isNaN(factor)) body.cooldown_factor = factor;
     }
   }
-  try {
-    await api("/combos", { method: "POST", body: JSON.stringify(body) });
-    if (wrapper) wrapper.remove(); else closeCreateCombo();
-    requestUpdate();
-  } catch (err: unknown) {
-    showApiError(err, "Error");
-  }
+  return body;
+}
+
+export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void> {
+  const target = e.target;
+  if (!(target instanceof HTMLFormElement)) return;
+  const body = buildComboBodyFromForm(target);
+  // POST /combos answers `{ "id": n }` — not a full Combo — so the grid
+  // (which renders from `state.combos`, populated only by the route
+  // loader) is refreshed by re-fetching GET /combos into the state
+  // BEFORE `requestUpdate()`. The modal closes only after the POST
+  // succeeded; a failed POST keeps it open with the form intact.
+  await mutateAndRefresh({
+    apiCall: () => api("/combos", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: async () => {
+      if (wrapper) wrapper.remove(); else closeCreateCombo();
+      state.combos = (await api("/combos")) as Combo[];
+    },
+  });
 }
 
 export async function deleteCombo(id: number): Promise<void> {
-  if (!confirm("Delete combo " + id + "?")) return;
-  try {
-    await api("/combos/" + id, { method: "DELETE" });
-    requestUpdate();
-  } catch (e: unknown) {
-    showApiError(e, "Error");
-  }
+  if (!(await showConfirm({
+    title: "Delete combo",
+    message: "Delete combo " + id + "?",
+    danger: true,
+    confirmLabel: "Delete",
+  }))) return;
+  await mutateAndRefresh({
+    apiCall: () => api("/combos/" + id, { method: "DELETE" }),
+  });
 }
 
 export async function updateRaceSize(id: number, e: Event | null): Promise<void> {
@@ -237,8 +264,7 @@ export async function updateRaceSize(id: number, e: Event | null): Promise<void>
   try {
     await api("/combos/" + id, { method: "PATCH", body: JSON.stringify({ race_size: val }) });
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
     requestUpdate();
   }
 }
@@ -387,6 +413,9 @@ export async function updateSelectionWindow(id: number, e: Event | null): Promis
 // original code used `window.event` to find the button, which is
 // non-standard; the e.target path is more reliable.
 export async function testAllTargets(comboId: number, e: Event | null): Promise<void> {
+  // intentionally not using mutateAndRefresh because: Tier 3 —
+  // button disable/relabel lifecycle (finally block) around the
+  // call; the helper has no hook for per-request UI affordances.
   const btn = e && e.target ? (e.target as HTMLElement).closest("button") : null;
   const oldText = btn ? btn.textContent : null;
   if (btn) { btn.disabled = true; btn.textContent = "Testing..."; }

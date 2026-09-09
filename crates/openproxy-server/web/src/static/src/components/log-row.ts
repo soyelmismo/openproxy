@@ -3,13 +3,13 @@
 
 import { html, type TemplateResult } from 'lit-html';
 import { formatContext } from "../lib/format.js";
-import { STAGE_LABELS } from "../lib/constants.js";
+import { getStageLabel } from "../lib/constants.js";
 import { icons, endpointIcon } from "../lib/icons.js";
 import type { AttemptState } from "../state/live-logs-store.js";
 
 export function renderLogPhaseHtml(attempt: AttemptState): TemplateResult {
   const phase = attempt.stage || "started";
-  const label = STAGE_LABELS[phase] || phase;
+  const label = getStageLabel(phase);
   const cls = `log-phase log-phase--${phase}`;
   
   let sublabel = "";

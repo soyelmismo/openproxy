@@ -15,8 +15,8 @@ import {
   showAddCustomProxy,
   reloadProxies,
 } from "../handlers/proxy-handlers.js";
-import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
+import { renderResponsiveCardTable, type ResponsiveColumn } from "../components/render-responsive-card-table.js";
 
 interface FreeProxyRow {
   id: string;
@@ -114,121 +114,15 @@ function formatTimeAgo(isoString: string | null): string {
   const date = new Date(isoString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  if (diffMs < 0) return "Just now";
+  if (diffMs < 0) return t("proxies.list.time.just_now");
   const diffSecs = Math.floor(diffMs / 1000);
-  if (diffSecs < 60) return `${diffSecs}s ago`;
+  if (diffSecs < 60) return t("proxies.list.time.seconds", { count: diffSecs });
   const diffMins = Math.floor(diffSecs / 60);
-  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffMins < 60) return t("proxies.list.time.minutes", { count: diffMins });
   const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffHours < 24) return t("proxies.list.time.hours", { count: diffHours });
   const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
-}
-
-async function onCopyProxy(text: string, e: Event): Promise<void> {
-  e.preventDefault();
-  e.stopPropagation();
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      showToast("Proxy copied!", "success");
-      return;
-    }
-    const el = document.createElement("textarea");
-    el.value = text;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
-    showToast("Proxy copied!", "success");
-  } catch (_err: unknown) {
-    showToast("Failed to copy", "error");
-  }
-}
-
-function renderProxyRow(p: FreeProxyRow): TemplateResult {
-  const isAlive = p.status === "alive";
-  const fullHost = p.port ? `${p.host}:${p.port}` : p.host;
-  const statusLabel = isAlive ? "ALIVE" : (p.status === "dead" ? "DEAD" : p.status.toUpperCase());
-  const statusClass = isAlive ? "alive on" : (p.status === "dead" ? "dead off" : "unknown");
-
-  let latencyText = html`—`;
-  const latencyNum = p.latency_ms ?? 0;
-  let latencyClass = "";
-  if (p.latency_ms !== null && p.latency_ms !== undefined) {
-    latencyText = html`${p.latency_ms} ms`;
-    if (p.latency_ms < 300) {
-      latencyClass = "latency-low"; // green
-    } else if (p.latency_ms < 800) {
-      latencyClass = "latency-medium"; // amber
-    } else {
-      latencyClass = "latency-high"; // red
-    }
-  }
-
-  const country = p.country_code || "XX";
-  const lastVal = formatTimeAgo(p.last_validated);
-
-  return html`
-    <tr class="proxy-card-row ${isAlive ? 'alive' : 'dead'}">
-      <!-- Desktop Table Cells -->
-      <td class="col-proxy-host" data-label="Host"><strong>${p.host}</strong></td>
-      <td class="col-proxy-port" data-label="Port"><code class="proxy-port-code">${p.port}</code></td>
-      <td class="col-proxy-protocol" data-label="Type"><span class="chip chip-protocol">${p.type.toUpperCase()}</span></td>
-      <td class="col-proxy-source" data-label="Source"><span class="badge badge-source">${p.source}</span></td>
-      <td class="col-proxy-status" data-label="Status">
-        <span class="status-pill ${statusClass}">
-          <span class="status-dot"></span>
-          ${statusLabel}
-        </span>
-      </td>
-      <td class="col-proxy-country" data-label="Country"><code class="proxy-country-code">${country}</code></td>
-      <td class="col-proxy-latency ${latencyClass}" data-label="Latency">${latencyText}</td>
-      <td class="col-proxy-validated" data-label="Checked"><small class="proxy-time-text">${lastVal}</small></td>
-      <td class="col-proxy-actions" data-label="Actions">
-        <div class="proxy-actions-wrap">
-          <button class="small" @click=${() => void testProxy(p.id)}>${icons.flask()} ${t("common.retry")}</button>
-          <button class="small danger" @click=${() => void deleteProxy(p.id)}>${icons.trash()} ${t("common.delete")}</button>
-        </div>
-      </td>
-
-      <!-- Mobile Card Structure -->
-      <td class="mobile-proxy-card-cell">
-        <!-- Línea 1: Host:Port + Protocolo + País + Status -->
-        <div class="p-card-line-1">
-          <div class="p-card-host-group">
-            <span 
-              class="p-card-host" 
-              title="Click to copy host:port"
-              @click=${(e: Event) => onCopyProxy(fullHost, e)}
-            >
-              ${fullHost}
-            </span>
-            <span class="p-card-chip">${p.type.toUpperCase()}</span>
-            <span class="p-card-country">${country}</span>
-          </div>
-          <span class="p-card-status ${isAlive ? 'alive' : 'dead'}">
-            ${statusLabel}
-          </span>
-        </div>
-
-        <!-- Línea 2: Latencia + Fuente + Antigüedad + Botones -->
-        <div class="p-card-line-2">
-          <div class="p-card-metrics">
-            <span class="p-card-latency ${latencyNum > 1000 ? 'high' : ''}">${p.latency_ms !== null && p.latency_ms !== undefined ? `${p.latency_ms} ms` : '—'}</span>
-            <span>·</span>
-            <span class="p-card-source" title="${p.source}">${p.source}</span>
-            <span>·</span>
-            <span class="p-card-time">${lastVal}</span>
-          </div>
-          <div class="p-card-actions">
-            <button @click=${() => void testProxy(p.id)}>🔄 Retry</button>
-            <button class="danger" @click=${() => void deleteProxy(p.id)} title="Delete">✕</button>
-          </div>
-        </div>
-      </td>
-    </tr>
-  `;
+  return t("proxies.list.time.days", { count: diffDays });
 }
 
 function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateResult {
@@ -252,7 +146,7 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
                 requestUpdate();
               }
             }}
-            placeholder="Proxy test URL..."
+            placeholder=${t("proxies.list.test_url_placeholder")}
             style="width: 100%; max-width: 320px; min-width: 0; padding: 0.35rem 0.5rem; border-radius: var(--radius-sm); border: var(--border-w) var(--border-style) var(--color-border);"
           />
           ${isSavingTestUrl ? html`<span class="spinner" style="width: 14px; height: 14px;"></span>` : ""}
@@ -291,7 +185,7 @@ function renderKpisDashboard(total: number, alive: number, dead: number, avgLate
       </div>
       <div class="kpi-card kpi-latency">
         <div class="kpi-title">${t("proxies.kpi.avg_latency")}</div>
-        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>ms</small>` : "—"}</div>
+        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>${t("proxies.list.avg_latency_unit")}</small>` : "—"}</div>
       </div>
     </div>
   `;
@@ -329,45 +223,105 @@ function renderFilterBar(search: string, protocol: string, source: string, statu
 }
 
 function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: number, hasPrevPage: boolean, hasNextPage: boolean): TemplateResult {
+  if (error) {
+    return html`<div class="banner banner-error">${error}</div>`;
+  }
+  if (proxies.length === 0) {
+    return html`<p class="empty">${t("common.empty")}</p>`;
+  }
+
+  const columns: ResponsiveColumn<FreeProxyRow>[] = [
+    {
+      key: "host",
+      label: t("proxies.table.col_host"),
+      render: (p) => html`<strong>${p.host}</strong>`,
+    },
+    {
+      key: "port",
+      label: t("proxies.table.col_port"),
+      render: (p) => html`<code class="proxy-port-code">${p.port}</code>`,
+    },
+    {
+      key: "type",
+      label: t("proxies.table.col_type"),
+      render: (p) => html`<span class="chip chip-protocol">${p.type.toUpperCase()}</span>`,
+    },
+    {
+      key: "source",
+      label: t("proxies.table.col_source"),
+      render: (p) => html`<span class="badge badge-source">${p.source}</span>`,
+    },
+    {
+      key: "status",
+      label: t("proxies.table.col_status"),
+      render: (p) => {
+        const isAlive = p.status === "alive";
+        const isDead = p.status === "dead";
+        const statusLabel = isAlive
+          ? t("proxies.list.status.alive")
+          : (isDead ? t("proxies.list.status.dead") : p.status.toUpperCase());
+        const statusClass = isAlive ? "alive on" : (isDead ? "dead off" : "unknown");
+        return html`
+          <span class=${"status-pill " + statusClass}>
+            <span class="status-dot"></span>
+            ${statusLabel}
+          </span>
+        `;
+      },
+    },
+    {
+      key: "country",
+      label: t("proxies.table.col_country"),
+      render: (p) => html`<code class="proxy-country-code">${p.country_code || "XX"}</code>`,
+    },
+    {
+      key: "latency",
+      label: t("proxies.table.col_latency"),
+      render: (p) => {
+        if (p.latency_ms == null) return html`—`;
+        let cls = "";
+        if (p.latency_ms < 300) cls = "latency-low";
+        else if (p.latency_ms < 800) cls = "latency-medium";
+        else cls = "latency-high";
+        return html`<span class=${cls}>${p.latency_ms} ${t("proxies.list.latency_unit")}</span>`;
+      },
+    },
+    {
+      key: "last_validated",
+      label: t("proxies.table.col_last_val"),
+      render: (p) => html`<small class="proxy-time-text">${formatTimeAgo(p.last_validated)}</small>`,
+    },
+    {
+      key: "actions",
+      label: t("proxies.list.col.actions"),
+      render: (p) => html`
+        <div class="proxy-actions-wrap">
+          <button class="small" @click=${() => void testProxy(p.id)}>${icons.flask()} ${t("common.retry")}</button>
+          <button class="small danger" @click=${() => void deleteProxy(p.id)}>${icons.trash()} ${t("common.delete")}</button>
+        </div>
+      `,
+    },
+  ];
+
   return html`
-    ${error
-      ? html`<div class="banner banner-error">${error}</div>`
-      : proxies.length === 0
-        ? html`<p class="empty">${t("common.empty")}</p>`
-        : html`
-          <div class="table-wrap">
-            <table class="proxies-table responsive-card-table">
-              <thead>
-                <tr>
-                  <th>${t("proxies.table.col_host")}</th>
-                  <th>${t("proxies.table.col_port")}</th>
-                  <th>${t("proxies.table.col_type")}</th>
-                  <th>${t("proxies.table.col_source")}</th>
-                  <th>${t("proxies.table.col_status")}</th>
-                  <th>${t("proxies.table.col_country")}</th>
-                  <th>${t("proxies.table.col_latency")}</th>
-                  <th>${t("proxies.table.col_last_val")}</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${proxies.map(renderProxyRow)}
-              </tbody>
-            </table>
-          </div>
-          <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
-            <span>Page ${page}</span>
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>
-                ← Previous
-              </button>
-              <button class="secondary small" ?disabled=${!hasNextPage} @click=${() => { if (hasNextPage) { currentPage++; fetchFilteredProxies(); } }}>
-                Next →
-              </button>
-            </div>
-          </div>
-        `
-    }
+    ${renderResponsiveCardTable<FreeProxyRow>({
+      columns,
+      rows: proxies,
+      rowKey: (p) => p.id,
+      rowClass: (p) => p.status === "alive" ? "alive" : (p.status === "dead" ? "dead" : "unknown"),
+      className: "proxies-table",
+    })}
+    <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
+      <span>${t("proxies.list.pagination.page", { page })}</span>
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>
+          ${t("proxies.list.pagination.previous")}
+        </button>
+        <button class="secondary small" ?disabled=${!hasNextPage} @click=${() => { if (hasNextPage) { currentPage++; fetchFilteredProxies(); } }}>
+          ${t("proxies.list.pagination.next")}
+        </button>
+      </div>
+    </div>
   `;
 }
 
@@ -390,7 +344,7 @@ function renderProxies(): TemplateResult {
   const uniqueSources = summary.sources || [];
   const uniqueProtocols = summary.protocols || [];
 
-  const syncBtnLabel = isSyncing ? "Syncing..." : t("proxies.btn.sync");
+  const syncBtnLabel = isSyncing ? t("proxies.list.btn.sync_progress") : t("proxies.btn.sync");
   const hasPrevPage = currentPage > 1;
   const hasNextPage = proxies.length === 50;
 

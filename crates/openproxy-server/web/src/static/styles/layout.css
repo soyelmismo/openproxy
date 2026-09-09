@@ -439,7 +439,7 @@ section.card {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   /* Tighter main padding for small mobile. */
   main { padding: var(--space-3) var(--space-2); }
 

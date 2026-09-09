@@ -284,11 +284,29 @@ class LiveLogsStore {
       if (!a.terminal) oldInflight.add(key);
     }
 
-    // Add/update server-authoritative inflight attempts
+    // Add/update server-authoritative inflight attempts. When the client
+    // already has a DB-anchored terminal entry for a key (broadcast lag),
+    // preserve its terminal fields; only overwrite the live phase fields.
     const serverKeys = new Set<string>();
     for (const raw of sync.attempts) {
       const key = raw.attemptKey || "";
       serverKeys.add(key);
+
+      const existing = this.attemptsByKey.get(key);
+      if (existing && existing.rowId != null) {
+        existing.stage = (raw.stage || "started") as StageName;
+        existing.stageSeq = raw.stageSeq || 0;
+        existing.stageRank = raw.stageRank || 0;
+        existing.updatedAtMs = raw.updatedAtMs || 0;
+        existing.startedAtMs = raw.startedAtMs || existing.startedAtMs;
+        existing.elapsedMsAtEvent = raw.elapsedMsAtEvent || 0;
+        if (raw.connectMs != null) existing.connectMs = raw.connectMs;
+        if (raw.ttftMs != null) existing.ttftMs = raw.ttftMs;
+        if (raw.statusCode != null) existing.statusCode = raw.statusCode;
+        if (raw.error != null) existing.error = raw.error;
+        if (raw.endpointKind != null) existing.endpointKind = raw.endpointKind;
+        continue;
+      }
 
       const a: AttemptState = {
         attemptKey: key,
@@ -583,7 +601,8 @@ class LiveLogsStore {
 
     if (e["type"] === "pong") {
       const st = e["server_time"];
-      const t = typeof st === "string" ? Date.parse(st) : (Number(st) || Date.now());
+      let t = typeof st === "string" ? Date.parse(st) : Number(st);
+      if (!Number.isFinite(t)) t = Date.now();
       return { type: "pong", server_time: t };
     }
 

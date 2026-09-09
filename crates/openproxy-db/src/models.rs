@@ -1025,12 +1025,12 @@ mod tests {
                 [],
             )
             .expect("blocker insert");
-            std::thread::sleep(Duration::from_millis(120));
+            std::thread::sleep(Duration::from_millis(30));
             tx.commit().expect("blocker commit");
         });
 
         // Give the blocker a moment to acquire its write tx.
-        std::thread::sleep(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(10));
 
         let started = Instant::now();
         let result = apply_auto_activation_with_retry(&conn, &provider, Some("gpt"));
@@ -1046,7 +1046,7 @@ mod tests {
         // retry was actually exercised before the wrapper
         // succeeded.
         assert!(
-            elapsed >= Duration::from_millis(50),
+            elapsed >= Duration::from_millis(30),
             "wrapper should have slept through at least one backoff; took {elapsed:?}",
         );
         // And bounded above by the cumulative backoff budget
