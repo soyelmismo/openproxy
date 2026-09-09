@@ -34,6 +34,7 @@ tower-service = "0.3"
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 sha2 = { workspace = true }
+rand = { workspace = true }
 
 hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }

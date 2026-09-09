@@ -1558,6 +1558,7 @@ dependencies = [
  "itoa",
  "openproxy-types",
  "parking_lot",
+ "rand 0.10.2",
  "regex",
  "rustls",
  "rustls-pki-types",
