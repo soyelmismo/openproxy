@@ -2463,9 +2463,9 @@ dependencies = [
 
 [[package]]
 name = "tdigest"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9d17c9f6b58eac6e0ed8616dabcc58cff483eabd432debee8410ede5329fbec"
+checksum = "179226d1b623a96586a858998526b941283f433f0b2b6f259233f5fde3ef99d4"
 dependencies = [
  "serde",
 ]
