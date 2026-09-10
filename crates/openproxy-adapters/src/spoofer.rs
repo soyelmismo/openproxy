@@ -104,8 +104,7 @@ pub const OPENCODE_SPOOFING_HEADERS: &[(&str, &str)] = &[
 pub struct OpenCodeSpoofer;
 
 /// Base62 alphabet used to generate opencode session/request IDs.
-const OPENCODE_B62: &[u8; 62] =
-    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const OPENCODE_B62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /// Length of the random suffix after the prefix (`ses_` / `msg_`).
 const OPENCODE_ID_SUFFIX_LEN: usize = 26;
@@ -274,12 +273,13 @@ mod tests {
     }
 
     fn assert_opencode_id(prefix: &str, id: &str) {
-        assert!(
-            id.starts_with(prefix),
-            "expected prefix {prefix}, got {id}"
-        );
+        assert!(id.starts_with(prefix), "expected prefix {prefix}, got {id}");
         let suffix = &id[prefix.len()..];
-        assert_eq!(suffix.len(), OPENCODE_ID_SUFFIX_LEN, "id suffix length mismatch");
+        assert_eq!(
+            suffix.len(),
+            OPENCODE_ID_SUFFIX_LEN,
+            "id suffix length mismatch"
+        );
         assert!(
             suffix.chars().all(|c| c.is_ascii_alphanumeric()),
             "id suffix must be base62 alphanumeric: {id}"
@@ -387,6 +387,25 @@ mod tests {
                 .any(|(k, v)| k == "x-client-name" && v == "antigravity")
         );
         assert!(!headers.iter().any(|(k, _)| k == "x-goog-user-project"));
+    }
+
+    #[test]
+    fn test_antigravity_spoofer_apply_to_request() {
+        let spoofer = AntigravitySpoofer::with_project("project-xyz");
+        let mut req = UpstreamRequest::get("https://dummy.url");
+        spoofer.apply_to_request(&mut req);
+
+        assert_eq!(
+            req.headers.get("x-client-name").unwrap(),
+            HeaderValue::from_static("antigravity")
+        );
+        assert_eq!(
+            req.headers.get("x-goog-user-project").unwrap(),
+            HeaderValue::from_static("project-xyz")
+        );
+        assert!(req.headers.contains_key("x-client-version"));
+        assert!(req.headers.contains_key("x-machine-id"));
+        assert!(req.headers.contains_key("x-vscode-sessionid"));
     }
 
     #[test]

@@ -144,7 +144,7 @@ test.describe('Combo target reorder', () => {
       // wipes this window property, so the post-reorder assertions
       // below double as a "no reload happened" proof.
       await page.evaluate(() => {
-        (window as unknown as Record<string, unknown>).__e2eNoReload = true;
+        (window as unknown as Record<string, unknown>)['__e2eNoReload'] = true;
       });
 
       const rowA = page.locator(`tr.combo-target-card-row[data-drag-id="${idA}"]`);
@@ -165,7 +165,7 @@ test.describe('Combo target reorder', () => {
         [idA, '2'],
         [idC, '3'],
       ]);
-      expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__e2eNoReload)).toBe(true);
+      expect(await page.evaluate(() => (window as unknown as Record<string, unknown>)['__e2eNoReload'])).toBe(true);
 
       // ---- Assertion (DB): GET targets returns priority_order consistent
       //      with the new visual order (B=1, A=2, C=3). ----
