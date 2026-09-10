@@ -426,9 +426,7 @@ async fn resolve_test_credentials(
         let master_key = std::sync::Arc::clone(s.master_key());
         tokio::task::spawn_blocking(move || -> Option<_> {
             let r = pool.try_reader_for(std::time::Duration::from_secs(5))?;
-            core_accounts::get(&r, aid, &master_key)
-                .ok()
-                .flatten()
+            core_accounts::get(&r, aid, &master_key).ok().flatten()
         })
         .await
         .ok()
@@ -939,10 +937,10 @@ pub(crate) async fn run_test_for_model(
         let status_i32 = i32::from(status);
         let pool = std::sync::Arc::clone(s.db_pool());
         let set_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let w = pool.try_writer_for(std::time::Duration::from_secs(5))
+            let w = pool
+                .try_writer_for(std::time::Duration::from_secs(5))
                 .ok_or_else(|| "writer lock timeout".to_string())?;
-            core_models::set_test_status(&w, row_id, status_i32)
-                .map_err(|e| e.to_string())
+            core_models::set_test_status(&w, row_id, status_i32).map_err(|e| e.to_string())
         })
         .await
         .unwrap_or_else(|e| Err(format!("spawn failed: {e}")));

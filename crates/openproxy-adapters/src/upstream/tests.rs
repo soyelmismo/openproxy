@@ -1311,9 +1311,7 @@ pub mod tests_helper {
             .get(http::header::USER_AGENT)
             .expect("user-agent present");
         assert!(
-            ua.to_str()
-                .expect("valid ascii")
-                .starts_with("openproxy/"),
+            ua.to_str().expect("valid ascii").starts_with("openproxy/"),
             "expected User-Agent to start with openproxy/, got {ua:?}"
         );
     }

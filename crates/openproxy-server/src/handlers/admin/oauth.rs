@@ -77,11 +77,11 @@ async fn resolve_or_create_oauth_account(
     let provider = provider.to_string();
     let master_key = std::sync::Arc::clone(s.master_key());
     tokio::task::spawn_blocking(move || {
-        let w = pool.try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
+        let w = pool
+            .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| ApiError(CoreError::Internal("writer lock timeout".into())))?;
         let provider_id = ProviderId::new(&provider);
-        core_accounts::create(&w, &provider_id, None, &master_key, None, 10, None)
-            .map_err(ApiError)
+        core_accounts::create(&w, &provider_id, None, &master_key, None, 10, None).map_err(ApiError)
     })
     .await
     .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
@@ -257,7 +257,8 @@ async fn validate_active_ticket(s: &AppState, device_code: &str) -> Result<(), A
     let pool = std::sync::Arc::clone(s.db_pool());
     let device_code = device_code.to_string();
     tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        let r = pool.try_reader_for(std::time::Duration::from_secs(5))
+        let r = pool
+            .try_reader_for(std::time::Duration::from_secs(5))
             .ok_or_else(|| ApiError(CoreError::Internal("reader lock timeout".into())))?;
         match openproxy_core::oauth::tickets::lookup_active(&r, &device_code)? {
             openproxy_core::oauth::tickets::TicketStatus::Active(_) => Ok(()),

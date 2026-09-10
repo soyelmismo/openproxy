@@ -80,7 +80,9 @@ async fn validate_custom_proxy_input(body: &CreateCustomProxyInput) -> Result<()
             "host and port are required".into(),
         )));
     }
-    if let Ok(ip) = host_str.parse::<std::net::IpAddr>() && is_private_or_reserved(&ip) {
+    if let Ok(ip) = host_str.parse::<std::net::IpAddr>()
+        && is_private_or_reserved(&ip)
+    {
         return Err(ApiError(CoreError::Validation(format!(
             "host '{host_str}' resolves to a private/reserved IP and is not allowed"
         ))));

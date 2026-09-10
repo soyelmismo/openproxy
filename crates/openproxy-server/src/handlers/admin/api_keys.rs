@@ -70,29 +70,21 @@ pub async fn update_api_key(
     // present + array = set to that array.
     let allowed_models_owned =
         extract_tristate_array(&body, "allowed_models", |x| x.as_str().map(String::from));
-    let allowed_models_slice = allowed_models_owned
-        .as_ref()
-        .map(|v| v.as_slice());
+    let allowed_models_slice = allowed_models_owned.as_ref().map(|v| v.as_slice());
 
     let allowed_combos_owned =
         extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
-    let allowed_combos_slice = allowed_combos_owned
-        .as_ref()
-        .map(|v| v.as_slice());
+    let allowed_combos_slice = allowed_combos_owned.as_ref().map(|v| v.as_slice());
 
     let blacklisted_providers_owned = extract_tristate_array(&body, "blacklisted_providers", |x| {
         x.as_str().map(String::from)
     });
-    let blacklisted_providers_slice = blacklisted_providers_owned
-        .as_ref()
-        .map(|v| v.as_slice());
+    let blacklisted_providers_slice = blacklisted_providers_owned.as_ref().map(|v| v.as_slice());
 
     let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
         x.as_str().map(String::from)
     });
-    let blacklisted_models_slice = blacklisted_models_owned
-        .as_ref()
-        .map(|v| v.as_slice());
+    let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|v| v.as_slice());
 
     let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
@@ -103,9 +95,7 @@ pub async fn update_api_key(
             None => UpdateField::Reset,
         },
     };
-    let expires_slice = expires_field
-        .as_ref()
-        .map(|s| s.as_str());
+    let expires_slice = expires_field.as_ref().map(|s| s.as_str());
 
     s.services().api_keys.update(
         ApiKeyId(id),

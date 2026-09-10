@@ -268,10 +268,7 @@ fn parse_nullable_str<'a>(
     }
 }
 
-fn parse_nullable_u64(
-    body: &serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<u64>, ApiError> {
+fn parse_nullable_u64(body: &serde_json::Value, field: &str) -> Result<UpdateField<u64>, ApiError> {
     match body.get(field) {
         None => Ok(UpdateField::Ignore),
         Some(v) if v.is_null() => Ok(UpdateField::Reset),
@@ -284,10 +281,7 @@ fn parse_nullable_u64(
     }
 }
 
-fn parse_nullable_i64(
-    body: &serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<i64>, ApiError> {
+fn parse_nullable_i64(body: &serde_json::Value, field: &str) -> Result<UpdateField<i64>, ApiError> {
     match body.get(field) {
         None => Ok(UpdateField::Ignore),
         Some(v) if v.is_null() => Ok(UpdateField::Reset),
@@ -300,10 +294,7 @@ fn parse_nullable_i64(
     }
 }
 
-fn parse_nullable_f64(
-    body: &serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<f64>, ApiError> {
+fn parse_nullable_f64(body: &serde_json::Value, field: &str) -> Result<UpdateField<f64>, ApiError> {
     match body.get(field) {
         None => Ok(UpdateField::Ignore),
         Some(v) if v.is_null() => Ok(UpdateField::Reset),
@@ -483,8 +474,7 @@ fn parse_combo_target_updates(
     let cooldown_mode = parse_nullable_str(body, "cooldown_mode")?;
     let cooldown_base_secs = parse_nullable_u64(body, "cooldown_base_secs")?;
     let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
-    let cooldown_factor =
-        parse_nullable_u64(body, "cooldown_factor")?.map(|f| f as u32);
+    let cooldown_factor = parse_nullable_u64(body, "cooldown_factor")?.map(|f| f as u32);
 
     let updates = ComboTargetUpdates {
         priority_order,

@@ -668,7 +668,8 @@ pub async fn resolve_oauth_token(
 
     // 1. Decrypt current access token.
     let access_token = tokio::task::spawn_blocking(move || {
-        let conn = pool_clone.try_reader_for(std::time::Duration::from_secs(5))
+        let conn = pool_clone
+            .try_reader_for(std::time::Duration::from_secs(5))
             .ok_or_else(|| CoreError::Internal("reader lock timeout".into()))?;
         decrypt_access_token(&conn, account_id, &master_key_clone)
     })
@@ -684,7 +685,8 @@ pub async fn resolve_oauth_token(
     let pool_clone2 = db_pool.clone();
     let master_key_clone2 = master_key.clone();
     let refresh_token = tokio::task::spawn_blocking(move || {
-        let conn = pool_clone2.try_reader_for(std::time::Duration::from_secs(5))
+        let conn = pool_clone2
+            .try_reader_for(std::time::Duration::from_secs(5))
             .ok_or_else(|| CoreError::Internal("reader lock timeout".into()))?;
         decrypt_refresh_token(&conn, account_id, &master_key_clone2)
     })

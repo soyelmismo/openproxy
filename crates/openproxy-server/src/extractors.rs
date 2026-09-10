@@ -61,10 +61,7 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request_parts(
-        _parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let conn_arc = app_state.db_pool().writer_arc();
         let guard = tokio::task::spawn_blocking(move || {

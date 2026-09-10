@@ -107,7 +107,9 @@ impl MasterKey {
         }
 
         // Fall back to previous key (rotation).
-        if let Some(prev) = &self.previous && let Some(res) = try_decrypt(prev, &nonce, ct) {
+        if let Some(prev) = &self.previous
+            && let Some(res) = try_decrypt(prev, &nonce, ct)
+        {
             tracing::debug!("decrypted with previous master key (rotation fallback)");
             return res;
         }

@@ -242,7 +242,9 @@ fn verify_combo_authorization(
         return Ok(());
     };
 
-    if let Some(auth) = auth && !auth.is_combo_allowed(combo_id.0) {
+    if let Some(auth) = auth
+        && !auth.is_combo_allowed(combo_id.0)
+    {
         return Err(ApiError(CoreError::Auth(
             "combo not allowed for this key".into(),
         )));
@@ -258,7 +260,9 @@ pub(crate) fn authenticate_and_authorize_model(
 ) -> Result<Option<ApiKeyId>, ApiError> {
     let auth_result = authenticate(state, headers)?;
 
-    if let Some(token) = &auth_result && !token.is_model_allowed(model_name, None) {
+    if let Some(token) = &auth_result
+        && !token.is_model_allowed(model_name, None)
+    {
         return Err(ApiError(CoreError::Auth(format!(
             "model '{model_name}' not allowed or blacklisted for this key"
         ))));
@@ -323,7 +327,9 @@ fn prune_unfulfilled_tool_calls(messages: &mut [openproxy_types::OpenAIMessage])
     let mut remainder = messages;
     while let Some((msg, tail)) = remainder.split_first_mut() {
         remainder = tail;
-        if msg.role == "assistant" && let Some(calls) = &mut msg.tool_calls {
+        if msg.role == "assistant"
+            && let Some(calls) = &mut msg.tool_calls
+        {
             calls.retain(|call| is_tool_call_fulfilled(call, remainder));
             if calls.is_empty() {
                 msg.tool_calls = None;

@@ -215,17 +215,23 @@ pub fn list_proxies(
     let mut sql = "SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, username, password, priority, created_at, updated_at FROM free_proxies WHERE 1=1".to_string();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    if let Some(src) = source && !src.trim().is_empty() {
+    if let Some(src) = source
+        && !src.trim().is_empty()
+    {
         sql.push_str(" AND source = ?");
         params.push(Box::new(src.to_string()));
     }
 
-    if let Some(st) = status && !st.trim().is_empty() {
+    if let Some(st) = status
+        && !st.trim().is_empty()
+    {
         sql.push_str(" AND status = ?");
         params.push(Box::new(st.to_string()));
     }
 
-    if let Some(proto) = protocol && !proto.trim().is_empty() {
+    if let Some(proto) = protocol
+        && !proto.trim().is_empty()
+    {
         sql.push_str(" AND type = ?");
         params.push(Box::new(proto.to_string()));
     }

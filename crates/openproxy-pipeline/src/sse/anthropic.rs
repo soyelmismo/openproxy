@@ -189,14 +189,8 @@ fn build_anthropic_message_start_chunk(
     // and exposes them under `prompt_tokens_details.cached_tokens` so the
     // dashboard can render the cache hit rate.
     let usage = data.get("message").and_then(|m| m.get("usage")).map(|u| {
-        let input_tokens = u
-            .get("input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let output_tokens = u
-            .get("output_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let input_tokens = u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+        let output_tokens = u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
         let cache_read = u
             .get("cache_read_input_tokens")
             .and_then(Value::as_u64)
@@ -205,7 +199,9 @@ fn build_anthropic_message_start_chunk(
             .get("cache_creation_input_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let prompt_total = input_tokens.saturating_add(cache_read).saturating_add(cache_creation);
+        let prompt_total = input_tokens
+            .saturating_add(cache_read)
+            .saturating_add(cache_creation);
         let total = prompt_total.saturating_add(output_tokens);
         OpenAIUsage {
             prompt_tokens: u32::try_from(prompt_total).unwrap_or(u32::MAX),
@@ -330,9 +326,7 @@ fn translate_anthropic_message_delta(
 
     let usage = {
         let usage_block = data.get("usage");
-        let input_present = usage_block
-            .and_then(|u| u.get("input_tokens"))
-            .is_some();
+        let input_present = usage_block.and_then(|u| u.get("input_tokens")).is_some();
         let output_tokens = usage_block
             .and_then(|u| u.get("output_tokens"))
             .and_then(Value::as_u64)
@@ -928,10 +922,14 @@ mod tests {
                 }
             }
         });
-        let chunk = build_anthropic_message_start_chunk("chunk-1", 1234567890, "claude-test", &data);
+        let chunk =
+            build_anthropic_message_start_chunk("chunk-1", 1234567890, "claude-test", &data);
         assert!(!chunk.done);
         let usage = chunk.usage.expect("message_start must carry usage");
-        assert_eq!(usage.prompt_tokens, 622, "input + cache_read + cache_creation = 472 + 100 + 50");
+        assert_eq!(
+            usage.prompt_tokens, 622,
+            "input + cache_read + cache_creation = 472 + 100 + 50"
+        );
         assert_eq!(usage.completion_tokens, 2);
         assert_eq!(usage.total_tokens, 624);
         let details = usage.prompt_tokens_details.expect("cache details present");
@@ -946,7 +944,8 @@ mod tests {
             "type": "message_start",
             "message": {"id": "msg_01", "role": "assistant", "content": []}
         });
-        let chunk = build_anthropic_message_start_chunk("chunk-1", 1234567890, "claude-test", &data);
+        let chunk =
+            build_anthropic_message_start_chunk("chunk-1", 1234567890, "claude-test", &data);
         assert!(chunk.usage.is_none());
     }
 
@@ -966,7 +965,10 @@ mod tests {
         let chunk = translate_anthropic_message_delta(&data, "chunk-1", 1234567890, "claude-test");
         assert!(chunk.done);
         let usage = chunk.usage.expect("classic message_delta must carry usage");
-        assert_eq!(usage.prompt_tokens, 0, "sentinel: caller must merge, not overwrite");
+        assert_eq!(
+            usage.prompt_tokens, 0,
+            "sentinel: caller must merge, not overwrite"
+        );
         assert_eq!(usage.completion_tokens, 89);
         assert_eq!(usage.total_tokens, 0);
         assert!(usage.prompt_tokens_details.is_none());
@@ -986,7 +988,9 @@ mod tests {
             }
         });
         let chunk = translate_anthropic_message_delta(&data, "chunk-1", 1234567890, "claude-test");
-        let usage = chunk.usage.expect("message_delta with input_tokens must carry usage");
+        let usage = chunk
+            .usage
+            .expect("message_delta with input_tokens must carry usage");
         assert_eq!(usage.prompt_tokens, 622, "input 450 + cache_read 172");
         assert_eq!(usage.completion_tokens, 89);
         assert_eq!(usage.total_tokens, 711);
@@ -1032,7 +1036,10 @@ mod tests {
         assert_eq!(merged.completion_tokens, 89, "updated from message_delta");
         assert_eq!(merged.total_tokens, 624, "preserved from message_start");
         assert_eq!(
-            merged.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            merged
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
             Some(100),
             "details preserved from message_start"
         );
@@ -1047,7 +1054,9 @@ mod tests {
             prompt_tokens: 62,
             completion_tokens: 2,
             total_tokens: 64,
-            prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: None }),
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: None,
+            }),
         };
         let new = OpenAIUsage {
             prompt_tokens: 622,
@@ -1061,7 +1070,13 @@ mod tests {
         assert_eq!(merged.prompt_tokens, 622);
         assert_eq!(merged.completion_tokens, 89);
         assert_eq!(merged.total_tokens, 711);
-        assert_eq!(merged.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens), Some(172));
+        assert_eq!(
+            merged
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(172)
+        );
     }
 
     // ---- H5 fix: Anthropic tool_use accumulator ----

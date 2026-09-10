@@ -441,29 +441,30 @@ async fn handle_client_subscribe(
 ) {
     let since_id = since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
     let pool = std::sync::Arc::clone(state.db_pool());
-    let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::spawn_blocking(move || {
-        let r = pool.try_reader_for(std::time::Duration::from_secs(5));
-        let Some(r) = r else {
-            tracing::error!("stream_usage_rows: subscribe reader lock timeout");
-            return Vec::new();
-        };
-        let rows = match core_usage::recent(&r, since_id, 100) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(error = %e, "stream_usage_rows: subscribe recent query failed");
-                Vec::new()
-            }
-        };
-        drop(r);
-        rows.into_iter()
-            .map(openproxy_types::usage::redact_for_broadcast)
-            .collect()
-    })
-    .await
-    .unwrap_or_else(|e| {
-        tracing::error!(error = %e, "stream_usage_rows: subscribe spawn_blocking failed");
-        Vec::new()
-    });
+    let rows: Vec<openproxy_types::usage::RecentUsageRow> =
+        tokio::task::spawn_blocking(move || {
+            let r = pool.try_reader_for(std::time::Duration::from_secs(5));
+            let Some(r) = r else {
+                tracing::error!("stream_usage_rows: subscribe reader lock timeout");
+                return Vec::new();
+            };
+            let rows = match core_usage::recent(&r, since_id, 100) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(error = %e, "stream_usage_rows: subscribe recent query failed");
+                    Vec::new()
+                }
+            };
+            drop(r);
+            rows.into_iter()
+                .map(openproxy_types::usage::redact_for_broadcast)
+                .collect()
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "stream_usage_rows: subscribe spawn_blocking failed");
+            Vec::new()
+        });
     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
         *last_known_id = (*last_known_id).max(mx);
     }
@@ -538,9 +539,7 @@ async fn fetch_initial_history_snapshot(state: &AppState) -> (i64, serde_json::V
     let rows = tokio::task::spawn_blocking(move || {
         let r = pool.try_reader_for(std::time::Duration::from_secs(5));
         let Some(r) = r else {
-            tracing::error!(
-                "stream_usage_rows: initial history reader lock timeout"
-            );
+            tracing::error!("stream_usage_rows: initial history reader lock timeout");
             return Vec::new();
         };
         match core_usage::recent_desc(&r, 100) {

@@ -1302,11 +1302,17 @@ mod tests {
         let list = list_accounts(&conn, Some(&ProviderId::new("anthropic")), &mk).expect("list");
         assert_eq!(list.len(), 2);
 
-        let a1 = list.iter().find(|a| a.id == created_ids[0]).expect("found a1");
+        let a1 = list
+            .iter()
+            .find(|a| a.id == created_ids[0])
+            .expect("found a1");
         assert_eq!(a1.label.as_deref(), Some("first-label"));
         assert_eq!(a1.priority, 50);
 
-        let a2 = list.iter().find(|a| a.id == created_ids[1]).expect("found a2");
+        let a2 = list
+            .iter()
+            .find(|a| a.id == created_ids[1])
+            .expect("found a2");
         assert_eq!(a2.priority, 100);
         assert!(a2.label.is_some());
     }

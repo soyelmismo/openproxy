@@ -963,7 +963,9 @@ impl<'de> Deserialize<'de> for UsageDetailRow {
 
 /// Map a rusqlite Row to `RecentUsageRow`. Reads columns sequentially from
 /// col_idx 0. Used by `recent()`, `recent_desc()`, and `row_for_broadcast_by_id()`.
-fn map_usage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<openproxy_types::usage::RecentUsageRow> {
+fn map_usage_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<openproxy_types::usage::RecentUsageRow> {
     let mut col_idx = 0;
     let id: i64 = row.get(col_idx)?;
     col_idx += 1;
@@ -1260,9 +1262,7 @@ pub fn row_for_broadcast_by_id(
         )
         .map_err(openproxy_db::error::map_db_error)?;
 
-    let row = stmt
-        .query_row(params![id], map_usage_row)
-        .map(Some);
+    let row = stmt.query_row(params![id], map_usage_row).map(Some);
 
     match row {
         Ok(r) => Ok(r),
