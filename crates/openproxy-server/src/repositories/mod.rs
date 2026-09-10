@@ -68,6 +68,11 @@ pub trait AccountRepository: Send + Sync {
         master_key: &db::MasterKey,
         input: openproxy_core::admin::CreateAccountInput,
     ) -> Result<AccountId, CoreError>;
+    fn bulk_create_accounts(
+        &self,
+        master_key: &db::MasterKey,
+        input: openproxy_core::admin::BulkCreateAccountsInput,
+    ) -> Result<Vec<AccountId>, CoreError>;
     fn delete_account(&self, id: AccountId) -> Result<(), CoreError>;
     fn set_account_health(
         &self,
@@ -156,6 +161,15 @@ impl AccountRepository for SqliteRepository {
     ) -> Result<AccountId, CoreError> {
         let w = self.writer();
         openproxy_core::admin::create_account(&w, master_key, input)
+    }
+
+    fn bulk_create_accounts(
+        &self,
+        master_key: &db::MasterKey,
+        input: openproxy_core::admin::BulkCreateAccountsInput,
+    ) -> Result<Vec<AccountId>, CoreError> {
+        let w = self.writer();
+        openproxy_core::admin::bulk_create_accounts(&w, master_key, input)
     }
 
     fn delete_account(&self, id: AccountId) -> Result<(), CoreError> {

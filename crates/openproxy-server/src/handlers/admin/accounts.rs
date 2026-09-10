@@ -22,6 +22,7 @@ pub struct AccountListQuery {
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/", axum::routing::get(list_accounts).post(create_account))
+        .route("/bulk", axum::routing::post(bulk_create_accounts))
         .route("/scan", axum::routing::post(scan_accounts))
         .route("/{id}", axum::routing::delete(delete_account))
         .route("/{id}/health", axum::routing::post(set_account_health))
@@ -65,6 +66,26 @@ pub async fn create_account(
     super::providers::spawn_background_provider_refresh(s, provider_id, Some(id.0));
 
     Ok(Json(serde_json::json!({ "id": id.0 })))
+}
+
+pub async fn bulk_create_accounts(
+    State(s): State<AppState>,
+    Json(input): Json<core_admin::BulkCreateAccountsInput>,
+) -> Result<Json<core_admin::BulkCreateAccountsResponse>, ApiError> {
+    let provider_id = input.provider_id.clone();
+    let ids = s
+        .services()
+        .accounts
+        .bulk_create(s.master_key().as_ref(), input)?;
+
+    if let Some(first_id) = ids.first() {
+        super::providers::spawn_background_provider_refresh(s, provider_id, Some(first_id.0));
+    }
+
+    Ok(Json(core_admin::BulkCreateAccountsResponse {
+        created: ids.len(),
+        ids,
+    }))
 }
 
 crate::admin_entity_action_handler! {

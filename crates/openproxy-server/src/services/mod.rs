@@ -77,6 +77,14 @@ impl AccountService {
         self.repo.create_account(master_key, input)
     }
 
+    pub fn bulk_create(
+        &self,
+        master_key: &db::MasterKey,
+        input: openproxy_core::admin::BulkCreateAccountsInput,
+    ) -> Result<Vec<AccountId>, CoreError> {
+        self.repo.bulk_create_accounts(master_key, input)
+    }
+
     pub fn delete(&self, id: AccountId) -> Result<(), CoreError> {
         self.repo.delete_account(id)
     }

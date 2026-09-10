@@ -336,6 +336,62 @@ pub fn create_account(
     )
 }
 
+/// Single item for bulk account creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkCreateAccountItem {
+    #[serde(alias = "secret")]
+    pub api_key: String,
+    pub label: Option<String>,
+    pub priority: Option<i32>,
+    pub extra_config_json: Option<String>,
+}
+
+/// Inputs for [`bulk_create_accounts`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkCreateAccountsInput {
+    pub provider_id: String,
+    pub items: Vec<BulkCreateAccountItem>,
+}
+
+/// Response returned by bulk account creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkCreateAccountsResponse {
+    pub created: usize,
+    pub ids: Vec<AccountId>,
+}
+
+/// Insert multiple accounts in batch.
+pub fn bulk_create_accounts(
+    conn: &Connection,
+    master_key: &MasterKey,
+    input: BulkCreateAccountsInput,
+) -> Result<Vec<AccountId>> {
+    let provider = ProviderId::new(input.provider_id);
+    let mut ids = Vec::with_capacity(input.items.len());
+    for item in input.items {
+        let trimmed = item.api_key.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let priority = item.priority.unwrap_or(100);
+        let effective_label = match item.label.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            _ => Some(openproxy_db::accounts::summarize_api_key(trimmed)),
+        };
+        let id = accounts::create(
+            conn,
+            &provider,
+            Some(trimmed),
+            master_key,
+            effective_label.as_deref(),
+            priority,
+            item.extra_config_json.as_deref(),
+        )?;
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
 /// List accounts, optionally filtered by provider.
 /// The `master_key` is required to decrypt `oauth_provider_specific`.
 pub fn list_accounts(
@@ -1189,6 +1245,70 @@ mod tests {
             Some("sk-another"),
             "auto-generated summarized label"
         );
+    }
+
+    #[test]
+    fn test_bulk_create_accounts() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        create_provider(
+            &conn,
+            CreateProviderInput {
+                rate_limit_scope: None,
+                id: "anthropic".into(),
+                name: "Anthropic".into(),
+                base_url: "https://api.anthropic.com/v1".into(),
+                auth_type: "bearer".into(),
+                format: "anthropic".into(),
+                extra_headers_json: None,
+            },
+        )
+        .expect("seed provider");
+
+        let mk = MasterKey::generate();
+        let items = vec![
+            BulkCreateAccountItem {
+                api_key: "sk-ant-key1-secret123456789".into(),
+                label: Some("first-label".into()),
+                priority: Some(50),
+                extra_config_json: None,
+            },
+            BulkCreateAccountItem {
+                api_key: "sk-ant-key2-secret987654321".into(),
+                label: None,
+                priority: None,
+                extra_config_json: None,
+            },
+            BulkCreateAccountItem {
+                api_key: "   ".into(), // Should be skipped
+                label: None,
+                priority: None,
+                extra_config_json: None,
+            },
+        ];
+
+        let created_ids = bulk_create_accounts(
+            &conn,
+            &mk,
+            BulkCreateAccountsInput {
+                provider_id: "anthropic".into(),
+                items,
+            },
+        )
+        .expect("bulk create");
+
+        assert_eq!(created_ids.len(), 2);
+        let list = list_accounts(&conn, Some(&ProviderId::new("anthropic")), &mk).expect("list");
+        assert_eq!(list.len(), 2);
+
+        let a1 = list.iter().find(|a| a.id == created_ids[0]).expect("found a1");
+        assert_eq!(a1.label.as_deref(), Some("first-label"));
+        assert_eq!(a1.priority, 50);
+
+        let a2 = list.iter().find(|a| a.id == created_ids[1]).expect("found a2");
+        assert_eq!(a2.priority, 100);
+        assert!(a2.label.is_some());
     }
 
     #[test]

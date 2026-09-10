@@ -663,6 +663,26 @@ export interface CreateAccountInput {
   extra_config_json: string | null;
 }
 
+/** Item for POST `/admin/accounts/bulk`. */
+export interface BulkCreateAccountItem {
+  api_key: string;
+  label?: string | null;
+  priority?: number | null;
+  extra_config_json?: string | null;
+}
+
+/** POST `/admin/accounts/bulk`. */
+export interface BulkCreateAccountsInput {
+  provider_id: string;
+  items: BulkCreateAccountItem[];
+}
+
+/** Response from POST `/admin/accounts/bulk`. */
+export interface BulkCreateAccountsResponse {
+  created: number;
+  ids: number[];
+}
+
 /** POST `/admin/combos`.
  *  @see crates/openproxy-core/src/admin.rs:451 */
 export interface CreateComboInput {

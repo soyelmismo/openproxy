@@ -46,8 +46,8 @@
 use openproxy_core::{
     accounts,
     admin::{
-        AddTargetInput, CreateAccountInput, CreateComboInput, CreateProviderInput,
-        UpdateAccountApiKeyInput,
+        AddTargetInput, BulkCreateAccountsInput, BulkCreateAccountsResponse, CreateAccountInput,
+        CreateComboInput, CreateProviderInput, UpdateAccountApiKeyInput,
     },
     analytics::{LatencyPercentiles, RaceStats},
     providers,
@@ -228,6 +228,15 @@ impl Client {
     ) -> Result<AccountId, ClientError> {
         let env: IdEnvelope<i64> = self.post_json_resp("/admin/accounts", &input).await?;
         Ok(AccountId::new(env.id))
+    }
+
+    /// `POST /admin/accounts/bulk`. Crea múltiples cuentas en lote.
+    pub async fn bulk_create_accounts(
+        &self,
+        input: BulkCreateAccountsInput,
+    ) -> Result<BulkCreateAccountsResponse, ClientError> {
+        let resp = self.post_json("/admin/accounts/bulk", &input).await?;
+        parse_json(resp).await
     }
 
     /// `PUT /admin/accounts/:id/api-key`. Encripta y guarda (o limpia)
