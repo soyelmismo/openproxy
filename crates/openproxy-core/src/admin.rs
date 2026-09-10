@@ -1176,7 +1176,7 @@ mod tests {
         )
         .expect("seed provider");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let plaintext = "sk-supersecret-DO-NOT-LEAK";
         let id = create_account(
             &conn,
@@ -1266,7 +1266,7 @@ mod tests {
         )
         .expect("seed provider");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let items = vec![
             BulkCreateAccountItem {
                 api_key: "sk-ant-key1-secret123456789".into(),

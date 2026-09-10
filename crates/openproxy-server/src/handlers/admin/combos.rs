@@ -6,6 +6,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use openproxy_types::UpdateField;
 
 use openproxy_core::admin as core_admin;
 
@@ -251,16 +252,15 @@ pub async fn list_valid_sub_combos(
     Ok(Json(list))
 }
 
-#[allow(clippy::option_option)]
 fn parse_nullable_str<'a>(
     body: &'a serde_json::Value,
     field: &str,
-) -> Result<Option<Option<&'a str>>, ApiError> {
+) -> Result<UpdateField<&'a str>, ApiError> {
     match body.get(field) {
-        None => Ok(None),
-        Some(v) if v.is_null() => Ok(Some(None)),
+        None => Ok(UpdateField::Ignore),
+        Some(v) if v.is_null() => Ok(UpdateField::Reset),
         Some(v) => match v.as_str() {
-            Some(s) => Ok(Some(Some(s))),
+            Some(s) => Ok(UpdateField::Set(s)),
             None => Err(ApiError(CoreError::Validation(format!(
                 "{field} must be a string or null, got {v}"
             )))),
@@ -268,16 +268,15 @@ fn parse_nullable_str<'a>(
     }
 }
 
-#[allow(clippy::option_option)]
 fn parse_nullable_u64(
     body: &serde_json::Value,
     field: &str,
-) -> Result<Option<Option<u64>>, ApiError> {
+) -> Result<UpdateField<u64>, ApiError> {
     match body.get(field) {
-        None => Ok(None),
-        Some(v) if v.is_null() => Ok(Some(None)),
+        None => Ok(UpdateField::Ignore),
+        Some(v) if v.is_null() => Ok(UpdateField::Reset),
         Some(v) => match v.as_u64() {
-            Some(n) => Ok(Some(Some(n))),
+            Some(n) => Ok(UpdateField::Set(n)),
             None => Err(ApiError(CoreError::Validation(format!(
                 "{field} must be a non-negative integer or null"
             )))),
@@ -285,16 +284,15 @@ fn parse_nullable_u64(
     }
 }
 
-#[allow(clippy::option_option)]
 fn parse_nullable_i64(
     body: &serde_json::Value,
     field: &str,
-) -> Result<Option<Option<i64>>, ApiError> {
+) -> Result<UpdateField<i64>, ApiError> {
     match body.get(field) {
-        None => Ok(None),
-        Some(v) if v.is_null() => Ok(Some(None)),
+        None => Ok(UpdateField::Ignore),
+        Some(v) if v.is_null() => Ok(UpdateField::Reset),
         Some(v) => match v.as_i64() {
-            Some(n) => Ok(Some(Some(n))),
+            Some(n) => Ok(UpdateField::Set(n)),
             None => Err(ApiError(CoreError::Validation(format!(
                 "{field} must be null or an integer"
             )))),
@@ -302,16 +300,15 @@ fn parse_nullable_i64(
     }
 }
 
-#[allow(clippy::option_option)]
 fn parse_nullable_f64(
     body: &serde_json::Value,
     field: &str,
-) -> Result<Option<Option<f64>>, ApiError> {
+) -> Result<UpdateField<f64>, ApiError> {
     match body.get(field) {
-        None => Ok(None),
-        Some(v) if v.is_null() => Ok(Some(None)),
+        None => Ok(UpdateField::Ignore),
+        Some(v) if v.is_null() => Ok(UpdateField::Reset),
         Some(v) => match v.as_f64() {
-            Some(n) => Ok(Some(Some(n))),
+            Some(n) => Ok(UpdateField::Set(n)),
             None => Err(ApiError(CoreError::Validation(format!(
                 "{field} must be a number in [0.0, 1.0] or null"
             )))),
@@ -324,17 +321,25 @@ fn apply_combo_cooldown_updates(
     id: ComboId,
     body: &serde_json::Value,
 ) -> Result<(), ApiError> {
-    if let Some(mode) = parse_nullable_str(body, "cooldown_mode")? {
-        core_combos::update_cooldown_mode(w, id, mode)?;
+    match parse_nullable_str(body, "cooldown_mode")? {
+        UpdateField::Set(v) => core_combos::update_cooldown_mode(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_cooldown_mode(w, id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(base) = parse_nullable_u64(body, "cooldown_base_secs")? {
-        core_combos::update_cooldown_base(w, id, base)?;
+    match parse_nullable_u64(body, "cooldown_base_secs")? {
+        UpdateField::Set(v) => core_combos::update_cooldown_base(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_cooldown_base(w, id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(max) = parse_nullable_u64(body, "cooldown_max_secs")? {
-        core_combos::update_cooldown_max(w, id, max)?;
+    match parse_nullable_u64(body, "cooldown_max_secs")? {
+        UpdateField::Set(v) => core_combos::update_cooldown_max(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_cooldown_max(w, id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(factor) = parse_nullable_u64(body, "cooldown_factor")? {
-        core_combos::update_cooldown_factor(w, id, factor.map(|f| f as u32))?;
+    match parse_nullable_u64(body, "cooldown_factor")? {
+        UpdateField::Set(v) => core_combos::update_cooldown_factor(w, id, Some(v as u32))?,
+        UpdateField::Reset => core_combos::update_cooldown_factor(w, id, None)?,
+        UpdateField::Ignore => {}
     }
     Ok(())
 }
@@ -360,17 +365,25 @@ fn apply_combo_general_updates(
         })?;
         core_combos::update_strategy(w, id, strategy)?;
     }
-    if let Some(cw) = parse_nullable_i64(body, "context_window")? {
-        core_combos::update_context_window(w, id, cw)?;
+    match parse_nullable_i64(body, "context_window")? {
+        UpdateField::Set(v) => core_combos::update_context_window(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_context_window(w, id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(mode) = parse_nullable_str(body, "priority_mode")? {
-        core_combos::update_priority_mode(w, id, mode)?;
+    match parse_nullable_str(body, "priority_mode")? {
+        UpdateField::Set(v) => core_combos::update_priority_mode(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_priority_mode(w, id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(rate) = parse_nullable_f64(body, "lkgp_exploration_rate")? {
-        core_combos::update_lkgp_settings(w, id, rate)?;
+    match parse_nullable_f64(body, "lkgp_exploration_rate")? {
+        UpdateField::Set(v) => core_combos::update_lkgp_settings(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_lkgp_settings(w, id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(window) = parse_nullable_u64(body, "selection_window_secs")? {
-        core_combos::update_selection_window(w, id, window)?;
+    match parse_nullable_u64(body, "selection_window_secs")? {
+        UpdateField::Set(v) => core_combos::update_selection_window(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_selection_window(w, id, None)?,
+        UpdateField::Ignore => {}
     }
     if let Some(v) = body.get("preventive_rate_limit")
         && let Some(enabled) = v.as_bool()
@@ -392,15 +405,14 @@ pub async fn update_combo(
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
-#[allow(clippy::option_option)]
 struct ComboTargetUpdates<'a> {
     priority_order: Option<i32>,
     weight: Option<i32>,
     active: Option<bool>,
-    cooldown_mode: Option<Option<&'a str>>,
-    cooldown_base_secs: Option<Option<u64>>,
-    cooldown_max_secs: Option<Option<u64>>,
-    cooldown_factor: Option<Option<u32>>,
+    cooldown_mode: UpdateField<&'a str>,
+    cooldown_base_secs: UpdateField<u64>,
+    cooldown_max_secs: UpdateField<u64>,
+    cooldown_factor: UpdateField<u32>,
 }
 
 impl ComboTargetUpdates<'_> {
@@ -408,10 +420,10 @@ impl ComboTargetUpdates<'_> {
         self.priority_order.is_none()
             && self.weight.is_none()
             && self.active.is_none()
-            && self.cooldown_mode.is_none()
-            && self.cooldown_base_secs.is_none()
-            && self.cooldown_max_secs.is_none()
-            && self.cooldown_factor.is_none()
+            && self.cooldown_mode.is_ignore()
+            && self.cooldown_base_secs.is_ignore()
+            && self.cooldown_max_secs.is_ignore()
+            && self.cooldown_factor.is_ignore()
     }
 }
 
@@ -472,7 +484,7 @@ fn parse_combo_target_updates(
     let cooldown_base_secs = parse_nullable_u64(body, "cooldown_base_secs")?;
     let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
     let cooldown_factor =
-        parse_nullable_u64(body, "cooldown_factor")?.map(|opt| opt.map(|f| f as u32));
+        parse_nullable_u64(body, "cooldown_factor")?.map(|f| f as u32);
 
     let updates = ComboTargetUpdates {
         priority_order,
@@ -506,17 +518,25 @@ fn apply_target_db_updates(
     if let Some(active_val) = updates.active {
         core_combos::update_target_active(w, target_id, active_val)?;
     }
-    if let Some(mode) = updates.cooldown_mode {
-        core_combos::update_target_cooldown_mode(w, target_id, mode)?;
+    match updates.cooldown_mode {
+        UpdateField::Set(v) => core_combos::update_target_cooldown_mode(w, target_id, Some(v))?,
+        UpdateField::Reset => core_combos::update_target_cooldown_mode(w, target_id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(base) = updates.cooldown_base_secs {
-        core_combos::update_target_cooldown_base(w, target_id, base)?;
+    match updates.cooldown_base_secs {
+        UpdateField::Set(v) => core_combos::update_target_cooldown_base(w, target_id, Some(v))?,
+        UpdateField::Reset => core_combos::update_target_cooldown_base(w, target_id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(max) = updates.cooldown_max_secs {
-        core_combos::update_target_cooldown_max(w, target_id, max)?;
+    match updates.cooldown_max_secs {
+        UpdateField::Set(v) => core_combos::update_target_cooldown_max(w, target_id, Some(v))?,
+        UpdateField::Reset => core_combos::update_target_cooldown_max(w, target_id, None)?,
+        UpdateField::Ignore => {}
     }
-    if let Some(factor) = updates.cooldown_factor {
-        core_combos::update_target_cooldown_factor(w, target_id, factor)?;
+    match updates.cooldown_factor {
+        UpdateField::Set(v) => core_combos::update_target_cooldown_factor(w, target_id, Some(v))?,
+        UpdateField::Reset => core_combos::update_target_cooldown_factor(w, target_id, None)?,
+        UpdateField::Ignore => {}
     }
     Ok(())
 }
@@ -591,19 +611,34 @@ mod tests {
         let obj = json!({ "valid": "text", "empty": null, "invalid": 123 });
         assert_eq!(
             parse_nullable_str(&obj, "valid").unwrap(),
-            Some(Some("text"))
+            UpdateField::Set("text")
         );
-        assert_eq!(parse_nullable_str(&obj, "empty").unwrap(), Some(None));
-        assert_eq!(parse_nullable_str(&obj, "missing").unwrap(), None);
+        assert_eq!(
+            parse_nullable_str(&obj, "empty").unwrap(),
+            UpdateField::Reset
+        );
+        assert_eq!(
+            parse_nullable_str(&obj, "missing").unwrap(),
+            UpdateField::Ignore
+        );
         assert!(parse_nullable_str(&obj, "invalid").is_err());
     }
 
     #[test]
     fn test_parse_nullable_u64() {
         let obj = json!({ "valid": 42, "empty": null, "invalid": "text", "negative": -1 });
-        assert_eq!(parse_nullable_u64(&obj, "valid").unwrap(), Some(Some(42)));
-        assert_eq!(parse_nullable_u64(&obj, "empty").unwrap(), Some(None));
-        assert_eq!(parse_nullable_u64(&obj, "missing").unwrap(), None);
+        assert_eq!(
+            parse_nullable_u64(&obj, "valid").unwrap(),
+            UpdateField::Set(42)
+        );
+        assert_eq!(
+            parse_nullable_u64(&obj, "empty").unwrap(),
+            UpdateField::Reset
+        );
+        assert_eq!(
+            parse_nullable_u64(&obj, "missing").unwrap(),
+            UpdateField::Ignore
+        );
         assert!(parse_nullable_u64(&obj, "invalid").is_err());
         assert!(parse_nullable_u64(&obj, "negative").is_err());
     }
@@ -611,18 +646,36 @@ mod tests {
     #[test]
     fn test_parse_nullable_i64() {
         let obj = json!({ "valid": -42, "empty": null, "invalid": "text" });
-        assert_eq!(parse_nullable_i64(&obj, "valid").unwrap(), Some(Some(-42)));
-        assert_eq!(parse_nullable_i64(&obj, "empty").unwrap(), Some(None));
-        assert_eq!(parse_nullable_i64(&obj, "missing").unwrap(), None);
+        assert_eq!(
+            parse_nullable_i64(&obj, "valid").unwrap(),
+            UpdateField::Set(-42)
+        );
+        assert_eq!(
+            parse_nullable_i64(&obj, "empty").unwrap(),
+            UpdateField::Reset
+        );
+        assert_eq!(
+            parse_nullable_i64(&obj, "missing").unwrap(),
+            UpdateField::Ignore
+        );
         assert!(parse_nullable_i64(&obj, "invalid").is_err());
     }
 
     #[test]
     fn test_parse_nullable_f64() {
         let obj = json!({ "valid": 0.5, "empty": null, "invalid": "text" });
-        assert_eq!(parse_nullable_f64(&obj, "valid").unwrap(), Some(Some(0.5)));
-        assert_eq!(parse_nullable_f64(&obj, "empty").unwrap(), Some(None));
-        assert_eq!(parse_nullable_f64(&obj, "missing").unwrap(), None);
+        assert_eq!(
+            parse_nullable_f64(&obj, "valid").unwrap(),
+            UpdateField::Set(0.5)
+        );
+        assert_eq!(
+            parse_nullable_f64(&obj, "empty").unwrap(),
+            UpdateField::Reset
+        );
+        assert_eq!(
+            parse_nullable_f64(&obj, "missing").unwrap(),
+            UpdateField::Ignore
+        );
         assert!(parse_nullable_f64(&obj, "invalid").is_err());
     }
 

@@ -130,9 +130,20 @@ macro_rules! admin_entity_action_handler {
             axum::extract::State($state): axum::extract::State<$crate::state::AppState>,
             axum::extract::Path($id): axum::extract::Path<$id_ty>,
         ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
-            let $w = $state.db_pool().writer();
-            $action;
-            Ok(axum::Json($resp))
+            let pool = std::sync::Arc::clone($state.db_pool());
+            let result: std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> =
+                tokio::task::spawn_blocking(move || {
+                    let $w = pool.try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT).ok_or_else(
+                        || $crate::error::ApiError(openproxy_types::CoreError::Internal("writer lock timeout".into())),
+                    )?;
+                    $action;
+                    Ok(axum::Json($resp))
+                })
+                .await
+                .map_err(|e| $crate::error::ApiError(openproxy_types::CoreError::Internal(
+                    format!("writer spawn failed: {e}"),
+                )))?;
+            result
         }
     };
 
@@ -184,8 +195,19 @@ macro_rules! admin_entity_action_handler {
             axum::extract::State($state): axum::extract::State<$crate::state::AppState>,
             axum::extract::Path($id): axum::extract::Path<$id_ty>,
         ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
-            let $w = $state.db_pool().writer();
-            $body
+            let pool = std::sync::Arc::clone($state.db_pool());
+            let result: std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> =
+                tokio::task::spawn_blocking(move || {
+                    let $w = pool.try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT).ok_or_else(
+                        || $crate::error::ApiError(openproxy_types::CoreError::Internal("writer lock timeout".into())),
+                    )?;
+                    $body
+                })
+                .await
+                .map_err(|e| $crate::error::ApiError(openproxy_types::CoreError::Internal(
+                    format!("writer spawn failed: {e}"),
+                )))?;
+            result
         }
     };
 

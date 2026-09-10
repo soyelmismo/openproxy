@@ -3,6 +3,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use openproxy_types::UpdateField;
 use std::sync::Arc;
 
 pub fn router() -> axum::Router<AppState> {
@@ -71,31 +72,27 @@ pub async fn update_api_key(
         extract_tristate_array(&body, "allowed_models", |x| x.as_str().map(String::from));
     let allowed_models_slice = allowed_models_owned
         .as_ref()
-        .map(|v| v.as_slice())
-        .into_nested_option();
+        .map(|v| v.as_slice());
 
     let allowed_combos_owned =
         extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
     let allowed_combos_slice = allowed_combos_owned
         .as_ref()
-        .map(|v| v.as_slice())
-        .into_nested_option();
+        .map(|v| v.as_slice());
 
     let blacklisted_providers_owned = extract_tristate_array(&body, "blacklisted_providers", |x| {
         x.as_str().map(String::from)
     });
     let blacklisted_providers_slice = blacklisted_providers_owned
         .as_ref()
-        .map(|v| v.as_slice())
-        .into_nested_option();
+        .map(|v| v.as_slice());
 
     let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
         x.as_str().map(String::from)
     });
     let blacklisted_models_slice = blacklisted_models_owned
         .as_ref()
-        .map(|v| v.as_slice())
-        .into_nested_option();
+        .map(|v| v.as_slice());
 
     let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
@@ -108,8 +105,7 @@ pub async fn update_api_key(
     };
     let expires_slice = expires_field
         .as_ref()
-        .map(|s| s.as_str())
-        .into_nested_option();
+        .map(|s| s.as_str());
 
     s.services().api_keys.update(
         ApiKeyId(id),
@@ -189,40 +185,6 @@ pub async fn api_key_usage(
     let r = s.db_pool().reader();
     let usage = fetch_api_key_usage(&r, id)?;
     Ok(Json(usage))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UpdateField<T> {
-    Ignore,
-    Reset,
-    Set(T),
-}
-
-impl<T> UpdateField<T> {
-    pub(crate) fn as_ref(&self) -> UpdateField<&T> {
-        match self {
-            Self::Ignore => UpdateField::Ignore,
-            Self::Reset => UpdateField::Reset,
-            Self::Set(v) => UpdateField::Set(v),
-        }
-    }
-
-    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> UpdateField<U> {
-        match self {
-            Self::Ignore => UpdateField::Ignore,
-            Self::Reset => UpdateField::Reset,
-            Self::Set(v) => UpdateField::Set(f(v)),
-        }
-    }
-
-    #[allow(clippy::option_option)]
-    pub(crate) fn into_nested_option(self) -> Option<Option<T>> {
-        match self {
-            Self::Ignore => None,
-            Self::Reset => Some(None),
-            Self::Set(v) => Some(Some(v)),
-        }
-    }
 }
 
 fn extract_tristate_array<T>(

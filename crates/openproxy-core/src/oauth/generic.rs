@@ -122,11 +122,10 @@ impl GenericOAuthProvider {
                 );
             }
         }
-        #[allow(clippy::collapsible_if)]
-        if let Some(user_agent) = self.spec.user_agent {
-            if let Ok(value) = http::HeaderValue::from_str(&user_agent()) {
-                req.headers.insert(http::header::USER_AGENT, value);
-            }
+        if let Some(user_agent) = self.spec.user_agent
+            && let Ok(value) = http::HeaderValue::from_str(&user_agent())
+        {
+            req.headers.insert(http::header::USER_AGENT, value);
         }
 
         let response = call_oauth_endpoint(upstream_client, &self.spec, req, purpose).await?;

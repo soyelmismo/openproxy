@@ -117,7 +117,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -154,7 +154,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let plaintext = "sk-supersecret-DO-NOT-LEAK-9f8a";
         let id = create(
             &conn,
@@ -192,7 +192,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let plaintext = "sk-roundtrip-xyz";
         let id = create(
             &conn,
@@ -213,7 +213,7 @@ mod tests {
         assert!(matches!(err, CoreError::AccountNotFound(424_242)));
 
         // Wrong key → decryption failure (Internal).
-        let other = MasterKey::generate();
+        let other = MasterKey::generate().unwrap();
         let err = decrypt_api_key(&conn, id, &other).expect_err("wrong key");
         assert!(matches!(err, CoreError::Internal(_)));
     }
@@ -224,7 +224,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "cloudflare");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let plaintext = "sk-roundtrip-xyz";
         let label = "my-cf-account-id";
 
@@ -249,7 +249,7 @@ mod tests {
         assert!(matches!(err, CoreError::AccountNotFound(424_242)));
 
         // Wrong key → decryption failure (Internal).
-        let other = MasterKey::generate();
+        let other = MasterKey::generate().unwrap();
         let err = decrypt_api_key_and_label(&conn, id, &other).expect_err("wrong key");
         assert!(matches!(err, CoreError::Internal(_)));
 
@@ -278,7 +278,7 @@ mod tests {
         seed_provider(&conn, "openrouter");
         seed_provider(&conn, "anthropic");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         for (pid, prio) in [("openrouter", 10), ("openrouter", 20), ("anthropic", 5)] {
             create(
                 &conn,
@@ -318,7 +318,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -353,7 +353,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -392,7 +392,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -418,7 +418,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "minimax");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("minimax"),
@@ -481,7 +481,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "minimax");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("minimax"),
@@ -561,7 +561,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -596,7 +596,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -633,7 +633,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -668,7 +668,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -702,7 +702,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -737,7 +737,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -777,7 +777,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -812,7 +812,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -837,7 +837,7 @@ mod tests {
         )
         .expect("store");
 
-        let wrong_mk = MasterKey::generate();
+        let wrong_mk = MasterKey::generate().unwrap();
         let err = decrypt_access_token(&conn, id, &wrong_mk).unwrap_err();
         assert!(matches!(err, CoreError::Internal(_)));
     }
@@ -846,7 +846,7 @@ mod tests {
     fn oauth_access_token_on_missing_account() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let err = decrypt_access_token(&conn, AccountId(99999), &mk).unwrap_err();
         assert!(matches!(err, CoreError::AccountNotFound(99999)));
     }
@@ -855,7 +855,7 @@ mod tests {
     fn oauth_refresh_token_on_missing_account() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let err = decrypt_refresh_token(&conn, AccountId(99999), &mk).unwrap_err();
         assert!(matches!(err, CoreError::AccountNotFound(99999)));
     }
@@ -864,7 +864,7 @@ mod tests {
     fn oauth_store_tokens_on_missing_account() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let err = store_oauth_tokens(
             &conn,
             AccountId(99999),
@@ -885,7 +885,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -938,7 +938,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -985,7 +985,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -1023,7 +1023,7 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         // OAuth account: api_key = None → api_key_encrypted = NULL in DB.
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -1048,7 +1048,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),
@@ -1092,7 +1092,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "minimax");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let account_id = create(
             &conn,
             &ProviderId::new("minimax"),
@@ -1155,7 +1155,7 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
 
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         let id = create(
             &conn,
             &ProviderId::new("openrouter"),

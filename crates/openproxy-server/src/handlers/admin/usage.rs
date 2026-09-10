@@ -440,8 +440,13 @@ async fn handle_client_subscribe(
     outbox_tx: &tokio::sync::mpsc::Sender<Box<str>>,
 ) {
     let since_id = since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
-    let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::block_in_place(|| {
-        let r = state.db_pool().reader();
+    let pool = std::sync::Arc::clone(state.db_pool());
+    let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::spawn_blocking(move || {
+        let r = pool.try_reader_for(std::time::Duration::from_secs(5));
+        let Some(r) = r else {
+            tracing::error!("stream_usage_rows: subscribe reader lock timeout");
+            return Vec::new();
+        };
         let rows = match core_usage::recent(&r, since_id, 100) {
             Ok(v) => v,
             Err(e) => {
@@ -453,6 +458,11 @@ async fn handle_client_subscribe(
         rows.into_iter()
             .map(openproxy_types::usage::redact_for_broadcast)
             .collect()
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(error = %e, "stream_usage_rows: subscribe spawn_blocking failed");
+        Vec::new()
     });
     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
         *last_known_id = (*last_known_id).max(mx);
@@ -523,9 +533,16 @@ async fn handle_incoming_ws_message(
     }
 }
 
-fn fetch_initial_history_snapshot(state: &AppState) -> (i64, serde_json::Value) {
-    let rows = tokio::task::block_in_place(|| {
-        let r = state.db_pool().reader();
+async fn fetch_initial_history_snapshot(state: &AppState) -> (i64, serde_json::Value) {
+    let pool = std::sync::Arc::clone(state.db_pool());
+    let rows = tokio::task::spawn_blocking(move || {
+        let r = pool.try_reader_for(std::time::Duration::from_secs(5));
+        let Some(r) = r else {
+            tracing::error!(
+                "stream_usage_rows: initial history reader lock timeout"
+            );
+            return Vec::new();
+        };
         match core_usage::recent_desc(&r, 100) {
             Ok(r) => r,
             Err(e) => {
@@ -537,6 +554,11 @@ fn fetch_initial_history_snapshot(state: &AppState) -> (i64, serde_json::Value) 
                 Vec::new()
             }
         }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(error = %e, "stream_usage_rows: initial history spawn_blocking failed");
+        Vec::new()
     });
     let last_known_id = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
     let active_attempts = openproxy_core::usage::get_active_inflight_attempts();
@@ -615,7 +637,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
     let (outbox_tx, outbox_rx) = tokio::sync::mpsc::channel::<Box<str>>(WS_OUTBOX_CAPACITY);
     let sender_task = spawn_ws_sender_task(ws_sender, outbox_rx);
 
-    let (last_known_id, snapshot) = fetch_initial_history_snapshot(&state);
+    let (last_known_id, snapshot) = fetch_initial_history_snapshot(&state).await;
     outbox_send(&outbox_tx, snapshot).await;
 
     run_ws_usage_event_loop(&state, ws_receiver, outbox_tx, last_known_id).await;

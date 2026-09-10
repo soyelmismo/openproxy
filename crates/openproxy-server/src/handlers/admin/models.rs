@@ -38,20 +38,34 @@ pub async fn toggle_model(
         .get("active")
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
-    let w = s.db_pool().writer();
-    core_models::set_active(&w, ModelRowId(id), active)?;
-    Ok(Json(serde_json::json!({ "id": id, "active": active })))
+    let pool = std::sync::Arc::clone(s.db_pool());
+    tokio::task::spawn_blocking(move || -> Result<Json<serde_json::Value>, ApiError> {
+        let w = pool
+            .try_writer_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| ApiError(CoreError::Internal("writer lock timeout".into())))?;
+        core_models::set_active(&w, ModelRowId(id), active)?;
+        Ok(Json(serde_json::json!({ "id": id, "active": active })))
+    })
+    .await
+    .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
 pub async fn bulk_toggle_models(
     State(s): State<AppState>,
     Json(body): Json<core_admin::BulkToggleInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let updated = core_admin::set_active_bulk(&w, body)?;
-    Ok(Json(serde_json::json!({
-        "updated": updated,
-    })))
+    let pool = std::sync::Arc::clone(s.db_pool());
+    tokio::task::spawn_blocking(move || -> Result<Json<serde_json::Value>, ApiError> {
+        let w = pool
+            .try_writer_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| ApiError(CoreError::Internal("writer lock timeout".into())))?;
+        let updated = core_admin::set_active_bulk(&w, body)?;
+        Ok(Json(serde_json::json!({
+            "updated": updated,
+        })))
+    })
+    .await
+    .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
 crate::admin_entity_action_handler! {
@@ -69,24 +83,40 @@ pub async fn update_model(
     Path(id): Path<i64>,
     Json(input): Json<core_admin::UpdateModelInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    core_admin::update_model(&w, ModelRowId(id), input)?;
-    Ok(Json(serde_json::json!({ "id": id, "updated": true })))
+    let pool = std::sync::Arc::clone(s.db_pool());
+    tokio::task::spawn_blocking(move || -> Result<Json<serde_json::Value>, ApiError> {
+        let w = pool
+            .try_writer_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| ApiError(CoreError::Internal("writer lock timeout".into())))?;
+        core_admin::update_model(&w, ModelRowId(id), input)?;
+        Ok(Json(serde_json::json!({ "id": id, "updated": true })))
+    })
+    .await
+    .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
 pub async fn create_custom_model(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateCustomModelInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let row_id = core_admin::create_custom_model(&w, input)?;
-    Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
+    let pool = std::sync::Arc::clone(s.db_pool());
+    tokio::task::spawn_blocking(move || -> Result<Json<serde_json::Value>, ApiError> {
+        let w = pool
+            .try_writer_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| ApiError(CoreError::Internal("writer lock timeout".into())))?;
+        let row_id = core_admin::create_custom_model(&w, input)?;
+        Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
+    })
+    .await
+    .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
-fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> {
-    tokio::task::block_in_place(|| {
-        let r = s.db_pool().reader();
-        let p = openproxy_core::free_proxies::get_proxy(&r, pid)
+async fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> {
+    let pool = std::sync::Arc::clone(s.db_pool());
+    let pid = pid.to_string();
+    tokio::task::spawn_blocking(move || {
+        let r = pool.try_reader_for(std::time::Duration::from_secs(5))?;
+        let p = openproxy_core::free_proxies::get_proxy(&r, &pid)
             .ok()
             .flatten()?;
         Some(format!(
@@ -96,9 +126,12 @@ fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> {
             p.port
         ))
     })
+    .await
+    .ok()
+    .flatten()
 }
 
-fn parse_test_model_params(
+async fn parse_test_model_params(
     s: &AppState,
     body_bytes: &[u8],
 ) -> Result<(Option<AccountId>, Option<String>), ApiError> {
@@ -108,10 +141,10 @@ fn parse_test_model_params(
     let input = serde_json::from_slice::<TestModelInput>(body_bytes)
         .map_err(|e| ApiError(CoreError::Parse(format!("Invalid JSON: {e}"))))?;
     let aid = input.account_id.map(AccountId::new);
-    let purl = input
-        .proxy_id
-        .as_deref()
-        .and_then(|pid| resolve_proxy_url_by_id(s, pid));
+    let purl = match input.proxy_id.as_deref() {
+        Some(pid) => resolve_proxy_url_by_id(s, pid).await,
+        None => None,
+    };
     Ok((aid, purl))
 }
 
@@ -122,7 +155,7 @@ pub async fn test_model(
     body_bytes: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
-    let (account_id, proxy_url) = parse_test_model_params(&s, &body_bytes)?;
+    let (account_id, proxy_url) = parse_test_model_params(&s, &body_bytes).await?;
 
     let (r, debug_payload) = run_test_for_model(
         &s,
@@ -388,14 +421,21 @@ async fn resolve_test_credentials(
     }
 
     let resolved_aid = account_id.or_else(|| select_account_candidate(&accounts_list));
-    let raw_account = resolved_aid.and_then(|aid| {
-        tokio::task::block_in_place(|| {
-            let r = s.db_pool().reader();
-            core_accounts::get(&r, aid, s.master_key().as_ref())
+    let raw_account = if let Some(aid) = resolved_aid {
+        let pool = std::sync::Arc::clone(s.db_pool());
+        let master_key = std::sync::Arc::clone(s.master_key());
+        tokio::task::spawn_blocking(move || -> Option<_> {
+            let r = pool.try_reader_for(std::time::Duration::from_secs(5))?;
+            core_accounts::get(&r, aid, &master_key)
                 .ok()
                 .flatten()
         })
-    });
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
 
     let api_key = match resolved_aid {
         Some(aid) => {
@@ -897,9 +937,17 @@ pub(crate) async fn run_test_for_model(
 
     if !opts.in_combo_fanout {
         let status_i32 = i32::from(status);
-        let w = s.db_pool().writer();
-        if let Err(e) = core_models::set_test_status(&w, row_id, status_i32) {
-            let mut err_res = test_error_result(model_row_id, e.http_status(), &e.to_string());
+        let pool = std::sync::Arc::clone(s.db_pool());
+        let set_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let w = pool.try_writer_for(std::time::Duration::from_secs(5))
+                .ok_or_else(|| "writer lock timeout".to_string())?;
+            core_models::set_test_status(&w, row_id, status_i32)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("spawn failed: {e}")));
+        if let Err(msg) = set_result {
+            let mut err_res = test_error_result(model_row_id, 500, &msg);
             err_res.elapsed_ms = elapsed_ms;
             return (err_res, None);
         }

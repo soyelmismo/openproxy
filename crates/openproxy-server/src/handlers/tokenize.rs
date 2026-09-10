@@ -281,7 +281,7 @@ mod tests {
         });
         insert_api_key(&pool, &plaintext);
 
-        let mk = openproxy_db::MasterKey::generate();
+        let mk = openproxy_db::MasterKey::generate().unwrap();
         let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),
@@ -444,7 +444,7 @@ mod tests {
             let mut w = pool.writer();
             core_db::migrations::run(&mut w).expect("migrations");
         }
-        let mk = openproxy_db::MasterKey::generate();
+        let mk = openproxy_db::MasterKey::generate().unwrap();
         let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),
@@ -510,7 +510,7 @@ mod tokenize_adversarial_tests {
         });
         insert_api_key(&pool, &plaintext);
 
-        let mk = openproxy_db::MasterKey::generate();
+        let mk = openproxy_db::MasterKey::generate().unwrap();
         let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),

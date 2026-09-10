@@ -2,6 +2,7 @@
 
 pub mod adapters;
 pub mod antigravity_headers;
+pub mod schema_cleaner;
 pub mod spoofer;
 pub mod upstream;
 

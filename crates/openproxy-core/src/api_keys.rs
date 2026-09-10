@@ -15,6 +15,7 @@ use crate::error::{CoreError, Result};
 use crate::ids::ApiKeyId;
 use crate::validation::Validatable;
 use chrono::{DateTime, Utc};
+use openproxy_types::UpdateField;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -523,10 +524,10 @@ pub fn touch_last_used(conn: &Connection, id: ApiKeyId) -> Result<()> {
     Ok(())
 }
 
-/// Partial update. The handler-side encoding uses `Option<Option<T>>`
-/// to distinguish "leave alone" (outer `None`) from "clear to NULL"
-/// (inner `None`); we flatten that here so the call site stays
-/// readable.
+/// Partial update. The handler-side encoding uses `UpdateField<T>`
+/// to distinguish "leave alone" (`Ignore`) from "clear to NULL"
+/// (`Reset`) from "set to value" (`Set(T)`); we flatten that here
+/// so the call site stays readable.
 ///
 /// `is_active = Some(false)` *also* stamps `revoked_at` (matching
 /// the soft-revoke semantics) so a dashboard "disable" toggle and
@@ -535,37 +536,35 @@ pub fn touch_last_used(conn: &Connection, id: ApiKeyId) -> Result<()> {
 pub struct UpdateParams<'a> {
     pub label: Option<&'a str>,
     pub scopes: Option<&'a [String]>,
-    pub allowed_models: Option<Option<&'a [String]>>,
-    pub allowed_combos: Option<Option<&'a [i64]>>,
-    pub blacklisted_providers: Option<Option<&'a [String]>>,
-    pub blacklisted_models: Option<Option<&'a [String]>>,
+    pub allowed_models: UpdateField<&'a [String]>,
+    pub allowed_combos: UpdateField<&'a [i64]>,
+    pub blacklisted_providers: UpdateField<&'a [String]>,
+    pub blacklisted_models: UpdateField<&'a [String]>,
     pub is_active: Option<bool>,
-    pub expires_at: Option<Option<&'a str>>,
+    pub expires_at: UpdateField<&'a str>,
 }
 
-#[allow(clippy::option_option)]
-fn serialize_optional_json<T: serde::Serialize>(
-    opt: Option<Option<&[T]>>,
+fn serialize_update_field<T: serde::Serialize>(
+    field: UpdateField<&[T]>,
     name: &str,
-) -> Result<Option<Option<String>>> {
-    opt.map(|inner| {
-        inner
-            .map(|v| {
-                serde_json::to_string(v)
-                    .map_err(|e| CoreError::Parse(format!("serialize {name}: {e}")))
-            })
-            .transpose()
-    })
-    .transpose()
+) -> Result<UpdateField<String>> {
+    match field {
+        UpdateField::Ignore => Ok(UpdateField::Ignore),
+        UpdateField::Reset => Ok(UpdateField::Reset),
+        UpdateField::Set(v) => {
+            let s = serde_json::to_string(v)
+                .map_err(|e| CoreError::Parse(format!("serialize {name}: {e}")))?;
+            Ok(UpdateField::Set(s))
+        }
+    }
 }
 
-#[allow(clippy::option_option)]
 fn build_update_json_clauses(
     scopes_json: Option<String>,
-    allowed_models_json: Option<Option<String>>,
-    allowed_combos_json: Option<Option<String>>,
-    blacklisted_providers_json: Option<Option<String>>,
-    blacklisted_models_json: Option<Option<String>>,
+    allowed_models_json: UpdateField<String>,
+    allowed_combos_json: UpdateField<String>,
+    blacklisted_providers_json: UpdateField<String>,
+    blacklisted_models_json: UpdateField<String>,
     sets: &mut Vec<&'static str>,
     bound: &mut Vec<Box<dyn rusqlite::ToSql>>,
 ) {
@@ -573,19 +572,19 @@ fn build_update_json_clauses(
         sets.push("scopes_json = ?");
         bound.push(Box::new(s));
     }
-    if let Some(om) = allowed_models_json {
+    if let Some(om) = allowed_models_json.into_option() {
         sets.push("allowed_models_json = ?");
         bound.push(Box::new(om));
     }
-    if let Some(oc) = allowed_combos_json {
+    if let Some(oc) = allowed_combos_json.into_option() {
         sets.push("allowed_combos_json = ?");
         bound.push(Box::new(oc));
     }
-    if let Some(bp) = blacklisted_providers_json {
+    if let Some(bp) = blacklisted_providers_json.into_option() {
         sets.push("blacklisted_providers_json = ?");
         bound.push(Box::new(bp));
     }
-    if let Some(bm) = blacklisted_models_json {
+    if let Some(bm) = blacklisted_models_json.into_option() {
         sets.push("blacklisted_models_json = ?");
         bound.push(Box::new(bm));
     }
@@ -609,9 +608,16 @@ fn build_update_scalar_clauses(
             sets.push("revoked_at = NULL");
         }
     }
-    if let Some(oe) = params.expires_at {
-        sets.push("expires_at = ?");
-        bound.push(Box::new(oe.map(|s| s.to_string())));
+    match params.expires_at {
+        UpdateField::Ignore => {}
+        UpdateField::Reset => {
+            sets.push("expires_at = ?");
+            bound.push(Box::new(None::<String>));
+        }
+        UpdateField::Set(v) => {
+            sets.push("expires_at = ?");
+            bound.push(Box::new(Some(v.to_string())));
+        }
     }
 }
 
@@ -646,12 +652,12 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
             serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
         })
         .transpose()?;
-    let allowed_models_json = serialize_optional_json(params.allowed_models, "allowed_models")?;
-    let allowed_combos_json = serialize_optional_json(params.allowed_combos, "allowed_combos")?;
+    let allowed_models_json = serialize_update_field(params.allowed_models, "allowed_models")?;
+    let allowed_combos_json = serialize_update_field(params.allowed_combos, "allowed_combos")?;
     let blacklisted_providers_json =
-        serialize_optional_json(params.blacklisted_providers, "blacklisted_providers")?;
+        serialize_update_field(params.blacklisted_providers, "blacklisted_providers")?;
     let blacklisted_models_json =
-        serialize_optional_json(params.blacklisted_models, "blacklisted_models")?;
+        serialize_update_field(params.blacklisted_models, "blacklisted_models")?;
 
     let mut sets = Vec::new();
     let mut bound = Vec::new();
@@ -1104,12 +1110,12 @@ mod tests {
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert_eq!(after.scopes, vec!["manage".to_string(), "read".to_string()]);
 
-        // Update allowed_models via Some(Some(&slice)).
+        // Update allowed_models via Set.
         update(
             &conn,
             key.id,
             UpdateParams {
-                allowed_models: Some(Some(&["openai/gpt-4o".to_string()])),
+                allowed_models: UpdateField::Set(&["openai/gpt-4o".to_string()]),
                 ..Default::default()
             },
         )
@@ -1120,12 +1126,12 @@ mod tests {
             Some(vec!["openai/gpt-4o".to_string()])
         );
 
-        // Clear allowed_models via Some(None).
+        // Clear allowed_models via Reset.
         update(
             &conn,
             key.id,
             UpdateParams {
-                allowed_models: Some(None),
+                allowed_models: UpdateField::Reset,
                 ..Default::default()
             },
         )

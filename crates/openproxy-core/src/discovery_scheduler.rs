@@ -807,7 +807,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn scheduler_upserts_models_after_a_few_ticks() {
         let (pool, _path) = fresh_pool();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         seed_provider_with_account(&pool, &mk, "openrouter");
 
         // Insert only the OpenRouter adapter; the other built-ins
@@ -896,7 +896,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn scheduler_skips_provider_with_no_accounts() {
         let (pool, _path) = fresh_pool();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         {
             let conn = pool.writer();
             let provider_id = CoreProviderId::new("openrouter");
@@ -994,7 +994,7 @@ mod tests {
         ];
 
         let (pool, _path) = fresh_pool();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         for pid in provider_ids {
             seed_provider_with_account(&pool, &mk, pid);
         }
@@ -1123,7 +1123,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn scheduler_skips_providers_without_an_adapter() {
         let (pool, _path) = fresh_pool();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         // No provider rows seeded at all.
         let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
             Arc::new(vec![]);
@@ -1299,7 +1299,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn gate_f2_discovery_scheduler_invokes_auto_activation() {
         let (pool, _path) = fresh_pool();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
 
         // Seed provider + account, then set the keyword on the
         // provider row. `seed_provider_with_account` does NOT set
@@ -1432,7 +1432,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn gate_f2_discovery_scheduler_skips_auto_activation_on_failure() {
         let (pool, _path) = fresh_pool();
-        let mk = MasterKey::generate();
+        let mk = MasterKey::generate().unwrap();
         seed_provider_with_account(&pool, &mk, "openrouter");
 
         // Set the keyword so a misbehaving scheduler would re-apply

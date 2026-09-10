@@ -80,13 +80,10 @@ async fn validate_custom_proxy_input(body: &CreateCustomProxyInput) -> Result<()
             "host and port are required".into(),
         )));
     }
-    #[allow(clippy::collapsible_if)]
-    if let Ok(ip) = host_str.parse::<std::net::IpAddr>() {
-        if is_private_or_reserved(&ip) {
-            return Err(ApiError(CoreError::Validation(format!(
-                "host '{host_str}' resolves to a private/reserved IP and is not allowed"
-            ))));
-        }
+    if let Ok(ip) = host_str.parse::<std::net::IpAddr>() && is_private_or_reserved(&ip) {
+        return Err(ApiError(CoreError::Validation(format!(
+            "host '{host_str}' resolves to a private/reserved IP and is not allowed"
+        ))));
     }
 
     let addrs = tokio::net::lookup_host((host_str, body.port))
@@ -197,7 +194,6 @@ pub async fn update_proxy_test_url(
             _ => 80,
         });
 
-    #[allow(clippy::collapsible_if)]
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if is_private_or_reserved(&ip) {
             return Err(ApiError(CoreError::Validation(format!(

@@ -1473,12 +1473,12 @@ pub fn clean_residual_prompt(s: &str) -> String {
     result
 }
 
-#[allow(clippy::collapsible_if)]
 fn check_horde_quota_error(body: &serde_json::Value) -> Option<&str> {
-    if body.get("kudos").is_none() && body.get("username").is_none() {
-        if let Some(msg) = body.get("message").and_then(|v| v.as_str()) {
-            return Some(msg);
-        }
+    if let Some(msg) = body.get("message").and_then(|v| v.as_str())
+        && body.get("kudos").is_none()
+        && body.get("username").is_none()
+    {
+        return Some(msg);
     }
     None
 }

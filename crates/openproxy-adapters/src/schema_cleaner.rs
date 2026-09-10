@@ -97,15 +97,12 @@ fn fallback_unresolved_ref(map: &mut serde_json::Map<String, Value>, ref_path: &
             Value::String(String::with_capacity(32 + ref_path.len())),
         );
     }
-    #[allow(clippy::collapsible_if)]
-    if let Some(Value::String(s)) = map.get_mut("description") {
-        if !s.contains(ref_path) {
-            if !s.is_empty() {
-                s.push(' ');
-            }
-            use std::fmt::Write;
-            let _ = write!(s, "(Unresolved $ref: {ref_path})");
+    if let Some(Value::String(s)) = map.get_mut("description") && !s.contains(ref_path) {
+        if !s.is_empty() {
+            s.push(' ');
         }
+        use std::fmt::Write;
+        let _ = write!(s, "(Unresolved $ref: {ref_path})");
     }
 }
 

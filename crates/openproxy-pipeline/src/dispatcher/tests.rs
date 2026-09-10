@@ -151,7 +151,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         racing: openproxy_types::config::RacingConfig::default(),
         retries: openproxy_types::config::RetriesConfig::default(),
         max_attempts: 1,
-        master_key: std::sync::Arc::new(MasterKey::generate()),
+        master_key: std::sync::Arc::new(MasterKey::generate().unwrap()),
         adapters: std::sync::Arc::new(Vec::new()),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,

@@ -603,6 +603,9 @@ impl TokenRefreshCoordinator {
             .await?;
         let expires_at = token_expires_at(token.expires_in);
 
+        // NOTE: `db` is `DbRef<'a>` with a non-'static lifetime, so it cannot
+        // be moved into `spawn_blocking`. We use `block_in_place` here because
+        // the closure runs synchronously and the borrow is scoped to the call.
         tokio::task::block_in_place(|| {
             db.with_conn(|conn| {
                 store_oauth_tokens(
@@ -657,11 +660,20 @@ pub async fn resolve_oauth_token(
 ) -> Result<String> {
     use crate::accounts::{decrypt_access_token, decrypt_refresh_token};
 
+    // Clone the pool once so both spawn_blocking closures share the same
+    // reader-index counter (DbPool is cheap to clone: all fields are Arc-backed).
+    let pool_clone = db_pool.clone();
+    let master_key_clone = master_key.clone();
+    let account_id = account.id;
+
     // 1. Decrypt current access token.
-    let access_token = tokio::task::block_in_place(|| {
-        let conn = db_pool.reader();
-        decrypt_access_token(&conn, account.id, master_key)
-    })?;
+    let access_token = tokio::task::spawn_blocking(move || {
+        let conn = pool_clone.try_reader_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| CoreError::Internal("reader lock timeout".into()))?;
+        decrypt_access_token(&conn, account_id, &master_key_clone)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("spawn failed: {e}")))??;
 
     // 2. Check expiry — if still fresh, return as-is.
     if !oauth_expires_soon(account, provider_id) {
@@ -669,10 +681,16 @@ pub async fn resolve_oauth_token(
     }
 
     // 3. Decrypt refresh token under a fresh connection.
-    let refresh_token = tokio::task::block_in_place(|| {
-        let conn = db_pool.reader();
-        decrypt_refresh_token(&conn, account.id, master_key)
-    })?
+    let pool_clone2 = db_pool.clone();
+    let master_key_clone2 = master_key.clone();
+    let refresh_token = tokio::task::spawn_blocking(move || {
+        let conn = pool_clone2.try_reader_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| CoreError::Internal("reader lock timeout".into()))?;
+        decrypt_refresh_token(&conn, account_id, &master_key_clone2)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("spawn failed: {e}")))?
+    .map_err(|e| CoreError::Internal(format!("decrypt refresh token failed: {e}")))?
     .ok_or_else(|| {
         CoreError::Auth(format!(
             "account {} has no refresh token, cannot refresh",
@@ -698,7 +716,7 @@ pub async fn resolve_oauth_token(
         .refresh_and_store(OAuthRefreshParams {
             provider_id,
             provider,
-            refresh_token: &refresh_token,
+            refresh_token: refresh_token.as_str(),
             upstream_client,
             account_id: account.id,
             db: DbRef::Pool(db_pool),

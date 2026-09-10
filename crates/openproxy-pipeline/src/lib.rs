@@ -38,6 +38,7 @@ pub mod stage;
 pub mod stages;
 pub mod streaming;
 pub mod streaming_state;
+#[cfg(test)]
 pub mod test_utils;
 pub mod think_extractor;
 pub mod timeouts;
@@ -46,7 +47,6 @@ pub mod upstream_dispatcher;
 pub mod usage_tracker;
 pub mod worker;
 
-pub use openproxy_types::schema_cleaner;
 pub use response_ext::ResponseExt;
 
 #[cfg(test)]

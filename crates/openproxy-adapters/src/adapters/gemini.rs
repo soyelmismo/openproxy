@@ -559,7 +559,7 @@ fn map_openai_tool_to_declaration(tool: &serde_json::Value) -> Option<GeminiFunc
             }
             Some(p) => {
                 let mut p = p.clone();
-                openproxy_types::schema_cleaner::clean_json_schema(&mut p);
+                crate::schema_cleaner::clean_json_schema(&mut p);
                 Some(p)
             }
             None => None,
@@ -588,7 +588,7 @@ fn map_openai_tool_to_declaration(tool: &serde_json::Value) -> Option<GeminiFunc
         }
         Some(p) => {
             let mut p = p.clone();
-            openproxy_types::schema_cleaner::clean_json_schema(&mut p);
+            crate::schema_cleaner::clean_json_schema(&mut p);
             Some(p)
         }
         None => None,

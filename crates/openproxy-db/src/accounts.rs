@@ -1081,7 +1081,7 @@ mod tests {
     fn read_provider_meta_decrypts_aes_encrypted_row_with_master_key() {
         let conn = open_in_memory();
         seed_antigravity_provider(&conn);
-        let master = MasterKey::generate();
+        let master = MasterKey::generate().unwrap();
         let plaintext = r#"{"project_id":"encrypted-proj"}"#;
         let blob = master.encrypt(plaintext).unwrap();
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &blob);
@@ -1104,7 +1104,7 @@ mod tests {
     fn read_provider_meta_returns_none_on_aes_decrypt_failure() {
         let conn = open_in_memory();
         seed_antigravity_provider(&conn);
-        let master = MasterKey::generate();
+        let master = MasterKey::generate().unwrap();
 
         // base64 valid but blob that is NOT a valid AES-GCM ciphertext.
         let garbage_b64 = base64::Engine::encode(

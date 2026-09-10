@@ -235,13 +235,13 @@ impl DbPool {
         configure_connection(&new_writer)?;
 
         let mut new_readers = Vec::with_capacity(self.readers.len());
-        for i in 0..self.readers.len() {
+        for (i, _) in self.readers.iter().enumerate() {
             new_readers.push(reopen_and_configure_reader(&self.path, flags, i)?);
         }
 
         *self.writer.lock() = new_writer;
-        for (i, new_r) in new_readers.into_iter().enumerate() {
-            *parking_lot::Mutex::lock(&self.readers[i]) = new_r;
+        for (slot, new_r) in self.readers.iter().zip(new_readers) {
+            *parking_lot::Mutex::lock(slot) = new_r;
         }
 
         tracing::info!("DbPool: reopened all connections (writer + readers)");

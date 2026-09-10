@@ -60,23 +60,27 @@ impl MasterKey {
     }
 
     /// Generate a fresh random key. For tests and bootstrapping.
-    pub fn generate() -> Self {
+    pub fn generate() -> Result<Self> {
         let mut bytes = [0u8; KEY_LEN];
-        getrandom::fill(&mut bytes).expect("getrandom failed");
-        Self {
+        getrandom::fill(&mut bytes)
+            .map_err(|e| CoreError::Internal(format!("getrandom failed: {e}")))?;
+        Ok(Self {
             current: bytes,
             previous: None,
-        }
+        })
     }
 
     /// Encrypt a UTF-8 plaintext (API key) into a self-contained blob.
     ///
     /// Output layout: `nonce (12 bytes) || ciphertext_with_tag`.
     pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>> {
-        let cipher = Aes256Gcm::new_from_slice(&self.current).expect("key should be valid len");
+        let cipher = Aes256Gcm::new_from_slice(&self.current)
+            .map_err(|e| CoreError::Internal(format!("key init failed: {e}")))?;
         let mut nonce_bytes = [0u8; 12];
-        getrandom::fill(&mut nonce_bytes).expect("getrandom failed");
-        let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("nonce len is always 12");
+        getrandom::fill(&mut nonce_bytes)
+            .map_err(|e| CoreError::Internal(format!("nonce random failed: {e}")))?;
+        let nonce = Nonce::try_from(nonce_bytes.as_slice())
+            .map_err(|e| CoreError::Internal(format!("nonce len: {e}")))?;
         let mut blob = nonce.to_vec();
         let ct = cipher
             .encrypt(&nonce, plaintext.as_bytes())
@@ -103,12 +107,9 @@ impl MasterKey {
         }
 
         // Fall back to previous key (rotation).
-        #[allow(clippy::collapsible_if)]
-        if let Some(prev) = &self.previous {
-            if let Some(res) = try_decrypt(prev, &nonce, ct) {
-                tracing::debug!("decrypted with previous master key (rotation fallback)");
-                return res;
-            }
+        if let Some(prev) = &self.previous && let Some(res) = try_decrypt(prev, &nonce, ct) {
+            tracing::debug!("decrypted with previous master key (rotation fallback)");
+            return res;
         }
 
         Err(CoreError::Internal(
@@ -122,7 +123,10 @@ fn try_decrypt(
     nonce: &Nonce<aes_gcm::aead::consts::U12>,
     ct: &[u8],
 ) -> Option<Result<String>> {
-    let cipher = Aes256Gcm::new_from_slice(raw_key).expect("key should be valid len");
+    let cipher = match Aes256Gcm::new_from_slice(raw_key) {
+        Ok(c) => c,
+        Err(e) => return Some(Err(CoreError::Internal(format!("key init failed: {e}")))),
+    };
     let pt = cipher.decrypt(nonce, ct).ok()?;
     Some(
         String::from_utf8(pt)
@@ -145,7 +149,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let key = MasterKey::generate();
+        let key = MasterKey::generate().unwrap();
         let blob = key.encrypt("sk-abc-123").unwrap();
         let pt = key.decrypt(&blob).unwrap();
         assert_eq!(pt, "sk-abc-123");
@@ -153,7 +157,7 @@ mod tests {
 
     #[test]
     fn encrypt_is_nonce_random() {
-        let key = MasterKey::generate();
+        let key = MasterKey::generate().unwrap();
         let a = key.encrypt("x").unwrap();
         let b = key.encrypt("x").unwrap();
         assert_ne!(a, b);
@@ -161,8 +165,8 @@ mod tests {
 
     #[test]
     fn wrong_key_fails_to_decrypt() {
-        let a = MasterKey::generate();
-        let b = MasterKey::generate();
+        let a = MasterKey::generate().unwrap();
+        let b = MasterKey::generate().unwrap();
         let blob = a.encrypt("sk-abc-123").unwrap();
         assert!(b.decrypt(&blob).is_err());
     }
@@ -210,15 +214,15 @@ mod tests {
 
     #[test]
     fn truncated_blob_fails() {
-        let key = MasterKey::generate();
+        let key = MasterKey::generate().unwrap();
         // 5 bytes is less than the 12-byte nonce.
         assert!(key.decrypt(&[0u8; 5]).is_err());
     }
 
     #[test]
     fn rotation_fallback_decrypts_with_previous_key() {
-        let old_key = MasterKey::generate();
-        let new_key = MasterKey::generate();
+        let old_key = MasterKey::generate().unwrap();
+        let new_key = MasterKey::generate().unwrap();
         let rotated_key = MasterKey {
             current: new_key.current,
             previous: Some(old_key.current),

@@ -1211,9 +1211,9 @@ mod tests {
     async fn make_state() -> AppState {
         let (pool, _path) = fresh_pool();
         let db_pool = Arc::new(pool);
-        // MasterKey::generate() returns a fresh 32-byte key — safe
+        // MasterKey::generate().unwrap() returns a fresh 32-byte key — safe
         // for tests that don't decrypt any real secrets.
-        let master_key = Arc::new(MasterKey::generate());
+        let master_key = Arc::new(MasterKey::generate().unwrap());
         // Start with an empty adapter registry; `rebuild_adapters`
         // is responsible for filling in both the built-ins and any
         // custom rows.

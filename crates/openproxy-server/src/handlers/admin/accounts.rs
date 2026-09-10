@@ -231,29 +231,39 @@ fn find_candidate_account_for_refresh(
         .map(|a| a.id)
 }
 
-pub(crate) fn resolve_refresh_account(
+pub(crate) async fn resolve_refresh_account(
     s: &AppState,
     provider: &ProviderId,
     q: &ProviderRefreshQuery,
 ) -> Result<(Option<AccountId>, String), ApiError> {
-    let w = s.db_pool().writer();
-    let provider_row = core_providers::get(&w, provider).map_err(ApiError)?;
-    let accounts_list =
-        core_accounts::list(&w, Some(provider), s.master_key().as_ref()).map_err(ApiError)?;
+    let pool = std::sync::Arc::clone(s.db_pool());
+    let provider = provider.clone();
+    let master_key = std::sync::Arc::clone(s.master_key());
+    let account_id_input = q.account_id;
+    tokio::task::spawn_blocking(move || {
+        let w = pool
+            .try_writer_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| ApiError(CoreError::Internal("writer lock timeout".into())))?;
+        let provider_row = core_providers::get(&w, &provider).map_err(ApiError)?;
+        let accounts_list =
+            core_accounts::list(&w, Some(&provider), &master_key).map_err(ApiError)?;
 
-    let is_auth_none = provider_row
-        .as_ref()
-        .is_some_and(|p| matches!(p.auth_type, core_providers::AuthType::None));
+        let is_auth_none = provider_row
+            .as_ref()
+            .is_some_and(|p| matches!(p.auth_type, core_providers::AuthType::None));
 
-    if is_auth_none || accounts_list.is_empty() {
-        return Ok((None, String::new()));
-    }
+        if is_auth_none || accounts_list.is_empty() {
+            return Ok((None, String::new()));
+        }
 
-    let account_id = find_candidate_account_for_refresh(&accounts_list, q.account_id);
-    match account_id {
-        Some(id) => Ok((Some(id), String::new())),
-        None => Err(ApiError(CoreError::NoHealthyTargets(0))),
-    }
+        let account_id = find_candidate_account_for_refresh(&accounts_list, account_id_input);
+        match account_id {
+            Some(id) => Ok((Some(id), String::new())),
+            None => Err(ApiError(CoreError::NoHealthyTargets(0))),
+        }
+    })
+    .await
+    .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
 fn write_antigravity_token_file(payload_str: &str) -> Result<std::path::PathBuf, CoreError> {
@@ -414,21 +424,32 @@ pub async fn scan_accounts(
         // OAuth post-exchange). El writer guard se libera al salir del
         // bloque (AGENTS §4.3: jamás retener locks a través de `.await`).
         {
-            let w = s.db_pool().writer();
-            core_accounts::store_oauth_tokens(
-                &w,
-                id,
-                s.master_key().as_ref(),
-                core_accounts::StoreOAuthTokensParams {
-                    access_token: &entry.access_token,
-                    refresh_token: entry.refresh_token.as_deref(),
-                    token_type: "Bearer",
-                    expires_at: None,
-                    scope: None,
-                    provider_specific: None,
-                    email: entry.email.as_deref(),
-                },
-            )?;
+            let pool = std::sync::Arc::clone(s.db_pool());
+            let master_key = std::sync::Arc::clone(s.master_key());
+            let access_token = entry.access_token.clone();
+            let refresh_token = entry.refresh_token.clone();
+            let email = entry.email.clone();
+            tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+                let w = pool
+                    .try_writer_for(std::time::Duration::from_secs(5))
+                    .ok_or_else(|| CoreError::Internal("writer lock timeout".into()))?;
+                core_accounts::store_oauth_tokens(
+                    &w,
+                    id,
+                    &master_key,
+                    core_accounts::StoreOAuthTokensParams {
+                        access_token: &access_token,
+                        refresh_token: refresh_token.as_deref(),
+                        token_type: "Bearer",
+                        expires_at: None,
+                        scope: None,
+                        provider_specific: None,
+                        email: email.as_deref(),
+                    },
+                )
+            })
+            .await
+            .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))??;
         }
 
         // Refresca metadata/quota del provider en background — idéntico a

@@ -961,6 +961,165 @@ impl<'de> Deserialize<'de> for UsageDetailRow {
     }
 }
 
+/// Map a rusqlite Row to `RecentUsageRow`. Reads columns sequentially from
+/// col_idx 0. Used by `recent()`, `recent_desc()`, and `row_for_broadcast_by_id()`.
+fn map_usage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<openproxy_types::usage::RecentUsageRow> {
+    let mut col_idx = 0;
+    let id: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let request_id: String = row.get(col_idx)?;
+    col_idx += 1;
+    let trace_id: String = row.get(col_idx)?;
+    col_idx += 1;
+    let provider_id: String = row.get(col_idx)?;
+    col_idx += 1;
+    let upstream_model_id: String = row.get(col_idx)?;
+    col_idx += 1;
+    let status_code: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let total_ms: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let prompt_tokens: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let completion_tokens: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let cost_usd: Option<f64> = row.get(col_idx)?;
+    col_idx += 1;
+    let connect_ms: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let ttft_ms: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let request_body_json: Option<serde_json::Value> = row
+        .get::<_, Option<String>>(col_idx)?
+        .and_then(|s| serde_json::from_str(&s).ok());
+    col_idx += 1;
+    let response_body_json: Option<serde_json::Value> = row
+        .get::<_, Option<String>>(col_idx)?
+        .and_then(|s| serde_json::from_str(&s).ok());
+    col_idx += 1;
+    let request_headers: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let response_headers: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let error_msg_redacted: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let error_msg: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let race_total: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let race_attempts: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let is_streaming: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let stream_complete: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let race_lost: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let created_at: String = row.get(col_idx)?;
+    col_idx += 1;
+    let stop_reason: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let compression_savings_pct: Option<f64> = row.get(col_idx)?;
+    col_idx += 1;
+    let compression_techniques: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let client_response: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let prompt_tokens_estimated: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let completion_tokens_estimated: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let endpoint_kind_str: String = row.get(col_idx)?;
+    col_idx += 1;
+    let proxy_url: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let proxy_status: Option<String> = row.get(col_idx)?;
+    col_idx += 1;
+    let is_proxy_rotated: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let cached_tokens: Option<i64> = row.get(col_idx)?;
+
+    if !(0..=i64::from(u16::MAX)).contains(&status_code) {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            5,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr(format!(
+                "status_code out of u16 range: {status_code}"
+            ))),
+        ));
+    }
+    if total_ms < 0 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr(format!(
+                "total_ms unexpectedly negative: {total_ms}"
+            ))),
+        ));
+    }
+    let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
+    let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
+    let error_message = error_msg_redacted.or(error_msg);
+    let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
+    let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
+    let race_total_u8 = u8::try_from(race_total).ok();
+    let race_attempts_u8 = u8::try_from(race_attempts).ok();
+    let mut flags = 0u8;
+    if race_lost != 0 {
+        flags |= USAGE_FLAG_RACE_LOST;
+    }
+    if is_streaming != 0 {
+        flags |= USAGE_FLAG_IS_STREAMING;
+    }
+    if stream_complete != 0 {
+        flags |= USAGE_FLAG_STREAM_COMPLETE;
+    }
+    if client_response != 0 {
+        flags |= USAGE_FLAG_CLIENT_RESPONSE;
+    }
+    if prompt_tokens_estimated != 0 {
+        flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+    }
+    if completion_tokens_estimated != 0 {
+        flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+    }
+    if is_proxy_rotated != 0 {
+        flags |= USAGE_FLAG_PROXY_ROTATED;
+    }
+    let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
+    let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
+    Ok(openproxy_types::usage::RecentUsageRow {
+        id: UsageId(id),
+        request_id,
+        trace_id,
+        provider_id: ProviderId::new(provider_id),
+        upstream_model_id,
+        status_code: status_code as u16,
+        total_ms: total_ms as u64,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+        cost_usd,
+        connect_ms: connect_ms.map(|v| v as u64),
+        ttft_ms: ttft_ms.map(|v| v as u64),
+        request_body_json,
+        response_body_json,
+        request_headers,
+        response_headers,
+        error_message,
+        race_total: race_total_u8,
+        race_attempts: race_attempts_u8,
+        stop_reason,
+        compression_savings_pct,
+        compression_techniques,
+        proxy_url,
+        proxy_status,
+        endpoint_kind,
+        created_at,
+        flags,
+    })
+}
+
 /// Return up to `limit` usage rows whose `id` is strictly greater than
 /// `since_id`, oldest first (so the dashboard can append in order).
 ///
@@ -1020,162 +1179,7 @@ pub fn recent(
         .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
-        .query_map(params![since_id, limit_param], |row| {
-            let mut col_idx = 0;
-            let id: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let request_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let trace_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let provider_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let upstream_model_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let status_code: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let total_ms: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let cost_usd: Option<f64> = row.get(col_idx)?;
-            col_idx += 1;
-            let connect_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let ttft_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let request_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_msg_redacted: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_msg: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let race_total: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let race_attempts: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let is_streaming: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let stream_complete: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let race_lost: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let created_at: String = row.get(col_idx)?;
-            col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let compression_savings_pct: Option<f64> = row.get(col_idx)?;
-            col_idx += 1;
-            let compression_techniques: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let client_response: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let endpoint_kind_str: String = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_url: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_status: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let is_proxy_rotated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let cached_tokens: Option<i64> = row.get(col_idx)?;
-
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    5,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            if total_ms < 0 {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    6,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {total_ms}"
-                    ))),
-                ));
-            }
-            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let error_message = error_msg_redacted.or(error_msg);
-            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
-            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
-            let race_total_u8 = u8::try_from(race_total).ok();
-            let race_attempts_u8 = u8::try_from(race_attempts).ok();
-            let mut flags = 0u8;
-            if race_lost != 0 {
-                flags |= USAGE_FLAG_RACE_LOST;
-            }
-            if is_streaming != 0 {
-                flags |= USAGE_FLAG_IS_STREAMING;
-            }
-            if stream_complete != 0 {
-                flags |= USAGE_FLAG_STREAM_COMPLETE;
-            }
-            if client_response != 0 {
-                flags |= USAGE_FLAG_CLIENT_RESPONSE;
-            }
-            if prompt_tokens_estimated != 0 {
-                flags |= USAGE_FLAG_PROMPT_ESTIMATED;
-            }
-            if completion_tokens_estimated != 0 {
-                flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
-            }
-            if is_proxy_rotated != 0 {
-                flags |= USAGE_FLAG_PROXY_ROTATED;
-            }
-            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-            let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
-            Ok(openproxy_types::usage::RecentUsageRow {
-                id: UsageId(id),
-                request_id,
-                trace_id,
-                provider_id: ProviderId::new(provider_id),
-                upstream_model_id,
-                status_code: status_code as u16,
-                total_ms: total_ms as u64,
-                prompt_tokens,
-                completion_tokens,
-                cached_tokens,
-                cost_usd,
-                connect_ms: connect_ms.map(|v| v as u64),
-                ttft_ms: ttft_ms.map(|v| v as u64),
-                request_body_json,
-                response_body_json,
-                request_headers,
-                response_headers,
-                error_message,
-                race_total: race_total_u8,
-                race_attempts: race_attempts_u8,
-                stop_reason,
-                compression_savings_pct,
-                compression_techniques,
-                proxy_url,
-                proxy_status,
-                endpoint_kind,
-                created_at,
-                flags,
-            })
-        })
+        .query_map(params![since_id, limit_param], map_usage_row)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "recent")
@@ -1219,163 +1223,7 @@ pub fn recent_desc(
         .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
-        .query_map(params![limit_param], |row| {
-            let mut col_idx = 0;
-            let id: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let request_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let trace_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let provider_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let upstream_model_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let status_code: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let total_ms: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let cost_usd: Option<f64> = row.get(col_idx)?;
-            col_idx += 1;
-            let connect_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let ttft_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let request_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_msg_redacted: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_msg: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let race_total: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let race_attempts: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let is_streaming: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let stream_complete: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let race_lost: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let created_at: String = row.get(col_idx)?;
-            col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let compression_savings_pct: Option<f64> = row.get(col_idx)?;
-            col_idx += 1;
-            let compression_techniques: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let client_response: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let endpoint_kind_str: String = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_url: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_status: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let is_proxy_rotated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let cached_tokens: Option<i64> = row.get(col_idx)?;
-
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    5,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            if total_ms < 0 {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    6,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "total_ms unexpectedly negative: {total_ms}"
-                    ))),
-                ));
-            }
-            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let error_message = error_msg_redacted.or(error_msg);
-            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
-            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
-            let race_total_u8 = u8::try_from(race_total).ok();
-            let race_attempts_u8 = u8::try_from(race_attempts).ok();
-            let mut flags = 0u8;
-            if race_lost != 0 {
-                flags |= USAGE_FLAG_RACE_LOST;
-            }
-            if is_streaming != 0 {
-                flags |= USAGE_FLAG_IS_STREAMING;
-            }
-            if stream_complete != 0 {
-                flags |= USAGE_FLAG_STREAM_COMPLETE;
-            }
-            if client_response != 0 {
-                flags |= USAGE_FLAG_CLIENT_RESPONSE;
-            }
-            if prompt_tokens_estimated != 0 {
-                flags |= USAGE_FLAG_PROMPT_ESTIMATED;
-            }
-            if completion_tokens_estimated != 0 {
-                flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
-            }
-            if is_proxy_rotated != 0 {
-                flags |= USAGE_FLAG_PROXY_ROTATED;
-            }
-            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-            let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
-
-            Ok(openproxy_types::usage::RecentUsageRow {
-                id: UsageId(id),
-                request_id,
-                trace_id,
-                provider_id: ProviderId::new(provider_id),
-                upstream_model_id,
-                status_code: status_code as u16,
-                total_ms: total_ms as u64,
-                prompt_tokens,
-                completion_tokens,
-                cached_tokens,
-                cost_usd,
-                connect_ms: connect_ms.map(|v| v as u64),
-                ttft_ms: ttft_ms.map(|v| v as u64),
-                request_body_json,
-                response_body_json,
-                request_headers,
-                response_headers,
-                error_message,
-                race_total: race_total_u8,
-                race_attempts: race_attempts_u8,
-                stop_reason,
-                compression_savings_pct,
-                compression_techniques,
-                proxy_url,
-                proxy_status,
-                endpoint_kind,
-                created_at,
-                flags,
-            })
-        })
+        .query_map(params![limit_param], map_usage_row)
         .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "recent_desc")
@@ -1413,153 +1261,7 @@ pub fn row_for_broadcast_by_id(
         .map_err(openproxy_db::error::map_db_error)?;
 
     let row = stmt
-        .query_row(params![id], |row| {
-            let mut col_idx = 0;
-            let id: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let request_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let trace_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let provider_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let upstream_model_id: String = row.get(col_idx)?;
-            col_idx += 1;
-            let status_code: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let total_ms: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let cost_usd: Option<f64> = row.get(col_idx)?;
-            col_idx += 1;
-            let connect_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let ttft_ms: Option<i64> = row.get(col_idx)?;
-            col_idx += 1;
-            let request_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row
-                .get::<_, Option<String>>(col_idx)?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_msg_redacted: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let error_msg: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let race_total: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let race_attempts: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let is_streaming: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let stream_complete: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let race_lost: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let created_at: String = row.get(col_idx)?;
-            col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let compression_savings_pct: Option<f64> = row.get(col_idx)?;
-            col_idx += 1;
-            let compression_techniques: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let client_response: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let completion_tokens_estimated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let endpoint_kind_str: String = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_url: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let proxy_status: Option<String> = row.get(col_idx)?;
-            col_idx += 1;
-            let is_proxy_rotated: i64 = row.get(col_idx)?;
-            col_idx += 1;
-            let cached_tokens: Option<i64> = row.get(col_idx)?;
-
-            if !(0..=i64::from(u16::MAX)).contains(&status_code) {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    5,
-                    rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!(
-                        "status_code out of u16 range: {status_code}"
-                    ))),
-                ));
-            }
-            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let error_message = error_msg_redacted.or(error_msg);
-            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
-            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
-            let race_total_u8 = u8::try_from(race_total).ok();
-            let race_attempts_u8 = u8::try_from(race_attempts).ok();
-            let mut flags = 0u8;
-            if race_lost != 0 {
-                flags |= USAGE_FLAG_RACE_LOST;
-            }
-            if is_streaming != 0 {
-                flags |= USAGE_FLAG_IS_STREAMING;
-            }
-            if stream_complete != 0 {
-                flags |= USAGE_FLAG_STREAM_COMPLETE;
-            }
-            if client_response != 0 {
-                flags |= USAGE_FLAG_CLIENT_RESPONSE;
-            }
-            if prompt_tokens_estimated != 0 {
-                flags |= USAGE_FLAG_PROMPT_ESTIMATED;
-            }
-            if completion_tokens_estimated != 0 {
-                flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
-            }
-            if is_proxy_rotated != 0 {
-                flags |= USAGE_FLAG_PROXY_ROTATED;
-            }
-            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
-            let cached_tokens = cached_tokens.and_then(|v| u32::try_from(v).ok());
-            Ok(openproxy_types::usage::RecentUsageRow {
-                id: UsageId(id),
-                request_id,
-                trace_id,
-                provider_id: ProviderId::new(provider_id),
-                upstream_model_id,
-                status_code: status_code as u16,
-                total_ms: total_ms as u64,
-                prompt_tokens,
-                completion_tokens,
-                cached_tokens,
-                cost_usd,
-                connect_ms: connect_ms.map(|v| v as u64),
-                ttft_ms: ttft_ms.map(|v| v as u64),
-                request_body_json,
-                response_body_json,
-                request_headers,
-                response_headers,
-                error_message,
-                race_total: race_total_u8,
-                race_attempts: race_attempts_u8,
-                stop_reason,
-                compression_savings_pct,
-                compression_techniques,
-                proxy_url,
-                proxy_status,
-                endpoint_kind,
-                created_at,
-                flags,
-            })
-        })
+        .query_row(params![id], map_usage_row)
         .map(Some);
 
     match row {
@@ -1845,4 +1547,156 @@ pub fn prune_expired_usage_rows(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal schema for the `usage` table, matching only the columns
+    /// that `map_usage_row` reads (indices 0..=34).
+    const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
+        id INTEGER PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        upstream_model_id TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        total_ms INTEGER NOT NULL,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        cost_usd REAL,
+        connect_ms INTEGER,
+        ttft_ms INTEGER,
+        request_body_json TEXT,
+        response_body_json TEXT,
+        request_headers TEXT,
+        response_headers TEXT,
+        error_msg_redacted TEXT,
+        error_msg TEXT,
+        race_total INTEGER NOT NULL DEFAULT 0,
+        race_attempts INTEGER NOT NULL DEFAULT 0,
+        is_streaming INTEGER NOT NULL DEFAULT 0,
+        stream_complete INTEGER NOT NULL DEFAULT 0,
+        race_lost INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        stop_reason TEXT,
+        compression_savings_pct REAL,
+        compression_techniques TEXT,
+        client_response INTEGER NOT NULL DEFAULT 0,
+        prompt_tokens_estimated INTEGER NOT NULL DEFAULT 0,
+        completion_tokens_estimated INTEGER NOT NULL DEFAULT 0,
+        endpoint_kind TEXT NOT NULL DEFAULT 'chat',
+        proxy_url TEXT,
+        proxy_status TEXT,
+        is_proxy_rotated INTEGER NOT NULL DEFAULT 0,
+        cached_tokens INTEGER
+    )";
+
+    #[test]
+    fn map_usage_row_basic() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(TEST_USAGE_SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO usage (id, request_id, trace_id, provider_id, upstream_model_id,
+                status_code, total_ms, prompt_tokens, completion_tokens, cost_usd,
+                connect_ms, ttft_ms, request_body_json, response_body_json,
+                request_headers, response_headers, error_msg_redacted, error_msg,
+                race_total, race_attempts, is_streaming, stream_complete, race_lost,
+                created_at, stop_reason, compression_savings_pct, compression_techniques,
+                client_response, prompt_tokens_estimated, completion_tokens_estimated,
+                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                     ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                     ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
+                     ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
+            rusqlite::params![
+                42i64,
+                "req-abc",
+                "trace-xyz",
+                "openai",
+                "gpt-4o",
+                200i64,
+                150i64,
+                100i64,
+                50i64,
+                0.003f64,
+                10i64,
+                25i64,
+                r#"{"model":"gpt-4o"}"#,
+                r#"{"choices":[]}"#,
+                r#"{"content-type":"application/json"}"#,
+                r#"{"x-request-id":"abc"}"#,
+                Some("redacted err"),
+                None::<String>,
+                2i64,
+                1i64,
+                1i64,
+                1i64,
+                0i64,
+                "2026-01-01T00:00:00Z",
+                Some("stop"),
+                Some(12.5f64),
+                Some("gzip"),
+                1i64,
+                0i64,
+                0i64,
+                "chat",
+                None::<String>,
+                None::<String>,
+                0i64,
+                Some(10i64),
+            ],
+        )
+        .unwrap();
+
+        let row = conn
+            .query_row("SELECT * FROM usage WHERE id = 42", [], map_usage_row)
+            .unwrap();
+
+        assert_eq!(row.id.0, 42);
+        assert_eq!(row.request_id, "req-abc");
+        assert_eq!(row.trace_id, "trace-xyz");
+        assert_eq!(row.provider_id.as_str(), "openai");
+        assert_eq!(row.upstream_model_id, "gpt-4o");
+        assert_eq!(row.status_code, 200);
+        assert_eq!(row.total_ms, 150);
+        assert_eq!(row.prompt_tokens, Some(100));
+        assert_eq!(row.completion_tokens, Some(50));
+        assert!((row.cost_usd.unwrap() - 0.003).abs() < f64::EPSILON);
+        assert_eq!(row.connect_ms, Some(10));
+        assert_eq!(row.ttft_ms, Some(25));
+        assert_eq!(row.stop_reason.as_deref(), Some("stop"));
+        assert_eq!(row.compression_savings_pct, Some(12.5));
+        assert_eq!(row.compression_techniques.as_deref(), Some("gzip"));
+        assert_eq!(row.proxy_url, None);
+        assert_eq!(row.proxy_status, None);
+        assert_eq!(row.cached_tokens, Some(10));
+        // flags: IS_STREAMING(2) | STREAM_COMPLETE(4) | CLIENT_RESPONSE(8) = 14
+        assert_eq!(row.flags, 14);
+    }
+
+    #[test]
+    fn map_usage_row_negative_total_ms_returns_error() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(TEST_USAGE_SCHEMA).unwrap();
+        conn.execute_batch(
+            "INSERT INTO usage (id, request_id, trace_id, provider_id, upstream_model_id,
+                status_code, total_ms, prompt_tokens, completion_tokens, cost_usd,
+                connect_ms, ttft_ms, request_body_json, response_body_json,
+                request_headers, response_headers, error_msg_redacted, error_msg,
+                race_total, race_attempts, is_streaming, stream_complete, race_lost,
+                created_at, stop_reason, compression_savings_pct, compression_techniques,
+                client_response, prompt_tokens_estimated, completion_tokens_estimated,
+                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens)
+             VALUES (1, 'r', 't', 'p', 'm', 200, -1, NULL, NULL, NULL,
+                     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                     0, 0, 0, 0, 0, '2026-01-01', NULL, NULL, NULL,
+                     0, 0, 0, 'chat', NULL, NULL, 0, NULL)",
+        )
+        .unwrap();
+
+        let result = conn.query_row("SELECT * FROM usage WHERE id = 1", [], map_usage_row);
+        assert!(result.is_err(), "negative total_ms should fail");
+    }
 }

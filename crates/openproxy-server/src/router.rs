@@ -214,7 +214,7 @@ mod tests {
     async fn make_state() -> AppState {
         let (pool, _path) = fresh_pool();
         let db_pool = Arc::new(pool);
-        let master_key = Arc::new(MasterKey::generate());
+        let master_key = Arc::new(MasterKey::generate().unwrap());
         let adapters = Arc::new(RwLock::new(Arc::new(
             Vec::<adapters::ProviderAdapterEnum>::new(),
         )));

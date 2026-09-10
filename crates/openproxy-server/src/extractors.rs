@@ -61,13 +61,27 @@ where
 {
     type Rejection = ApiError;
 
-    fn from_request_parts(
+    async fn from_request_parts(
         _parts: &mut Parts,
         state: &S,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+    ) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        let w = app_state.db_pool().writer_guard();
-        std::future::ready(Ok(DbWriter(w)))
+        let conn_arc = app_state.db_pool().writer_arc();
+        let guard = tokio::task::spawn_blocking(move || {
+            conn_arc.try_lock_arc_for(std::time::Duration::from_secs(5))
+        })
+        .await
+        .map_err(|e| {
+            ApiError(openproxy_types::CoreError::Internal(format!(
+                "writer spawn failed: {e}"
+            )))
+        })?
+        .ok_or_else(|| {
+            ApiError(openproxy_types::CoreError::Internal(
+                "writer lock timeout (5s)".into(),
+            ))
+        })?;
+        Ok(DbWriter(guard))
     }
 }
 

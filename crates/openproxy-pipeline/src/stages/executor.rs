@@ -79,7 +79,7 @@ async fn execute_sequential_targets(
     mut last_result: Option<PipelineResult>,
 ) -> Result<PipelineResult, CoreError> {
     let mut overall_attempt: u8 = 1;
-    for idx in 0..to_run.len() {
+    for (idx, _target) in to_run.iter().enumerate() {
         match execute_single_target_step(ctx, combo, to_run, idx, race_size, &mut overall_attempt)
             .await
         {

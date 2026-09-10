@@ -277,7 +277,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
         let mut w = pool.writer();
         migrations::run(&mut w).expect("migrations");
     }
-    let mk = Arc::new(MasterKey::generate());
+    let mk = Arc::new(MasterKey::generate().unwrap());
 
     // Register the test provider in the providers table so
     // `admin::refresh_models` doesn't bail on the first line

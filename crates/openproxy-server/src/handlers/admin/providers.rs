@@ -319,7 +319,7 @@ pub(crate) async fn run_provider_refresh(
     };
 
     let (selected_account_id, _) =
-        crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q)?;
+        crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q).await?;
 
     let (api_key, account_label) =
         resolve_refresh_key_and_label(&s, &provider, selected_account_id).await?;

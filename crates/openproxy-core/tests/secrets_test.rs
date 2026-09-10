@@ -13,7 +13,7 @@ use openproxy_types::CoreError;
 
 #[test]
 fn encrypt_then_decrypt_roundtrip() {
-    let key = MasterKey::generate();
+    let key = MasterKey::generate().unwrap();
     let blob = key.encrypt("sk-abc-123").unwrap();
     let pt = key.decrypt(&blob).unwrap();
     assert_eq!(pt, "sk-abc-123");
@@ -21,7 +21,7 @@ fn encrypt_then_decrypt_roundtrip() {
 
 #[test]
 fn encrypt_produces_different_ciphertexts() {
-    let key = MasterKey::generate();
+    let key = MasterKey::generate().unwrap();
     let a = key.encrypt("x").unwrap();
     let b = key.encrypt("x").unwrap();
     assert_ne!(
@@ -32,8 +32,8 @@ fn encrypt_produces_different_ciphertexts() {
 
 #[test]
 fn decrypt_with_wrong_key_fails() {
-    let a = MasterKey::generate();
-    let b = MasterKey::generate();
+    let a = MasterKey::generate().unwrap();
+    let b = MasterKey::generate().unwrap();
     let blob = a.encrypt("sk-abc-123").unwrap();
     let res = b.decrypt(&blob);
     assert!(res.is_err(), "wrong key must fail to decrypt");
@@ -91,7 +91,7 @@ fn from_env_invalid_base64_returns_config_error() {
 
 #[test]
 fn decrypt_truncated_blob_fails() {
-    let key = MasterKey::generate();
+    let key = MasterKey::generate().unwrap();
     // 5 bytes is shorter than the 12-byte nonce prefix.
     let res = key.decrypt(&[0u8; 5]);
     assert!(res.is_err(), "truncated blob must fail to decrypt");
@@ -100,7 +100,7 @@ fn decrypt_truncated_blob_fails() {
 #[test]
 fn encrypt_then_decrypt_long_key() {
     // A realistic-looking OpenAI-style key.
-    let key = MasterKey::generate();
+    let key = MasterKey::generate().unwrap();
     let api_key = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
     let blob = key.encrypt(api_key).unwrap();
     let pt = key.decrypt(&blob).unwrap();
@@ -109,7 +109,7 @@ fn encrypt_then_decrypt_long_key() {
 
 #[test]
 fn blob_layout_is_nonce_then_ciphertext() {
-    let key = MasterKey::generate();
+    let key = MasterKey::generate().unwrap();
     let blob = key.encrypt("hi").unwrap();
     // Nonce is 12 bytes; aes-gcm adds a 16-byte auth tag.
     // So minimal blob is 12 + 2 + 16 = 30 bytes.
