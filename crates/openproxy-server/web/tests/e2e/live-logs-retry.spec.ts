@@ -14,17 +14,18 @@
 // `trace_id=tr-old`, then a fresh `started` event with
 // `trace_id=tr-new` for the same `request_id`, and asserts:
 //   1. The DOM renders two distinct rows (one per `trace_id`).
-//   2. The old row's phase label stays as "conectando a upstream"
-//      (the `connecting` stage label from `lib/constants.ts:17`),
-//      even after the new attempt's `started` event has been
-//      processed.
-//   3. The new row's phase label is "procesando payload"
-//      (the `started` stage label from `lib/constants.ts:18`).
+//   2. The old row's phase label stays as "connecting to upstream"
+//      (i18n key `stage.connecting` via `getStageLabel` in
+//      `lib/constants.ts`), even after the new attempt's `started`
+//      event has been processed.
+//   3. The new row's phase label is "processing payload"
+//      (i18n key `stage.started` via `getStageLabel` in
+//      `lib/constants.ts`).
 //
 // Pre-fix behaviour (keying the stage map by `request_id`) would
 // overwrite the `connecting` stage of the old attempt with the
 // `started` stage of the new one, so the old row's phase label
-// would show "procesando payload" instead of "conectando a
+// would show "processing payload" instead of "connecting to
 // upstream" — assertion 2 catches that.
 
 import { test, expect, type Page } from '@playwright/test';
@@ -250,17 +251,18 @@ test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bl
   expect(snap.renderedTraceIds).toContain('tr-old');
   expect(snap.renderedTraceIds).toContain('tr-new');
 
-  // 2. The old row's phase label stays as "conectando a
-  //    upstream" (the `connecting` stage label from
-  //    `lib/constants.ts:19`). Pre-fix behaviour would have
-  //    overwritten it with "procesando payload" (the
+  // 2. The old row's phase label stays as "connecting to
+  //    upstream" (i18n key `stage.connecting`, resolved by
+  //    `getStageLabel` in `lib/constants.ts`). Pre-fix behaviour
+  //    would have overwritten it with "processing payload" (the
   //    `started` stage label) because the stage map is
   //    keyed by `request_id`.
   const oldPhase = (snap.oldPhaseInDom ?? '').toLowerCase();
   const newPhase = (snap.newPhaseInDom ?? '').toLowerCase();
-  expect(oldPhase).toContain('conectando');
-  expect(oldPhase).not.toContain('procesando');
-  // 3. The new row's phase label is "procesando payload"
-  //    (the `started` stage label from `lib/constants.ts:18`).
-  expect(newPhase).toContain('procesando');
+  expect(oldPhase).toContain('connecting');
+  expect(oldPhase).not.toContain('processing');
+  // 3. The new row's phase label is "processing payload"
+  //    (i18n key `stage.started`, resolved by `getStageLabel` in
+  //    `lib/constants.ts`).
+  expect(newPhase).toContain('processing');
 });

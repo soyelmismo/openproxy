@@ -208,7 +208,7 @@ async function injectAndSnapshot(
 // Tests
 // ---------------------------------------------------------------------------
 
-test('Live Logs: inflight placeholder with status_code=200 (waiting_ttft) does NOT show "completado" (NUEVO BUG A)', async ({ page }: { page: Page }) => {
+test('Live Logs: inflight placeholder with status_code=200 (waiting_ttft) does NOT show "completed" (NUEVO BUG A)', async ({ page }: { page: Page }) => {
   await setupLogsView(page);
 
   // Simulate a typical stage progression:
@@ -223,8 +223,8 @@ test('Live Logs: inflight placeholder with status_code=200 (waiting_ttft) does N
   //
   // Post-fix: `isInflight` guard (logs.ts:317-320) prevents this
   // synthesis for inflight placeholders. The row shows the actual
-  // stage from the stage map ("esperando ttft" / "recibiendo
-  // streaming"), and the latency cell shows the monotonic
+  // stage from the stage map ("waiting for ttft" / "streaming
+  // response"), and the latency cell shows the monotonic
   // `(elapsed_ms + sinceEvent)` value.
   const stages: SyntheticStagePhases[] = [
     {
@@ -252,18 +252,19 @@ test('Live Logs: inflight placeholder with status_code=200 (waiting_ttft) does N
   const row = snap.rows[0]!;
   expect(row.traceId).toBe('tr-bug-A');
 
-  // CRITICAL assertion: the phase text must NOT contain "completado"
+  // CRITICAL assertion: the phase text must NOT contain "completed"
   // (the terminal stage label). Pre-fix this would fail — the row
   // would show "completado / 0ms" because status_code=200 triggered
   // the synthesis path.
   const phaseLower = row.phase.toLowerCase();
-  expect(phaseLower).not.toContain('completado');
-  expect(phaseLower).not.toContain('falló');
-  expect(phaseLower).not.toContain('cancelado');
+  expect(phaseLower).not.toContain('completed');
+  expect(phaseLower).not.toContain('failed');
+  expect(phaseLower).not.toContain('cancelled');
 
   // The phase text MUST contain the actual stage label. For
-  // waiting_ttft: "esperando ttft" (constants.ts:20).
-  expect(phaseLower).toContain('esperando');
+  // waiting_ttft: `getStageLabel` resolves i18n key
+  // `stage.waiting_ttft` → "Waiting for TTFT" (lib/constants.ts).
+  expect(phaseLower).toContain('waiting');
 
   // The latency cell must NOT be "0ms" — the inflight placeholder
   // has no `total_ms` from a DB row, but the renderer now uses
@@ -278,14 +279,14 @@ test('Live Logs: inflight placeholder with status_code=200 (waiting_ttft) does N
   expect(latencyMs).toBeGreaterThanOrEqual(100);
 });
 
-test('Live Logs: inflight streaming with status_code=200 shows "recibiendo streaming" not "completado"', async ({ page }: { page: Page }) => {
+test('Live Logs: inflight streaming with status_code=200 shows "streaming response" not "completed"', async ({ page }: { page: Page }) => {
   await setupLogsView(page);
 
   // Same as above but with `stage: "streaming"`. This is the
   // EXACT scenario the user reported: a request that is actively
   // streaming gets a `streaming` stage event with `status_code=200`,
-  // and the dashboard shows "completado" instead of "recibiendo
-  // streaming".
+  // and the dashboard shows "completed" instead of "streaming
+  // response".
   const stages: SyntheticStagePhases[] = [
     {
       request_id: 'req-streaming',
@@ -309,8 +310,8 @@ test('Live Logs: inflight streaming with status_code=200 shows "recibiendo strea
   expect(snap.rows.length).toBe(1);
 
   const phaseLower = snap.rows[0]!.phase.toLowerCase();
-  expect(phaseLower).not.toContain('completado');
-  expect(phaseLower).toContain('recibiendo');
+  expect(phaseLower).not.toContain('completed');
+  expect(phaseLower).toContain('streaming');
 });
 
 test('Live Logs: newer inflight renders ABOVE older inflight (HALLAZGO 2)', async ({ page }: { page: Page }) => {
@@ -467,7 +468,7 @@ test('Live Logs: burst of stage events renders the LATEST stage (Fix 4 — reque
   // relying solely on the 250ms render interval. Under a burst of
   // 4 stage events in <50ms (started → connecting → waiting_ttft →
   // streaming), the renderer should show the LATEST stage
-  // ("recibiendo streaming") — not "procesando payload" (started).
+  // ("streaming response") — not "processing payload" (started).
   //
   // Note: this test injects only the LATEST stage event (streaming)
   // and verifies the renderer shows it. A full burst test would
@@ -498,9 +499,9 @@ test('Live Logs: burst of stage events renders the LATEST stage (Fix 4 — reque
   expect(snap.rows.length).toBe(1);
 
   const phaseLower = snap.rows[0]!.phase.toLowerCase();
-  // The latest stage must be rendered, not "procesando payload"
+  // The latest stage must be rendered, not "processing payload"
   // (started) which would be the case if the renderer had skipped
   // intermediate stages.
-  expect(phaseLower).toContain('recibiendo');
-  expect(phaseLower).not.toContain('procesando');
+  expect(phaseLower).toContain('streaming');
+  expect(phaseLower).not.toContain('processing');
 });
