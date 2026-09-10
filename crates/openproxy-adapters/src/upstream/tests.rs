@@ -1301,4 +1301,35 @@ pub mod tests_helper {
         let connector = SingleResponseConnector { addr };
         UpstreamClient::for_test_with_connector(connector, None)
     }
+
+    #[test]
+    fn test_build_hyper_request_injects_default_user_agent() {
+        let req = super::UpstreamRequest::get("https://example.com/v1/models");
+        let hyper_req = super::client::build_hyper_request(req).expect("build request");
+        let ua = hyper_req
+            .headers()
+            .get(http::header::USER_AGENT)
+            .expect("user-agent present");
+        assert!(
+            ua.to_str()
+                .expect("valid ascii")
+                .starts_with("openproxy/"),
+            "expected User-Agent to start with openproxy/, got {ua:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_hyper_request_preserves_custom_user_agent() {
+        let mut req = super::UpstreamRequest::get("https://example.com/v1/models");
+        req.headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_static("custom-agent/2.0"),
+        );
+        let hyper_req = super::client::build_hyper_request(req).expect("build request");
+        let ua = hyper_req
+            .headers()
+            .get(http::header::USER_AGENT)
+            .expect("user-agent present");
+        assert_eq!(ua.to_str().expect("valid ascii"), "custom-agent/2.0");
+    }
 }

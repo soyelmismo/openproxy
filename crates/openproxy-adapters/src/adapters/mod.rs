@@ -1051,6 +1051,10 @@ pub async fn upstream_get_bytes(
     headers: &[(&str, &str)],
 ) -> std::result::Result<bytes::Bytes, String> {
     let mut req = UpstreamRequest::get(url);
+    req.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json, text/plain, */*"),
+    );
     insert_upstream_headers(&mut req, headers)?;
 
     let cancel = CancellationToken::new();

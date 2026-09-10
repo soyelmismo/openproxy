@@ -444,7 +444,19 @@ fn build_host_key_and_uri(url: &str) -> UpstreamResult<(Uri, HostKey, String)> {
 }
 
 #[cfg(feature = "upstream-hyper")]
-fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Bytes>>> {
+static DEFAULT_USER_AGENT: std::sync::LazyLock<http::HeaderValue> =
+    std::sync::LazyLock::new(|| {
+        if let Ok(custom) = std::env::var("OPENPROXY_USER_AGENT")
+            && let Ok(val) = http::HeaderValue::from_str(&custom)
+        {
+            val
+        } else {
+            http::HeaderValue::from_static(concat!("openproxy/", env!("CARGO_PKG_VERSION")))
+        }
+    });
+
+#[cfg(feature = "upstream-hyper")]
+pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Bytes>>> {
     let body_bytes = spec.body;
     let body_len = body_bytes.as_ref().map(bytes::Bytes::len);
     let body: Full<Bytes> = match body_bytes {
@@ -457,6 +469,9 @@ fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Byt
             .headers_mut()
             .ok_or_else(|| UpstreamError::Invalid("failed to build request headers".to_string()))?;
         *headers = spec.headers;
+        if !headers.contains_key(http::header::USER_AGENT) {
+            headers.insert(http::header::USER_AGENT, DEFAULT_USER_AGENT.clone());
+        }
         if let Some(len) = body_len
             && !headers.contains_key(http::header::CONTENT_LENGTH)
         {
