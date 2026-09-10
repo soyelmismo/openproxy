@@ -258,9 +258,9 @@ test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bl
   //    keyed by `request_id`.
   const oldPhase = (snap.oldPhaseInDom ?? '').toLowerCase();
   const newPhase = (snap.newPhaseInDom ?? '').toLowerCase();
-  expect(oldPhase).toContain('conectando');
-  expect(oldPhase).not.toContain('procesando');
-  // 3. The new row's phase label is "procesando payload"
-  //    (the `started` stage label from `lib/constants.ts:18`).
-  expect(newPhase).toContain('procesando');
+  expect(oldPhase).toContain('connecting');
+  expect(oldPhase).not.toContain('processing');
+  // 3. The new row's phase label is "Processing payload"
+  //    (the `started` stage label from i18n).
+  expect(newPhase).toContain('processing');
 });

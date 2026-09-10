@@ -262,8 +262,8 @@ test('Live Logs: inflight placeholder with status_code=200 (waiting_ttft) does N
   expect(phaseLower).not.toContain('cancelado');
 
   // The phase text MUST contain the actual stage label. For
-  // waiting_ttft: "esperando ttft" (constants.ts:20).
-  expect(phaseLower).toContain('esperando');
+  // waiting_ttft: "Waiting for TTFT" (i18n).
+  expect(phaseLower).toContain('waiting');
 
   // The latency cell must NOT be "0ms" — the inflight placeholder
   // has no `total_ms` from a DB row, but the renderer now uses
@@ -309,8 +309,8 @@ test('Live Logs: inflight streaming with status_code=200 shows "recibiendo strea
   expect(snap.rows.length).toBe(1);
 
   const phaseLower = snap.rows[0]!.phase.toLowerCase();
-  expect(phaseLower).not.toContain('completado');
-  expect(phaseLower).toContain('recibiendo');
+  expect(phaseLower).not.toContain('completed');
+  expect(phaseLower).toContain('streaming');
 });
 
 test('Live Logs: newer inflight renders ABOVE older inflight (HALLAZGO 2)', async ({ page }: { page: Page }) => {
@@ -501,6 +501,6 @@ test('Live Logs: burst of stage events renders the LATEST stage (Fix 4 — reque
   // The latest stage must be rendered, not "procesando payload"
   // (started) which would be the case if the renderer had skipped
   // intermediate stages.
-  expect(phaseLower).toContain('recibiendo');
-  expect(phaseLower).not.toContain('procesando');
+  expect(phaseLower).toContain('streaming');
+  expect(phaseLower).not.toContain('processing');
 });
