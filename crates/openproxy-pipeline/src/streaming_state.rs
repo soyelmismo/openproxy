@@ -2,6 +2,7 @@ use crate::FailureContext;
 use crate::race_sink::StreamSink;
 use crate::sse::AnthropicToolUseAccumulator;
 use crate::sse::SseParser;
+use crate::sse::merge_usage;
 use crate::sse_accumulator::ResponseAccumulator;
 use crate::streaming::{StreamAction, StreamingChunkStage};
 use crate::think_extractor::ThinkStreamExtractor;
@@ -592,8 +593,11 @@ impl ChunkProcessor<'_> {
         mut chunk: crate::sse::UpstreamSseChunk,
         json_payload: &str,
     ) {
-        if chunk.usage.is_some() {
-            self.state.usage = chunk.usage.take();
+        if let Some(new_usage) = chunk.usage.take() {
+            self.state.usage = Some(match self.state.usage.take() {
+                Some(existing) => merge_usage(existing, new_usage),
+                None => new_usage,
+            });
         }
         if chunk.stop_reason.is_some() && self.state.stop_reason.is_none() {
             self.state.stop_reason = chunk.stop_reason.take();
@@ -751,8 +755,11 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         mut chunk: crate::sse::UpstreamSseChunk,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
-        if chunk.usage.is_some() {
-            self.state.usage = chunk.usage.take();
+        if let Some(new_usage) = chunk.usage.take() {
+            self.state.usage = Some(match self.state.usage.take() {
+                Some(existing) => merge_usage(existing, new_usage),
+                None => new_usage,
+            });
         }
         if chunk.stop_reason.is_some() {
             self.state.stop_reason = chunk.stop_reason.take();
@@ -800,8 +807,11 @@ impl ChunkProcessor<'_> {
         stream: &mut openproxy_adapters::upstream::UpstreamBodyStream,
         mut chunk: crate::sse::UpstreamSseChunk,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
-        if chunk.usage.is_some() {
-            self.state.usage = chunk.usage.take();
+        if let Some(new_usage) = chunk.usage.take() {
+            self.state.usage = Some(match self.state.usage.take() {
+                Some(existing) => merge_usage(existing, new_usage),
+                None => new_usage,
+            });
         }
         if chunk.stop_reason.is_some() && self.state.stop_reason.is_none() {
             self.state.stop_reason = chunk.stop_reason.take();

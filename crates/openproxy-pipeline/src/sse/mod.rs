@@ -13,6 +13,10 @@ mod gemini;
 mod openai;
 mod responses;
 
+// Re-export the Anthropic `merge_usage` helper so the streaming state
+// can call it without exposing the rest of the Anthropic submodule.
+pub(crate) use anthropic::merge_usage;
+
 use crate::translation::OpenAIUsage;
 use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;

@@ -2,7 +2,61 @@
 
 use super::{MAX_SSE_EVENT_TYPE_BYTES, UpstreamSseChunk};
 use openproxy_types::error::{CoreError, Result};
+use openproxy_types::message::{OpenAIUsage, PromptTokensDetails};
 use serde_json::Value;
+
+/// Merge two `OpenAIUsage` snapshots from successive SSE chunks.
+///
+/// Token counts in streamed responses are delivered incrementally:
+/// `message_start` carries `prompt_tokens` (with cache contributions)
+/// but `output_tokens` is still ~0; later `message_delta` carries the
+/// final `output_tokens`. Newer Anthropic streams include
+/// `input_tokens` in the `message_delta.usage` block too, but the
+/// classic format omits it. This helper preserves the maximum seen
+/// value per field so that a zero-sentinel chunk (e.g. message_delta
+/// with `output_tokens: 89, prompt_tokens: 0`) does not clobber the
+/// prompt count extracted from `message_start`.
+pub(crate) fn merge_usage(existing: OpenAIUsage, new: OpenAIUsage) -> OpenAIUsage {
+    use std::cmp::max;
+
+    let pick_prompt = |new_val: u32| {
+        if new_val > 0 {
+            max(existing.prompt_tokens, new_val)
+        } else {
+            existing.prompt_tokens
+        }
+    };
+    let pick_total = |new_val: u32| {
+        if new_val > 0 {
+            max(existing.total_tokens, new_val)
+        } else if existing.total_tokens > 0 {
+            existing.total_tokens
+        } else {
+            existing
+                .prompt_tokens
+                .saturating_add(existing.completion_tokens)
+        }
+    };
+
+    OpenAIUsage {
+        prompt_tokens: pick_prompt(new.prompt_tokens),
+        completion_tokens: max(existing.completion_tokens, new.completion_tokens),
+        total_tokens: pick_total(new.total_tokens),
+        prompt_tokens_details: match (existing.prompt_tokens_details, new.prompt_tokens_details) {
+            (Some(e), Some(n)) => Some(PromptTokensDetails {
+                cached_tokens: match (e.cached_tokens, n.cached_tokens) {
+                    (Some(a), Some(b)) => Some(max(a, b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                },
+            }),
+            (Some(e), None) => Some(e),
+            (None, Some(n)) => Some(n),
+            (None, None) => None,
+        },
+    }
+}
 
 // ==========
 // H5 fix: Anthropic tool_use stateful accumulator
@@ -127,7 +181,42 @@ fn build_anthropic_message_start_chunk(
     chunk_id: &str,
     created: u64,
     model: &str,
+    data: &Value,
 ) -> UpstreamSseChunk {
+    // Anthropic `message_start` carries the true prompt token count at
+    // `message.usage.{input_tokens,cache_read_input_tokens,cache_creation_input_tokens}`.
+    // The OpenAI wire shape merges cache contributions into `prompt_tokens`
+    // and exposes them under `prompt_tokens_details.cached_tokens` so the
+    // dashboard can render the cache hit rate.
+    let usage = data.get("message").and_then(|m| m.get("usage")).map(|u| {
+        let input_tokens = u
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let output_tokens = u
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let cache_read = u
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let cache_creation = u
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let prompt_total = input_tokens.saturating_add(cache_read).saturating_add(cache_creation);
+        let total = prompt_total.saturating_add(output_tokens);
+        OpenAIUsage {
+            prompt_tokens: u32::try_from(prompt_total).unwrap_or(u32::MAX),
+            completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
+            total_tokens: u32::try_from(total).unwrap_or(u32::MAX),
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: u32::try_from(cache_read).ok(),
+            }),
+        }
+    });
+
     let chunk = serde_json::json!({
         "id": chunk_id,
         "object": "chat.completion.chunk",
@@ -143,7 +232,7 @@ fn build_anthropic_message_start_chunk(
         raw_payload: None,
         payload: chunk,
         done: false,
-        usage: None,
+        usage,
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),
@@ -239,22 +328,60 @@ fn translate_anthropic_message_delta(
         _ => None,
     };
 
-    let usage = data.get("usage").map(|u| crate::translation::OpenAIUsage {
-        prompt_tokens: u
-            .get("input_tokens")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            .try_into()
-            .unwrap_or(u32::MAX),
-        completion_tokens: u
-            .get("output_tokens")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            .try_into()
-            .unwrap_or(u32::MAX),
-        total_tokens: 0,
-        prompt_tokens_details: None,
-    });
+    let usage = {
+        let usage_block = data.get("usage");
+        let input_present = usage_block
+            .and_then(|u| u.get("input_tokens"))
+            .is_some();
+        let output_tokens = usage_block
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+
+        if input_present {
+            // Newer Anthropic streams: both input and output present in
+            // the final message_delta. Take both, including cache
+            // contributions so the dashboard sees the full prompt cost.
+            let input_tokens = usage_block
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let cache_read = usage_block
+                .and_then(|u| u.get("cache_read_input_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let cache_creation = usage_block
+                .and_then(|u| u.get("cache_creation_input_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let prompt_total = input_tokens
+                .saturating_add(cache_read)
+                .saturating_add(cache_creation);
+            let total = prompt_total.saturating_add(output_tokens);
+            Some(OpenAIUsage {
+                prompt_tokens: u32::try_from(prompt_total).unwrap_or(u32::MAX),
+                completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
+                total_tokens: u32::try_from(total).unwrap_or(u32::MAX),
+                prompt_tokens_details: Some(PromptTokensDetails {
+                    cached_tokens: u32::try_from(cache_read).ok(),
+                }),
+            })
+        } else if output_tokens > 0 {
+            // Classic Anthropic message_delta: only `output_tokens` is
+            // present. Emit a chunk that carries the final completion
+            // count but a zero `prompt_tokens` SENTINEL — the streaming
+            // state must merge this with the prompt count extracted
+            // from the earlier `message_start` chunk.
+            Some(OpenAIUsage {
+                prompt_tokens: 0,
+                completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
+                total_tokens: 0,
+                prompt_tokens_details: None,
+            })
+        } else {
+            None
+        }
+    };
 
     let chunk = serde_json::json!({
         "id": chunk_id,
@@ -298,7 +425,7 @@ pub fn translate_anthropic_sse_payload(
 
     match event_type {
         "message_start" => Ok(Some(build_anthropic_message_start_chunk(
-            chunk_id, created, model,
+            chunk_id, created, model, &data,
         ))),
         "content_block_delta" => Ok(translate_anthropic_content_delta(
             &data, chunk_id, created, model,
@@ -766,6 +893,175 @@ mod tests {
                 .unwrap(),
             "length"
         );
+    }
+
+    // ---- Token-usage regression tests (2026-09-10) ----
+    //
+    // The dashboards showed `prompt_tokens`/`completion_tokens` too low
+    // on Anthropic streams, as if only the latest message was counted.
+    // Root cause was three layers:
+    //   A. `message_start.usage` (the true prompt token count, incl.
+    //      cache contributions) was ignored entirely.
+    //   B. `message_delta` filled `input_tokens` with 0 when absent,
+    //      producing a chunk with `prompt_tokens = 0`.
+    //   C. `streaming_state` overwrote the accumulated usage with the
+    //      latest chunk, so the prompt count was lost.
+    // These tests pin the fixed behavior at the translator level.
+
+    #[test]
+    fn anthropic_streaming_message_start_extracts_usage() {
+        // A full `message_start` payload with cache contributions. The
+        // prompt count must be input + cache_read + cache_creation.
+        let data = serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-test",
+                "usage": {
+                    "input_tokens": 472,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 100,
+                    "cache_creation_input_tokens": 50
+                }
+            }
+        });
+        let chunk = build_anthropic_message_start_chunk("chunk-1", 1234567890, "claude-test", &data);
+        assert!(!chunk.done);
+        let usage = chunk.usage.expect("message_start must carry usage");
+        assert_eq!(usage.prompt_tokens, 622, "input + cache_read + cache_creation = 472 + 100 + 50");
+        assert_eq!(usage.completion_tokens, 2);
+        assert_eq!(usage.total_tokens, 624);
+        let details = usage.prompt_tokens_details.expect("cache details present");
+        assert_eq!(details.cached_tokens, Some(100));
+    }
+
+    #[test]
+    fn anthropic_streaming_message_start_without_usage_emits_none() {
+        // Defensive: a message_start without a `message.usage` block
+        // must not produce a zero-filled usage chunk.
+        let data = serde_json::json!({
+            "type": "message_start",
+            "message": {"id": "msg_01", "role": "assistant", "content": []}
+        });
+        let chunk = build_anthropic_message_start_chunk("chunk-1", 1234567890, "claude-test", &data);
+        assert!(chunk.usage.is_none());
+    }
+
+    #[test]
+    fn anthropic_streaming_message_delta_classic_preserves_prompt() {
+        // Classic Anthropic `message_delta`: the usage block carries
+        // only `output_tokens`. The translator must NOT emit a chunk
+        // claiming `prompt_tokens = 0` as a real count — it emits the
+        // zero sentinel which the streaming-state merge turns into a
+        // no-op for the prompt field. Any non-zero `output_tokens` must
+        // still surface.
+        let data = serde_json::json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 89}
+        });
+        let chunk = translate_anthropic_message_delta(&data, "chunk-1", 1234567890, "claude-test");
+        assert!(chunk.done);
+        let usage = chunk.usage.expect("classic message_delta must carry usage");
+        assert_eq!(usage.prompt_tokens, 0, "sentinel: caller must merge, not overwrite");
+        assert_eq!(usage.completion_tokens, 89);
+        assert_eq!(usage.total_tokens, 0);
+        assert!(usage.prompt_tokens_details.is_none());
+    }
+
+    #[test]
+    fn anthropic_streaming_message_delta_with_input_tokens_takes_both() {
+        // Newer Anthropic `message_delta` includes `input_tokens` again.
+        // Both counts must be taken directly, not zero-filled.
+        let data = serde_json::json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 450,
+                "output_tokens": 89,
+                "cache_read_input_tokens": 172
+            }
+        });
+        let chunk = translate_anthropic_message_delta(&data, "chunk-1", 1234567890, "claude-test");
+        let usage = chunk.usage.expect("message_delta with input_tokens must carry usage");
+        assert_eq!(usage.prompt_tokens, 622, "input 450 + cache_read 172");
+        assert_eq!(usage.completion_tokens, 89);
+        assert_eq!(usage.total_tokens, 711);
+        let details = usage.prompt_tokens_details.expect("cache details present");
+        assert_eq!(details.cached_tokens, Some(172));
+    }
+
+    #[test]
+    fn anthropic_streaming_message_delta_without_usage_emits_none() {
+        // Defensive: a message_delta with no usage block at all (e.g.
+        // a `stop_reason: "tool_use"` mid-stream signal) must not
+        // emit a zero-filled usage chunk.
+        let data = serde_json::json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"}
+        });
+        let chunk = translate_anthropic_message_delta(&data, "chunk-1", 1234567890, "claude-test");
+        assert!(chunk.usage.is_none());
+    }
+
+    #[test]
+    fn merge_usage_preserves_prompt_from_zero_sentinel() {
+        // When the classic message_delta arrives (prompt_tokens = 0
+        // sentinel, total_tokens = 0) after message_start carried the
+        // real prompt count, the merge must keep the prompt and total
+        // from the earlier chunk while adopting the new completion count.
+        let existing = OpenAIUsage {
+            prompt_tokens: 622,
+            completion_tokens: 2,
+            total_tokens: 624,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: Some(100),
+            }),
+        };
+        let new = OpenAIUsage {
+            prompt_tokens: 0,
+            completion_tokens: 89,
+            total_tokens: 0,
+            prompt_tokens_details: None,
+        };
+        let merged = merge_usage(existing, new);
+        assert_eq!(merged.prompt_tokens, 622, "preserved from message_start");
+        assert_eq!(merged.completion_tokens, 89, "updated from message_delta");
+        assert_eq!(merged.total_tokens, 624, "preserved from message_start");
+        assert_eq!(
+            merged.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            Some(100),
+            "details preserved from message_start"
+        );
+    }
+
+    #[test]
+    fn merge_usage_takes_max_of_newer_counts() {
+        // Newer Anthropic streams put the full usage (input + output)
+        // into the final message_delta. The merge must take the max,
+        // never the old value.
+        let existing = OpenAIUsage {
+            prompt_tokens: 62,
+            completion_tokens: 2,
+            total_tokens: 64,
+            prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: None }),
+        };
+        let new = OpenAIUsage {
+            prompt_tokens: 622,
+            completion_tokens: 89,
+            total_tokens: 711,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: Some(172),
+            }),
+        };
+        let merged = merge_usage(existing, new);
+        assert_eq!(merged.prompt_tokens, 622);
+        assert_eq!(merged.completion_tokens, 89);
+        assert_eq!(merged.total_tokens, 711);
+        assert_eq!(merged.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens), Some(172));
     }
 
     // ---- H5 fix: Anthropic tool_use accumulator ----
