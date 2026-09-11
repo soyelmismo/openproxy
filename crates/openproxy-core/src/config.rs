@@ -239,7 +239,7 @@ mod tests {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config.example.toml");
         let cfg = AppConfig::load(&path).expect("config.example.toml must load");
         assert_eq!(cfg.racing.default_race_size, 1);
-        assert_eq!(cfg.timeouts.ttft_ms, 30_000);
+        assert_eq!(cfg.timeouts.ttft_ms, 6_000);
     }
 
     #[test]

@@ -42,7 +42,7 @@ impl ResolvedTimeouts {
         dial_ms: 5_000,         // == `connect_ms` system default
         tls_ms: 5_000,          // rolled into `connect_ms` for backward compat
         write_ms: 10_000,       // == `request_send_ms` system default
-        headers_ms: 30_000,     // == `ttft_ms` system default (wait-for-headers)
+        headers_ms: 6_000,      // == `ttft_ms` system default (wait-for-headers / TTFT)
         body_chunk_ms: 120_000, // == `idle_chunk_ms` system default
         total_ms: 300_000,      // == `total_ms` system default
     };
@@ -70,7 +70,7 @@ pub enum TimeoutProfile {
 
 impl TimeoutProfile {
     const CHAT: ResolvedTimeouts = ResolvedTimeouts {
-        headers_ms: 20_000,
+        headers_ms: 6_000,
         body_chunk_ms: 90_000,
         ..ResolvedTimeouts::SYSTEM_DEFAULTS
     };
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn chat_resolves_with_ttft_and_chunk_overrides() {
         let t = TimeoutProfile::Chat.resolve();
-        assert_eq!(t.headers_ms, 20_000);
+        assert_eq!(t.headers_ms, 6_000);
         assert_eq!(t.body_chunk_ms, 90_000);
         // non-overridden phases fall back to system defaults
         assert_eq!(t.total_ms, 300_000);

@@ -279,15 +279,15 @@ fn profile_chat_default_values() {
     // The spec section "MIGRATION STRATEGY" doesn't pin Chat's exact
     // values, but the section "Existing config schema" says the
     // system defaults for the equivalent `TimeoutsConfig` are:
-    //   connect_ms=5000, request_send_ms=10000, ttft_ms=30000,
+    //   connect_ms=5000, request_send_ms=10000, ttft_ms=6000,
     //   idle_chunk_ms=120000, total_ms=300000.
-    // Chat tightens `ttft` (== headers_ms) to 20_000 and `idle_chunk`
+    // Chat sets `ttft` (== headers_ms) to 6_000 and `idle_chunk`
     // (== body_chunk_ms) to 90_000 to fail fast on a dead upstream.
     assert_eq!(t.dns_ms, 5_000, "dns_ms should equal system default");
     assert_eq!(t.dial_ms, 5_000, "dial_ms should equal system default");
     assert_eq!(t.tls_ms, 5_000, "tls_ms should equal system default");
     assert_eq!(t.write_ms, 10_000, "write_ms should equal system default");
-    assert_eq!(t.headers_ms, 20_000, "Chat tightens headers_ms to 20s");
+    assert_eq!(t.headers_ms, 6_000, "Chat headers_ms should equal 6s");
     assert_eq!(
         t.body_chunk_ms, 90_000,
         "Chat tightens body_chunk_ms to 90s"
@@ -563,6 +563,69 @@ async fn stub_event_does_not_start_chunk_gap_timer() {
         "elapsed = {elapsed:?}: the total_ms (2s) deadline did not \
          fire — the body stream is not falling back to total_deadline \
          when `note_content_chunk()` is not called."
+    );
+}
+
+// -----------------------------------------------------------------------
+// Test 6c: ttft_deadline (headers_ms) is enforced while waiting for first chunk
+// -----------------------------------------------------------------------
+async fn spawn_headers_then_silent_server() -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut tcp, _peer)) = listener.accept().await {
+            let mut buf = vec![0u8; 4096];
+            let _ = tcp.read(&mut buf).await;
+            let resp = "HTTP/1.1 200 OK\r\n\
+                        content-type: text/event-stream\r\n\
+                        transfer-encoding: chunked\r\n\r\n";
+            let _ = tcp.write_all(resp.as_bytes()).await;
+            let _ = tcp.flush().await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn ttft_timeout_fires_when_first_chunk_delayed_after_headers() {
+    let addr = spawn_headers_then_silent_server().await;
+    let url = format!("http://{addr}/");
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let profile = TimeoutProfile::Custom(ResolvedTimeouts {
+        dns_ms: 5_000,
+        dial_ms: 5_000,
+        tls_ms: 5_000,
+        write_ms: 5_000,
+        headers_ms: 200,
+        body_chunk_ms: 5_000,
+        total_ms: 5_000,
+    });
+    let mut resp = client
+        .call(UpstreamRequest::get(url), profile, cancel)
+        .await
+        .expect("headers arrive quickly, dispatch ok");
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let t = std::time::Instant::now();
+    let res = resp.body.next_chunk().await;
+    let elapsed = t.elapsed();
+
+    assert!(
+        res.is_err(),
+        "expected ttft timeout on first chunk, got {res:?}"
+    );
+    assert!(
+        matches!(
+            res.unwrap_err(),
+            UpstreamError::Timeout(UpstreamPhase::Headers)
+        ),
+        "expected Timeout(Headers) representing ttft timeout"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "elapsed = {elapsed:?}: ttft timeout must fire well before total_ms (5s)"
     );
 }
 

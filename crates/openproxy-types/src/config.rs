@@ -138,7 +138,7 @@ impl Default for TimeoutsConfig {
         Self {
             connect_ms: 5_000,
             request_send_ms: 10_000,
-            ttft_ms: 30_000,
+            ttft_ms: 6_000,
             idle_chunk_ms: 120_000,
             total_ms: 300_000,
         }

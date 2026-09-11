@@ -419,6 +419,7 @@ impl UpstreamClient {
             response,
             cancel,
             timeouts.body_chunk_ms,
+            deadlines.headers_deadline,
             deadlines.total_deadline,
             is_streaming,
         ))
@@ -513,6 +514,7 @@ fn wrap_upstream_response(
     response: hyper::Response<hyper::body::Incoming>,
     cancel: CancellationToken,
     body_chunk_ms: u64,
+    ttft_deadline: Instant,
     total_deadline: Instant,
     is_streaming: bool,
 ) -> UpstreamResponse {
@@ -521,6 +523,7 @@ fn wrap_upstream_response(
         body,
         cancel,
         body_chunk_ms,
+        ttft_deadline,
         total_deadline,
         8 * 1024 * 1024,
         is_streaming,

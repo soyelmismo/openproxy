@@ -54,6 +54,10 @@ fn is_race_cancelled(ctx: &StreamContext<'_>) -> bool {
 
 fn map_upstream_stream_error(e: UpstreamError, ctx: &StreamContext<'_>) -> Option<CoreError> {
     match e {
+        UpstreamError::Timeout(UpstreamPhase::Headers) => Some(CoreError::UpstreamTimeout {
+            phase: "ttft".into(),
+            ms: ctx.resolved_timeouts.ttft.as_millis() as u64,
+        }),
         UpstreamError::Timeout(UpstreamPhase::Body) => Some(CoreError::UpstreamTimeout {
             phase: "idle_chunk".into(),
             ms: ctx.resolved_timeouts.idle_chunk.as_millis() as u64,

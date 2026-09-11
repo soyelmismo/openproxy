@@ -168,11 +168,12 @@ impl UpstreamDispatcher {
             Ok(crate::streaming_state::ChunkResult::Return(r)) => return *r,
             Ok(crate::streaming_state::ChunkResult::Break) => {}
             Err(e) => {
+                let status_code = e.http_status();
                 return self.record_and_fail_with_trace_id(
                     req.clone(),
                     combo,
                     target,
-                    dctx.fail_ctx_code(&e, Some(connect_and_send_ms), state.ttft_ms, 502),
+                    dctx.fail_ctx_code(&e, Some(connect_and_send_ms), state.ttft_ms, status_code),
                     trace_id.clone(),
                 );
             }

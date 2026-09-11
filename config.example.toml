@@ -17,7 +17,7 @@ abort_grace_ms = 500
 [timeouts]
 connect_ms = 5000
 request_send_ms = 10000
-ttft_ms = 30000
+ttft_ms = 6000
 idle_chunk_ms = 120000
 total_ms = 300000
 

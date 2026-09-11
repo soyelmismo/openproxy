@@ -72,6 +72,7 @@ pub struct UpstreamBodyStream {
     cancel_rx: watch::Receiver<bool>,
     last_chunk_at: Option<Instant>,
     body_chunk_ms: u64,
+    ttft_deadline: Instant,
     total_deadline: Instant,
     /// When `false` (non-streaming), the body-chunk gap timeout is
     /// NOT applied. Only `total_deadline` bounds the body read.
@@ -93,12 +94,13 @@ impl UpstreamBodyStream {
     ///
     /// `body_chunk_ms` is the max gap between consecutive chunks (not
     /// a deadline relative to the request start). The first chunk is
-    /// bounded by `total_deadline`; subsequent chunks use the gap.
+    /// bounded by `ttft_deadline`; subsequent chunks use the gap.
     #[cfg(feature = "upstream-hyper")]
     pub fn from_hyper(
         body: hyper::body::Incoming,
         cancel: CancellationToken,
         body_chunk_ms: u64,
+        ttft_deadline: Instant,
         total_deadline: Instant,
         limit: u64,
         is_streaming: bool,
@@ -106,25 +108,18 @@ impl UpstreamBodyStream {
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
         let cancel_rx = cancel.subscribe();
-        // For non-streaming, the initial deadline is total_deadline.
-        // The LLM needs time to generate the full response before
-        // sending the first (and only) chunk. For streaming, the
-        // initial deadline is also total_deadline — the first chunk
-        // is bounded by the headers_deadline (ttft_ms) which is
-        // enforced by the upstream client's select! in call_inner.
-        // The body_chunk_ms gap only applies AFTER the first chunk
-        // arrives (in next_chunk's gap calc). Previously, the
-        // initial deadline was start + body_chunk_ms which killed
-        // streaming requests whose first token took longer than
-        // body_chunk_ms (e.g. 10s) even though ttft_ms (30s) hadn't
-        // expired yet.
-        let initial_deadline = total_deadline;
+        let initial_deadline = if is_streaming {
+            std::cmp::min(ttft_deadline, total_deadline)
+        } else {
+            total_deadline
+        };
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
             cancel,
             last_chunk_at: None,
             body_chunk_ms,
+            ttft_deadline,
             total_deadline,
             is_streaming,
             sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
@@ -137,11 +132,16 @@ impl UpstreamBodyStream {
     pub fn empty(
         cancel: CancellationToken,
         body_chunk_ms: u64,
+        ttft_deadline: Instant,
         total_deadline: Instant,
         is_streaming: bool,
     ) -> Self {
         let cancel_rx = cancel.subscribe();
-        let initial_deadline = total_deadline;
+        let initial_deadline = if is_streaming {
+            std::cmp::min(ttft_deadline, total_deadline)
+        } else {
+            total_deadline
+        };
         Self {
             #[cfg(feature = "upstream-hyper")]
             inner: None,
@@ -149,6 +149,7 @@ impl UpstreamBodyStream {
             cancel,
             last_chunk_at: None,
             body_chunk_ms,
+            ttft_deadline,
             total_deadline,
             is_streaming,
             sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
@@ -200,6 +201,7 @@ impl UpstreamBodyStream {
         is_streaming: bool,
         last_chunk_at: Option<Instant>,
         body_chunk_ms: u64,
+        ttft_deadline: Instant,
         total_deadline: Instant,
     ) -> Instant {
         if !is_streaming {
@@ -210,15 +212,25 @@ impl UpstreamBodyStream {
                 let chunk_gap_deadline = last + Duration::from_millis(body_chunk_ms);
                 std::cmp::min(chunk_gap_deadline, total_deadline)
             }
-            None => total_deadline,
+            None => std::cmp::min(ttft_deadline, total_deadline),
         }
     }
 
-    fn timeout_error_for_gap(last_chunk_at: Option<Instant>) -> UpstreamError {
+    fn timeout_error_for_gap(
+        last_chunk_at: Option<Instant>,
+        total_deadline: Instant,
+    ) -> UpstreamError {
+        let now = Instant::now();
         if last_chunk_at.is_some() {
-            UpstreamError::Timeout(UpstreamPhase::Body)
-        } else {
+            if now + Duration::from_millis(5) >= total_deadline {
+                UpstreamError::Timeout(UpstreamPhase::Total)
+            } else {
+                UpstreamError::Timeout(UpstreamPhase::Body)
+            }
+        } else if now + Duration::from_millis(5) >= total_deadline {
             UpstreamError::Timeout(UpstreamPhase::Total)
+        } else {
+            UpstreamError::Timeout(UpstreamPhase::Headers)
         }
     }
 
@@ -256,6 +268,7 @@ impl UpstreamBodyStream {
             self.is_streaming,
             self.last_chunk_at,
             self.body_chunk_ms,
+            self.ttft_deadline,
             self.total_deadline,
         );
 
@@ -276,7 +289,7 @@ impl UpstreamBodyStream {
                     Err(UpstreamError::Cancel)
                 }
                 () = &mut self.sleep => {
-                    Err(Self::timeout_error_for_gap(self.last_chunk_at))
+                    Err(Self::timeout_error_for_gap(self.last_chunk_at, self.total_deadline))
                 }
                 res = futures_util::StreamExt::next(stream) => {
                     Self::map_stream_frame(res)
