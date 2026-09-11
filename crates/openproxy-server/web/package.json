@@ -15,7 +15,7 @@
   },
   "devDependencies": {
     "@oxlint/plugins": "^1.78.0",
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.2.0",
     "esbuild": "^0.28.2",
     "jsdom": "^30.0.1",
