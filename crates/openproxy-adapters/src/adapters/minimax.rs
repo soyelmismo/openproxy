@@ -407,8 +407,8 @@ mod tests {
             }
         });
 
-        let err = parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains")
-            .unwrap_err();
+        let err =
+            parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains").unwrap_err();
 
         match err {
             CoreError::UpstreamConnection(msg) => {
