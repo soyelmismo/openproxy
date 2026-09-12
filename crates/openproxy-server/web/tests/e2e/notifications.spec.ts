@@ -165,7 +165,11 @@ test.describe('notifications lifecycle', () => {
     await page.goto('/#/notifications');
     const card = page.locator(`.notification-card[data-id="${systemId}"]`);
     await expect(card).toBeVisible();
+    const archivePromise = page.waitForResponse(
+      (response) => response.url().includes(`/notifications/${systemId}/archive`) && response.status() === 200,
+    );
     await card.getByRole('button', { name: 'Dismiss' }).click();
+    await archivePromise;
     await expect(card).toHaveCount(0);
 
     const notifications = await fetchNotifications(page);
