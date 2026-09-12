@@ -141,8 +141,25 @@ async fn execute_single_target_step(
         run_target_with_retries(ctx, combo, target, race_size, to_run.len(), overall_attempt).await;
     *overall_attempt = overall_attempt.saturating_add(1);
     match step {
-        TargetStepResult::Success(r) | TargetStepResult::ClientDisconnected(r) => {
-            TargetLoopOutcome::Finish(r)
+        TargetStepResult::Success(r) => TargetLoopOutcome::Finish(r),
+        TargetStepResult::ClientDisconnected(r) => {
+            let is_true_client_disconnect = r.error.as_ref().is_some_and(|e| {
+                matches!(
+                    e,
+                    CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
+                )
+            });
+            if is_true_client_disconnect || idx + 1 >= to_run.len() {
+                TargetLoopOutcome::Finish(r)
+            } else {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.target.id.0,
+                    provider = %target.target.provider_id,
+                    "target timed out or cancelled via watchdog; rotating to next target in combo"
+                );
+                TargetLoopOutcome::Continue(Some(r))
+            }
         }
         TargetStepResult::Failed(r) => TargetLoopOutcome::Continue(Some(r)),
     }
@@ -199,6 +216,9 @@ fn check_client_cancellation(
 ) -> Option<PipelineResult> {
     let mut rx = tokio::sync::watch::Receiver::clone(&ctx.req.client_disconnected);
     let reason = crate::Pipeline::is_client_disconnected(&mut rx)?;
+    if reason != openproxy_types::CancelReason::ClientDisconnected {
+        return None;
+    }
     tracing::warn!(
         combo_id,
         target_id = target.target.id.0,
@@ -525,6 +545,16 @@ async fn perform_retry_iteration(
     err: &CoreError,
     overall_attempt: &mut u8,
 ) -> RetryStep {
+    if state.total_targets > 1 && is_max_request_timeout(err) {
+        tracing::info!(
+            combo_id = combo.id.0,
+            target_id = target.target.id.0,
+            provider = %target.target.provider_id,
+            "target reached maximum request timeout; rotating to next target in combo"
+        );
+        return RetryStep::Abort;
+    }
+
     if !should_retry_target(
         err,
         state.target_local_retry_count,
@@ -726,6 +756,17 @@ fn finalize_exhausted_combo(
     Err(CoreError::NoHealthyTargets(combo_id))
 }
 
+fn is_max_request_timeout(err: &CoreError) -> bool {
+    match err {
+        CoreError::UpstreamTimeout { phase, .. } => phase.contains("total") || phase == "total_ms",
+        CoreError::Cancelled(openproxy_types::CancelReason::WatchdogTimeout) => true,
+        CoreError::UpstreamError {
+            status: 504, body, ..
+        } => body.contains("total") || body.contains("timeout"),
+        _ => false,
+    }
+}
+
 fn error_matches_part(err: &CoreError, part: &str) -> bool {
     match err {
         CoreError::RateLimited { .. } => matches!(part, "429" | "rate_limited"),
@@ -791,4 +832,59 @@ fn should_skip_preventive_target(
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_types::{CancelReason, CoreError, UpstreamErrorClass};
+
+    #[test]
+    fn test_is_max_request_timeout() {
+        let total_timeout = CoreError::UpstreamTimeout {
+            phase: "total".to_string(),
+            ms: 30000,
+        };
+        assert!(is_max_request_timeout(&total_timeout));
+
+        let total_ms_timeout = CoreError::UpstreamTimeout {
+            phase: "total_ms".to_string(),
+            ms: 30000,
+        };
+        assert!(is_max_request_timeout(&total_ms_timeout));
+
+        let headers_timeout = CoreError::UpstreamTimeout {
+            phase: "headers".to_string(),
+            ms: 5000,
+        };
+        assert!(!is_max_request_timeout(&headers_timeout));
+
+        let watchdog = CoreError::Cancelled(CancelReason::WatchdogTimeout);
+        assert!(is_max_request_timeout(&watchdog));
+
+        let client_disc = CoreError::Cancelled(CancelReason::ClientDisconnected);
+        assert!(!is_max_request_timeout(&client_disc));
+
+        let gateway_timeout = CoreError::UpstreamError {
+            status: 504,
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            body: "gateway timeout while waiting for total response".to_string(),
+            is_proxy_rotated: false,
+            class: UpstreamErrorClass::Generic,
+            is_hard_skip: false,
+        };
+        assert!(is_max_request_timeout(&gateway_timeout));
+
+        let internal_error = CoreError::UpstreamError {
+            status: 500,
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            body: "internal server error".to_string(),
+            is_proxy_rotated: false,
+            class: UpstreamErrorClass::Generic,
+            is_hard_skip: false,
+        };
+        assert!(!is_max_request_timeout(&internal_error));
+    }
 }

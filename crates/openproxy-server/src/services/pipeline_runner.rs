@@ -70,24 +70,12 @@ impl PipelineRunner {
     }
 
     /// Calculate watchdog budget in milliseconds respecting `x-request-deadline-ms` header.
-    pub fn calculate_watchdog_budget(state: &AppState, headers: &HeaderMap) -> u64 {
-        let client_deadline_ms: Option<u64> = headers
+    pub fn calculate_watchdog_budget(headers: &HeaderMap) -> Option<u64> {
+        headers
             .get("x-request-deadline-ms")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.trim().parse::<u64>().ok())
-            .filter(|ms| *ms > 0);
-        let total_ms = state.timeouts().total_ms;
-        match client_deadline_ms {
-            Some(client_ms) if client_ms < total_ms => {
-                tracing::debug!(
-                    client_ms,
-                    total_ms,
-                    "client requested shorter cancellation deadline than upstream total"
-                );
-                client_ms
-            }
-            _ => total_ms,
-        }
+            .filter(|ms| *ms > 0)
     }
 
     /// Spawn a background task that sends a watchdog timeout cancel reason if
@@ -114,7 +102,7 @@ impl PipelineRunner {
     /// Prepare a [`PipelineRequest`] and wire watchdog + cancellation + streaming sinks.
     pub fn prepare_request(params: PrepareRequestParams<'_>) -> PreparedPipelineRequest {
         let PrepareRequestParams {
-            state,
+            state: _,
             headers,
             cancel,
             openai_req,
@@ -128,7 +116,7 @@ impl PipelineRunner {
         let request_id = RequestId::new();
         let trace_id = TraceId::new();
 
-        let watchdog_budget_ms = Self::calculate_watchdog_budget(state, headers);
+        let watchdog_budget_ms = Self::calculate_watchdog_budget(headers);
         let (tx, rx) = mpsc::channel(64);
         let CancelWatch {
             tx: watchdog_tx,
@@ -142,7 +130,9 @@ impl PipelineRunner {
         };
 
         let (done_tx, done_rx) = oneshot::channel::<()>();
-        Self::spawn_watchdog(done_rx, watchdog_tx, watchdog_budget_ms);
+        if let Some(budget_ms) = watchdog_budget_ms {
+            Self::spawn_watchdog(done_rx, watchdog_tx, budget_ms);
+        }
 
         let req = PipelineRequest {
             request_id,
