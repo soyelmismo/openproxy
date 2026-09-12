@@ -123,7 +123,7 @@ impl MiniMaxAdapter {
                 .await
             {
                 Ok(quota) => return Ok(quota),
-                Err(e) => last_err = Some(format!("{url}: {e}")),
+                Err(e) => last_err = Some(e.to_string()),
             }
         }
 
@@ -208,6 +208,22 @@ fn parse_minimax_quota(
     body: &serde_json::Value,
     url: &str,
 ) -> Result<openproxy_types::AccountQuota> {
+    if let Some(base_resp) = body.get("base_resp") {
+        let code = base_resp
+            .get("status_code")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if code != 0 {
+            let msg = base_resp
+                .get("status_msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            return Err(CoreError::UpstreamConnection(format!(
+                "{url}: [{code}] {msg}"
+            )));
+        }
+    }
+
     let plan_name = body
         .get("plan_name")
         .and_then(|v| v.as_str())
@@ -379,5 +395,27 @@ mod tests {
         assert_eq!(quota.session_used, Some(10));
         assert_eq!(quota.session_limit, Some(50));
         assert!(quota.session_reset_at.is_some());
+    }
+
+    #[test]
+    fn parses_minimax_quota_base_resp_error() {
+        let json = serde_json::json!({
+            "model_remains": null,
+            "base_resp": {
+                "status_code": 2062,
+                "status_msg": "no active token plan subscription"
+            }
+        });
+
+        let err = parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains")
+            .unwrap_err();
+
+        match err {
+            CoreError::UpstreamConnection(msg) => {
+                assert!(msg.contains("2062"));
+                assert!(msg.contains("no active token plan subscription"));
+            }
+            other => panic!("expected UpstreamConnection, got {other:?}"),
+        }
     }
 }
