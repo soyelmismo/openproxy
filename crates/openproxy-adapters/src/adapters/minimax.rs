@@ -113,7 +113,7 @@ impl MiniMaxAdapter {
     ) -> Result<openproxy_types::AccountQuota> {
         let urls = [
             "https://api.minimax.io/v1/token_plan/remains",
-            "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+            "https://api.minimax.io/v1/coding_plan/remains",
         ];
 
         let mut last_err: Option<String> = None;
