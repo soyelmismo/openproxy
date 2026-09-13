@@ -171,21 +171,62 @@ function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): T
   })}`;
 }
 
-// Build the grouped-by-provider map of models matching the search query.
-function buildGlobalSearchGroups(query: string): Map<string, ModelWithFallbacks[]> {
-  const q = query.trim().toLowerCase();
-  const groups = new Map<string, ModelWithFallbacks[]>();
-  for (const m of (state.models || [])) {
-    if (!m.active) continue;
-    if (m.row_id != null && existingTargetModelRowIds.has(m.row_id)) continue;
-    if (q) {
-      const haystack = `${m.model_id || ""} ${m.display_name || ""} ${m.provider_id || ""}`.toLowerCase();
-      const tokens = q.split(/\s+/).filter(Boolean);
-      if (!tokens.every((t) => haystack.includes(t))) continue;
+/** Check if a model matches the search query.
+ * Supports:
+ * - Direct model ID or display name: "Qwen3.8", "gpt-4o"
+ * - Provider-prefixed searches: "hcnsec/Qwen3.8-Flash-Next", "openai:gpt-4o"
+ * - Partial provider + model token: "hcnsec/flash"
+ * - Quoted queries: '"hcnsec/Qwen3.8-Flash-Next"'
+ * - Provider only with trailing slash: "hcnsec/"
+ */
+export function modelMatchesSearch(
+  m: { provider_id?: string; model_id?: string; display_name?: string | null; id?: string },
+  query: string,
+): boolean {
+  const q = query.replace(/["']/g, "").trim().toLowerCase();
+  if (!q) return true;
+
+  const provider = (m.provider_id || "").toLowerCase();
+  const modelId = (m.model_id || m.id || "").toLowerCase();
+  const displayName = (m.display_name || "").toLowerCase();
+
+  const qualifiedSlash = `${provider}/${modelId}`;
+  const qualifiedColon = `${provider}:${modelId}`;
+  const qualifiedName = `${provider}/${displayName}`;
+  const haystack = `${qualifiedSlash} ${qualifiedColon} ${qualifiedName} ${modelId} ${displayName} ${provider}`;
+
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return tokens.every((token) => {
+    if (haystack.includes(token)) return true;
+    const sep = token.includes("/") ? "/" : token.includes(":") ? ":" : null;
+    if (sep) {
+      const idx = token.indexOf(sep);
+      const provPart = token.slice(0, idx);
+      const modelPart = token.slice(idx + 1);
+      if (provPart && modelPart) {
+        const provMatches = provider.includes(provPart);
+        const modelMatches = modelId.includes(modelPart) || displayName.includes(modelPart);
+        if (provMatches && modelMatches) return true;
+      }
     }
+    return false;
+  });
+}
+
+// Build the grouped-by-provider map of models matching the search query.
+export function buildGlobalSearchGroups(
+  query: string,
+  models: ModelWithFallbacks[] = (state.models || []) as ModelWithFallbacks[],
+  excludedRowIds: Set<number> = existingTargetModelRowIds,
+): Map<string, ModelWithFallbacks[]> {
+  const groups = new Map<string, ModelWithFallbacks[]>();
+  for (const m of models) {
+    if (!m.active) continue;
+    if (m.row_id != null && excludedRowIds.has(m.row_id)) continue;
+    if (!modelMatchesSearch(m, query)) continue;
     const p: string = m.provider_id;
     if (!groups.has(p)) groups.set(p, []);
-    groups.get(p)!.push(m as ModelWithFallbacks);
+    groups.get(p)!.push(m);
   }
   return groups;
 }
