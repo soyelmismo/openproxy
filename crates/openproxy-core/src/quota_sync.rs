@@ -480,32 +480,17 @@ pub fn is_low(remaining: i64, limit: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_db::{DbPool, migrations};
+    use openproxy_db::DbPool;
     use openproxy_types::ids::{AccountId, ModelId};
-    use std::path::PathBuf;
 
     /// Build an in-memory `DbPool` with all migrations applied and one
     /// provider + account seeded. Returns the pool plus the freshly
     /// inserted `AccountId` (always `1` after the seed).
     fn fresh_pool() -> (Arc<DbPool>, AccountId) {
-        // DbPool needs a real file path for `open_connection`, so we
-        // create a tempdir-backed file. The DB content is empty
-        // initially; we apply migrations on the writer before use.
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let path: PathBuf = base.join(format!("openproxy-quota-sync-test-{pid}-{nanos}.db"));
-        let pool = DbPool::open(&path).expect("open pool");
+        let pool = DbPool::test_pool_with_prefix("openproxy-quota-sync-test").expect("open pool");
         let aid = AccountId(1);
-
-        // Apply migrations on a fresh connection that we own, then
-        // seed the FK target row. (DbPool doesn't expose a `run_migrations`
-        // helper directly.)
         {
-            let mut conn = pool.open_connection().expect("open conn");
-            migrations::run(&mut conn).expect("migrations");
+            let conn = pool.open_connection().expect("open conn");
             conn.execute(
                 "INSERT INTO providers(id, name, base_url, auth_type, format) \
                  VALUES ('antigravity', 'Antigravity', 'https://x', 'oauth', 'openai')",

@@ -4,11 +4,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_core::free_proxies::{ScrapedProxy, upsert_scraped_proxies};
 
 fn benchmark_upsert(c: &mut Criterion) {
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let db_path = tmp_dir.path().join("test.db");
-    let pool = openproxy_db::conn::DbPool::open(&db_path).unwrap();
+    let pool = openproxy_db::conn::DbPool::test_pool_with_prefix("openproxy-bench").unwrap();
     let mut conn = pool.writer();
-    openproxy_db::migrations::run(&mut conn).unwrap();
 
     let mut proxies = Vec::new();
     for i in 0..500 {

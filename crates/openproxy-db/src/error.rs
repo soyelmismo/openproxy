@@ -264,14 +264,7 @@ mod tests {
         // (so reads don't block on the writer's tx) and use
         // `BEGIN IMMEDIATE` on the blocker so its tx holds a
         // RESERVED write lock that prevents other writers.
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-busy-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos()),
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testing::TempDir::new("openproxy-busy-test").unwrap();
         let path = dir.join("busy.db");
         let a = Connection::open(&path).unwrap();
         a.execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE t (id INTEGER PRIMARY KEY);")
@@ -287,14 +280,7 @@ mod tests {
 
     #[test]
     fn is_sqlite_busy_detects_busy_under_ctx_wrapper() {
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-busy-test-ctx-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos()),
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testing::TempDir::new("openproxy-busy-test-ctx").unwrap();
         let path = dir.join("busy.db");
         let a = Connection::open(&path).unwrap();
         a.execute_batch("PRAGMA journal_mode = WAL; CREATE TABLE t (id INTEGER PRIMARY KEY);")
@@ -354,14 +340,7 @@ mod tests {
 
     #[test]
     fn with_busy_retry_retries_on_busy_and_succeeds() {
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-busy-retry-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos()),
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testing::TempDir::new("openproxy-busy-retry-test").unwrap();
         let path = dir.join("test.db");
         let conn1 = Connection::open(&path).unwrap();
         conn1

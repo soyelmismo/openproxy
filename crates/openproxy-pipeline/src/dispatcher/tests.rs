@@ -15,7 +15,6 @@ use openproxy_adapters::UpstreamClient;
 use openproxy_db::MasterKey;
 use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::providers::{AuthType, ProviderFormat, RateLimitScope};
-use std::sync::atomic::AtomicU64;
 
 /// Build a minimal in-memory-ish DB+pool pair compatible with
 /// `UpstreamDispatcher::new`. Mirrors el helper que previamente vivía
@@ -25,22 +24,10 @@ pub(super) fn fresh_pool() -> (
     std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
     std::path::PathBuf,
 ) {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let dir = std::env::temp_dir().join(format!("openproxy-wiring-test-{pid}-{nanos}-{n}"));
-    std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-    let path = dir.join("wiring.db");
-    let pool = openproxy_db::DbPool::open(&path).expect("open pool");
-    {
-        let mut w = pool.writer();
-        openproxy_db::migrations::run(&mut w).expect("migrations");
-    }
+    let pool = openproxy_db::DbPool::test_pool_with_prefix("openproxy-wiring-test").expect("open pool");
     let extra = pool.open_connection().expect("open extra connection");
     let conn = std::sync::Arc::new(parking_lot::Mutex::new(extra));
+    let path = pool.path().to_path_buf();
     (pool, conn, path)
 }
 

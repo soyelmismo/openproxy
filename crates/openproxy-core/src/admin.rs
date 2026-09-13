@@ -1061,20 +1061,8 @@ mod tests {
 
     /// Build a fresh in-process pool: temp dir on disk, migrations applied.
     fn fresh_pool() -> (DbPool, PathBuf) {
-        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("openproxy-admin-test-{pid}-{nanos}-{n}"));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-        let path = dir.join("admin.db");
-        let pool = DbPool::open(&path).expect("open pool");
-        {
-            let mut w = pool.writer();
-            openproxy_db::migrations::run(&mut w).expect("migrations");
-        }
+        let pool = DbPool::test_pool_with_prefix("openproxy-admin-test").expect("open pool");
+        let path = pool.path().to_path_buf();
         (pool, path)
     }
 

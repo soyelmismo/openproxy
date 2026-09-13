@@ -1433,23 +1433,10 @@ mod tests {
     use crate::conn::DbPool;
 
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicU64;
 
     fn fresh_pool() -> (DbPool, PathBuf) {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("openproxy-crud-test-{pid}-{nanos}-{n}"));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-        let path = dir.join("crud.db");
-        let pool = DbPool::open(&path).expect("open pool");
-        {
-            let mut w = pool.writer();
-            crate::migrations::run(&mut w).expect("migrations");
-        }
+        let pool = DbPool::test_pool_with_prefix("openproxy-crud-test").expect("open pool");
+        let path = pool.path().to_path_buf();
         (pool, path)
     }
 

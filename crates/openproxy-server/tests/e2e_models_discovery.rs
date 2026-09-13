@@ -42,6 +42,7 @@ use openproxy_core::{
     models::{self, DiscoveredModel, TargetFormat},
 };
 use openproxy_db::secrets::MasterKey;
+use openproxy_db::testing::TempDir;
 use openproxy_db::{self as core_db, combos, migrations};
 use openproxy_server::state::AppState;
 use openproxy_types::combos::Strategy;
@@ -49,7 +50,6 @@ use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowI
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use serde_json::json;
-use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 // =====================================================================
@@ -417,7 +417,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
 
     // --- Step 2: build the test adapter + AppState --------------
     let adapter = TestMockAdapter::new("e2e-mock", &base_url);
-    let tmp = TempDir::new().expect("tempdir");
+    let tmp = TempDir::new("openproxy-e2e-discovery").expect("tempdir");
     let state = make_test_state(tmp.path(), &adapter).await;
     let provider = ProviderId::new("e2e-mock");
 

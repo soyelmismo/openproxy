@@ -95,8 +95,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-# Used by the Gate-C E2E integration test
-# (`tests/e2e_models_discovery.rs`) to get an isolated on-disk
-# SQLite directory per test run. Pulls in a couple of `remove_*`
-# helpers as a side effect — fine, this is a test-only dep.
-tempfile = "3"

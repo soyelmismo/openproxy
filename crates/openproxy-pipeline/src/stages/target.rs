@@ -654,32 +654,27 @@ mod gap6_tests {
     //! driving the live_limited_models SQLite table.
 
     use super::*;
-    use openproxy_db::{DbPool, migrations};
+    use openproxy_db::DbPool;
     use openproxy_types::error::CoreError;
     use openproxy_types::ids::{AccountId, ModelId};
-    use std::path::PathBuf;
 
     fn fresh_pool(tag: &str) -> DbPool {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let path: PathBuf = base.join(format!("openproxy-pipeline-gap6-{tag}-{pid}-{nanos}.db"));
-        let pool = DbPool::open(&path).expect("open pool");
-        let mut conn = pool.open_connection().expect("open conn");
-        migrations::run(&mut conn).expect("migrations");
-        conn.execute(
-            "INSERT INTO providers(id, name, base_url, auth_type, format) \
-             VALUES ('antigravity', 'Antigravity', 'https://x', 'oauth', 'openai')",
-            [],
-        )
-        .expect("seed provider");
-        conn.execute(
-            "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a1')",
-            [],
-        )
-        .expect("seed account");
+        let pool = DbPool::test_pool_with_prefix(&format!("openproxy-pipeline-gap6-{tag}"))
+            .expect("open pool");
+        {
+            let conn = pool.open_connection().expect("open conn");
+            conn.execute(
+                "INSERT INTO providers(id, name, base_url, auth_type, format) \
+                 VALUES ('antigravity', 'Antigravity', 'https://x', 'oauth', 'openai')",
+                [],
+            )
+            .expect("seed provider");
+            conn.execute(
+                "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a1')",
+                [],
+            )
+            .expect("seed account");
+        }
         pool
     }
 

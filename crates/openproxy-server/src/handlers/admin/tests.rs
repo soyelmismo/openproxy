@@ -15,7 +15,6 @@ use openproxy_core::api_keys as core_api_keys;
 use openproxy_db as core_db;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::config::TimeoutsConfig;
-use std::path::PathBuf;
 
 /// Module-level lock + RAII guard for HOME mutation, shared by all
 /// `scan_accounts` endpoint tests. `scan_accounts` calls
@@ -53,15 +52,8 @@ impl Drop for HomeGuard {
 }
 use tower::ServiceExt;
 
-fn tempdir() -> PathBuf {
-    let base = std::env::temp_dir();
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let dir = base.join(format!("openproxy-admin-test-{pid}-{nanos}"));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    dir
+fn tempdir() -> openproxy_db::testing::TempDir {
+    openproxy_db::testing::TempDir::new("openproxy-admin-test").expect("mkdir")
 }
 
 fn insert_manage_key(pool: &core_db::DbPool, plaintext: &str) {
@@ -300,7 +292,7 @@ async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
     // exists, the request must succeed. This is the legitimate
     // "dev convenience" path and the operator has explicitly opted
     // in.
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, _key) = make_state_with_key(tmp.path()).await;
     // Drop the API key the helper just created so the request
     // would otherwise 401.
@@ -331,7 +323,7 @@ async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
     // fix restricts the bypass to the exact sentinel `1`; everything
     // else must fall through to normal auth, which fails here because
     // no API key is configured.
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, _key) = make_state_with_key(tmp.path()).await;
     {
         let w = state.db_pool().writer();
@@ -596,7 +588,7 @@ async fn body_limit_accepts_10_mib_chat_body() {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let big = "x".repeat(10 * 1024 * 1024);
@@ -627,7 +619,7 @@ async fn body_limit_rejects_100_mib_chat_body() {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let big = "x".repeat(100 * 1024 * 1024);
@@ -668,7 +660,7 @@ async fn usage_recent_clamps_since_id_at_max() {
     // satisfaction of forcing a comparison against MAX.
     use axum::http::Request;
     use tower::ServiceExt;
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let req = Request::builder()
@@ -691,7 +683,7 @@ async fn usage_recent_rejects_negative_since_id() {
     // rows. We assert it doesn't 5xx.
     use axum::http::Request;
     use tower::ServiceExt;
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, key) = make_state_with_key(tmp.path()).await;
     let app = crate::router::build_router(state);
     let req = Request::builder()
@@ -1166,7 +1158,7 @@ async fn test_run_test_for_model_cancellation() {
 
 #[tokio::test]
 async fn auth_bypass_sentinel_1_rejects_non_loopback() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, _key) = make_state_with_key(tmp.path()).await;
     {
         let w = state.db_pool().writer();
@@ -1201,7 +1193,7 @@ async fn test_scan_endpoint_dry_run_does_not_create() {
     // Module-level SCAN_TEST_LOCK + HomeGuard are used so HOME is held
     // for the entire duration of the async scan (HOME is read by the
     // spawn_blocking thread inside the handler).
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, plaintext) = make_state_with_key(tmp.path()).await;
 
     // Seed the built-in `antigravity` provider so `accounts.create`
@@ -1293,7 +1285,7 @@ async fn adv_scan_endpoint_empty_body_defaults() {
     // Empty JSON object `{}` — auto_import=false (default), dry_run=false (default).
     // The endpoint scans and returns scanned entries without importing
     // (because auto_import defaults to false).
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, plaintext) = make_state_with_key(tmp.path()).await;
 
     {
@@ -1357,7 +1349,7 @@ async fn adv_scan_endpoint_empty_body_defaults() {
 
 #[tokio::test]
 async fn adv_scan_endpoint_malformed_json_body_returns_4xx() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, plaintext) = make_state_with_key(tmp.path()).await;
 
     let mut router = axum::Router::new();
@@ -1389,7 +1381,7 @@ async fn adv_scan_endpoint_malformed_json_body_returns_4xx() {
 
 #[tokio::test]
 async fn adv_scan_endpoint_with_dry_run_true_and_auto_import_true() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, plaintext) = make_state_with_key(tmp.path()).await;
 
     {
@@ -1450,7 +1442,7 @@ async fn adv_scan_endpoint_with_dry_run_true_and_auto_import_true() {
 
 #[tokio::test]
 async fn adv_scan_endpoint_array_body_returns_4xx() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempdir();
     let (state, plaintext) = make_state_with_key(tmp.path()).await;
 
     let mut router = axum::Router::new();

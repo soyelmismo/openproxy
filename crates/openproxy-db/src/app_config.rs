@@ -172,27 +172,10 @@ pub fn save_proxy_test_url(conn: &Connection, url: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::conn::DbPool;
-    use std::path::PathBuf;
-
-    fn tempdir() -> PathBuf {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!("openproxy-appcfg-test-{pid}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
-    }
 
     #[test]
     fn timeouts_roundtrip_through_db() {
-        let dir = tempdir();
-        let pool = DbPool::open(&dir.join("rt.db")).unwrap();
-        {
-            let mut w = pool.writer();
-            crate::migrations::run(&mut w).unwrap();
-        }
+        let pool = DbPool::test_pool_with_prefix("openproxy-appcfg-test").unwrap();
         let original = TimeoutsConfig {
             connect_ms: 1234,
             request_send_ms: 5678,
@@ -213,12 +196,7 @@ mod tests {
 
     #[test]
     fn recording_ttl_roundtrip_through_db() {
-        let dir = tempdir();
-        let pool = DbPool::open(&dir.join("recording-ttl.db")).unwrap();
-        {
-            let mut w = pool.writer();
-            crate::migrations::run(&mut w).unwrap();
-        }
+        let pool = DbPool::test_pool_with_prefix("openproxy-appcfg-ttl").unwrap();
         {
             let w = pool.writer();
             save_recording_ttl_to_db(&w, 123, 1_700_000_002).unwrap();

@@ -333,19 +333,6 @@ mod tests {
     use openproxy_types::endpoint::EndpointKind;
     use openproxy_types::ids::{ProviderId, RequestId};
     use openproxy_types::usage::UsageInput;
-    use std::sync::atomic::AtomicU64;
-
-    fn tempdir() -> std::path::PathBuf {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("openproxy-cost-test-{pid}-{nanos}-{n}"));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-        dir
-    }
 
     #[test]
     fn test_compute_cost_and_tps() {
@@ -431,12 +418,8 @@ mod tests {
 
     #[test]
     fn test_record() {
-        let dir = tempdir();
-        let path = dir.join("test.db");
-        let pool = DbPool::open(&path).expect("open pool");
-
-        let mut conn = pool.writer();
-        crate::migrations::run(&mut conn).expect("run migrations");
+        let pool = DbPool::test_pool_with_prefix("openproxy-cost-test").expect("open pool");
+        let conn = pool.writer();
 
         let input = UsageInput {
             request_id: RequestId::new(),
@@ -505,13 +488,7 @@ mod tests {
     /// attempt).
     #[test]
     fn record_with_retry_succeeds_first_attempt_on_quiescent_db() {
-        let dir = tempdir();
-        let path = dir.join("retry.db");
-        let pool = DbPool::open(&path).expect("open pool");
-        {
-            let mut w = pool.writer();
-            crate::migrations::run(&mut w).expect("migrations");
-        }
+        let pool = DbPool::test_pool_with_prefix("openproxy-cost-retry").expect("open pool");
 
         let input = UsageInput {
             request_id: RequestId::new(),

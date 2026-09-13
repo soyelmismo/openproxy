@@ -415,25 +415,10 @@ mod tests {
 
     use rusqlite::{Connection, params};
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn tempdir() -> PathBuf {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!("openproxy-analytics-test-{pid}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
-    }
 
     fn fresh_conn() -> (Connection, PathBuf) {
-        let dir = tempdir();
-        let path = dir.join("analytics-test.db");
-        let mut conn = Connection::open(&path).expect("open");
-        openproxy_db::migrations::run(&mut conn).expect("migrate");
-        (conn, path)
+        let conn = openproxy_db::testing::open_in_memory();
+        (conn, PathBuf::from(":memory:"))
     }
 
     #[derive(Default)]

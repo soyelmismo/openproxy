@@ -145,9 +145,13 @@ mod tests {
         }
     }
 
+    pub(super) fn tempdir() -> openproxy_db::testing::TempDir {
+        openproxy_db::testing::TempDir::new("openproxy-account-test").expect("tempdir")
+    }
+
     #[test]
     fn test_scanner_finds_antigravity_token_file() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -184,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_scanner_skips_missing_and_corrupt_files() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
 
         // (a) HOME vacío → ningún archivo.
         {
@@ -232,6 +236,7 @@ mod tests {
 // ============================================================
 #[cfg(test)]
 mod adversarial_tests {
+    use super::tests::tempdir;
     use super::*;
 
     /// Serializes HOME mutations across tests in this module.
@@ -271,7 +276,7 @@ mod adversarial_tests {
     #[test]
     fn adv_file_with_valid_json_wrong_schema() {
         // JSON is valid but has wrong shape (no token.access_token).
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -292,7 +297,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_file_with_token_wrong_types() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -319,7 +324,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_file_without_email_uses_default_label() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -370,7 +375,7 @@ mod adversarial_tests {
         // root, mode 000 is bypassed by the kernel, so the file IS
         // read. We check the result is SOME (root) or NONE (non-root).
         // Either way the function must not panic.
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -397,7 +402,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_file_without_refresh_token() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -435,7 +440,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_deeply_nested_json_without_token() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -464,7 +469,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_zero_byte_file_returns_none() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -485,7 +490,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_whitespace_only_file_returns_none() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")
@@ -506,7 +511,7 @@ mod adversarial_tests {
 
     #[test]
     fn adv_source_path_matches_actual_file() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempdir();
         let target = tmp
             .path()
             .join(".gemini")

@@ -888,26 +888,13 @@ mod tests {
         RateLimitScope, TargetFormat,
     };
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicU64;
     use std::time::{Duration, Instant};
 
     /// Mirror of `combos::tests::fresh_pool` — every test gets an
     /// isolated file-based DB so WAL locks between tests never bleed.
     fn fresh_pool() -> (DbPool, PathBuf) {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("openproxy-models-test-{pid}-{nanos}-{n}"));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-        let path = dir.join("models.db");
-        let pool = DbPool::open(&path).expect("open pool");
-        {
-            let mut w = pool.writer();
-            crate::migrations::run(&mut w).expect("migrations");
-        }
+        let pool = DbPool::test_pool_with_prefix("openproxy-models-test").expect("open pool");
+        let path = pool.path().to_path_buf();
         (pool, path)
     }
 

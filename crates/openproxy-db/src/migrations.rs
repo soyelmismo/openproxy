@@ -179,17 +179,8 @@ fn load_applied_versions(conn: &Connection) -> Result<std::collections::HashSet<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn tempdir() -> PathBuf {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!("openproxy-mig-test-{pid}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
+    fn tempdir() -> crate::testing::TempDir {
+        crate::testing::TempDir::new("openproxy-mig-test").expect("mkdir")
     }
 
     #[test]

@@ -197,32 +197,10 @@ mod tests {
 
     use rusqlite::{Connection, params};
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn tempdir() -> PathBuf {
-        let base = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!(
-            "openproxy-usage-test-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
-    }
-
-    /// Build a fresh in-memory-style DB on disk, run migrations, and return
-    /// the connection plus a cleanup closure (we use a file because rusqlite
-    /// doesn't expose `:memory:` across `&Connection` borrows without
-    /// `OpenFlags::SQLITE_OPEN_URI`).
     fn fresh_conn() -> (Connection, PathBuf) {
-        let dir = tempdir();
-        let path = dir.join("usage-test.db");
-        let mut conn = Connection::open(&path).expect("open");
-        openproxy_db::migrations::run(&mut conn).expect("migrate");
-        (conn, path)
+        let conn = openproxy_db::testing::open_in_memory();
+        (conn, PathBuf::from(":memory:"))
     }
 
     #[derive(Default)]

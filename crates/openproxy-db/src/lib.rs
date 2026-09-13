@@ -34,6 +34,5 @@ pub use error::{
     with_busy_retry,
 };
 pub use maintenance::DbTable;
-
-#[cfg(test)]
-pub(crate) mod test_db;
+pub mod testing;
+pub use testing as test_db;

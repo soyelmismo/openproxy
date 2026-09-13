@@ -577,20 +577,9 @@ mod tests {
     async fn backfill_service_completes_initial_pass_on_empty_db() {
         use openproxy_db::DbPool;
 
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-backfill-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos()),
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-        let path = dir.join("backfill.db");
-        let pool = Arc::new(DbPool::open(&path).expect("open pool"));
-        {
-            let mut w = pool.writer();
-            openproxy_db::migrations::run(&mut w).expect("migrations");
-        }
+        let pool = Arc::new(
+            DbPool::test_pool_with_prefix("openproxy-backfill-test").expect("open pool"),
+        );
 
         let status = Arc::new(parking_lot::RwLock::new(
             crate::state::BackfillStatus::default(),

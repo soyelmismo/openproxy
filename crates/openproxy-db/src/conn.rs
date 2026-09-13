@@ -47,6 +47,7 @@ pub struct DbPool {
     /// `Connection` (rusqlite 0.31's `Connection: !Clone`, so the
     /// only way to get a second handle is to open a new one).
     path: Arc<Path>,
+    _cleanup: Option<Arc<crate::testing::TempDir>>,
 }
 
 /// Time budget for the writer lock on hot-path inserts.
@@ -127,6 +128,34 @@ impl DbPool {
             readers: Arc::new(readers),
             next_reader: Arc::new(AtomicUsize::new(0)),
             path: Arc::from(path),
+            _cleanup: None,
+        })
+    }
+
+    /// Create an isolated test pool backed by a temporary directory with all
+    /// migrations applied. Automatically cleans up the directory on drop.
+    pub fn test_pool() -> Result<Self> {
+        Self::test_pool_with_prefix("openproxy-test")
+    }
+
+    /// Create an isolated test pool with a custom directory prefix.
+    pub fn test_pool_with_prefix(prefix: &str) -> Result<Self> {
+        let temp_dir = Arc::new(
+            crate::testing::TempDir::new(prefix)
+                .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?,
+        );
+        let db_path = temp_dir.path().join("test.db");
+        let pool = Self::open(&db_path)?;
+        {
+            let mut w = pool.writer();
+            crate::migrations::run(&mut w)?;
+        }
+        Ok(Self {
+            writer: pool.writer,
+            readers: pool.readers,
+            next_reader: pool.next_reader,
+            path: pool.path,
+            _cleanup: Some(temp_dir),
         })
     }
 
@@ -329,9 +358,7 @@ mod tests {
 
     #[test]
     fn open_creates_file_and_sets_pragmas() {
-        let dir = tempdir();
-        let path = dir.join("test.db");
-        let pool = DbPool::open(&path).expect("open");
+        let pool = DbPool::test_pool().expect("test pool");
         let conn = pool.writer();
 
         let journal: String = conn
@@ -350,22 +377,9 @@ mod tests {
         assert_eq!(busy, 5000);
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!("openproxy-db-test-{pid}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-        dir
-    }
-
     #[test]
     fn try_writer_for_returns_none_when_lock_is_held() {
-        let dir = tempdir();
-        let path = dir.join("test.db");
-        let pool = DbPool::open(&path).expect("open");
+        let pool = DbPool::test_pool().expect("test pool");
 
         let _guard = pool.writer();
 
@@ -382,9 +396,7 @@ mod tests {
 
     #[test]
     fn try_writer_for_succeeds_when_lock_is_free() {
-        let dir = tempdir();
-        let path = dir.join("test.db");
-        let pool = DbPool::open(&path).expect("open");
+        let pool = DbPool::test_pool().expect("test pool");
 
         let start = std::time::Instant::now();
         let guard = pool

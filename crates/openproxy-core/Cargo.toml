@@ -111,7 +111,6 @@ openproxy-adapters = { path = "../openproxy-adapters", features = ["ssrf-bypass"
 # Benchmark harness for the SSE chunk-forwarding hot path.
 # Used by `cargo bench -p openproxy-core --bench sse_fast_path`.
 criterion = { version = "0.8", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
-tempfile = "3.10.1"
 
 [[bench]]
 name = "sse_fast_path"

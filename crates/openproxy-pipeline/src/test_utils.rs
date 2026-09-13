@@ -65,7 +65,6 @@ use crate::timeouts::Timeouts;
 use crate::{PipelineConfig, PipelineRequest};
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::conn::DbPool;
-use openproxy_db::migrations;
 use openproxy_db::providers;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::TargetFormat;
@@ -76,30 +75,16 @@ use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use tokio::sync::watch;
 
 pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let dir = std::env::temp_dir().join(format!("openproxy-pipeline-test-{pid}-{nanos}-{n}"));
-    std::fs::create_dir_all(&dir).expect("mkdir tempdir");
-    let path = dir.join("pipeline.db");
-    let pool = DbPool::open(&path).expect("open pool");
-    {
-        let mut w = pool.writer();
-        migrations::run(&mut w).expect("migrations");
-    }
-    // A second connection on the same file, owned by the Pipeline.
-    let extra = Connection::open(&path).expect("open extra");
+    let pool = DbPool::test_pool_with_prefix("openproxy-pipeline-test").expect("open pool");
+    let extra = pool.open_connection().expect("open extra");
     let conn = Arc::new(parking_lot::Mutex::new(extra));
     unsafe {
         std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
     }
+    let path = pool.path().to_path_buf();
     (pool, conn, path)
 }
 

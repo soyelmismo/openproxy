@@ -188,7 +188,6 @@ mod tests {
     //! con más de 20 líneas requiere al menos 1 test unitario.
 
     use super::*;
-    use openproxy_db::migrations;
 
     /// Test unitario (no async, no spawn_blocking). Patrón corregido:
     /// adquirimos el guard UNA vez y pasamos `&Connection` por deref
@@ -197,19 +196,8 @@ mod tests {
     #[test]
     fn apply_proxy_rotation_marks_proxy_dead_on_connect_error() {
         // 1) Pool en disco temporal con migrations.
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-rotation-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let pool = openproxy_db::DbPool::open(&dir.join("rot.db")).expect("open pool");
-        {
-            let mut w = pool.writer();
-            migrations::run(&mut w).expect("migrations");
-        }
+        let pool = openproxy_db::DbPool::test_pool_with_prefix("openproxy-rotation-test")
+            .expect("open pool");
 
         // 2) Conexión propia para los seeds + llamada directa a la función.
         let conn_arc = std::sync::Arc::new(parking_lot::Mutex::new(
@@ -321,8 +309,6 @@ mod tests {
             "with an alive seed, get_candidate_proxies_for_provider must return a candidate"
         );
 
-        // Cleanup best-effort.
         drop(c);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

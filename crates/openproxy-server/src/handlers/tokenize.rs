@@ -180,18 +180,11 @@ mod tests {
     use openproxy_types::ids::ProviderId;
     use parking_lot::RwLock;
     use rusqlite::params;
-    use std::{path::PathBuf, sync::Arc};
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    fn tempdir() -> PathBuf {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!("openproxy-tokenize-test-{pid}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
+    fn tempdir() -> openproxy_db::testing::TempDir {
+        openproxy_db::testing::TempDir::new("openproxy-tokenize-test").expect("mkdir")
     }
 
     /// Seed an active `chat`-scope API key into the pool so requests
@@ -436,14 +429,10 @@ mod tests {
         // Structural pin: the route builder compiles with an AppState.
         // AppState::for_test requires a Tokio runtime because of the
         // background channel inside, so the test is `#[tokio::test]`.
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-tokenize-struct-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let pool = Arc::new(core_db::DbPool::open(&dir.join("struct.db")).expect("open"));
-        {
-            let mut w = pool.writer();
-            core_db::migrations::run(&mut w).expect("migrations");
-        }
+        let pool = Arc::new(
+            core_db::DbPool::test_pool_with_prefix("openproxy-tokenize-struct")
+                .expect("open"),
+        );
         let mk = openproxy_db::MasterKey::generate().unwrap();
         let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
@@ -467,7 +456,7 @@ mod tokenize_adversarial_tests {
     use openproxy_types::ids::ProviderId;
     use parking_lot::RwLock;
     use rusqlite::params;
-    use std::{path::PathBuf, sync::Arc};
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     use crate::state::AppState;
@@ -478,15 +467,8 @@ mod tokenize_adversarial_tests {
     };
     use serde_json::json;
 
-    fn tempdir() -> PathBuf {
-        let base = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = base.join(format!("openproxy-tokenize-adv-{pid}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
+    fn tempdir() -> openproxy_db::testing::TempDir {
+        openproxy_db::testing::TempDir::new("openproxy-tokenize-adv").expect("mkdir")
     }
 
     async fn make_test_app() -> (

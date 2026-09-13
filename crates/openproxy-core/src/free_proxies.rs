@@ -1764,8 +1764,8 @@ mod tests {
         s
     }
 
-    fn fresh_pool(name: &str) -> (tempfile::TempDir, Arc<openproxy_db::DbPool>) {
-        let tmp = tempfile::tempdir().expect("tempdir");
+    fn fresh_pool(name: &str) -> (openproxy_db::testing::TempDir, Arc<openproxy_db::DbPool>) {
+        let tmp = openproxy_db::testing::TempDir::new(name).expect("tempdir");
         let db_path = tmp.path().join(format!("{name}.db"));
         let pool = Arc::new(openproxy_db::DbPool::open(&db_path).expect("open db pool"));
         {
