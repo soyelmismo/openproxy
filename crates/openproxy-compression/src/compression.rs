@@ -378,4 +378,22 @@ mod tests {
             stats.techniques
         );
     }
+
+    #[test]
+    fn test_would_compress() {
+        let small_msg = vec![msg("user", "hello world")];
+        let large_msg = vec![msg("user", &"a".repeat(1001))];
+
+        assert!(!would_compress(&small_msg, CompressionMode::Off));
+        assert!(!would_compress(&large_msg, CompressionMode::Off));
+
+        assert!(!would_compress(&small_msg, CompressionMode::Lite));
+        assert!(would_compress(&large_msg, CompressionMode::Lite));
+
+        assert!(!would_compress(&small_msg, CompressionMode::Rtk));
+        assert!(would_compress(&large_msg, CompressionMode::Rtk));
+
+        assert!(!would_compress(&small_msg, CompressionMode::LiteRtk));
+        assert!(would_compress(&large_msg, CompressionMode::LiteRtk));
+    }
 }
