@@ -227,6 +227,7 @@ mod tests {
                 cooldown_base_secs: None,
                 cooldown_max_secs: None,
                 cooldown_factor: None,
+                thinking_effort: None,
             },
             model: openproxy_types::Model {
                 row_id: openproxy_types::ModelRowId(1),

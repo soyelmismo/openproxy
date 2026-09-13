@@ -337,6 +337,7 @@ export interface ComboTarget {
   active: boolean;
   cooldown_mode?: CooldownMode | null;
   cooldown_base_secs?: number | null;
+  thinking_effort?: string | null;
 }
 
 /** `ComboTarget` enriquecido con metadata del model (display name, etc.)

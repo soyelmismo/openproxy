@@ -96,6 +96,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         cooldown_max_secs: None,
         cooldown_factor: None,
         rate_limit_scope: RateLimitScope::Account,
+        thinking_effort: None,
     };
 
     let combo = Combo {

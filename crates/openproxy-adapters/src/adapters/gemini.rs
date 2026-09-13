@@ -191,6 +191,12 @@ pub struct GeminiPart {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GeminiThinkingConfig {
+    #[serde(rename = "thinkingBudget")]
+    pub thinking_budget: i32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeminiGenerationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
@@ -200,6 +206,12 @@ pub struct GeminiGenerationConfig {
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    #[serde(
+        default,
+        rename = "thinkingConfig",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thinking_config: Option<GeminiThinkingConfig>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -677,11 +689,31 @@ pub fn openai_to_gemini(
 ) -> GeminiRequest {
     let (system_instruction, contents) = partition_messages_for_gemini(override_messages);
 
+    let thinking_config = req
+        .extra
+        .get("reasoning_effort")
+        .and_then(|v| v.as_str())
+        .or_else(|| req.extra.get("thinking_effort").and_then(|v| v.as_str()))
+        .map(|effort| {
+            let budget = match effort {
+                "none" => 0,
+                "low" => 1024,
+                "medium" => 8192,
+                "high" => 16384,
+                "max" | "xhigh" => 32768,
+                s => s.parse::<i32>().unwrap_or(8192),
+            };
+            GeminiThinkingConfig {
+                thinking_budget: budget,
+            }
+        });
+
     let generation_config = GeminiGenerationConfig {
         temperature: req.temperature,
         top_p: req.top_p,
         max_output_tokens: req.max_tokens.or(Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS)),
         stop_sequences: req.stop.clone(),
+        thinking_config,
     };
 
     let (tools, tool_config) =

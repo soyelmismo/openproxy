@@ -404,6 +404,7 @@ struct ComboTargetUpdates<'a> {
     cooldown_base_secs: UpdateField<u64>,
     cooldown_max_secs: UpdateField<u64>,
     cooldown_factor: UpdateField<u32>,
+    thinking_effort: UpdateField<&'a str>,
 }
 
 impl ComboTargetUpdates<'_> {
@@ -415,6 +416,7 @@ impl ComboTargetUpdates<'_> {
             && self.cooldown_base_secs.is_ignore()
             && self.cooldown_max_secs.is_ignore()
             && self.cooldown_factor.is_ignore()
+            && self.thinking_effort.is_ignore()
     }
 }
 
@@ -475,6 +477,7 @@ fn parse_combo_target_updates(
     let cooldown_base_secs = parse_nullable_u64(body, "cooldown_base_secs")?;
     let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
     let cooldown_factor = parse_nullable_u64(body, "cooldown_factor")?.map(|f| f as u32);
+    let thinking_effort = parse_nullable_str(body, "thinking_effort")?;
 
     let updates = ComboTargetUpdates {
         priority_order,
@@ -484,6 +487,7 @@ fn parse_combo_target_updates(
         cooldown_base_secs,
         cooldown_max_secs,
         cooldown_factor,
+        thinking_effort,
     };
 
     if updates.is_empty() {
@@ -526,6 +530,11 @@ fn apply_target_db_updates(
     match updates.cooldown_factor {
         UpdateField::Set(v) => core_combos::update_target_cooldown_factor(w, target_id, Some(v))?,
         UpdateField::Reset => core_combos::update_target_cooldown_factor(w, target_id, None)?,
+        UpdateField::Ignore => {}
+    }
+    match updates.thinking_effort {
+        UpdateField::Set(v) => core_combos::update_target_thinking_effort(w, target_id, Some(v))?,
+        UpdateField::Reset => core_combos::update_target_thinking_effort(w, target_id, None)?,
         UpdateField::Ignore => {}
     }
     Ok(())
@@ -730,6 +739,7 @@ mod tests {
             provider_active: true,
             sub_combo_id: Some(ComboId(3)),
             sub_combo_name: Some("Sub".into()),
+            thinking_effort: None,
         };
         let res_sub = build_skipped_target_entry(&t_sub).expect("Should be skipped");
         assert_eq!(res_sub["target_id"], 1);
@@ -760,6 +770,7 @@ mod tests {
             provider_active: true,
             sub_combo_id: None,
             sub_combo_name: None,
+            thinking_effort: None,
         };
         let res_cd = build_skipped_target_entry(&t_cd).expect("Should be skipped");
         assert_eq!(res_cd["target_id"], 2);
@@ -770,5 +781,24 @@ mod tests {
         let mut t_active = t_cd;
         t_active.in_cooldown = false;
         assert!(build_skipped_target_entry(&t_active).is_none());
+    }
+
+    #[test]
+    fn test_parse_combo_target_updates_thinking_effort() {
+        let val_set = json!({"thinking_effort": "high"});
+        let updates = parse_combo_target_updates(&val_set).unwrap();
+        assert_eq!(updates.thinking_effort, UpdateField::Set("high"));
+
+        let val_clear = json!({"thinking_effort": null});
+        let updates_clear = parse_combo_target_updates(&val_clear).unwrap();
+        assert_eq!(updates_clear.thinking_effort, UpdateField::Reset);
+
+        let val_ignore = json!({"weight": 2});
+        let updates_ignore = parse_combo_target_updates(&val_ignore).unwrap();
+        assert_eq!(updates_ignore.thinking_effort, UpdateField::Ignore);
+
+        assert!(parse_combo_target_updates(&json!({})).is_err());
+        let val_err = json!({"thinking_effort": 123});
+        assert!(parse_combo_target_updates(&val_err).is_err());
     }
 }

@@ -264,6 +264,7 @@ mod tests {
             cooldown_base_secs: None,
             cooldown_max_secs: None,
             cooldown_factor: None,
+            thinking_effort: None,
         };
         assert!(cb.is_target_healthy(&target_no_acc));
 

@@ -270,6 +270,7 @@ mod tests {
             cooldown_max_secs: None,
             cooldown_factor: None,
             rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            thinking_effort: None,
         }
     }
 

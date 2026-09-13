@@ -43,10 +43,51 @@ pub fn openai_to_anthropic(
         })
         .filter(|t: &Vec<serde_json::Value>| !t.is_empty());
 
+    let mut extra = serde_json::Map::new();
+    let effort_opt = req
+        .extra
+        .get("reasoning_effort")
+        .and_then(|v| v.as_str())
+        .or_else(|| req.extra.get("thinking_effort").and_then(|v| v.as_str()));
+
+    let (max_tokens_override, thinking_val) = if let Some(effort) = effort_opt {
+        let (val, budget) = match effort {
+            "none" => (json!({"type": "disabled"}), 0u32),
+            "low" => (json!({"type": "enabled", "budget_tokens": 2048}), 2048),
+            "medium" => (json!({"type": "enabled", "budget_tokens": 8192}), 8192),
+            "high" => (json!({"type": "enabled", "budget_tokens": 16384}), 16384),
+            "max" | "xhigh" => (json!({"type": "enabled", "budget_tokens": 32768}), 32768),
+            s => {
+                let b = s.parse::<u32>().unwrap_or(8192);
+                (json!({"type": "enabled", "budget_tokens": b}), b)
+            }
+        };
+        (budget, Some(val))
+    } else if let Some(client_thinking) = req.extra.get("thinking") {
+        let budget = client_thinking
+            .get("budget_tokens")
+            .and_then(|v| v.as_u64())
+            .map_or(0, |b| b as u32);
+        (budget, Some(client_thinking.clone()))
+    } else {
+        (0, None)
+    };
+
+    if let Some(tv) = thinking_val {
+        extra.insert("thinking".to_string(), tv);
+    }
+
+    let base_max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    let effective_max_tokens = if max_tokens_override > 0 {
+        base_max_tokens.max(max_tokens_override + 1024)
+    } else {
+        base_max_tokens
+    };
+
     AnthropicRequest {
         model: override_model.to_string(),
         messages: conversation,
-        max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        max_tokens: effective_max_tokens,
         system,
         temperature: req.temperature,
         top_p: req.top_p,
@@ -62,7 +103,7 @@ pub fn openai_to_anthropic(
             .as_ref()
             .map(|u| serde_json::json!({ "user_id": u })),
         stream: override_stream,
-        extra: Default::default(),
+        extra,
     }
 }
 

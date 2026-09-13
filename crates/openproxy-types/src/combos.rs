@@ -87,6 +87,8 @@ pub struct ComboTarget {
     pub cooldown_max_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_factor: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +127,8 @@ pub struct ComboTargetWithModel {
     pub cooldown_max_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_factor: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<Box<str>>,
 }
 
 #[cfg(test)]

@@ -693,6 +693,7 @@ mod tests {
             cooldown_max_secs: None,
             cooldown_factor: None,
             rate_limit_scope: RateLimitScope::Account,
+            thinking_effort: None,
         };
 
         let combo = Combo {

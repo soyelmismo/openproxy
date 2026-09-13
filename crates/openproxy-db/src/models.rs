@@ -996,6 +996,7 @@ mod tests {
         // after t=0) the blocker has released the lock and the
         // wrapper succeeds.
         let blocker_path = _path;
+        let (tx_ready, rx_ready) = std::sync::mpsc::channel();
         let blocker = std::thread::spawn(move || {
             let blocker_conn = Connection::open(&blocker_path).expect("blocker open");
             // Make the blocker's first failed write return BUSY
@@ -1012,12 +1013,13 @@ mod tests {
                 [],
             )
             .expect("blocker insert");
-            std::thread::sleep(Duration::from_millis(30));
+            let _ = tx_ready.send(());
+            std::thread::sleep(Duration::from_millis(60));
             tx.commit().expect("blocker commit");
         });
 
-        // Give the blocker a moment to acquire its write tx.
-        std::thread::sleep(Duration::from_millis(10));
+        // Wait until the blocker has acquired the write tx.
+        let _ = rx_ready.recv();
 
         let started = Instant::now();
         let result = apply_auto_activation_with_retry(&conn, &provider, Some("gpt"));

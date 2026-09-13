@@ -815,6 +815,7 @@ pub(crate) async fn run_test_for_model(
             cooldown_base_secs: None,
             cooldown_max_secs: None,
             cooldown_factor: None,
+            thinking_effort: None,
         },
         model,
         api_key,

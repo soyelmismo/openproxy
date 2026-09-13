@@ -57,7 +57,8 @@ crate::def_table_select!(
     "combo_targets ct INNER JOIN providers p ON p.id = ct.provider_id",
     "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
      ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
-     ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor"
+     ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor, \
+     ct.thinking_effort"
 );
 
 crate::def_table_select!(
@@ -83,7 +84,8 @@ crate::def_table_select!(
      ct.cooldown_mode, \
      ct.cooldown_base_secs, \
      ct.cooldown_max_secs, \
-     ct.cooldown_factor"
+     ct.cooldown_factor, \
+     ct.thinking_effort"
 );
 
 crate::def_table_select!(model_provider_id_select, "models", "provider_id");
@@ -677,6 +679,26 @@ pub fn update_target_cooldown_mode(
     Ok(())
 }
 
+pub fn update_target_thinking_effort(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    effort: Option<&str>,
+) -> Result<()> {
+    let effort_str = match effort {
+        Some(s) if !s.trim().is_empty() && s != "passthrough" => Some(s.trim()),
+        _ => None,
+    };
+    conn.execute(
+        "UPDATE combo_targets SET thinking_effort = ?1 WHERE id = ?2",
+        params![effort_str, target_id.0],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update thinking_effort for combo_target {}",
+        target_id.0
+    )))?;
+    Ok(())
+}
+
 fn update_target_column<T: rusqlite::ToSql>(
     conn: &Connection,
     target_id: ComboTargetId,
@@ -1184,6 +1206,7 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         cooldown_base_secs: @opt_u64(11),
         cooldown_max_secs: @opt_u64(12),
         cooldown_factor: @opt_u32(13),
+        thinking_effort: 14,
     })
 }
 
@@ -1211,6 +1234,7 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
         cooldown_base_secs: @opt_u64(19),
         cooldown_max_secs: @opt_u64(20),
         cooldown_factor: @opt_u32(21),
+        thinking_effort: @opt_box_str(22),
     })
 }
 
@@ -1762,5 +1786,43 @@ mod tests {
         // The logic must be able to explore C3 (second branch) and find C4.
         let result = combo_in_chain(&conn, c4, c1, 10).expect("query success");
         assert!(result, "C1 should be able to reach C4 via C3");
+    }
+
+    #[test]
+    fn test_combo_target_thinking_effort_crud() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('p1', 'P1', 'url', 'bearer', 'openai');
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+            INSERT INTO combo_targets (id, combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (10, 1, 'p1', 2, 1);
+            "
+        ).expect("insert test data");
+
+        let t = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        assert_eq!(t.thinking_effort, None, "default thinking_effort must be None (passthrough)");
+
+        // Set to high
+        update_target_thinking_effort(&conn, ComboTargetId(10), Some("high")).expect("update");
+        let t_high = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        assert_eq!(t_high.thinking_effort.as_deref(), Some("high"));
+
+        let with_model = list_targets_with_model(&conn, ComboId(1)).expect("list");
+        assert_eq!(with_model[0].thinking_effort.as_deref(), Some("high"));
+
+        // Reset to passthrough with None
+        update_target_thinking_effort(&conn, ComboTargetId(10), None).expect("reset");
+        let t_none = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        assert_eq!(t_none.thinking_effort, None);
+
+        // Reset to passthrough with "passthrough" string
+        update_target_thinking_effort(&conn, ComboTargetId(10), Some("medium")).expect("update");
+        update_target_thinking_effort(&conn, ComboTargetId(10), Some("passthrough")).expect("reset");
+        let t_pass = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        assert_eq!(t_pass.thinking_effort, None);
     }
 }

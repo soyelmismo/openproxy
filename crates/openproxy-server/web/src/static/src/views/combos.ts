@@ -218,6 +218,22 @@ async function onUpdateTargetCooldownBase(targetId: number, e: Event): Promise<v
   }
 }
 
+async function onUpdateTargetThinkingEffort(targetId: number, e: Event): Promise<void> {
+  const select = e.target as HTMLSelectElement;
+  const val = select.value || null;
+  try {
+    await api(`/combos/${detailComboId}/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ thinking_effort: val }),
+    });
+    const target = detailTargets.find((x) => x.id === targetId);
+    if (target) target.thinking_effort = val;
+    requestUpdate();
+  } catch (err: unknown) {
+    showToast(t("combos.toast.error_updating_thinking_effort", { message: err instanceof Error ? err.message : String(err) }), "error");
+  }
+}
+
 // `onTestAllTargets` is now a thin shim into `testAllTargets` from
 // combo-handlers.ts. That handler:
 //   1. Disables the button and sets text to "🧪 Testing..."
@@ -436,6 +452,16 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const accountCell = isSub ? html`<em>${t("combos.target.na")}</em>` : (target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`);
   const contextCell = isSub ? html`<em>${t("combos.target.sub_combo")}</em>` : (target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`);
   const weightCell = showWeight ? (isSub ? html`<td class="col-target-weight" data-label=${t("combos.detail.col.weight")}><em>${t("combos.target.na")}</em></td>` : html`<td class="col-target-weight" data-label=${t("combos.detail.col.weight")}><input type="number" min="1" .value=${String(target.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(target.id, e)} @input=${(e: Event) => onUpdateTargetWeight(target.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
+  const thinkingCell = isSub ? html`<td class="col-target-thinking" data-label=${t("combos.detail.col.thinking")}><em>${t("combos.target.na")}</em></td>` : html`<td class="col-target-thinking" data-label=${t("combos.detail.col.thinking")}>
+    <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:110px" .value=${target.thinking_effort ?? ""} @change=${(e: Event) => onUpdateTargetThinkingEffort(target.id, e)}>
+      <option value="" ?selected=${!target.thinking_effort}>${t("combos.target.thinking_passthrough")}</option>
+      <option value="none" ?selected=${target.thinking_effort === "none"}>${t("combos.target.thinking_none")}</option>
+      <option value="low" ?selected=${target.thinking_effort === "low"}>${t("combos.target.thinking_low")}</option>
+      <option value="medium" ?selected=${target.thinking_effort === "medium"}>${t("combos.target.thinking_medium")}</option>
+      <option value="high" ?selected=${target.thinking_effort === "high"}>${t("combos.target.thinking_high")}</option>
+      <option value="max" ?selected=${target.thinking_effort === "max"}>${t("combos.target.thinking_max")}</option>
+    </select>
+  </td>`;
   const cooldownCell = isSub ? html`<td class="col-target-cooldown" data-label=${t("combos.detail.col.cooldown")}><em>${t("combos.target.sub_combo")}</em></td>` : html`<td class="col-target-cooldown" data-label=${t("combos.detail.col.cooldown")}>
     <div style="display:flex;align-items:center;gap:4px">
       <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:95px" @change=${(e: Event) => onUpdateTargetCooldownMode(target.id, e)}>
@@ -488,6 +514,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     <td class="col-target-model" data-label=${t("combos.detail.col.model")}><div class="target-model-title">${modelCell}</div></td>
     <td class="col-target-context" data-label=${t("combos.detail.col.context")}>${contextCell}</td>
     ${weightCell}
+    ${thinkingCell}
     ${cooldownCell}
     <td class="last-test-cell col-target-test-status" data-label=${t("combos.detail.col.last_test")}>${lastTestCell}</td>
     <td class="col-target-actions" data-label=${t("combos.detail.col.actions")}>
@@ -543,7 +570,7 @@ function renderComboDetail(): TemplateResult {
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${onTestAllTargets}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">${t("combos.detail.targets_empty")}</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
-        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
+        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.thinking")}</th><th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;
 }

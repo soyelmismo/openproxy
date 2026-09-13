@@ -396,6 +396,7 @@ pub fn build_synthetic_combo(
         cooldown_base_secs: None,
         cooldown_max_secs: None,
         cooldown_factor: None,
+        thinking_effort: None,
     };
     let combo = Combo {
         id: ComboId(SYNTHETIC_COMBO_ID),

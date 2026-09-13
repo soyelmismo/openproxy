@@ -190,9 +190,22 @@ impl PipelineStage for FormattingStage {
         let stream = ctx.req.openai_request.stream || ctx.req.stream_sink.is_some();
         let messages_ref = prepare_messages_for_formatting(ctx);
 
+        let mut req_override;
+        let req_ref = if let Some(ref effort) = current.target.thinking_effort {
+            req_override = ctx.req.clone();
+            let mut patched_openai_req = (*req_override.openai_request).clone();
+            patched_openai_req
+                .extra
+                .insert("reasoning_effort".to_string(), serde_json::json!(effort));
+            req_override.openai_request = std::sync::Arc::new(patched_openai_req);
+            &req_override
+        } else {
+            &ctx.req
+        };
+
         let formatter = crate::formatting::get_formatter(target_format);
         let body_bytes = match formatter
-            .format_request(&ctx.req, &current.model, messages_ref, stream, adapter)
+            .format_request(req_ref, &current.model, messages_ref, stream, adapter)
             .and_then(|body| {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             }) {
