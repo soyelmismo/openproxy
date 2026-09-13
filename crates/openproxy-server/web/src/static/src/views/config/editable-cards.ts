@@ -38,6 +38,18 @@ let liveCompression = "off";
 let liveIdleChunkRetryable = false;
 let liveQuotaProtectionEnabled = true;
 let liveQuotaProtectionThreshold = 10;
+let livePiiEnabled = false;
+let livePiiReversible = true;
+let livePiiRedactLogs = true;
+let livePiiEntities: string[] = ["email", "phone", "ip", "credit_card", "secret", "person"];
+
+function normalizePiiEntity(entity: string): string {
+  if (entity === "card") return "credit_card";
+  if (entity === "name") return "person";
+  if (entity === "key" || entity === "api_key") return "secret";
+  if (entity === "ipv4" || entity === "ipv6") return "ip";
+  return entity;
+}
 
 /** Seed the live editable values from a freshly fetched `/config`
  *  payload. Called by mountConfig after the fetch succeeds. */
@@ -55,6 +67,18 @@ export function applyServerConfig(payload: ConfigPayload): void {
   liveIdleChunkRetryable = payload.idle_chunk_retryable ?? false;
   liveQuotaProtectionEnabled = payload.quota_protection?.enabled ?? true;
   liveQuotaProtectionThreshold = payload.quota_protection?.threshold_percentage ?? 10;
+
+  const pii = payload.pii ?? {
+    pii_enabled: payload.pii_enabled,
+    pii_reversible: payload.pii_reversible,
+    pii_redact_logs: payload.pii_redact_logs,
+    pii_entities: payload.pii_entities,
+  };
+  livePiiEnabled = pii.pii_enabled ?? false;
+  livePiiReversible = pii.pii_reversible ?? true;
+  livePiiRedactLogs = pii.pii_redact_logs ?? true;
+  const rawEntities: string[] = pii.pii_entities ?? ["email", "phone", "ip", "credit_card", "secret", "person"];
+  livePiiEntities = Array.from(new Set(rawEntities.map(normalizePiiEntity)));
 }
 
 // ── Per-section save helpers (used by both the @change handlers
@@ -136,6 +160,39 @@ async function patchQuotaProtection(enabled: boolean, threshold: number): Promis
       cfg.quota_protection = { enabled, threshold_percentage: threshold };
     }
     showToast(t("config.quota.toast.updated"), "success");
+    requestUpdate();
+    return true;
+  } catch (e: unknown) {
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
+    requestUpdate();
+    return false;
+  }
+}
+
+async function patchPiiConfig(cfgUpdate: {
+  pii_enabled?: boolean;
+  pii_reversible?: boolean;
+  pii_redact_logs?: boolean;
+  pii_entities?: string[];
+}): Promise<boolean> {
+  const pii_enabled = cfgUpdate.pii_enabled ?? livePiiEnabled;
+  const pii_reversible = cfgUpdate.pii_reversible ?? livePiiReversible;
+  const pii_redact_logs = cfgUpdate.pii_redact_logs ?? livePiiRedactLogs;
+  const pii_entities = cfgUpdate.pii_entities ?? livePiiEntities;
+  try {
+    await api("/config/pii", {
+      method: "PUT",
+      body: JSON.stringify({ pii_enabled, pii_reversible, pii_redact_logs, pii_entities }),
+    });
+    const cfg = getConfig();
+    if (cfg) {
+      cfg.pii = { pii_enabled, pii_reversible, pii_redact_logs, pii_entities };
+      cfg.pii_enabled = pii_enabled;
+      cfg.pii_reversible = pii_reversible;
+      cfg.pii_redact_logs = pii_redact_logs;
+      cfg.pii_entities = pii_entities;
+    }
+    showToast(t("config.pii.toast.updated"), "success");
     requestUpdate();
     return true;
   } catch (e: unknown) {
@@ -362,9 +419,110 @@ export function renderQuotaCard(): TemplateResult {
       <label class="config-field">
         <span class="config-label">${t("config.quota.reserve_threshold")}</span>
         <input type="number" min="1" max="99" name="quota_protection.threshold_percentage" .value=${String(liveQuotaProtectionThreshold)}
-               @change=${onQuotaThresholdChange} @input=${onQuotaThresholdChange}>
+                @change=${onQuotaThresholdChange} @input=${onQuotaThresholdChange}>
         <span class="config-help">${t("config.quota.help_threshold")}</span>
       </label>
+    </div>
+  `);
+}
+
+async function onTogglePiiEnabled(): Promise<void> {
+  const prev = livePiiEnabled;
+  livePiiEnabled = !prev;
+  const ok = await patchPiiConfig({ pii_enabled: livePiiEnabled });
+  if (!ok) livePiiEnabled = prev;
+}
+
+async function onTogglePiiReversible(): Promise<void> {
+  const prev = livePiiReversible;
+  livePiiReversible = !prev;
+  const ok = await patchPiiConfig({ pii_reversible: livePiiReversible });
+  if (!ok) livePiiReversible = prev;
+}
+
+async function onTogglePiiRedactLogs(): Promise<void> {
+  const prev = livePiiRedactLogs;
+  livePiiRedactLogs = !prev;
+  const ok = await patchPiiConfig({ pii_redact_logs: livePiiRedactLogs });
+  if (!ok) livePiiRedactLogs = prev;
+}
+
+async function onTogglePiiEntity(entity: string): Promise<void> {
+  const norm = normalizePiiEntity(entity);
+  const prev = [...livePiiEntities];
+  const idx = livePiiEntities.indexOf(norm);
+  if (idx >= 0) {
+    livePiiEntities.splice(idx, 1);
+  } else {
+    livePiiEntities.push(norm);
+  }
+  livePiiEntities = Array.from(new Set(livePiiEntities.map(normalizePiiEntity)));
+  const ok = await patchPiiConfig({ pii_entities: livePiiEntities });
+  if (!ok) livePiiEntities = prev;
+}
+
+const ALL_PII_ENTITIES = [
+  { id: "email", label: "Email" },
+  { id: "phone", label: "Phone" },
+  { id: "ip", label: "IP Address" },
+  { id: "credit_card", label: "Credit Card (Luhn)" },
+  { id: "secret", label: "Secrets / Keys" },
+  { id: "person", label: "Person Names" },
+];
+
+export function renderPiiCard(): TemplateResult {
+  return card(t("config.pii.title"), html`
+    <p class="muted">${t("config.pii.description")}</p>
+    <div class="config-grid">
+      <label class="config-field">
+        <span class="config-label">${t("config.pii.enabled")}</span>
+        <button type="button" role="switch" aria-checked=${livePiiEnabled ? "true" : "false"}
+                class="toggle-btn ${livePiiEnabled ? "on" : "off"}"
+                @click=${() => { void onTogglePiiEnabled(); }}>
+          <span class="toggle-thumb"></span>
+        </button>
+        <span class="config-help">${livePiiEnabled
+          ? t("config.pii.help_on")
+          : t("config.pii.help_off")}</span>
+      </label>
+      <label class="config-field">
+        <span class="config-label">${t("config.pii.reversible")}</span>
+        <button type="button" role="switch" aria-checked=${livePiiReversible ? "true" : "false"}
+                class="toggle-btn ${livePiiReversible ? "on" : "off"}"
+                @click=${() => { void onTogglePiiReversible(); }}>
+          <span class="toggle-thumb"></span>
+        </button>
+        <span class="config-help">${livePiiReversible
+          ? t("config.pii.help_reversible_on")
+          : t("config.pii.help_reversible_off")}</span>
+      </label>
+      <label class="config-field">
+        <span class="config-label">${t("config.pii.redact_logs")}</span>
+        <button type="button" role="switch" aria-checked=${livePiiRedactLogs ? "true" : "false"}
+                class="toggle-btn ${livePiiRedactLogs ? "on" : "off"}"
+                @click=${() => { void onTogglePiiRedactLogs(); }}>
+          <span class="toggle-thumb"></span>
+        </button>
+        <span class="config-help">${livePiiRedactLogs
+          ? t("config.pii.help_redact_logs_on")
+          : t("config.pii.help_redact_logs_off")}</span>
+      </label>
+    </div>
+    <div style="margin-top: 1rem;">
+      <span class="config-label">${t("config.pii.entities_label")}</span>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;">
+        ${ALL_PII_ENTITIES.map(ent => {
+          const active = livePiiEntities.includes(ent.id);
+          return html`
+            <button type="button"
+                    class="btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}"
+                    style="font-size: 0.8rem; padding: 0.25rem 0.5rem;"
+                    @click=${() => { void onTogglePiiEntity(ent.id); }}>
+              ${active ? "✓ " : "+ "}${ent.label}
+            </button>
+          `;
+        })}
+      </div>
     </div>
   `);
 }

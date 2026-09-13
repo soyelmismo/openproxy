@@ -439,6 +439,8 @@ export interface StageEvent {
   compression_savings_pct: number | null;
   /** Compression techniques applied (CSV) or null when off. */
   compression_techniques: string | null;
+  /** Summary of PII entities redacted before upstream, if any. */
+  pii_redacted?: string | null;
   endpoint_kind?: string;
 }
 
@@ -604,6 +606,8 @@ export interface RecentUsageRow {
   compression_savings_pct: number | null;
   /** Compression techniques applied (CSV) or null when off. */
   compression_techniques: string | null;
+  /** Summary of PII entities redacted before upstream, if any. */
+  pii_redacted?: string | null;
   /** True iff this row's response was actually delivered to the HTTP
    *  client (winning attempt). False for intermediate retries that
    *  were tried internally but never reached the client. */

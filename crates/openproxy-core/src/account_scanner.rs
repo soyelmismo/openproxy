@@ -119,7 +119,11 @@ mod tests {
 
     /// Serializa la mutación de `HOME` entre tests paralelos
     /// (AGENTS §4.3 + P3-4 de la spec).
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(super) fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     /// RAII guard que setea `HOME` y lo restaura al drop (incluso en panic).
     struct HomeGuard {
@@ -170,7 +174,7 @@ mod tests {
         });
         std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
 
-        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        let _guard = lock();
         let _home = HomeGuard::set(tmp.path());
 
         let found = scan_external_accounts();
@@ -192,7 +196,7 @@ mod tests {
 
         // (a) HOME vacío → ningún archivo.
         {
-            let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+            let _guard = lock();
             let _home = HomeGuard::set(tmp.path());
             let found = scan_external_accounts();
             assert!(found.is_empty(), "expected no entries from empty home");
@@ -207,7 +211,7 @@ mod tests {
         std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
         std::fs::write(&target, b"{ this is not valid json").expect("write");
         {
-            let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+            let _guard = lock();
             let _home = HomeGuard::set(tmp.path());
             let found = scan_external_accounts();
             assert!(found.is_empty(), "corrupt file must not surface as entry");
@@ -220,7 +224,7 @@ mod tests {
         });
         std::fs::write(&target, serde_json::to_vec(&body).expect("ser")).expect("write");
         {
-            let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+            let _guard = lock();
             let _home = HomeGuard::set(tmp.path());
             let found = scan_external_accounts();
             assert!(
@@ -239,12 +243,9 @@ mod adversarial_tests {
     use super::tests::tempdir;
     use super::*;
 
-    /// Serializes HOME mutations across tests in this module.
-    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Lock the test mutex, recovering from poisoning.
+    /// Serializes HOME mutations across all scanner tests using the shared lock.
     fn lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        super::tests::lock()
     }
 
     /// RAII guard that sets HOME and restores it on drop.

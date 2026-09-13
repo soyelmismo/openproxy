@@ -41,6 +41,7 @@ pub struct UsageInput {
     pub stop_reason: Option<String>,
     pub compression_savings_pct: Option<f64>,
     pub compression_techniques: Option<String>,
+    pub pii_redacted: Option<String>,
     pub endpoint_kind: EndpointKind,
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
@@ -83,6 +84,8 @@ pub struct StageEvent {
     pub status_code: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_kind: Option<EndpointKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pii_redacted: Option<String>,
 }
 
 #[doc(hidden)]
@@ -225,6 +228,9 @@ macro_rules! __set_stage_event_field {
         $event.endpoint_kind =
             $crate::usage::IntoOptionEndpointKind::into_option_endpoint_kind($val);
     };
+    ($event:ident, pii_redacted, $val:expr) => {
+        $event.pii_redacted = $crate::usage::IntoOptionString::into_option_string($val);
+    };
 }
 
 /// Constructs a `StageEvent` struct with default `None` for omitted optional fields.
@@ -305,6 +311,7 @@ pub struct RecentUsageRow {
     pub error_message: Option<String>,
     pub stop_reason: Option<String>,
     pub compression_techniques: Option<String>,
+    pub pii_redacted: Option<String>,
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
     pub request_body_json: Option<serde_json::Value>,
@@ -352,6 +359,8 @@ struct RecentUsageRowSerde {
     pub stop_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compression_techniques: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pii_redacted: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -409,6 +418,8 @@ struct RecentUsageRowSerdeRef<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_techniques: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pii_redacted: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_status: Option<&'a String>,
@@ -465,6 +476,7 @@ impl Serialize for RecentUsageRow {
             error_message: self.error_message.as_ref(),
             stop_reason: self.stop_reason.as_ref(),
             compression_techniques: self.compression_techniques.as_ref(),
+            pii_redacted: self.pii_redacted.as_ref(),
             proxy_url: self.proxy_url.as_ref(),
             proxy_status: self.proxy_status.as_ref(),
             request_body_json: self.request_body_json.as_ref(),
@@ -533,6 +545,7 @@ impl<'de> Deserialize<'de> for RecentUsageRow {
             error_message: shadow.error_message,
             stop_reason: shadow.stop_reason,
             compression_techniques: shadow.compression_techniques,
+            pii_redacted: shadow.pii_redacted,
             proxy_url: shadow.proxy_url,
             proxy_status: shadow.proxy_status,
             request_body_json: shadow.request_body_json,
@@ -657,6 +670,7 @@ mod tests {
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             endpoint_kind: EndpointKind::Chat,
             proxy_url: None,
             proxy_status: None,
@@ -683,6 +697,7 @@ mod tests {
             error_message: None,
             stop_reason: None,
             compression_techniques: None,
+            pii_redacted: None,
             proxy_url: None,
             proxy_status: None,
             request_body_json: None,

@@ -5,7 +5,7 @@
 use crate::error::{CoreError, Result};
 pub use openproxy_types::config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
-    MaintenanceConfig, QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig,
+    MaintenanceConfig, PiiConfig, QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig,
     SmartWarmupConfig, StorageConfig, TimeoutsConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -161,6 +161,8 @@ pub struct AppConfig {
     pub smart_warmup: SmartWarmupConfig,
     #[serde(default)]
     pub quota_sync: QuotaSyncConfig,
+    #[serde(default)]
+    pub pii: PiiConfig,
 }
 
 impl AppConfig {

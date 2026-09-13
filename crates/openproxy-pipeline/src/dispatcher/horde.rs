@@ -204,6 +204,7 @@ impl UpstreamDispatcher {
                 .completion_tokens_opt(Some(completion_tokens))
                 .cached_tokens(None)
                 .response_body_json(Some(resp_json))
+                .redact_logs(self.config.pii_config.pii_redact_logs)
                 .request_headers(request_headers_btm)
                 .response_headers(None)
                 .is_streaming(false)

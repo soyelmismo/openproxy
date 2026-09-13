@@ -33,6 +33,7 @@ export interface LogDetailLog {
   /** Compression savings in tokens (0.0–100.0) or null when off. */
   compression_savings_pct?: number | null;
   compression_techniques?: string | null;
+  pii_redacted?: string | null;
   race_lost?: boolean;
   request_body_json?: unknown;
   response_body_json?: unknown;

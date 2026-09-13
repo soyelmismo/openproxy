@@ -117,6 +117,7 @@ impl UsageTracker {
             api_key_id: req.api_key_id,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             request_body_json: None,
             response_body_json: None,
             request_headers: None,
@@ -168,6 +169,7 @@ impl UsageTracker {
             api_key_id: req.api_key_id,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             request_body_json: None,
             response_body_json: None,
             request_headers: None,
@@ -292,6 +294,7 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) proxy_url: Option<String>,
     pub(crate) proxy_status: Option<String>,
     pub(crate) is_proxy_rotated: bool,
+    pub(crate) redact_logs: bool,
 }
 
 impl<'a> UsageRecordBuilder<'a> {
@@ -329,7 +332,13 @@ impl<'a> UsageRecordBuilder<'a> {
             proxy_url: None,
             proxy_status: None,
             is_proxy_rotated: false,
+            redact_logs: true,
         }
+    }
+
+    pub fn redact_logs(mut self, redact: bool) -> Self {
+        self.redact_logs = redact;
+        self
     }
 
     pub fn model_opt(mut self, model: Option<&'a Model>) -> Self {
@@ -492,6 +501,12 @@ impl<'a> UsageRecordBuilder<'a> {
         let error_str = self
             .err
             .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()));
+        let pii_redacted = self
+            .req
+            .pii_session
+            .lock()
+            .as_ref()
+            .and_then(|s| s.summary());
         openproxy_types::emit_stage_event!(
             request_id: self.req.request_id,
             trace_id: self.trace_id,
@@ -502,6 +517,7 @@ impl<'a> UsageRecordBuilder<'a> {
             status_code: self.status_code,
             error: error_str,
             stop_reason: self.stop_reason.clone(),
+            pii_redacted: pii_redacted,
         );
     }
 
@@ -556,9 +572,19 @@ fn resolve_recorded_request_body(
     recording: bool,
     req_body: Option<bytes::Bytes>,
     openai_req: &openproxy_types::OpenAIRequest,
+    prepared_msgs: Option<&[openproxy_types::OpenAIMessage]>,
+    has_pii: bool,
+    redact_logs: bool,
 ) -> Option<bytes::Bytes> {
     if !recording {
         return None;
+    }
+    if has_pii && redact_logs && let Some(msgs) = prepared_msgs {
+        let mut cloned = openai_req.clone();
+        cloned.messages = msgs.to_vec();
+        if let Ok(vec) = serde_json::to_vec(&cloned) {
+            return Some(bytes::Bytes::from(vec));
+        }
     }
     req_body.or_else(|| serde_json::to_vec(openai_req).ok().map(bytes::Bytes::from))
 }
@@ -577,11 +603,27 @@ impl UsageRecordBuilder<'_> {
         compression_savings_pct: Option<f64>,
         compression_techniques: Option<String>,
     ) -> UsageInput {
+        let pii_redacted = self
+            .req
+            .pii_session
+            .lock()
+            .as_ref()
+            .and_then(|s| s.summary());
+        let has_pii = pii_redacted.is_some();
+        let prepared_msgs = self
+            .req
+            .compressed_messages
+            .get()
+            .and_then(|opt| opt.as_deref());
+
         let recording = self.tracker.is_recording();
         let request_body_json = resolve_recorded_request_body(
             recording,
             self.req.request_body_json.clone(),
             &self.req.openai_request,
+            prepared_msgs,
+            has_pii,
+            self.redact_logs,
         );
         let response_body_json =
             optional_when_recording(recording, self.response_body_json.clone());
@@ -640,6 +682,7 @@ impl UsageRecordBuilder<'_> {
             stop_reason: self.stop_reason.clone(),
             compression_savings_pct,
             compression_techniques,
+            pii_redacted,
             flags,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             proxy_url: self.proxy_url.clone(),

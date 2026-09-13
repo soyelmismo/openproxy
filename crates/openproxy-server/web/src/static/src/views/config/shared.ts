@@ -58,6 +58,16 @@ export interface ConfigPayload {
     enabled?: boolean | null;
     threshold_percentage?: number | null;
   } | null;
+  pii?: {
+    pii_enabled?: boolean | null;
+    pii_reversible?: boolean | null;
+    pii_redact_logs?: boolean | null;
+    pii_entities?: string[] | null;
+  } | null;
+  pii_enabled?: boolean | null;
+  pii_reversible?: boolean | null;
+  pii_redact_logs?: boolean | null;
+  pii_entities?: string[] | null;
   /** Maintenance config (auto_vacuum, interval, retention). */
   maintenance?: {
     auto_vacuum?: boolean | null;

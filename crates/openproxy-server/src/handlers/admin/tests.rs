@@ -1471,3 +1471,79 @@ async fn adv_scan_endpoint_array_body_returns_4xx() {
         resp.status()
     );
 }
+
+#[tokio::test]
+async fn put_pii_persists_new_config_and_updates_memory() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+
+    let app = Router::new()
+        .route(
+            "/admin/config/pii",
+            get(crate::handlers::admin::runtime::get_runtime_pii)
+                .put(crate::handlers::admin::runtime::put_runtime_pii),
+        )
+        .route(
+            "/admin/config",
+            get(crate::handlers::admin::runtime::get_runtime_config),
+        )
+        .with_state(state.clone());
+
+    // Initially disabled
+    assert!(!state.pii_config().pii_enabled);
+
+    // Update PII config via PUT
+    let payload = serde_json::json!({
+        "pii_enabled": true,
+        "pii_reversible": true,
+        "pii_redact_logs": false,
+        "pii_entities": ["email", "card", "ip"]
+    });
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/admin/config/pii")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .expect("build req");
+
+    let resp = app.clone().oneshot(req).await.expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK, "PUT should be 200");
+
+    // In-memory slot was updated
+    let current = state.pii_config();
+    assert!(current.pii_enabled);
+    assert!(current.pii_reversible);
+    assert!(!current.pii_redact_logs);
+    assert_eq!(current.pii_entities.len(), 3);
+
+    // DB has persisted the change
+    let loaded = state
+        .db_pool()
+        .with_conn(openproxy_db::app_config::load_pii_config_from_db)
+        .expect("load pii config from db")
+        .expect("persisted pii config exists");
+    assert!(loaded.pii_enabled);
+    assert!(loaded.pii_reversible);
+    assert!(!loaded.pii_redact_logs);
+    assert_eq!(loaded.pii_entities.len(), 3);
+
+    // GET /admin/config includes pii
+    let get_req = Request::builder()
+        .method("GET")
+        .uri("/admin/config")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .body(Body::empty())
+        .expect("build req");
+    let get_resp = app.oneshot(get_req).await.expect("oneshot");
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(get_resp.into_body(), 4096)
+        .await
+        .expect("body");
+    let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(json["pii_enabled"], true);
+    assert_eq!(json["pii_reversible"], true);
+    assert_eq!(json["pii_redact_logs"], false);
+    assert_eq!(json["pii"]["pii_enabled"], true);
+    assert_eq!(json["pii"]["pii_redact_logs"], false);
+}

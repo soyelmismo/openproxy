@@ -1,7 +1,6 @@
 // @see tsconfig.test.json for type settings.
 //
-// Phase-robustness e2e — §5.4 of
-// `.hermes/phase-robustness-spec.md`.
+// Phase-robustness e2e regression test.
 //
 // Regression test for the user-reported "el reason stop del upstream
 // no se está tomando en cuenta" bug, where the live-logs dashboard

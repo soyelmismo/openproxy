@@ -1682,6 +1682,7 @@ dependencies = [
 name = "openproxy-pipeline"
 version = "1.0.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "bytes",
  "chrono",
@@ -1698,6 +1699,7 @@ dependencies = [
  "openproxy-types",
  "parking_lot",
  "rand 0.10.2",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

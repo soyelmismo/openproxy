@@ -789,6 +789,7 @@ pub struct UsageDetailRow {
     pub proxy_status: Option<String>,
     /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
+    pub pii_redacted: Option<String>,
     pub created_at: String,
     pub flags: u8,
 }
@@ -844,6 +845,7 @@ struct UsageDetailRowSerde {
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
+    pub pii_redacted: Option<String>,
     pub created_at: String,
 }
 
@@ -890,6 +892,7 @@ impl Serialize for UsageDetailRow {
             proxy_status: self.proxy_status.clone(),
             is_proxy_rotated: self.has_flag(USAGE_FLAG_PROXY_ROTATED),
             endpoint_kind: self.endpoint_kind,
+            pii_redacted: self.pii_redacted.clone(),
             created_at: self.created_at.clone(),
         };
         shadow.serialize(serializer)
@@ -955,6 +958,7 @@ impl<'de> Deserialize<'de> for UsageDetailRow {
             proxy_url: shadow.proxy_url,
             proxy_status: shadow.proxy_status,
             endpoint_kind: shadow.endpoint_kind,
+            pii_redacted: shadow.pii_redacted,
             created_at: shadow.created_at,
             flags,
         })
@@ -1040,6 +1044,8 @@ fn map_usage_row(
     let is_proxy_rotated: i64 = row.get(col_idx)?;
     col_idx += 1;
     let cached_tokens: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let pii_redacted: Option<String> = row.get(col_idx)?;
 
     if !(0..=i64::from(u16::MAX)).contains(&status_code) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1114,6 +1120,7 @@ fn map_usage_row(
         stop_reason,
         compression_savings_pct,
         compression_techniques,
+        pii_redacted,
         proxy_url,
         proxy_status,
         endpoint_kind,
@@ -1172,7 +1179,7 @@ pub fn recent(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
              FROM usage \
              WHERE id > ?1 \
              ORDER BY id ASC \
@@ -1217,7 +1224,7 @@ pub fn recent_desc(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
              FROM usage \
              ORDER BY id DESC \
              LIMIT ?1",
@@ -1256,7 +1263,7 @@ pub fn row_for_broadcast_by_id(
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1328,6 +1335,8 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
     let proxy_status: Option<String> = row.get(col_idx)?;
     col_idx += 1;
     let is_proxy_rotated: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let pii_redacted: Option<String> = row.get(col_idx).unwrap_or(None);
 
     if !(0..=i64::from(u16::MAX)).contains(&status_code) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1404,6 +1413,7 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
         proxy_url,
         proxy_status,
         endpoint_kind,
+        pii_redacted,
         flags,
     })
 }
@@ -1421,7 +1431,8 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     request_body_json, response_body_json, request_headers, \
                     response_headers, error_message, client_response, \
                     prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, \
+                    pii_redacted \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1448,7 +1459,8 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     request_body_json, response_body_json, request_headers, \
                     response_headers, error_message, client_response, \
                     prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, \
+                    pii_redacted \
              FROM usage \
              WHERE trace_id = ?1 \
              ORDER BY client_response DESC, id DESC \
@@ -1590,7 +1602,8 @@ mod tests {
         proxy_url TEXT,
         proxy_status TEXT,
         is_proxy_rotated INTEGER NOT NULL DEFAULT 0,
-        cached_tokens INTEGER
+        cached_tokens INTEGER,
+        pii_redacted TEXT
     )";
 
     #[test]
@@ -1605,11 +1618,11 @@ mod tests {
                 race_total, race_attempts, is_streaming, stream_complete, race_lost,
                 created_at, stop_reason, compression_savings_pct, compression_techniques,
                 client_response, prompt_tokens_estimated, completion_tokens_estimated,
-                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens)
+                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                      ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                      ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                     ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
+                     ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)",
             rusqlite::params![
                 42i64,
                 "req-abc",
@@ -1646,6 +1659,7 @@ mod tests {
                 None::<String>,
                 0i64,
                 Some(10i64),
+                Some("email: 1"),
             ],
         )
         .unwrap();
@@ -1669,6 +1683,7 @@ mod tests {
         assert_eq!(row.stop_reason.as_deref(), Some("stop"));
         assert_eq!(row.compression_savings_pct, Some(12.5));
         assert_eq!(row.compression_techniques.as_deref(), Some("gzip"));
+        assert_eq!(row.pii_redacted.as_deref(), Some("email: 1"));
         assert_eq!(row.proxy_url, None);
         assert_eq!(row.proxy_status, None);
         assert_eq!(row.cached_tokens, Some(10));
@@ -1688,11 +1703,11 @@ mod tests {
                 race_total, race_attempts, is_streaming, stream_complete, race_lost,
                 created_at, stop_reason, compression_savings_pct, compression_techniques,
                 client_response, prompt_tokens_estimated, completion_tokens_estimated,
-                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens)
+                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted)
              VALUES (1, 'r', 't', 'p', 'm', 200, -1, NULL, NULL, NULL,
                      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                      0, 0, 0, 0, 0, '2026-01-01', NULL, NULL, NULL,
-                     0, 0, 0, 'chat', NULL, NULL, 0, NULL)",
+                     0, 0, 0, 'chat', NULL, NULL, 0, NULL, NULL)",
         )
         .unwrap();
 

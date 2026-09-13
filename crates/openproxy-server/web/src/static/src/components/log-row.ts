@@ -121,10 +121,13 @@ function buildLogRowCells(
   
   if (has("compression")) {
     const savings = row ? row.compression_savings_pct : null;
+    const pii = row?.pii_redacted;
     if (savings != null && savings > 0) {
       const pct = savings < 1 ? savings.toFixed(2) : Math.round(savings).toString();
       const tech = row ? row.compression_techniques : "";
-      cells.push(html`<span class="log-compression" style="background: rgba(34, 197, 94, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: 500;" title="Local Compression: ${pct}% savings (BPE cl100k_base) — ${tech}">${icons.lightning()} ${pct}%</span>`);
+      cells.push(html`<span class="log-compression" style="background: rgba(34, 197, 94, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: 500;" title="Local Compression: ${pct}% savings (BPE cl100k_base) — ${tech}">${icons.lightning()} ${pct}%</span>${pii ? html`<span class="log-pii" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; padding: 2px 6px; border-radius: 4px; font-weight: 500; font-size: 0.75rem; margin-left: 4px;" title="PII Redacted: ${pii}">PII</span>` : ""}`);
+    } else if (pii) {
+      cells.push(html`<span class="log-pii" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; padding: 2px 6px; border-radius: 4px; font-weight: 500; font-size: 0.75rem;" title="PII Redacted: ${pii}">PII</span>`);
     } else {
       cells.push(html`<span class="log-compression log-compression--none" title="No compression applied (or mode is Off)">—</span>`);
     }
@@ -174,9 +177,11 @@ function buildMobileCardView(
   // Model & Provider
   const modelProv = `${attempt.providerId ? `${attempt.providerId} / ` : ""}${attempt.upstreamModelId || "—"}`;
 
-  // Optional badge: cache or compression or cost
+  // Optional badge: pii, cache, compression or cost
   let extraBadge: TemplateResult | null = null;
-  if (row && row.cached_tokens != null && row.cached_tokens > 0) {
+  if (row && row.pii_redacted) {
+    extraBadge = html`<span class="log-pii" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; padding: 1px 5px; border-radius: 3px; font-size: 0.72rem; font-weight: 500;" title="PII Redacted: ${row.pii_redacted}">PII</span>`;
+  } else if (row && row.cached_tokens != null && row.cached_tokens > 0) {
     extraBadge = html`<span class="log-cache" style="color: var(--color-success); font-size: 0.72rem;">${icons.target()} ${formatContext(row.cached_tokens)}</span>`;
   } else if (row && row.compression_savings_pct != null && row.compression_savings_pct > 0) {
     const pct = row.compression_savings_pct < 1 ? row.compression_savings_pct.toFixed(2) : Math.round(row.compression_savings_pct).toString();

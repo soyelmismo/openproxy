@@ -234,6 +234,7 @@ pub(crate) struct StreamingState {
     pub done_sent: bool,
     pub acc: Option<ResponseAccumulator>,
     pub responses_sse_state: crate::sse::ResponsesSseState,
+    pub pii_stage: Option<crate::pii::PiiRestorationStage>,
 }
 
 pub(crate) struct StreamContext<'a> {
@@ -280,6 +281,7 @@ impl StreamingState {
                 None
             },
             responses_sse_state: crate::sse::ResponsesSseState::default(),
+            pii_stage: None,
         }
     }
 
@@ -512,6 +514,17 @@ impl ChunkProcessor<'_> {
         }
     }
 
+    async fn send_to_sink(
+        &mut self,
+        ctx: &StreamContext<'_>,
+        chunk: bytes::Bytes,
+    ) -> Result<(), crate::race_sink::StreamSinkError> {
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        ctx.sink.send(chunk).await
+    }
+
     async fn handle_done_sentinel(
         &mut self,
         ctx: &StreamContext<'_>,
@@ -519,8 +532,14 @@ impl ChunkProcessor<'_> {
         if let Some(event) = self.check_race_cancelled(ctx) {
             return Ok(event);
         }
-        if let Err(crate::race_sink::StreamSinkError::Lost) =
-            ctx.sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
+        // If PII stage has residual buffered content, flush before [DONE]
+        if let Some(residual) = self.state.pii_stage.as_mut().and_then(|s| s.finalize()) {
+            let sse_bytes = crate::sse::build_sse_frame(&residual);
+            let _ = self.send_to_sink(ctx, sse_bytes).await;
+        }
+        if let Err(crate::race_sink::StreamSinkError::Lost) = self
+            .send_to_sink(ctx, bytes::Bytes::clone(&SSE_DONE_BYTES))
+            .await
         {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
@@ -653,9 +672,19 @@ impl ChunkProcessor<'_> {
             _ => None,
         };
         let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
-        let sse_bytes = crate::sse::build_sse_frame(payload_str);
 
-        if let Err(e) = ctx.sink.send(sse_bytes).await {
+        let pii_action = match &mut self.state.pii_stage {
+            Some(stage) => stage.process_chunk(payload_str),
+            None => StreamAction::Passthrough,
+        };
+        let final_payload = match &pii_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => payload_str,
+        };
+
+        let sse_bytes = crate::sse::build_sse_frame(final_payload);
+
+        if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
@@ -670,23 +699,32 @@ impl ChunkProcessor<'_> {
         json_payload: &str,
         line_bytes: &[u8],
     ) -> bytes::Bytes {
-        let effective_payload = match self.state.normalizer.process_chunk(json_payload) {
-            StreamAction::Mutate(s) => Some(s),
-            _ => None,
+        let norm_action = self.state.normalizer.process_chunk(json_payload);
+        let normalized_payload = match &norm_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => json_payload,
         };
 
         if let Some(a) = self.state.acc.as_mut() {
-            let payload = effective_payload.as_deref().unwrap_or(json_payload);
-            a.process_chunk(payload);
+            a.process_chunk(normalized_payload);
         }
 
-        match effective_payload {
-            Some(modified) => crate::sse::build_sse_frame(&modified),
-            None => {
-                let mut frame = bytes::BytesMut::from(line_bytes);
-                frame.extend_from_slice(b"\n\n");
-                frame.freeze()
-            }
+        let pii_action = match &mut self.state.pii_stage {
+            Some(stage) => stage.process_chunk(normalized_payload),
+            None => StreamAction::Passthrough,
+        };
+
+        match pii_action {
+            StreamAction::Mutate(modified) => crate::sse::build_sse_frame(&modified),
+            StreamAction::Skip => bytes::Bytes::new(),
+            _ => match norm_action {
+                StreamAction::Mutate(modified) => crate::sse::build_sse_frame(&modified),
+                _ => {
+                    let mut frame = bytes::BytesMut::from(line_bytes);
+                    frame.extend_from_slice(b"\n\n");
+                    frame.freeze()
+                }
+            },
         }
     }
 
@@ -704,7 +742,7 @@ impl ChunkProcessor<'_> {
         }
 
         stream.note_content_chunk();
-        if let Err(e) = ctx.sink.send(sse_bytes).await {
+        if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
@@ -777,16 +815,32 @@ impl ChunkProcessor<'_> {
             return Ok(cancel);
         }
 
-        let sse_frame = crate::sse::build_sse_frame(&json_str);
-        if let Err(e) = ctx.sink.send(sse_frame).await {
+        let pii_action = match &mut self.state.pii_stage {
+            Some(stage) => stage.process_chunk(&json_str),
+            None => StreamAction::Passthrough,
+        };
+        let final_json = match &pii_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => &json_str,
+        };
+
+        let sse_frame = crate::sse::build_sse_frame(final_json);
+        if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
             )));
         }
 
-        if let Err(crate::race_sink::StreamSinkError::Lost) =
-            ctx.sink.send(bytes::Bytes::clone(&SSE_DONE_BYTES)).await
+        // If PII stage has residual buffered content, flush before [DONE]
+        if let Some(residual) = self.state.pii_stage.as_mut().and_then(|s| s.finalize()) {
+            let sse_bytes = crate::sse::build_sse_frame(&residual);
+            let _ = self.send_to_sink(ctx, sse_bytes).await;
+        }
+
+        if let Err(crate::race_sink::StreamSinkError::Lost) = self
+            .send_to_sink(ctx, bytes::Bytes::clone(&SSE_DONE_BYTES))
+            .await
         {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
@@ -833,11 +887,20 @@ impl ChunkProcessor<'_> {
             a.append_openai_raw(&json_str);
         }
 
-        let sse_frame = crate::sse::build_sse_frame(&json_str);
+        let pii_action = match &mut self.state.pii_stage {
+            Some(stage) => stage.process_chunk(&json_str),
+            None => StreamAction::Passthrough,
+        };
+        let final_json = match &pii_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => &json_str,
+        };
+
+        let sse_frame = crate::sse::build_sse_frame(final_json);
         if chunk_has_content {
             stream.note_content_chunk();
         }
-        if let Err(e) = ctx.sink.send(sse_frame).await {
+        if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_on_sink_send_error(e, fail_ctx),

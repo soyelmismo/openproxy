@@ -292,6 +292,105 @@ impl_string_enum! {
     error: "cooldown_mode"
 }
 
+impl_string_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PiiEntity {
+        Email => "email",
+        Phone => "phone",
+        #[serde(alias = "ipv4", alias = "ipv6")]
+        Ip => "ip" | "ipv4" | "ipv6",
+        #[serde(alias = "card")]
+        CreditCard => "credit_card" | "card",
+        #[serde(alias = "key", alias = "api_key")]
+        Secret => "secret" | "key" | "api_key",
+        #[serde(alias = "name")]
+        Person => "person" | "name",
+    }
+    core_error: "pii_entity"
+}
+
+impl PiiEntity {
+    pub const ALL: [Self; 6] = [
+        Self::Email,
+        Self::Phone,
+        Self::Ip,
+        Self::CreditCard,
+        Self::Secret,
+        Self::Person,
+    ];
+
+    #[must_use]
+    pub const fn placeholder_prefix(self) -> &'static str {
+        match self {
+            Self::Email => "EMAIL",
+            Self::Phone => "PHONE",
+            Self::Ip => "IP",
+            Self::CreditCard => "CARD",
+            Self::Secret => "KEY",
+            Self::Person => "PERSON",
+        }
+    }
+}
+
+fn deserialize_dedup_entities<'de, D>(deserializer: D) -> Result<Vec<PiiEntity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let list = Vec::<PiiEntity>::deserialize(deserializer)?;
+    let mut seen = std::collections::HashSet::with_capacity(list.len());
+    let mut out = Vec::with_capacity(list.len());
+    for item in list {
+        if seen.insert(item) {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PiiConfig {
+    #[serde(default = "default_pii_enabled", alias = "enabled")]
+    pub pii_enabled: bool,
+    #[serde(default = "default_pii_reversible", alias = "reversible")]
+    pub pii_reversible: bool,
+    #[serde(default = "default_pii_redact_logs", alias = "redact_logs")]
+    pub pii_redact_logs: bool,
+    #[serde(
+        default = "default_pii_entities",
+        alias = "entities",
+        deserialize_with = "deserialize_dedup_entities"
+    )]
+    pub pii_entities: Vec<PiiEntity>,
+}
+
+fn default_pii_enabled() -> bool {
+    false
+}
+
+fn default_pii_reversible() -> bool {
+    true
+}
+
+fn default_pii_redact_logs() -> bool {
+    true
+}
+
+fn default_pii_entities() -> Vec<PiiEntity> {
+    PiiEntity::ALL.to_vec()
+}
+
+impl Default for PiiConfig {
+    fn default() -> Self {
+        Self {
+            pii_enabled: default_pii_enabled(),
+            pii_reversible: default_pii_reversible(),
+            pii_redact_logs: default_pii_redact_logs(),
+            pii_entities: default_pii_entities(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +458,55 @@ mod tests {
         assert_eq!(CooldownMode::from_db(Some("flat")), CooldownMode::Flat);
         assert_eq!(CooldownMode::from_db(Some("unknown")), CooldownMode::Flat);
         assert_eq!(CooldownMode::from_db(None), CooldownMode::Flat);
+    }
+
+    #[test]
+    fn test_pii_entity_and_config() {
+        assert_eq!(PiiEntity::Email.as_str(), "email");
+        assert_eq!(PiiEntity::Email.placeholder_prefix(), "EMAIL");
+        assert_eq!(PiiEntity::Phone.placeholder_prefix(), "PHONE");
+        assert_eq!(PiiEntity::Ip.placeholder_prefix(), "IP");
+        assert_eq!(PiiEntity::CreditCard.placeholder_prefix(), "CARD");
+        assert_eq!(PiiEntity::Secret.placeholder_prefix(), "KEY");
+        assert_eq!(PiiEntity::Person.placeholder_prefix(), "PERSON");
+
+        assert_eq!(PiiEntity::parse("email").unwrap(), PiiEntity::Email);
+        assert_eq!(PiiEntity::parse("card").unwrap(), PiiEntity::CreditCard);
+        assert_eq!(
+            PiiEntity::parse("credit_card").unwrap(),
+            PiiEntity::CreditCard
+        );
+        assert_eq!(PiiEntity::parse("key").unwrap(), PiiEntity::Secret);
+        assert_eq!(PiiEntity::parse("api_key").unwrap(), PiiEntity::Secret);
+
+        let default_cfg = PiiConfig::default();
+        assert!(!default_cfg.pii_enabled);
+        assert!(default_cfg.pii_reversible);
+        assert!(default_cfg.pii_redact_logs);
+        assert_eq!(default_cfg.pii_entities.len(), 6);
+
+        let json = serde_json::to_string(&default_cfg).unwrap();
+        let parsed: PiiConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(default_cfg, parsed);
+
+        // Test aliases
+        let aliased_json =
+            r#"{"enabled": true, "reversible": false, "redact_logs": false, "entities": ["email", "key"]}"#;
+        let aliased: PiiConfig = serde_json::from_str(aliased_json).unwrap();
+        assert!(aliased.pii_enabled);
+        assert!(!aliased.pii_reversible);
+        assert!(!aliased.pii_redact_logs);
+        assert_eq!(
+            aliased.pii_entities,
+            vec![PiiEntity::Email, PiiEntity::Secret]
+        );
+
+        // Test deduplication of repeated and aliased entities
+        let dup_json = r#"{"pii_entities": ["credit_card", "person", "card", "person", "credit_card", "name"]}"#;
+        let dup_cfg: PiiConfig = serde_json::from_str(dup_json).unwrap();
+        assert_eq!(
+            dup_cfg.pii_entities,
+            vec![PiiEntity::CreditCard, PiiEntity::Person]
+        );
     }
 }

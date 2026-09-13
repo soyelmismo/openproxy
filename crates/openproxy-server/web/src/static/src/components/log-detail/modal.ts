@@ -180,6 +180,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             <div><strong>Combo:</strong> ${comboText}</div>
             <div><strong>API Key:</strong> ${apiKeyDisplay}</div>
             <div><strong>Created:</strong> ${String(createdAt)}</div>
+            ${log.pii_redacted ? html`<div><strong>PII:</strong> <span class="status-pill" style="background:rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); font-weight: 500;" title="Entities redacted before upstream">${log.pii_redacted}</span></div>` : ""}
           </div>
 
           <!-- Resumen: Mobile 2x2 Mini-Cards -->
@@ -202,7 +203,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             <div class="m-kpi-card">
               <span class="kpi-label">Uso & Metadata</span>
               <span class="kpi-val">${tokensDisplay}</span>
-              <span class="kpi-sub">Key ${apiKeyDisplay} · ${costDisplay}</span>
+              <span class="kpi-sub">Key ${apiKeyDisplay} · ${costDisplay}${log.pii_redacted ? ` · PII (${log.pii_redacted})` : ""}</span>
             </div>
           </div>
 

@@ -31,6 +31,8 @@ pub mod response_ext;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
 mod dispatcher;
+pub mod pii;
+pub use pii::{PiiEngine, PiiRestorationStage, PiiSession, StreamingWindowReplacer};
 pub mod redact;
 pub mod sse;
 pub mod sse_accumulator;

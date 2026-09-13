@@ -5,7 +5,7 @@
 # producción.
 #
 # Convenciones asumidas (basadas en /etc/systemd/system/openproxy.service):
-#   - Proyecto y target/ viven en $PROJECT_DIR (/root/proyectos/openproxy por defecto).
+#   - Proyecto y target/ viven en $PROJECT_DIR (raíz del repositorio por defecto).
 #   - Binario: $PROJECT_DIR/target/release/openproxy.
 #   - Servicio systemd: openproxy.
 #
@@ -23,7 +23,8 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/root/proyectos/openproxy"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FEATURES="--all-features"
 DO_RESTART=1
 LOG_PREFIX="[rebuild]"
@@ -66,7 +67,7 @@ if [[ -d "$WEB_DIR" && -f "$WEB_DIR/package.json" ]]; then
   # pnpm puede no estar en el PATH default del script (ej. corre bajo sudo
   # con un PATH limpio). Buscamos en las rutas comunes antes de fallar.
   if ! command -v pnpm >/dev/null 2>&1; then
-    for pnpm_dir in /root/.hermes/node/bin /root/.local/share/pnpm /usr/local/bin /usr/bin; do
+    for pnpm_dir in "$HOME/.local/share/pnpm" /usr/local/bin /usr/bin; do
       if [[ -x "$pnpm_dir/pnpm" ]]; then
         export PATH="$pnpm_dir:$PATH"
         log "pnpm encontrado en $pnpm_dir, agregado al PATH"
@@ -75,7 +76,7 @@ if [[ -d "$WEB_DIR" && -f "$WEB_DIR/package.json" ]]; then
     done
   fi
   if ! command -v pnpm >/dev/null 2>&1; then
-    die "pnpm no está en PATH; instalá con 'npm i -g pnpm' o 'corepack enable' (o agregá /root/.hermes/node/bin a PATH) y reintentá"
+    die "pnpm no está en PATH; instalá con 'npm i -g pnpm' o 'corepack enable' y reintentá"
   fi
   log "pnpm install --frozen-lockfile  (en $WEB_DIR)"
   PNPM_ERR=$(mktemp)

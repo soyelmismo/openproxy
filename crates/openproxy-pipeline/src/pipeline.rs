@@ -34,6 +34,7 @@ pub struct PipelineConfig {
     pub compression_mode: openproxy_compression::CompressionMode,
     pub idle_chunk_retryable: bool,
     pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
+    pub pii_config: openproxy_types::config::PiiConfig,
     pub background_tx: tokio::sync::mpsc::Sender<crate::worker::BackgroundJob>,
 }
 
@@ -54,6 +55,7 @@ pub struct PipelineRequest {
     pub race_cancelled: bool,
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
     pub compressed_messages: Arc<std::sync::OnceLock<Option<Vec<openproxy_types::OpenAIMessage>>>>,
+    pub pii_session: Arc<parking_lot::Mutex<Option<crate::pii::PiiSession>>>,
     pub proxy_override: Option<(String, String)>,
 }
 

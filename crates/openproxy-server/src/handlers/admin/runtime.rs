@@ -20,6 +20,11 @@ pub struct RuntimeConfigResponse {
     /// (pipeline falls through to the next target).
     pub idle_chunk_retryable: bool,
     pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
+    pub pii: openproxy_types::config::PiiConfig,
+    pub pii_enabled: bool,
+    pub pii_reversible: bool,
+    pub pii_redact_logs: bool,
+    pub pii_entities: Vec<openproxy_types::config::PiiEntity>,
 }
 
 pub fn router() -> axum::Router<AppState> {
@@ -40,6 +45,10 @@ pub fn router() -> axum::Router<AppState> {
             axum::routing::put(put_runtime_quota_protection),
         )
         .route(
+            "/pii",
+            axum::routing::get(get_runtime_pii).put(put_runtime_pii),
+        )
+        .route(
             "/maintenance",
             axum::routing::get(get_maintenance_config).put(put_maintenance_config),
         )
@@ -58,6 +67,7 @@ pub async fn get_runtime_config(
     State(s): State<AppState>,
 ) -> Result<Json<RuntimeConfigResponse>, ApiError> {
     let cfg = s.config();
+    let pii = s.pii_config();
     Ok(Json(RuntimeConfigResponse {
         timeouts: s.timeouts(),
         retries: cfg.retries,
@@ -67,6 +77,11 @@ pub async fn get_runtime_config(
         compression: s.compression_mode(),
         idle_chunk_retryable: s.idle_chunk_retryable(),
         quota_protection: s.quota_protection(),
+        pii_enabled: pii.pii_enabled,
+        pii_reversible: pii.pii_reversible,
+        pii_redact_logs: pii.pii_redact_logs,
+        pii_entities: pii.pii_entities.clone(),
+        pii,
     }))
 }
 
@@ -184,6 +199,26 @@ runtime_config_put!(
             "threshold_percentage": body.threshold_percentage,
             "applies_to": "next_requests",
         }),
+    }
+);
+
+pub async fn get_runtime_pii(
+    State(s): State<AppState>,
+) -> Result<Json<openproxy_types::config::PiiConfig>, ApiError> {
+    Ok(Json(s.pii_config()))
+}
+
+runtime_config_put!(
+    put_runtime_pii(body: openproxy_types::config::PiiConfig) {
+        save: core_db::app_config::save_pii_config_to_db,
+        state: set_pii_config,
+        log: tracing::info!(
+            pii_enabled = body.pii_enabled,
+            pii_reversible = body.pii_reversible,
+            pii_redact_logs = body.pii_redact_logs,
+            "updated pii config via admin API"
+        ),
+        response: serde_json::to_value(&body).unwrap_or_default(),
     }
 );
 

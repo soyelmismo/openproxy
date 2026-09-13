@@ -256,6 +256,9 @@ export function buildDebugBundle(log: LogDetailLog): string {
   if (log.compression_techniques) {
     lines.push(`- **Compression techniques:** ${log.compression_techniques}`);
   }
+  if (log.pii_redacted) {
+    lines.push(`- **PII Redacted:** ${log.pii_redacted}`);
+  }
   lines.push("");
 
   // Error.

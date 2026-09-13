@@ -577,6 +577,7 @@ mod tests {
             race_cancel: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             compressed_messages: Arc::new(std::sync::OnceLock::new()),
+            pii_session: Arc::new(parking_lot::Mutex::new(None)),
             proxy_override: None,
         };
 
@@ -676,6 +677,7 @@ mod tests {
             race_cancel: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             compressed_messages: Arc::new(std::sync::OnceLock::new()),
+            pii_session: Arc::new(parking_lot::Mutex::new(None)),
             proxy_override: None,
         };
 

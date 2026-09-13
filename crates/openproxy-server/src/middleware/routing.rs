@@ -266,6 +266,7 @@ fn record_model_not_found_usage_row(
         stop_reason: None,
         compression_savings_pct: None,
         compression_techniques: None,
+        pii_redacted: None,
         endpoint_kind: openproxy_types::EndpointKind::Chat,
         flags: USAGE_FLAG_CLIENT_RESPONSE,
     };

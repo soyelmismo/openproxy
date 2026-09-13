@@ -245,22 +245,41 @@ fn resolve_target_format(
 
 fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::OpenAIMessage] {
     let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
-        if openproxy_compression::would_compress(
+        let pii_enabled = ctx.pipeline.config.pii_config.pii_enabled;
+        let compression_needed = openproxy_compression::would_compress(
             &ctx.req.openai_request.messages,
             ctx.pipeline.config.compression_mode,
-        ) {
-            let mut msgs = ctx.req.openai_request.messages.clone();
+        );
+
+        if !pii_enabled && !compression_needed {
+            *ctx.pipeline.compression_stats_cell.write() =
+                Some(openproxy_compression::stats::CompressionStats::empty());
+            return None;
+        }
+
+        let mut msgs = ctx.req.openai_request.messages.clone();
+
+        if pii_enabled {
+            let engine = crate::pii::PiiEngine::from_config(&ctx.pipeline.config.pii_config);
+            let mut session =
+                crate::pii::PiiSession::new(ctx.pipeline.config.pii_config.pii_reversible);
+            let redacted = engine.redact_messages(&msgs, &mut session);
+            msgs = redacted;
+            *ctx.req.pii_session.lock() = Some(session);
+        }
+
+        if compression_needed {
             let stats = openproxy_compression::apply_compression(
                 &mut msgs,
                 ctx.pipeline.config.compression_mode,
             );
             *ctx.pipeline.compression_stats_cell.write() = Some(stats);
-            Some(msgs)
         } else {
             *ctx.pipeline.compression_stats_cell.write() =
                 Some(openproxy_compression::stats::CompressionStats::empty());
-            None
         }
+
+        Some(msgs)
     });
 
     cloned_messages_ref

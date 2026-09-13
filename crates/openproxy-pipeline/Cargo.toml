@@ -50,3 +50,5 @@ sha2 = { workspace = true }
 memchr = "2"
 tokio-util = { workspace = true, features = ["rt"] }
 chrono = { workspace = true }
+regex = { workspace = true }
+aho-corasick = { workspace = true }

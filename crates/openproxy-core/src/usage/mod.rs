@@ -1325,6 +1325,7 @@ mod tests {
         assert_eq!(row.race_total, 3);
         assert!(row.has_flag(USAGE_FLAG_RACE_LOST));
         assert_eq!(row.api_key_id, None);
+        assert_eq!(row.pii_redacted, None);
         assert!(!row.created_at.is_empty());
 
         assert!(

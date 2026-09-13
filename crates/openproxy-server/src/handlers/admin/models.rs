@@ -591,6 +591,7 @@ fn build_chat_format_test_payload(
                 race_cancelled: false,
                 endpoint_kind: openproxy_types::EndpointKind::Chat,
                 compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+                pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 proxy_override: None,
             };
             let formatter = openproxy_pipeline::formatting::get_formatter(

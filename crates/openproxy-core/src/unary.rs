@@ -302,6 +302,7 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
         stop_reason: None,
         compression_savings_pct: None,
         compression_techniques: None,
+        pii_redacted: None,
         flags: openproxy_types::usage::USAGE_FLAG_CLIENT_RESPONSE,
         endpoint_kind: args.endpoint_kind,
     };

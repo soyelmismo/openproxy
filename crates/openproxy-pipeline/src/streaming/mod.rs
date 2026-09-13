@@ -65,12 +65,37 @@ impl StreamingChunkStage for StreamingStagePipeline {
     }
 
     fn finalize(&mut self) -> Option<String> {
-        for stage in &mut self.stages {
-            if let Some(s) = stage.finalize() {
-                return Some(s);
+        let mut combined_residuals = Vec::new();
+        let len = self.stages.len();
+        for i in 0..len {
+            let (first, rest) = self.stages.split_at_mut(i + 1);
+            let stage = &mut first[i];
+            if let Some(residual) = stage.finalize() {
+                let mut current = residual;
+                let mut dropped = false;
+                for next_stage in rest.iter_mut() {
+                    match next_stage.process_chunk(&current) {
+                        StreamAction::Passthrough => {}
+                        StreamAction::Mutate(new_payload) => {
+                            current = new_payload;
+                        }
+                        StreamAction::Skip => {
+                            dropped = true;
+                            break;
+                        }
+                        StreamAction::Done => break,
+                    }
+                }
+                if !dropped && !current.is_empty() {
+                    combined_residuals.push(current);
+                }
             }
         }
-        None
+        if combined_residuals.is_empty() {
+            None
+        } else {
+            Some(combined_residuals.join("\n\n"))
+        }
     }
 }
 
@@ -141,5 +166,22 @@ mod tests {
 
         let action = pipeline.process_chunk("RAW");
         assert_eq!(action, StreamAction::Passthrough);
+    }
+
+    #[test]
+    fn test_stage_pipeline_finalize_aggregation() {
+        struct ResidualStage(&'static str);
+        impl StreamingChunkStage for ResidualStage {
+            fn process_chunk(&mut self, _payload: &str) -> StreamAction {
+                StreamAction::Passthrough
+            }
+            fn finalize(&mut self) -> Option<String> {
+                Some(self.0.to_string())
+            }
+        }
+        let mut pipeline = StreamingStagePipeline::new();
+        pipeline.add_stage(ResidualStage("PART1"));
+        pipeline.add_stage(ResidualStage("PART2"));
+        assert_eq!(pipeline.finalize(), Some("PART1\n\nPART2".to_string()));
     }
 }

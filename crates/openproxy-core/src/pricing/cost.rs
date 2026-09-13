@@ -149,6 +149,7 @@ fn build_recent_usage_row(
         stop_reason: input.stop_reason.clone(),
         compression_savings_pct: input.compression_savings_pct,
         compression_techniques: input.compression_techniques.clone(),
+        pii_redacted: input.pii_redacted.clone(),
         proxy_url: input.proxy_url.clone(),
         proxy_status: input.proxy_status.clone(),
         endpoint_kind: input.endpoint_kind,
@@ -187,12 +188,12 @@ fn execute_usage_insert(
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated\
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, pii_redacted\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-            ?37, ?38, ?39, ?40\
+            ?37, ?38, ?39, ?40, ?41\
          )",
         params![
             input.request_id.to_string(),
@@ -235,6 +236,7 @@ fn execute_usage_insert(
             input.proxy_url,
             input.proxy_status,
             i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
+            input.pii_redacted,
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -319,6 +321,7 @@ mod tests {
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             flags: 0,
         }

@@ -143,6 +143,13 @@ impl UpstreamDispatcher {
 
         let mut stream = response.body;
         let mut state = StreamingState::new(true);
+        if self.config.pii_config.pii_enabled
+            && self.config.pii_config.pii_reversible
+            && let Some(ref session) = *req.pii_session.lock()
+            && !session.is_empty()
+        {
+            state.pii_stage = Some(crate::pii::PiiRestorationStage::new(session));
+        }
 
         let ctx = crate::streaming_state::StreamContext {
             req: &req,
@@ -177,6 +184,14 @@ impl UpstreamDispatcher {
                     trace_id.clone(),
                 );
             }
+        }
+
+        // If stream ended without [DONE], flush any pending PII restoration stage buffer to client
+        if !state.done_sent
+            && let Some(residual_json) = state.pii_stage.as_mut().and_then(|s| s.finalize())
+        {
+            let sse_bytes = crate::sse::build_sse_frame(&residual_json);
+            let _ = sink.send(sse_bytes).await;
         }
 
         let client_disconnected = if state.done_sent {
@@ -505,9 +520,20 @@ impl UpstreamDispatcher {
             .and_then(|u| u.prompt_tokens_details.as_ref())
             .and_then(|d| d.cached_tokens);
 
-        let response_body_json: Option<serde_json::Value> = acc
+        let raw_response_body_json: Option<serde_json::Value> = acc
             .as_ref()
             .map(|a| a.finish(args.chunk_id, args.created, args.model_name));
+
+        let mut response_body_json = raw_response_body_json.clone();
+
+        if self.config.pii_config.pii_enabled
+            && self.config.pii_config.pii_reversible
+            && let Some(ref session) = *params.req.pii_session.lock()
+            && let Some(val) = response_body_json.as_mut()
+        {
+            session.restore_json_value(val);
+        }
+
         let final_response = if matches!(
             params.req.stream_sink.as_ref(),
             Some(crate::race_sink::StreamSink::Discard)
@@ -517,6 +543,14 @@ impl UpstreamDispatcher {
                 .and_then(|v| serde::Deserialize::deserialize(v).ok())
         } else {
             None
+        };
+
+        let recorded_response_body = if self.config.pii_config.pii_enabled
+            && self.config.pii_config.pii_redact_logs
+        {
+            raw_response_body_json
+        } else {
+            response_body_json
         };
 
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
@@ -539,7 +573,8 @@ impl UpstreamDispatcher {
         .prompt_tokens_opt(prompt_tokens)
         .completion_tokens_opt(completion_tokens)
         .cached_tokens(cached_tokens)
-        .response_body_json(response_body_json)
+        .response_body_json(recorded_response_body)
+        .redact_logs(self.config.pii_config.pii_redact_logs)
         .request_headers(None)
         .response_headers(None)
         .is_streaming(true)
@@ -621,6 +656,7 @@ mod tests {
             compression_mode: openproxy_compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
+            pii_config: openproxy_types::config::PiiConfig::default(),
             background_tx: tokio::sync::mpsc::channel(1).0,
         };
         UpstreamDispatcher::new(
@@ -745,6 +781,7 @@ mod tests {
             race_cancel: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+            pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
             proxy_override: None,
         };
 

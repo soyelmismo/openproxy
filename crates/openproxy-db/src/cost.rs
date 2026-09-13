@@ -81,12 +81,12 @@ fn insert_usage_record(
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens\
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted\
          ) VALUES (\
             ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41\
+            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42\
          )",
         params![
             request_id,
@@ -142,6 +142,7 @@ fn insert_usage_record(
             input.proxy_status,
             i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
             input.cached_tokens.map(i64::from),
+            input.pii_redacted,
         ],
     )
     .map_err(crate::error::map_db_error)?;
@@ -197,6 +198,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         stop_reason: input.stop_reason.as_deref().map(str::to_owned),
         compression_savings_pct: input.compression_savings_pct,
         compression_techniques: input.compression_techniques.as_deref().map(str::to_owned),
+        pii_redacted: input.pii_redacted.clone(),
         proxy_url: input.proxy_url.as_deref().map(str::to_owned),
         proxy_status: input.proxy_status.as_deref().map(str::to_owned),
         flags: input.flags,
@@ -370,6 +372,7 @@ mod tests {
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             endpoint_kind: EndpointKind::Chat,
             proxy_url: None,
             proxy_status: None,
@@ -449,6 +452,7 @@ mod tests {
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             endpoint_kind: EndpointKind::Chat,
             proxy_url: None,
             proxy_status: None,
@@ -519,6 +523,7 @@ mod tests {
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
+            pii_redacted: None,
             proxy_url: None,
             proxy_status: None,
             flags: USAGE_FLAG_CLIENT_RESPONSE,

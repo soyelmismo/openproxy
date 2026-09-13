@@ -150,6 +150,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         compression_mode: openproxy_compression::CompressionMode::Off,
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
+        pii_config: openproxy_types::config::PiiConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let dispatcher = UpstreamDispatcher::new(
@@ -207,6 +208,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         race_cancel: None,
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+        pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
     };
 

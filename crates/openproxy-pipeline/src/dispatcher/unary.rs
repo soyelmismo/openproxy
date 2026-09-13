@@ -314,6 +314,7 @@ impl UpstreamDispatcher {
         .completion_tokens_opt(completion_tokens)
         .cached_tokens(cached_tokens)
         .response_body_json(Some(args.response_body_raw))
+        .redact_logs(self.config.pii_config.pii_redact_logs)
         .request_headers(request_headers_btm)
         .response_headers(args.response_headers)
         .is_streaming(false)
@@ -489,7 +490,7 @@ impl UpstreamDispatcher {
             }
         };
 
-        let openai_response = match translate_non_streaming_body(
+        let mut openai_response = match translate_non_streaming_body(
             params.target_format,
             &response_body_raw,
             &params.req,
@@ -522,6 +523,21 @@ impl UpstreamDispatcher {
             );
         }
 
+        if self.config.pii_config.pii_enabled
+            && self.config.pii_config.pii_reversible
+            && let Some(ref session) = *params.req.pii_session.lock()
+        {
+            session.restore_openai_response(&mut openai_response);
+        }
+
+        let recorded_response_body = if self.config.pii_config.pii_enabled
+            && !self.config.pii_config.pii_redact_logs
+        {
+            serde_json::to_value(&openai_response).unwrap_or_else(|_| response_body_raw.clone())
+        } else {
+            response_body_raw
+        };
+
         self.record_non_streaming_success(
             params,
             &dctx,
@@ -530,7 +546,7 @@ impl UpstreamDispatcher {
                 connect_and_send_ms,
                 ttft_ms,
                 response_headers,
-                response_body_raw,
+                response_body_raw: recorded_response_body,
                 openai_response,
             },
         )

@@ -24,7 +24,7 @@ import {
 } from "./shared.js";
 import {
   applyServerConfig,
-  renderCompressionCard, renderIdleChunkCard, renderQuotaCard,
+  renderCompressionCard, renderIdleChunkCard, renderPiiCard, renderQuotaCard,
   renderRecordingTtlCard, renderTimeoutsCard,
 } from "./editable-cards.js";
 import { loadMaintenanceState, pollVacuumStatus, renderMaintenanceCard } from "./maintenance.js";
@@ -101,6 +101,7 @@ function renderConfig(): TemplateResult {
       ${renderCompressionCard()}
       ${renderIdleChunkCard()}
       ${renderQuotaCard()}
+      ${renderPiiCard()}
       ${renderMaintenanceCard()}
     </div>
     ${renderStaticRegion(cfg)}

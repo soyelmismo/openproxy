@@ -57,6 +57,7 @@ impl PipelineRunner {
             compression_mode: state.compression_mode(),
             idle_chunk_retryable: state.idle_chunk_retryable(),
             quota_protection: state.quota_protection(),
+            pii_config: state.pii_config(),
             background_tx: state.background_tx(),
         };
         Pipeline::with_selection_registry(
@@ -150,6 +151,7 @@ impl PipelineRunner {
             race_cancel: None,
             endpoint_kind,
             compressed_messages: Arc::new(std::sync::OnceLock::new()),
+            pii_session: Arc::new(parking_lot::Mutex::new(None)),
             proxy_override: None,
         };
 

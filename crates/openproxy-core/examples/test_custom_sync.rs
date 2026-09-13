@@ -5,11 +5,12 @@ use openproxy_db::DbPool;
 
 #[tokio::main]
 async fn main() {
-    let url = "https://proxy.webshare.io/api/v2/proxy/list/download/lrudumdwkaeblzdpofyztfcfzcqeirkioveeirws/-/any/username/direct/-/?plan_id=13938906";
-    let name = "bigdataligma@gmail.com";
+    let url = std::env::var("PROXY_SOURCE_URL")
+        .unwrap_or_else(|_| "https://example.com/mock-proxy-list.txt".to_string());
+    let name = "example-source";
 
     println!("Fetching from: {url}");
-    match fetch_custom_proxy_source(name, url, 0).await {
+    match fetch_custom_proxy_source(name, &url, 0).await {
         Ok(list) => {
             println!("Fetched {} proxies", list.len());
             for p in list.iter().take(2) {
@@ -17,7 +18,9 @@ async fn main() {
             }
 
             // Try upsert
-            let pool = DbPool::open(std::path::Path::new("/root/.openproxy/data.db")).unwrap();
+            let db_path = std::env::var("OPENPROXY_DATABASE_PATH")
+                .unwrap_or_else(|_| "./target/test-data.db".to_string());
+            let pool = DbPool::open(std::path::Path::new(&db_path)).unwrap();
             let mut conn = pool.writer();
             match upsert_scraped_proxies(&mut conn, &list) {
                 Ok(()) => println!("Upsert successful"),

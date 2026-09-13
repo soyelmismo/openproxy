@@ -96,6 +96,8 @@ pub struct AppState {
     idle_chunk_retryable_cell: Arc<AtomicBool>,
     /// Hot-swappable configuration for quota protection.
     quota_protection_cell: Arc<parking_lot::RwLock<openproxy_types::config::QuotaProtectionConfig>>,
+    /// Hot-swappable configuration for PII redaction.
+    pii_config_cell: Arc<parking_lot::RwLock<openproxy_types::config::PiiConfig>>,
     /// In-memory selection registry for the LKGP / least_used /
     /// p2c priority modes (migration 000035). Tracks per-target
     /// recent success timestamps and request counts so the
@@ -210,6 +212,7 @@ impl AppState {
         let idle_chunk_retryable_cell = Arc::new(AtomicBool::new(idle_chunk_retryable));
         let compression_mode_cell = Arc::new(RwLock::new(compression_mode));
         let quota_protection_cell = Arc::new(RwLock::new(config.quota_protection.clone()));
+        let pii_config_cell = Arc::new(RwLock::new(config.pii.clone()));
 
         let master_key = Arc::new(MasterKey::from_env()?);
         let initial_adapters = Self::load_adapters(&db_pool)?;
@@ -312,6 +315,7 @@ impl AppState {
             oauth_provider_registry,
             idle_chunk_retryable_cell,
             quota_protection_cell,
+            pii_config_cell,
             selection_registry,
             circuit_breaker,
             predictive_limiter,
@@ -440,6 +444,7 @@ impl AppState {
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
             quota_protection_cell: Arc::new(RwLock::new(config.quota_protection)),
+            pii_config_cell: Arc::new(RwLock::new(config.pii)),
             selection_registry,
             circuit_breaker,
             predictive_limiter,
@@ -741,6 +746,19 @@ impl AppState {
         *self.quota_protection_cell.write() = config;
     }
 
+    /// Read the current live `pii` configuration.
+    pub fn pii_config(&self) -> openproxy_types::config::PiiConfig {
+        self.pii_config_cell.read().clone()
+    }
+
+    /// Replace the live `pii` configuration. Called by the
+    /// admin PUT endpoint after the DB UPSERT.
+    pub fn set_pii_config(&self, mut config: openproxy_types::config::PiiConfig) {
+        let mut seen = std::collections::HashSet::with_capacity(config.pii_entities.len());
+        config.pii_entities.retain(|e| seen.insert(*e));
+        *self.pii_config_cell.write() = config;
+    }
+
     /// Return a clone of the shared selection registry. The chat
     /// handler passes this into every `Pipeline` it builds via
     /// [`openproxy_pipeline::Pipeline::with_selection_registry`]
@@ -919,6 +937,15 @@ fn load_persisted_compression_and_quota(
             "loaded persisted quota_protection override from app_config"
         );
         config.quota_protection = quota_cfg;
+    }
+
+    if let Some(pii_cfg) = openproxy_db::app_config::load_pii_config_from_db(w)? {
+        tracing::info!(
+            pii_enabled = pii_cfg.pii_enabled,
+            pii_reversible = pii_cfg.pii_reversible,
+            "loaded persisted pii config override from app_config"
+        );
+        config.pii = pii_cfg;
     }
     Ok(())
 }

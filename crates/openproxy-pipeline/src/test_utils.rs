@@ -122,6 +122,7 @@ pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         // state.rs; tests don't need to flip this.
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
+        pii_config: openproxy_types::config::PiiConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
@@ -230,6 +231,7 @@ pub fn make_request(
         race_cancel: None,
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
+        pii_session: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
     };
     (req, _dis_tx)
@@ -355,6 +357,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> Pipe
         compression_mode: openproxy_compression::CompressionMode::Off,
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
+        pii_config: openproxy_types::config::PiiConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
