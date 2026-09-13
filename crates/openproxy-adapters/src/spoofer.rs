@@ -140,8 +140,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
 
     // NOTE: `apply_to_header_map` intentionally NOT overridden.
     // The trait default (lines 21-30) already iterates `self.headers()`.
-    // Avoid the duplication in FxSpoofer which duplicates static+dynamic
-    // logic across both methods.
+    // Avoid duplicating static+dynamic logic across both methods.
 }
 
 // =====================================================================
@@ -187,74 +186,7 @@ impl ClientSpoofer for AntigravitySpoofer {
     }
 }
 
-// =====================================================================
-// Fx Spoofing Preset (for fx.sh web wasm gateway)
-// =====================================================================
 
-pub const FX_STATIC_SPOOFING_HEADERS: &[(&str, &str)] = &[
-    ("origin", "https://fx.sh"),
-    ("referer", "https://fx.sh/"),
-    ("http-referer", "https://github.com/vercel-labs/fx"),
-    ("x-title", "fx"),
-    ("ai-gateway-protocol-version", "0.0.1"),
-    ("ai-language-model-specification-version", "4"),
-    ("ai-language-model-streaming", "true"),
-    ("sec-fetch-dest", "empty"),
-    ("sec-fetch-mode", "cors"),
-    ("sec-fetch-site", "same-origin"),
-    (
-        "user-agent",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
-    ),
-];
-
-/// Preset for fx.sh WebAssembly gateway client identity headers.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FxSpoofer;
-
-impl ClientSpoofer for FxSpoofer {
-    fn headers(&self) -> Vec<(String, String)> {
-        let mut list: Vec<(String, String)> = FX_STATIC_SPOOFING_HEADERS
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let session_id = format!("{now_ms}-{now_ms}000000-59e35abc56800be2");
-        list.push(("x-session-id".into(), session_id.clone()));
-        list.push(("x-session-affinity".into(), session_id));
-        list
-    }
-
-    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
-        for &(k, v) in FX_STATIC_SPOOFING_HEADERS {
-            if let Ok(name) = http::header::HeaderName::try_from(k)
-                && let Ok(val) = HeaderValue::try_from(v)
-            {
-                headers.insert(name, val);
-            }
-        }
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let session_id = format!("{now_ms}-{now_ms}000000-59e35abc56800be2");
-        if let Ok(val) = HeaderValue::try_from(session_id.as_str()) {
-            headers.insert(
-                http::header::HeaderName::from_static("x-session-id"),
-                val.clone(),
-            );
-            headers.insert(
-                http::header::HeaderName::from_static("x-session-affinity"),
-                val,
-            );
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -406,31 +338,5 @@ mod tests {
         assert!(req.headers.contains_key("x-client-version"));
         assert!(req.headers.contains_key("x-machine-id"));
         assert!(req.headers.contains_key("x-vscode-sessionid"));
-    }
-
-    #[test]
-    fn test_fx_spoofer() {
-        let spoofer = FxSpoofer;
-        let headers = spoofer.headers();
-        assert!(
-            headers
-                .iter()
-                .any(|(k, v)| k == "origin" && v == "https://fx.sh")
-        );
-        assert!(
-            headers
-                .iter()
-                .any(|(k, v)| k == "http-referer" && v == "https://github.com/vercel-labs/fx")
-        );
-        assert!(headers.iter().any(|(k, _)| k == "x-session-id"));
-
-        let mut req = UpstreamRequest::get("https://fx.sh");
-        spoofer.apply_to_request(&mut req);
-        assert_eq!(
-            req.headers.get("origin").unwrap(),
-            HeaderValue::from_static("https://fx.sh")
-        );
-        assert!(req.headers.contains_key("x-session-id"));
-        assert!(req.headers.contains_key("x-session-affinity"));
     }
 }

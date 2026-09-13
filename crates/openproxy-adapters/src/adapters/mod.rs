@@ -141,8 +141,7 @@ pub trait ProviderAdapter: Send + Sync {
             );
         }
         let eff_format = resolve_target_format(self.format(), target_format);
-        target_format_path(eff_format)
-            .map_or_else(|| base_url.clone(), |path| format!("{base_url}{path}"))
+        format!("{base_url}{}", target_format_path(eff_format))
     }
 
     /// Build the chat URL with account-level context (label).
@@ -806,7 +805,6 @@ define_provider_adapter! {
             "opencode-zen" => OpenCodeZen(opencode_common, OpenCodeZenAdapter),
             "openrouter" => OpenRouter(openrouter, OpenRouterAdapter),
             "vercel-gateway" => VercelGateway(vercel_gateway, VercelGatewayAdapter),
-            "fx" => Fx(fx, FxAdapter),
         }
         custom {
             Custom(custom_adapter, CustomAdapter),
@@ -942,7 +940,6 @@ pub mod cloudflare_workers_ai;
 pub mod codex;
 pub mod custom_adapter;
 pub mod factory;
-pub mod fx;
 pub mod gemini;
 pub mod horde;
 pub mod kilocode;
@@ -986,18 +983,16 @@ fn resolve_target_format(format: AdapterFormat, fallback: TargetFormat) -> Targe
         AdapterFormat::Anthropic => TargetFormat::Anthropic,
         AdapterFormat::Responses => TargetFormat::Responses,
         AdapterFormat::Atomesus => TargetFormat::Atomesus,
-        AdapterFormat::Fx => TargetFormat::Fx,
         AdapterFormat::Gemini => TargetFormat::Gemini,
     }
 }
 
-fn target_format_path(target_format: TargetFormat) -> Option<&'static str> {
+fn target_format_path(target_format: TargetFormat) -> &'static str {
     match target_format {
-        TargetFormat::Openai | TargetFormat::Gemini => Some("/chat/completions"),
-        TargetFormat::Anthropic => Some("/messages"),
-        TargetFormat::Responses => Some("/responses"),
-        TargetFormat::Atomesus => Some("/chat/atomesus"),
-        TargetFormat::Fx => None,
+        TargetFormat::Openai | TargetFormat::Gemini => "/chat/completions",
+        TargetFormat::Anthropic => "/messages",
+        TargetFormat::Responses => "/responses",
+        TargetFormat::Atomesus => "/chat/atomesus",
     }
 }
 
@@ -1433,7 +1428,7 @@ mod tests {
     #[test]
     fn builtin_adapters_returns_all() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 18);
+        assert_eq!(v.len(), 17);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"atomesus"));
         assert!(ids.contains(&"cline"));
@@ -1452,7 +1447,6 @@ mod tests {
         assert!(ids.contains(&"codex"));
         assert!(ids.contains(&"kiro"));
         assert!(ids.contains(&"vercel-gateway"));
-        assert!(ids.contains(&"fx"));
     }
 
     /// After deduping `delegate_adapter_dispatch!` into inline `match` arms,

@@ -464,9 +464,6 @@ fn parse_translated_sse_line(
         openproxy_types::TargetFormat::Atomesus => {
             crate::sse::parse_atomesus_sse_line(line, chunk_id, created, model_name)
         }
-        openproxy_types::TargetFormat::Fx => {
-            crate::sse::parse_fx_sse_line(line, chunk_id, created, model_name)
-        }
         openproxy_types::TargetFormat::Gemini => {
             crate::sse::parse_gemini_sse_line(line, chunk_id, created, model_name)
         }

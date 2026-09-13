@@ -122,9 +122,6 @@ impl TargetFormatter for GenericFormatter {
 static GEMINI_FORMATTER: GenericFormatter = GenericFormatter {
     format_spec: TargetFormat::Gemini,
 };
-static FX_FORMATTER: GenericFormatter = GenericFormatter {
-    format_spec: TargetFormat::Fx,
-};
 
 pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatter {
     match target_format {
@@ -132,7 +129,6 @@ pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatte
         TargetFormat::Anthropic => &AnthropicFormatter,
         TargetFormat::Gemini => &GEMINI_FORMATTER,
         TargetFormat::Responses => &ResponsesFormatter,
-        TargetFormat::Fx => &FX_FORMATTER,
     }
 }
 

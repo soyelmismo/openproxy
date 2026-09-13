@@ -238,9 +238,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 18, "first call inserts all eighteen");
+        assert_eq!(n, 17, "first call inserts all seventeen");
 
-        // All eighteen are present and reachable by id.
+        // All seventeen are present and reachable by id.
         for id in [
             "atomesus",
             "openrouter",
@@ -259,7 +259,6 @@ mod tests {
             "cloudflare-workers-ai",
             "cline",
             "vercel-gateway",
-            "fx",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -273,14 +272,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 18);
+        assert_eq!(first, 17);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 18, "still exactly eighteen rows");
+        assert_eq!(count, 17, "still exactly seventeen rows");
     }
 
     #[test]
@@ -304,7 +303,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 17, "only the seventeen missing ones");
+        assert_eq!(n, 16, "only the sixteen missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -383,7 +382,7 @@ mod tests {
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 18);
+        assert_eq!(ids.len(), 17);
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
@@ -400,7 +399,6 @@ mod tests {
         assert!(ids.iter().any(|s| s == "cloudflare-workers-ai"));
         assert!(ids.iter().any(|s| s == "cline"));
         assert!(ids.iter().any(|s| s == "vercel-gateway"));
-        assert!(ids.iter().any(|s| s == "fx"));
     }
 
     #[test]

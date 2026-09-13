@@ -332,7 +332,6 @@ fn resolve_effective_target_format(
         adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
         adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
         adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
-        adapters::AdapterFormat::Fx => openproxy_core::models::TargetFormat::Fx,
     }
 }
 
@@ -608,21 +607,6 @@ fn build_chat_format_test_payload(
                 .map_err(|err| test_error_result(model_row_id, 500, &err.to_string()))?;
             let v = serde_json::from_slice::<serde_json::Value>(&req_bytes).map_err(|e| {
                 test_error_result(model_row_id, 500, &format!("serialize responses req: {e}"))
-            })?;
-            Ok((url, v))
-        }
-        openproxy_core::models::TargetFormat::Fx => {
-            let req_bytes = adapter
-                .format_request(
-                    openproxy_core::models::TargetFormat::Fx,
-                    openai_req,
-                    &model.model_id,
-                    &openai_req.messages,
-                    openai_req.stream,
-                )
-                .map_err(|err| test_error_result(model_row_id, 500, &err.to_string()))?;
-            let v = serde_json::from_slice::<serde_json::Value>(&req_bytes).map_err(|e| {
-                test_error_result(model_row_id, 500, &format!("serialize fx req: {e}"))
             })?;
             Ok((url, v))
         }

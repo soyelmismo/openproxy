@@ -68,8 +68,7 @@ impl ApiError {
             openproxy_types::TargetFormat::Openai
             | openproxy_types::TargetFormat::Gemini
             | openproxy_types::TargetFormat::Responses
-            | openproxy_types::TargetFormat::Atomesus
-            | openproxy_types::TargetFormat::Fx => {
+            | openproxy_types::TargetFormat::Atomesus => {
                 let error_json = serde_json::json!({
                     "error": {
                         "message": message,
@@ -91,8 +90,7 @@ impl ApiError {
             openproxy_types::TargetFormat::Openai
             | openproxy_types::TargetFormat::Gemini
             | openproxy_types::TargetFormat::Responses
-            | openproxy_types::TargetFormat::Atomesus
-            | openproxy_types::TargetFormat::Fx => {
+            | openproxy_types::TargetFormat::Atomesus => {
                 frame.extend_from_slice(b"data: ");
             }
         }

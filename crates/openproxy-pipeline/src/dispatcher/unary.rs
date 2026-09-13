@@ -76,7 +76,7 @@ pub(super) fn translate_simple_text_response(
 
 /// Despacha `response_body_raw` al `OpenAIResponse` correcto según el
 /// `target_format`. Los adapters Gemini delega a su propia traducción;
-/// Atomesus/Fx caen al fallback simple.
+/// Atomesus cae al fallback simple.
 pub(super) fn translate_non_streaming_body(
     target_format: openproxy_types::TargetFormat,
     response_body_raw: &serde_json::Value,
@@ -102,7 +102,7 @@ pub(super) fn translate_non_streaming_body(
             let adapter = openproxy_adapters::GeminiAdapter::new();
             adapter.translate_non_streaming_response(target_format, response_body_raw.clone())
         }
-        openproxy_types::TargetFormat::Atomesus | openproxy_types::TargetFormat::Fx => Ok(
+        openproxy_types::TargetFormat::Atomesus => Ok(
             translate_simple_text_response(response_body_raw, req.openai_request.model.clone()),
         ),
     }

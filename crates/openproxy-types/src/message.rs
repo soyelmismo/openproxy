@@ -11,7 +11,6 @@ impl_string_enum! {
         Gemini => "gemini",
         Responses => "responses",
         Atomesus => "atomesus",
-        Fx => "fx",
     }
     core_error: "target_format"
 }

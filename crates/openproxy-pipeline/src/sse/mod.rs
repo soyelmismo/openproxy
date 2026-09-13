@@ -2,13 +2,12 @@
 //!
 //! Common types ([`UpstreamSseChunk`]), the byte-level line buffer
 //! ([`SseParser`]) and shared helpers live here. Provider-specific parsers
-//! (OpenAI, Anthropic, Gemini, Responses API, Atomesus, fx.sh) live in their
+//! (OpenAI, Anthropic, Gemini, Responses API, Atomesus) live in their
 //! own submodules and are re-exported below, translating upstream SSE formats
 //! into OpenAI-format SSE chunks that clients expect.
 
 mod anthropic;
 mod atomesus;
-mod fx;
 mod gemini;
 mod openai;
 mod responses;
@@ -429,7 +428,6 @@ pub use anthropic::{
     translate_anthropic_sse_payload,
 };
 pub use atomesus::parse_atomesus_sse_line;
-pub use fx::parse_fx_sse_line;
 pub use gemini::parse_gemini_sse_line;
 pub use openai::parse_openai_sse_line;
 pub use responses::{ResponsesSseState, parse_responses_sse_stream_line};
