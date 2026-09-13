@@ -430,8 +430,7 @@ mod tests {
         // AppState::for_test requires a Tokio runtime because of the
         // background channel inside, so the test is `#[tokio::test]`.
         let pool = Arc::new(
-            core_db::DbPool::test_pool_with_prefix("openproxy-tokenize-struct")
-                .expect("open"),
+            core_db::DbPool::test_pool_with_prefix("openproxy-tokenize-struct").expect("open"),
         );
         let mk = openproxy_db::MasterKey::generate().unwrap();
         let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));

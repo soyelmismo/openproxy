@@ -226,7 +226,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn fresh_pool() -> (core_db::DbPool, PathBuf) {
-        let pool = core_db::DbPool::test_pool_with_prefix("openproxy-embedding-test").expect("open pool");
+        let pool =
+            core_db::DbPool::test_pool_with_prefix("openproxy-embedding-test").expect("open pool");
         let path = pool.path().to_path_buf();
         (pool, path)
     }

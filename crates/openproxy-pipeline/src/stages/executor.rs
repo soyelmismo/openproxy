@@ -963,7 +963,9 @@ mod tests {
         };
 
         let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
-        let key_a = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target_a.target);
+        let key_a = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(
+            &target_a.target,
+        );
 
         // Saturate target A
         limiter.report_rate_limited_key(key_a, Some(60), now_ms);
@@ -1016,7 +1018,9 @@ mod tests {
         // When target B is also saturated in limiter, but target B has cooldown disabled,
         // target A (cooldown enabled) CAN skip because target B is an available healthy fallback
         combo.cooldown_mode = CooldownMode::Flat;
-        let key_b = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target_b.target);
+        let key_b = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(
+            &target_b.target,
+        );
         limiter.report_rate_limited_key(key_b, Some(60), now_ms);
 
         let mut target_b_disabled = target_b;

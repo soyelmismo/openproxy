@@ -577,9 +577,8 @@ mod tests {
     async fn backfill_service_completes_initial_pass_on_empty_db() {
         use openproxy_db::DbPool;
 
-        let pool = Arc::new(
-            DbPool::test_pool_with_prefix("openproxy-backfill-test").expect("open pool"),
-        );
+        let pool =
+            Arc::new(DbPool::test_pool_with_prefix("openproxy-backfill-test").expect("open pool"));
 
         let status = Arc::new(parking_lot::RwLock::new(
             crate::state::BackfillStatus::default(),

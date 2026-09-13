@@ -1803,12 +1803,19 @@ mod tests {
             "
         ).expect("insert test data");
 
-        let t = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
-        assert_eq!(t.thinking_effort, None, "default thinking_effort must be None (passthrough)");
+        let t = get_target(&conn, ComboTargetId(10))
+            .expect("get target")
+            .expect("found");
+        assert_eq!(
+            t.thinking_effort, None,
+            "default thinking_effort must be None (passthrough)"
+        );
 
         // Set to high
         update_target_thinking_effort(&conn, ComboTargetId(10), Some("high")).expect("update");
-        let t_high = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        let t_high = get_target(&conn, ComboTargetId(10))
+            .expect("get target")
+            .expect("found");
         assert_eq!(t_high.thinking_effort.as_deref(), Some("high"));
 
         let with_model = list_targets_with_model(&conn, ComboId(1)).expect("list");
@@ -1816,13 +1823,18 @@ mod tests {
 
         // Reset to passthrough with None
         update_target_thinking_effort(&conn, ComboTargetId(10), None).expect("reset");
-        let t_none = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        let t_none = get_target(&conn, ComboTargetId(10))
+            .expect("get target")
+            .expect("found");
         assert_eq!(t_none.thinking_effort, None);
 
         // Reset to passthrough with "passthrough" string
         update_target_thinking_effort(&conn, ComboTargetId(10), Some("medium")).expect("update");
-        update_target_thinking_effort(&conn, ComboTargetId(10), Some("passthrough")).expect("reset");
-        let t_pass = get_target(&conn, ComboTargetId(10)).expect("get target").expect("found");
+        update_target_thinking_effort(&conn, ComboTargetId(10), Some("passthrough"))
+            .expect("reset");
+        let t_pass = get_target(&conn, ComboTargetId(10))
+            .expect("get target")
+            .expect("found");
         assert_eq!(t_pass.thinking_effort, None);
     }
 }

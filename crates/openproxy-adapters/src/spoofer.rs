@@ -186,8 +186,6 @@ impl ClientSpoofer for AntigravitySpoofer {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

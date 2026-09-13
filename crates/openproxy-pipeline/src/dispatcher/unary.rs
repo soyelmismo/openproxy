@@ -102,9 +102,10 @@ pub(super) fn translate_non_streaming_body(
             let adapter = openproxy_adapters::GeminiAdapter::new();
             adapter.translate_non_streaming_response(target_format, response_body_raw.clone())
         }
-        openproxy_types::TargetFormat::Atomesus => Ok(
-            translate_simple_text_response(response_body_raw, req.openai_request.model.clone()),
-        ),
+        openproxy_types::TargetFormat::Atomesus => Ok(translate_simple_text_response(
+            response_body_raw,
+            req.openai_request.model.clone(),
+        )),
     }
 }
 

@@ -1189,7 +1189,8 @@ mod tests {
 
     /// Build an in-process pool: temp dir on disk, migrations applied.
     fn fresh_pool() -> (core_db::DbPool, PathBuf) {
-        let pool = core_db::DbPool::test_pool_with_prefix("openproxy-state-test").expect("open pool");
+        let pool =
+            core_db::DbPool::test_pool_with_prefix("openproxy-state-test").expect("open pool");
         let path = pool.path().to_path_buf();
         (pool, path)
     }

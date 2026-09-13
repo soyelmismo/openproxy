@@ -24,7 +24,8 @@ pub(super) fn fresh_pool() -> (
     std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
     std::path::PathBuf,
 ) {
-    let pool = openproxy_db::DbPool::test_pool_with_prefix("openproxy-wiring-test").expect("open pool");
+    let pool =
+        openproxy_db::DbPool::test_pool_with_prefix("openproxy-wiring-test").expect("open pool");
     let extra = pool.open_connection().expect("open extra connection");
     let conn = std::sync::Arc::new(parking_lot::Mutex::new(extra));
     let path = pool.path().to_path_buf();
