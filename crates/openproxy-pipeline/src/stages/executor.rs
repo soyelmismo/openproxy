@@ -108,7 +108,14 @@ async fn execute_single_target_step(
     let target_key =
         crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target.target);
     let remaining = &to_run[idx + 1..];
-    if should_skip_preventive_target(&ctx.pipeline, combo, target, target_key, remaining, now_ms) {
+    if should_skip_preventive_target(
+        &ctx.pipeline.predictive_limiter,
+        combo,
+        target,
+        target_key,
+        remaining,
+        now_ms,
+    ) {
         let skip_trace_id = format!("{}:{}", ctx.req.trace_id, *overall_attempt);
         ctx.pipeline.tracker.record_predictive_skipped_row(
             &ctx.req,
@@ -787,17 +794,17 @@ pub(crate) fn matches_proxy_rotation_errors(err: &CoreError, rotation_errors_csv
 }
 
 fn should_skip_preventive_target(
-    pipeline: &crate::Pipeline,
+    limiter: &crate::predictive_rate_limit::PredictiveRateLimiter,
     combo: &openproxy_types::Combo,
     target: &crate::context::ResolvedTarget,
     target_key: u64,
     remaining_targets: &[crate::context::ResolvedTarget],
     now_ms: u64,
 ) -> bool {
-    if !combo.preventive_rate_limit {
+    if !combo.preventive_rate_limit || target.target.is_cooldown_disabled(combo) {
         return false;
     }
-    let readiness = pipeline.predictive_limiter.evaluate_key(target_key, now_ms);
+    let readiness = limiter.evaluate_key(target_key, now_ms);
     let crate::predictive_rate_limit::TargetReadiness::Saturated {
         learned_burst,
         window_count,
@@ -808,12 +815,12 @@ fn should_skip_preventive_target(
     };
 
     let has_healthy_alternative = remaining_targets.iter().any(|alt| {
+        if alt.target.is_cooldown_disabled(combo) {
+            return true;
+        }
         let alt_key =
             crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&alt.target);
-        !matches!(
-            pipeline.predictive_limiter.evaluate_key(alt_key, now_ms),
-            crate::predictive_rate_limit::TargetReadiness::Saturated { .. }
-        )
+        !limiter.evaluate_key(alt_key, now_ms).is_saturated()
     });
 
     if has_healthy_alternative {
@@ -886,5 +893,141 @@ mod tests {
             is_hard_skip: false,
         };
         assert!(!is_max_request_timeout(&internal_error));
+    }
+
+    #[test]
+    fn test_should_skip_preventive_target_disabled_cooldown() {
+        use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
+        use openproxy_types::config::CooldownMode;
+        use openproxy_types::providers::RateLimitScope;
+        use openproxy_types::{ComboId, ComboTargetId};
+
+        let limiter = crate::predictive_rate_limit::PredictiveRateLimiter::new();
+
+        let mut combo = Combo {
+            id: ComboId(1),
+            name: "test".into(),
+            strategy: Strategy::Priority,
+            race_size: 1,
+            preventive_rate_limit: true,
+            created_at: "now".into(),
+            context_window: None,
+            priority_mode: PriorityMode::Strict,
+            cooldown_mode: CooldownMode::Flat,
+            cooldown_base_secs: Some(60),
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: None,
+            selection_window_secs: None,
+        };
+
+        let target_a = crate::context::ResolvedTarget {
+            target: ComboTarget {
+                id: ComboTargetId(1),
+                combo_id: ComboId(1),
+                provider_id: openproxy_types::ProviderId("openai".into()),
+                account_id: Some(openproxy_types::AccountId(1)),
+                model_row_id: None,
+                sub_combo_id: None,
+                priority_order: 1,
+                weight: 1,
+                active: true,
+                rate_limit_scope: RateLimitScope::Account,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                thinking_effort: None,
+            },
+            model: openproxy_types::models::Model {
+                row_id: openproxy_types::ModelRowId(1),
+                provider_id: openproxy_types::ProviderId("openai".into()),
+                model_id: "gpt-4o".into(),
+                ..Default::default()
+            },
+            api_key: "key1".into(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
+        let target_b = crate::context::ResolvedTarget {
+            target: ComboTarget {
+                id: ComboTargetId(2),
+                account_id: Some(openproxy_types::AccountId(2)),
+                ..target_a.target.clone()
+            },
+            model: target_a.model.clone(),
+            api_key: "key2".into(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
+        let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
+        let key_a = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target_a.target);
+
+        // Saturate target A
+        limiter.report_rate_limited_key(key_a, Some(60), now_ms);
+
+        // When cooldown is enabled on target A and B is healthy -> should skip A
+        assert!(should_skip_preventive_target(
+            &limiter,
+            &combo,
+            &target_a,
+            key_a,
+            std::slice::from_ref(&target_b),
+            now_ms,
+        ));
+
+        // When target A explicitly disables cooldown via cooldown_mode -> DO NOT skip A
+        let mut target_a_none = target_a.clone();
+        target_a_none.target.cooldown_mode = Some(CooldownMode::None);
+        assert!(!should_skip_preventive_target(
+            &limiter,
+            &combo,
+            &target_a_none,
+            key_a,
+            std::slice::from_ref(&target_b),
+            now_ms,
+        ));
+
+        // When target A explicitly disables cooldown via cooldown_base_secs = 0 -> DO NOT skip A
+        let mut target_a_base0 = target_a.clone();
+        target_a_base0.target.cooldown_base_secs = Some(0);
+        assert!(!should_skip_preventive_target(
+            &limiter,
+            &combo,
+            &target_a_base0,
+            key_a,
+            std::slice::from_ref(&target_b),
+            now_ms,
+        ));
+
+        // When combo disables cooldown -> DO NOT skip A
+        combo.cooldown_mode = CooldownMode::None;
+        assert!(!should_skip_preventive_target(
+            &limiter,
+            &combo,
+            &target_a,
+            key_a,
+            std::slice::from_ref(&target_b),
+            now_ms,
+        ));
+
+        // When target B is also saturated in limiter, but target B has cooldown disabled,
+        // target A (cooldown enabled) CAN skip because target B is an available healthy fallback
+        combo.cooldown_mode = CooldownMode::Flat;
+        let key_b = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target_b.target);
+        limiter.report_rate_limited_key(key_b, Some(60), now_ms);
+
+        let mut target_b_disabled = target_b;
+        target_b_disabled.target.cooldown_mode = Some(CooldownMode::None);
+        assert!(should_skip_preventive_target(
+            &limiter,
+            &combo,
+            &target_a,
+            key_a,
+            &[target_b_disabled],
+            now_ms,
+        ));
     }
 }

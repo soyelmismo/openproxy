@@ -274,6 +274,13 @@ pub enum TargetReadiness {
     },
 }
 
+impl TargetReadiness {
+    #[inline]
+    pub fn is_saturated(&self) -> bool {
+        matches!(self, Self::Saturated { .. })
+    }
+}
+
 #[repr(align(64))]
 struct Shard {
     inner: RwLock<HashMap<u64, TargetPredictiveState>>,
@@ -737,10 +744,7 @@ mod tests {
 
         // Target debe estar Saturated
         let r = limiter.evaluate_target(combo, target, now);
-        assert!(
-            matches!(r, TargetReadiness::Saturated { .. }),
-            "upstream error debe saturar"
-        );
+        assert!(r.is_saturated(), "upstream error debe saturar");
 
         // learned_burst NO fue reducido (sigue en default 1000)
         let key = PredictiveRateLimiter::compute_key(combo, target);

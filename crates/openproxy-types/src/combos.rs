@@ -131,6 +131,31 @@ pub struct ComboTargetWithModel {
     pub thinking_effort: Option<Box<str>>,
 }
 
+impl Combo {
+    /// Returns `true` if cooldown is disabled at the combo level.
+    #[inline]
+    pub fn is_cooldown_disabled(&self) -> bool {
+        self.cooldown_mode == CooldownMode::None || self.cooldown_base_secs == Some(0)
+    }
+}
+
+impl ComboTarget {
+    /// Returns `true` if this target explicitly forces cooldown to disabled.
+    #[inline]
+    pub fn is_cooldown_forced_disabled(&self) -> bool {
+        self.cooldown_mode == Some(crate::config::CooldownMode::None)
+            || self.cooldown_base_secs == Some(0)
+    }
+
+    /// Returns `true` if this target's cooldown is disabled either explicitly
+    /// on the target or inherited from the combo.
+    #[inline]
+    pub fn is_cooldown_disabled(&self, combo: &Combo) -> bool {
+        self.is_cooldown_forced_disabled()
+            || (self.cooldown_mode.is_none() && combo.is_cooldown_disabled())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +198,66 @@ mod tests {
         assert_eq!(PriorityMode::Weighted.as_str(), "weighted");
         assert_eq!(PriorityMode::LeastUsed.as_str(), "least_used");
         assert_eq!(PriorityMode::P2c.as_str(), "p2c");
+    }
+
+    #[test]
+    fn test_combo_target_cooldown_disabled() {
+        let mut target = ComboTarget {
+            id: ComboTargetId(1),
+            combo_id: ComboId(1),
+            provider_id: crate::ProviderId("openai".into()),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+            active: true,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+        };
+
+        let mut combo = Combo {
+            id: ComboId(1),
+            name: "test".into(),
+            strategy: Strategy::Priority,
+            race_size: 1,
+            preventive_rate_limit: true,
+            created_at: "now".into(),
+            context_window: None,
+            priority_mode: PriorityMode::Strict,
+            cooldown_mode: CooldownMode::Flat,
+            cooldown_base_secs: Some(60),
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: None,
+            selection_window_secs: None,
+        };
+
+        // Default: inherits combo (Flat 60s) -> not disabled
+        assert!(!combo.is_cooldown_disabled());
+        assert!(!target.is_cooldown_forced_disabled());
+        assert!(!target.is_cooldown_disabled(&combo));
+
+        // Forced disabled on target via CooldownMode::None
+        target.cooldown_mode = Some(CooldownMode::None);
+        assert!(target.is_cooldown_forced_disabled());
+        assert!(target.is_cooldown_disabled(&combo));
+
+        // Reset mode, force disabled via base_secs = 0
+        target.cooldown_mode = None;
+        target.cooldown_base_secs = Some(0);
+        assert!(target.is_cooldown_forced_disabled());
+        assert!(target.is_cooldown_disabled(&combo));
+
+        // Inherits from combo when combo has CooldownMode::None
+        target.cooldown_base_secs = None;
+        combo.cooldown_mode = CooldownMode::None;
+        assert!(combo.is_cooldown_disabled());
+        assert!(!target.is_cooldown_forced_disabled());
+        assert!(target.is_cooldown_disabled(&combo));
     }
 }
