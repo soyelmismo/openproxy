@@ -85,7 +85,10 @@ fn test_ip_address_redaction() {
     // Compressed IPv6
     let compressed_ipv6 = "Connect to 2001:db8::1 or fe80::1 now.";
     let redacted_comp = engine.redact_text(compressed_ipv6, &mut session);
-    assert_eq!(redacted_comp, "Connect to fd00:10:240::4 or fd00:10:240::5 now.");
+    assert_eq!(
+        redacted_comp,
+        "Connect to fd00:10:240::4 or fd00:10:240::5 now."
+    );
     assert_eq!(session.restore_text(&redacted_comp), compressed_ipv6);
 }
 
@@ -560,11 +563,7 @@ fn test_pipeline_roundtrip_unary_and_streaming() {
 
     assert!(!redacted_content.contains("alice@example.com"));
     assert!(!redacted_content.contains("sk-proj-1234567890abcdefghijklmn"));
-    let fake_email = session
-        .forward
-        .get("alice@example.com")
-        .cloned()
-        .unwrap();
+    let fake_email = session.forward.get("alice@example.com").cloned().unwrap();
     let fake_key = session
         .forward
         .get("sk-proj-1234567890abcdefghijklmn")
@@ -584,9 +583,9 @@ fn test_pipeline_roundtrip_unary_and_streaming() {
             index: 0,
             message: OpenAIMessage {
                 role: "assistant".into(),
-                content: Some(serde_json::Value::String(
-                    format!("Confirmed receipt for {fake_email} using key {fake_key}."),
-                )),
+                content: Some(serde_json::Value::String(format!(
+                    "Confirmed receipt for {fake_email} using key {fake_key}."
+                ))),
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
@@ -677,7 +676,9 @@ fn test_pii_non_reversible_behavior() {
             index: 0,
             message: OpenAIMessage {
                 role: "assistant".into(),
-                content: Some(serde_json::Value::String("Noted alex.turner1@fastmail.com".into())),
+                content: Some(serde_json::Value::String(
+                    "Noted alex.turner1@fastmail.com".into(),
+                )),
                 name: None,
                 tool_call_id: None,
                 tool_calls: None,
@@ -915,9 +916,8 @@ fn test_stream_eof_without_done_sentinel_preserves_buffer() {
     let fake_email = session.get_or_create_placeholder(PiiEntity::Email, "alice@example.com");
     let mut sse_replacer = PiiRestorationStage::new(&session);
     let prefix = &fake_email[..fake_email.len() - 5];
-    let chunk_split = format!(
-        "data: {{\"choices\":[{{\"delta\":{{\"content\":\"Notice {prefix}\"}}}}]}}\n\n"
-    );
+    let chunk_split =
+        format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"Notice {prefix}\"}}}}]}}\n\n");
     let res = sse_replacer.process_frame(&chunk_split);
     assert_eq!(
         res,
@@ -999,12 +999,21 @@ fn test_env_vars_and_service_credentials() {
 
     let test_cases = [
         ("CF_Token=lSy1234567890abcdef1234567890abcdef12", true),
-        ("SEARXNG_SECRET=000111222333444555666777888999aaabbbcccdddeeefff0001112223334445", true),
+        (
+            "SEARXNG_SECRET=000111222333444555666777888999aaabbbcccdddeeefff0001112223334445",
+            true,
+        ),
         ("SECRET=1i8s9dt1y98234710928374109283741", true),
         ("WORDPRESS_DB_PASSWORD=act_secure_password_here_12345", true),
         ("GATECHA_ADMIN_PASSWORD=u4Tsuperadminpass123", true),
-        ("TELEGRAM_BOT_TOKEN=7281928374:Agk12345678901234567890123456789012", true),
-        ("INSTATIC_SECRET_KEY=a1z9uwsupersecretkeybase64padding==", true),
+        (
+            "TELEGRAM_BOT_TOKEN=7281928374:Agk12345678901234567890123456789012",
+            true,
+        ),
+        (
+            "INSTATIC_SECRET_KEY=a1z9uwsupersecretkeybase64padding==",
+            true,
+        ),
         ("MYSQL_ROOT_PASSWORD=my_super_root_pass_123", true),
         ("N8N_BASIC_AUTH_USER=admin", false),
         ("PORT=8080", false),
@@ -1057,9 +1066,8 @@ fn test_connection_strings_and_new_platform_secrets() {
     let r8 = format!("r8_{}", "a7b8".repeat(10));
     let sk_live = format!("sk_live_{}", "c9d0".repeat(6));
     let twilio = format!("AC{}", "e1f2".repeat(8));
-    let ai_input = format!(
-        "Tokens: {sk_or} and {hf} and {gsk} and {r8} and {sk_live} and {twilio}"
-    );
+    let ai_input =
+        format!("Tokens: {sk_or} and {hf} and {gsk} and {r8} and {sk_live} and {twilio}");
     let mut session = PiiSession::new(true);
     let redacted_ai = engine.redact_text(&ai_input, &mut session);
     assert!(!redacted_ai.contains(&sk_or));
@@ -1099,10 +1107,7 @@ fn test_production_config_fixtures_redaction() {
             "env_cloudflare_ddns",
             "# Cloudflare DDNS env\nCLOUDFLARE_API_TOKEN=mock_cf_token_40_chars_abcdef1234567890\nZONE_ID=f185016a2dfa10e924d8fa05e2aedfcd\nDOMAINS=example.com\nCLOUDFLARE_EMAIL=admin@example.com\n",
         ),
-        (
-            "raw_token_file",
-            "MockFamilyToken32CharsValue12345\n",
-        ),
+        ("raw_token_file", "MockFamilyToken32CharsValue12345\n"),
         (
             "media_strm_url_token",
             "https://media.example.com/serve?id=mock_stream_media_id&token=MockFamilyToken32CharsValue12345\n",
@@ -1168,7 +1173,9 @@ fn test_tool_calls_and_tool_messages_redaction_roundtrip() {
     let messages = vec![
         OpenAIMessage {
             role: "system".to_string(),
-            content: Some(serde_json::json!("You are an AI assistant. Call tools when needed.")),
+            content: Some(serde_json::json!(
+                "You are an AI assistant. Call tools when needed."
+            )),
             name: None,
             tool_call_id: None,
             tool_calls: None,
@@ -1176,7 +1183,9 @@ fn test_tool_calls_and_tool_messages_redaction_roundtrip() {
         },
         OpenAIMessage {
             role: "user".to_string(),
-            content: Some(serde_json::json!("Please query account for alice@example.com")),
+            content: Some(serde_json::json!(
+                "Please query account for alice@example.com"
+            )),
             name: None,
             tool_call_id: None,
             tool_calls: None,
@@ -1199,7 +1208,9 @@ fn test_tool_calls_and_tool_messages_redaction_roundtrip() {
         },
         OpenAIMessage {
             role: "tool".to_string(),
-            content: Some(serde_json::json!("{\"status\": \"success\", \"user_phone\": \"+1-555-019-2834\"}")),
+            content: Some(serde_json::json!(
+                "{\"status\": \"success\", \"user_phone\": \"+1-555-019-2834\"}"
+            )),
             name: None,
             tool_call_id: Some("call_abc123".to_string()),
             tool_calls: None,
@@ -1212,7 +1223,9 @@ fn test_tool_calls_and_tool_messages_redaction_roundtrip() {
     // 1. System prompt intact
     assert_eq!(
         redacted[0].content,
-        Some(serde_json::json!("You are an AI assistant. Call tools when needed."))
+        Some(serde_json::json!(
+            "You are an AI assistant. Call tools when needed."
+        ))
     );
 
     // 2. User message email redacted
@@ -1292,10 +1305,10 @@ fn test_tool_calls_and_tool_messages_redaction_roundtrip() {
             .unwrap(),
         "Found user alice@example.com with phone +1-555-019-2834"
     );
-    let restored_tc_args = restored_choice.message.tool_calls.as_ref().unwrap()[0]["function"]
-        ["arguments"]
-        .as_str()
-        .unwrap();
+    let restored_tc_args =
+        restored_choice.message.tool_calls.as_ref().unwrap()[0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
     assert_eq!(
         restored_tc_args,
         "{\"target\": \"alice@example.com\", \"key\": \"sk-test1234567890abcdef1234567890abcdef\"}"
@@ -1317,11 +1330,17 @@ fn test_high_volume_pii_scalability_and_zero_collision() {
     for i in 1..=1000 {
         let email_orig = format!("test_user_{i}@enterprise.corp");
         let fake_email = session.get_or_create_placeholder(PiiEntity::Email, &email_orig);
-        assert!(generated_emails.insert(fake_email), "Email collision at index {i}");
+        assert!(
+            generated_emails.insert(fake_email),
+            "Email collision at index {i}"
+        );
 
         let phone_orig = format!("+34-600-{i:06}");
         let fake_phone = session.get_or_create_placeholder(PiiEntity::Phone, &phone_orig);
-        assert!(generated_phones.insert(fake_phone), "Phone collision at index {i}");
+        assert!(
+            generated_phones.insert(fake_phone),
+            "Phone collision at index {i}"
+        );
 
         let ip_orig = format!("172.16.{}.{}", (i / 254) % 254, (i % 254) + 1);
         let fake_ip = session.get_or_create_placeholder(PiiEntity::Ip, &ip_orig);
@@ -1329,18 +1348,30 @@ fn test_high_volume_pii_scalability_and_zero_collision() {
 
         let card_orig = format!("card_dummy_token_{i}");
         let fake_card = session.get_or_create_placeholder(PiiEntity::CreditCard, &card_orig);
-        assert!(generated_cards.insert(fake_card.clone()), "Credit card collision at index {i}");
+        assert!(
+            generated_cards.insert(fake_card.clone()),
+            "Credit card collision at index {i}"
+        );
         // Ensure Luhn valid for every generated fake card
         let digits: String = fake_card.chars().filter(|c| c.is_ascii_digit()).collect();
-        assert!(luhn_check(&digits), "Generated card must have valid Luhn checksum");
+        assert!(
+            luhn_check(&digits),
+            "Generated card must have valid Luhn checksum"
+        );
 
         let person_orig = format!("Person Original Identity {i}");
         let fake_person = session.get_or_create_placeholder(PiiEntity::Person, &person_orig);
-        assert!(generated_persons.insert(fake_person), "Person collision at index {i}");
+        assert!(
+            generated_persons.insert(fake_person),
+            "Person collision at index {i}"
+        );
 
         let secret_orig = format!("sk-proj-orig-secret-{i:08}");
         let fake_secret = session.get_or_create_placeholder(PiiEntity::Secret, &secret_orig);
-        assert!(generated_secrets.insert(fake_secret), "Secret collision at index {i}");
+        assert!(
+            generated_secrets.insert(fake_secret),
+            "Secret collision at index {i}"
+        );
     }
 
     // Exact bijection: 6,000 forward entries and 6,000 reverse entries
@@ -1352,10 +1383,16 @@ fn test_high_volume_pii_scalability_and_zero_collision() {
     let mut sample_text = String::new();
     let mut expected_text = String::new();
     for i in 1..=50 {
-        let fake_email = session.forward.get(&format!("test_user_{i}@enterprise.corp")).unwrap();
+        let fake_email = session
+            .forward
+            .get(&format!("test_user_{i}@enterprise.corp"))
+            .unwrap();
         let fake_phone = session.forward.get(&format!("+34-600-{i:06}")).unwrap();
         let _ = write!(sample_text, "user={fake_email} phone={fake_phone} ");
-        let _ = write!(expected_text, "user=test_user_{i}@enterprise.corp phone=+34-600-{i:06} ");
+        let _ = write!(
+            expected_text,
+            "user=test_user_{i}@enterprise.corp phone=+34-600-{i:06} "
+        );
     }
 
     let restored = session.restore_text(&sample_text);

@@ -530,13 +530,12 @@ impl UpstreamDispatcher {
             session.restore_openai_response(&mut openai_response);
         }
 
-        let recorded_response_body = if self.config.pii_config.pii_enabled
-            && !self.config.pii_config.pii_redact_logs
-        {
-            serde_json::to_value(&openai_response).unwrap_or_else(|_| response_body_raw.clone())
-        } else {
-            response_body_raw
-        };
+        let recorded_response_body =
+            if self.config.pii_config.pii_enabled && !self.config.pii_config.pii_redact_logs {
+                serde_json::to_value(&openai_response).unwrap_or_else(|_| response_body_raw.clone())
+            } else {
+                response_body_raw
+            };
 
         self.record_non_streaming_success(
             params,

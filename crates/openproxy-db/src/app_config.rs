@@ -178,9 +178,24 @@ pub fn save_pii_config_to_db(conn: &Connection, cfg: &PiiConfig, now_unix_secs: 
     clean_cfg.pii_entities.retain(|e| seen.insert(*e));
     save_config_val(conn, PII_CONFIG_KEY, &clean_cfg, now_unix_secs)?;
     save_config_val(conn, PII_ENABLED_KEY, &clean_cfg.pii_enabled, now_unix_secs)?;
-    save_config_val(conn, PII_REVERSIBLE_KEY, &clean_cfg.pii_reversible, now_unix_secs)?;
-    save_config_val(conn, PII_REDACT_LOGS_KEY, &clean_cfg.pii_redact_logs, now_unix_secs)?;
-    save_config_val(conn, PII_ENTITIES_KEY, &clean_cfg.pii_entities, now_unix_secs)?;
+    save_config_val(
+        conn,
+        PII_REVERSIBLE_KEY,
+        &clean_cfg.pii_reversible,
+        now_unix_secs,
+    )?;
+    save_config_val(
+        conn,
+        PII_REDACT_LOGS_KEY,
+        &clean_cfg.pii_redact_logs,
+        now_unix_secs,
+    )?;
+    save_config_val(
+        conn,
+        PII_ENTITIES_KEY,
+        &clean_cfg.pii_entities,
+        now_unix_secs,
+    )?;
     Ok(())
 }
 

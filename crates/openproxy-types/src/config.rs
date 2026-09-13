@@ -490,8 +490,7 @@ mod tests {
         assert_eq!(default_cfg, parsed);
 
         // Test aliases
-        let aliased_json =
-            r#"{"enabled": true, "reversible": false, "redact_logs": false, "entities": ["email", "key"]}"#;
+        let aliased_json = r#"{"enabled": true, "reversible": false, "redact_logs": false, "entities": ["email", "key"]}"#;
         let aliased: PiiConfig = serde_json::from_str(aliased_json).unwrap();
         assert!(aliased.pii_enabled);
         assert!(!aliased.pii_reversible);

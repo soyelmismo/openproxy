@@ -20,8 +20,10 @@ static REGEX_INLINE_CODE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`[^`\n]+`").expect("regex compilation failed"));
 
 static REGEX_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:https?|ftp|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqps?)://[^\s<>"'`]+"#)
-        .expect("regex compilation failed")
+    Regex::new(
+        r#"(?:https?|ftp|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqps?)://[^\s<>"'`]+"#,
+    )
+    .expect("regex compilation failed")
 });
 
 static REGEX_URI_USERINFO_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
@@ -35,8 +37,10 @@ static REGEX_URL_SENSITIVE_PARAM: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static REGEX_DSN_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\b[a-zA-Z0-9_.~%+-]+:([^@/\s\n\r"':]{3,})@(?:tcp|unix|[a-zA-Z0-9_.-]+(?::[0-9]+)?)"#)
-        .expect("regex compilation failed")
+    Regex::new(
+        r#"(?i)\b[a-zA-Z0-9_.~%+-]+:([^@/\s\n\r"':]{3,})@(?:tcp|unix|[a-zA-Z0-9_.-]+(?::[0-9]+)?)"#,
+    )
+    .expect("regex compilation failed")
 });
 
 static REGEX_JSON_KEY: LazyLock<Regex> = LazyLock::new(|| {
@@ -139,16 +143,15 @@ static REGEX_IBAN_CANDIDATE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static REGEX_NATIONAL_ID_ES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:[0-9]{8}[A-Za-z]|[XYZxyz][0-9]{7}[A-Za-z])\b").expect("regex compilation failed")
+    Regex::new(r"\b(?:[0-9]{8}[A-Za-z]|[XYZxyz][0-9]{7}[A-Za-z])\b")
+        .expect("regex compilation failed")
 });
 
-static REGEX_NATIONAL_ID_CL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b([0-9]{7,8})-([0-9kK])\b").expect("regex compilation failed")
-});
+static REGEX_NATIONAL_ID_CL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b([0-9]{7,8})-([0-9kK])\b").expect("regex compilation failed"));
 
-static REGEX_NATIONAL_ID_US: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("regex compilation failed")
-});
+static REGEX_NATIONAL_ID_US: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("regex compilation failed"));
 
 static REGEX_SECRET_LABELED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -158,7 +161,8 @@ static REGEX_SECRET_LABELED: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static REGEX_SECRET_HIGH_ENTROPY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b[a-zA-Z0-9_-]{32,64}\b|\b[a-zA-Z0-9+/]{30,62}={1,2}\b").expect("regex compilation failed")
+    Regex::new(r"\b[a-zA-Z0-9_-]{32,64}\b|\b[a-zA-Z0-9+/]{30,62}={1,2}\b")
+        .expect("regex compilation failed")
 });
 
 static REGEX_SECRET_JWT: LazyLock<Regex> = LazyLock::new(|| {
@@ -243,7 +247,9 @@ pub fn is_valid_secret_value(key: &str, val: &str) -> bool {
     if let Some(stripped) = val.strip_prefix('$') {
         let unescaped = stripped.strip_prefix('$').unwrap_or(stripped);
         let is_shell_var = !unescaped.is_empty()
-            && unescaped.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            && unescaped
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
         if is_shell_var {
             return false;
         }
@@ -333,7 +339,9 @@ pub fn is_valid_chilean_rut(digits_str: &str, verifier: char) -> bool {
     let mut sum = 0;
     let mut multiplier = 2;
     for c in digits_str.chars().rev() {
-        let Some(d) = c.to_digit(10) else { return false; };
+        let Some(d) = c.to_digit(10) else {
+            return false;
+        };
         sum += d * multiplier;
         multiplier = if multiplier == 7 { 2 } else { multiplier + 1 };
     }
@@ -355,9 +363,15 @@ pub fn is_valid_ssn(s: &str) -> bool {
         return false;
     }
     let mut parts = s.split('-');
-    let Some(area_str) = parts.next() else { return false; };
-    let Some(group_str) = parts.next() else { return false; };
-    let Some(serial_str) = parts.next() else { return false; };
+    let Some(area_str) = parts.next() else {
+        return false;
+    };
+    let Some(group_str) = parts.next() else {
+        return false;
+    };
+    let Some(serial_str) = parts.next() else {
+        return false;
+    };
     if parts.next().is_some() {
         return false;
     }
@@ -925,7 +939,11 @@ impl PiiEngine {
     }
 
     /// Collect all raw candidates across enabled entity types.
-    pub(crate) fn collect_candidates<'a>(&self, text: &'a str, protected: &[Range<usize>]) -> Vec<Candidate<'a>> {
+    pub(crate) fn collect_candidates<'a>(
+        &self,
+        text: &'a str,
+        protected: &[Range<usize>],
+    ) -> Vec<Candidate<'a>> {
         let mut candidates = Vec::new();
 
         // ── 1. Secrets / API Keys ──
@@ -1037,13 +1055,19 @@ impl PiiEngine {
                 }
             }
             for cap in REGEX_SECRET_LABELED.captures_iter(text) {
-                let Some(key_m) = cap.get(1).or_else(|| cap.get(5)) else { continue };
-                let Some(val_m) = cap.get(2)
+                let Some(key_m) = cap.get(1).or_else(|| cap.get(5)) else {
+                    continue;
+                };
+                let Some(val_m) = cap
+                    .get(2)
                     .or_else(|| cap.get(3))
                     .or_else(|| cap.get(4))
                     .or_else(|| cap.get(6))
                     .or_else(|| cap.get(7))
-                    .or_else(|| cap.get(8)) else { continue };
+                    .or_else(|| cap.get(8))
+                else {
+                    continue;
+                };
                 let key_str = key_m.as_str();
                 let val_raw = val_m.as_str();
                 let trimmed_val = val_raw.trim_end_matches([';', ',']);
@@ -1060,9 +1084,7 @@ impl PiiEngine {
                     }
                 }
 
-                if trimmed_val.len() >= 4
-                    && is_valid_secret_value(key_str, trimmed_val)
-                {
+                if trimmed_val.len() >= 4 && is_valid_secret_value(key_str, trimmed_val) {
                     let start = val_m.start();
                     let end = start + trimmed_val.len();
                     if !Self::is_in_protected_range(protected, start, end) {
@@ -1080,7 +1102,9 @@ impl PiiEngine {
                     let start = val_m.start();
                     let end = val_m.end();
                     let val = val_m.as_str();
-                    if is_valid_secret_value("token", val) && !Self::is_in_protected_range(protected, start, end) {
+                    if is_valid_secret_value("token", val)
+                        && !Self::is_in_protected_range(protected, start, end)
+                    {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1146,7 +1170,9 @@ impl PiiEngine {
                     let start = pass_m.start();
                     let end = pass_m.end();
                     let pass_str = pass_m.as_str();
-                    if is_valid_secret_value("password", pass_str) && !Self::is_in_protected_range(protected, start, end) {
+                    if is_valid_secret_value("password", pass_str)
+                        && !Self::is_in_protected_range(protected, start, end)
+                    {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1201,7 +1227,9 @@ impl PiiEngine {
                     let start = m.start();
                     let end = m.end();
                     let val = m.as_str();
-                    if is_valid_secret_value("-p", val) && !Self::is_in_protected_range(protected, start, end) {
+                    if is_valid_secret_value("-p", val)
+                        && !Self::is_in_protected_range(protected, start, end)
+                    {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1213,7 +1241,9 @@ impl PiiEngine {
             }
             for m in REGEX_NATIONAL_ID_ES.find_iter(text) {
                 let s = m.as_str();
-                if is_valid_spanish_id(s) && !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if is_valid_spanish_id(s)
+                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1223,7 +1253,9 @@ impl PiiEngine {
                 }
             }
             for cap in REGEX_NATIONAL_ID_CL.captures_iter(text) {
-                if let (Some(m_full), Some(m_digits), Some(m_verif)) = (cap.get(0), cap.get(1), cap.get(2)) {
+                if let (Some(m_full), Some(m_digits), Some(m_verif)) =
+                    (cap.get(0), cap.get(1), cap.get(2))
+                {
                     let verif_char = m_verif.as_str().chars().next().unwrap_or('?');
                     if is_valid_chilean_rut(m_digits.as_str(), verif_char)
                         && !Self::is_in_protected_range(protected, m_full.start(), m_full.end())

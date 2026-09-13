@@ -545,13 +545,12 @@ impl UpstreamDispatcher {
             None
         };
 
-        let recorded_response_body = if self.config.pii_config.pii_enabled
-            && self.config.pii_config.pii_redact_logs
-        {
-            raw_response_body_json
-        } else {
-            response_body_json
-        };
+        let recorded_response_body =
+            if self.config.pii_config.pii_enabled && self.config.pii_config.pii_redact_logs {
+                raw_response_body_json
+            } else {
+                response_body_json
+            };
 
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,

@@ -579,7 +579,10 @@ fn resolve_recorded_request_body(
     if !recording {
         return None;
     }
-    if has_pii && redact_logs && let Some(msgs) = prepared_msgs {
+    if has_pii
+        && redact_logs
+        && let Some(msgs) = prepared_msgs
+    {
         let mut cloned = openai_req.clone();
         cloned.messages = msgs.to_vec();
         if let Ok(vec) = serde_json::to_vec(&cloned) {

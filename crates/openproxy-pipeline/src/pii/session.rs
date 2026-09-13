@@ -184,7 +184,13 @@ fn generate_fake_credit_card(count: usize, spaced: bool) -> String {
     let check = compute_luhn_check_digit(&base);
     let full = format!("{base}{check}");
     if spaced {
-        format!("{} {} {} {}", &full[0..4], &full[4..8], &full[8..12], &full[12..16])
+        format!(
+            "{} {} {} {}",
+            &full[0..4],
+            &full[4..8],
+            &full[8..12],
+            &full[12..16]
+        )
     } else {
         full
     }
@@ -207,16 +213,30 @@ impl PiiSession {
                     format!("fd00:10:240::{c}")
                 } else {
                     let zero_based = c - 1;
-                    format!("10.240.{}.{}", (zero_based / 254) % 254, (zero_based % 254) + 1)
+                    format!(
+                        "10.240.{}.{}",
+                        (zero_based / 254) % 254,
+                        (zero_based % 254) + 1
+                    )
                 }
             }
             PiiEntity::Email => {
                 const FIRST_NAMES: &[&str] = &[
-                    "alex.turner", "jordan.lee", "morgan.reed", "sam.taylor",
-                    "chris.evans", "pat.parker", "casey.miller", "riley.cooper",
+                    "alex.turner",
+                    "jordan.lee",
+                    "morgan.reed",
+                    "sam.taylor",
+                    "chris.evans",
+                    "pat.parker",
+                    "casey.miller",
+                    "riley.cooper",
                 ];
                 let name = FIRST_NAMES[(c - 1) % FIRST_NAMES.len()];
-                let domain = if c.is_multiple_of(2) { "outlook.com" } else { "fastmail.com" };
+                let domain = if c.is_multiple_of(2) {
+                    "outlook.com"
+                } else {
+                    "fastmail.com"
+                };
                 format!("{name}{c}@{domain}")
             }
             PiiEntity::Secret => {
@@ -260,16 +280,31 @@ impl PiiSession {
             }
             PiiEntity::Person => {
                 const FIRST_NAMES: &[&str] = &[
-                    "Alex", "David", "Sarah", "Michael", "Elena", "James",
-                    "Marcus", "Laura", "Carlos", "Emily", "Robert", "Anna",
-                    "Daniel", "Rachel", "Thomas", "Sofia", "Lucas", "Maria",
-                    "Brian", "Jessica",
+                    "Alex", "David", "Sarah", "Michael", "Elena", "James", "Marcus", "Laura",
+                    "Carlos", "Emily", "Robert", "Anna", "Daniel", "Rachel", "Thomas", "Sofia",
+                    "Lucas", "Maria", "Brian", "Jessica",
                 ];
                 const LAST_NAMES: &[&str] = &[
-                    "Vance", "Chen", "Jenkins", "Sterling", "Mercer", "Wilson",
-                    "Reed", "Bennett", "Lindqvist", "Hawthorne", "Taylor", "Kowalski",
-                    "Anderson", "Martinez", "Wright", "Scott", "Torres", "Nguyen",
-                    "Murphy", "Rivera",
+                    "Vance",
+                    "Chen",
+                    "Jenkins",
+                    "Sterling",
+                    "Mercer",
+                    "Wilson",
+                    "Reed",
+                    "Bennett",
+                    "Lindqvist",
+                    "Hawthorne",
+                    "Taylor",
+                    "Kowalski",
+                    "Anderson",
+                    "Martinez",
+                    "Wright",
+                    "Scott",
+                    "Torres",
+                    "Nguyen",
+                    "Murphy",
+                    "Rivera",
                 ];
                 let zero_based = c - 1;
                 let first_idx = zero_based % FIRST_NAMES.len();

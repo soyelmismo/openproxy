@@ -1,7 +1,7 @@
 //! Streaming window replacer and SSE chunk restoration stage.
 
-use aho_corasick::{AhoCorasick, MatchKind};
 use crate::streaming::{StreamAction, StreamingChunkStage};
+use aho_corasick::{AhoCorasick, MatchKind};
 use std::collections::{HashMap, HashSet};
 
 /// Streaming window replacer that handles placeholders split across SSE chunk boundaries
@@ -326,8 +326,10 @@ impl StreamingChunkStage for PiiRestorationStage {
 
                 if let Some(choices) = val.get_mut("choices").and_then(|c| c.as_array_mut()) {
                     for choice in choices {
-                        if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
-                            if let Some(content) = delta.get_mut("content").and_then(|c| c.as_str()) {
+                        if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut())
+                        {
+                            if let Some(content) = delta.get_mut("content").and_then(|c| c.as_str())
+                            {
                                 let restored = self.content_replacer.process(content);
                                 delta.insert(
                                     "content".to_string(),
@@ -368,9 +370,7 @@ impl StreamingChunkStage for PiiRestorationStage {
                 }
 
                 if changed {
-                    StreamAction::Mutate(
-                        serde_json::to_string(&val).unwrap_or(to_parse),
-                    )
+                    StreamAction::Mutate(serde_json::to_string(&val).unwrap_or(to_parse))
                 } else if is_buffered {
                     StreamAction::Mutate(to_parse)
                 } else {
