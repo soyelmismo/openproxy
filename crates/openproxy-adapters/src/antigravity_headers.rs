@@ -367,6 +367,14 @@ mod tests {
     }
 
     #[test]
+    fn test_is_valid_project_id() {
+        assert!(!is_valid_project_id(""));
+        assert!(!is_valid_project_id("test-project"));
+        assert!(!is_valid_project_id("project-id"));
+        assert!(is_valid_project_id("my-real-project-123"));
+    }
+
+    #[test]
     fn test_oauth_user_agent_and_current_version() {
         let ua = oauth_user_agent();
         let version = current_version();
