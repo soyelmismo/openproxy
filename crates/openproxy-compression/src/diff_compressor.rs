@@ -757,4 +757,17 @@ index abc..def 100644\n\
             "should compress assistant messages, got: {applied:?}"
         );
     }
+
+    #[test]
+    fn test_compress_diff_string() {
+        let content = make_basic_diff();
+        let result = compress_diff_string(&content);
+        assert!(
+            result.is_some(),
+            "compress_diff_string should return Some for valid diff"
+        );
+        let (compressed, tech) = result.unwrap();
+        assert_eq!(tech, TECHNIQUE);
+        assert!(compressed.starts_with("[#diff_compressed: was "));
+    }
 }
