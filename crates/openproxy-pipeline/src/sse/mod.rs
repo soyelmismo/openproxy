@@ -416,6 +416,125 @@ pub fn sse_payload_needs_parse(payload: &str) -> bool {
     payload.contains("\"usage\":{") || check_finish_reason_non_null(payload)
 }
 
+#[derive(serde::Deserialize)]
+struct InlineErrorProbe<'a> {
+    #[serde(borrow)]
+    choices: Option<Vec<&'a serde_json::value::RawValue>>,
+    #[serde(borrow)]
+    error: Option<InlineErrorPayload<'a>>,
+    #[serde(borrow)]
+    provider: Option<&'a str>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum InlineErrorPayload<'a> {
+    Obj(InlineErrorObjProbe<'a>),
+    #[serde(borrow)]
+    Str(&'a str),
+}
+
+#[derive(serde::Deserialize)]
+struct InlineErrorObjProbe<'a> {
+    #[serde(borrow)]
+    code: Option<InlineErrorCodeProbe<'a>>,
+    #[serde(borrow)]
+    message: Option<&'a str>,
+    #[serde(borrow)]
+    r#type: Option<&'a str>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum InlineErrorCodeProbe<'a> {
+    Num(u64),
+    #[serde(borrow)]
+    Str(&'a str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedInlineError<'a> {
+    pub status_code: u16,
+    pub message: &'a str,
+    pub provider: Option<&'a str>,
+}
+
+pub fn parse_inline_sse_error<'a>(json_payload: &'a str) -> Option<ParsedInlineError<'a>> {
+    if !json_payload.contains("\"error\"")
+        || (json_payload.contains("\"choices\":") && !json_payload.contains("\"choices\":[]"))
+    {
+        return None;
+    }
+
+    let probe = serde_json::from_str::<InlineErrorProbe<'a>>(json_payload).ok()?;
+    if !probe.choices.as_ref().is_none_or(std::vec::Vec::is_empty) {
+        return None;
+    }
+
+    let (status_code, message) = match probe.error? {
+        InlineErrorPayload::Str(msg) => (502, msg),
+        InlineErrorPayload::Obj(obj) => {
+            let msg = obj
+                .message
+                .unwrap_or("unknown upstream error in SSE stream");
+            let mut resolved = match obj.code {
+                Some(InlineErrorCodeProbe::Num(n)) if (400..=599).contains(&n) => n as u16,
+                Some(InlineErrorCodeProbe::Str(s)) => {
+                    if let Ok(n) = s.parse::<u16>() {
+                        if (400..=599).contains(&n) { n } else { 502 }
+                    } else if s.contains("rate_limit")
+                        || s.contains("quota")
+                        || s.contains("resource_exhausted")
+                    {
+                        429
+                    } else if s.contains("content_filter")
+                        || s.contains("safety")
+                        || s.contains("policy")
+                        || s.contains("blocked")
+                        || s.contains("invalid")
+                        || s.contains("bad_request")
+                        || s.contains("malformed")
+                    {
+                        400
+                    } else if s.contains("auth")
+                        || s.contains("unauthorized")
+                        || s.contains("permission")
+                        || s.contains("forbidden")
+                    {
+                        403
+                    } else {
+                        502
+                    }
+                }
+                _ => 502,
+            };
+
+            if resolved == 502
+                && let Some(t) = obj.r#type
+            {
+                if t.contains("rate_limit") {
+                    resolved = 429;
+                } else if t.contains("content_filter")
+                    || t.contains("safety")
+                    || t.contains("invalid_request")
+                {
+                    resolved = 400;
+                } else if t.contains("auth") {
+                    resolved = 401;
+                }
+            }
+
+            (resolved, msg)
+        }
+    };
+
+    Some(ParsedInlineError {
+        status_code,
+        message,
+        provider: probe.provider,
+    })
+}
+
 // `MAX_TOOL_*` / `MAX_RESPONSES_*` are `pub(crate)` in their submodules
 // (spec §2.3: crate-visible, hidden from the external API). They are NOT
 // re-exported here because no in-crate consumer references them via
@@ -505,5 +624,35 @@ mod tests {
         // Edge cases with colons
         let multi_colon = "data: :data:hello";
         assert_eq!(parse_sse_data_line(multi_colon), Some(":data:hello"));
+    }
+
+    #[test]
+    fn test_parse_inline_sse_error_string_code() {
+        let payload = r#"{"error": {"message": "I'm sorry, but I can't share details of my architecture or training process. Would you like to learn about how language models work in general instead?", "type": "content_filter_error", "param": null, "code": "content_filter"}}"#;
+        let err = parse_inline_sse_error(payload).expect("should parse content_filter error");
+        assert_eq!(err.status_code, 400);
+        assert!(err.message.starts_with("I'm sorry"));
+    }
+
+    #[test]
+    fn test_parse_inline_sse_error_numeric_code() {
+        let payload = r#"{"error": {"message": "Rate limit exceeded", "code": 429}}"#;
+        let err = parse_inline_sse_error(payload).expect("should parse rate limit");
+        assert_eq!(err.status_code, 429);
+        assert_eq!(err.message, "Rate limit exceeded");
+    }
+
+    #[test]
+    fn test_parse_inline_sse_error_string_payload() {
+        let payload = r#"{"error": "Internal upstream failure"}"#;
+        let err = parse_inline_sse_error(payload).expect("should parse string error");
+        assert_eq!(err.status_code, 502);
+        assert_eq!(err.message, "Internal upstream failure");
+    }
+
+    #[test]
+    fn test_parse_inline_sse_error_ignores_choices() {
+        let payload = r#"{"choices": [{"delta": {"content": "Hello"}}], "error": null}"#;
+        assert!(parse_inline_sse_error(payload).is_none());
     }
 }

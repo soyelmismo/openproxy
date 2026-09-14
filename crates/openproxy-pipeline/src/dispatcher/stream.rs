@@ -348,12 +348,14 @@ impl UpstreamDispatcher {
                 inline_error_message = %message,
                 "client disconnected but upstream had sent inline SSE error (code={code}); attributing to upstream error",
             );
-            let err = CoreError::upstream_error(
+            let class = crate::error_classification::classify_upstream_error(code, &message);
+            let err = CoreError::upstream_error_classified(
                 code,
                 fctx.target.provider_id.to_string(),
                 fctx.model_name,
                 message,
                 false,
+                class,
             );
             return self.fail_stream_with_error(err, fctx, Some(code));
         }
@@ -405,12 +407,14 @@ impl UpstreamDispatcher {
                 inline_error_message = %message,
                 "sink closed after upstream sent inline SSE error (code={code}, elapsed={elapsed}ms)",
             );
-            let err = CoreError::upstream_error(
+            let class = crate::error_classification::classify_upstream_error(code, &message);
+            let err = CoreError::upstream_error_classified(
                 code,
                 fctx.target.provider_id.to_string(),
                 fctx.model_name,
                 message,
                 false,
+                class,
             );
             return self.fail_stream_with_error(err, fctx, Some(code));
         }

@@ -351,33 +351,6 @@ fn parse_tool_call_probe(payload: &str) -> Option<Vec<ToolCallProbe<'_>>> {
         .and_then(|d| d.tool_calls)
 }
 
-fn parse_upstream_error_payload(json_bytes: &[u8]) -> Option<(u16, String)> {
-    #[derive(serde::Deserialize)]
-    struct UpstreamErrorProbe<'a> {
-        choices: Option<Vec<serde_json::Value>>,
-        #[serde(borrow)]
-        error: Option<ErrorObjProbe<'a>>,
-    }
-    #[derive(serde::Deserialize)]
-    struct ErrorObjProbe<'a> {
-        code: Option<u64>,
-        #[serde(borrow)]
-        message: Option<std::borrow::Cow<'a, str>>,
-    }
-    let v = serde_json::from_slice::<UpstreamErrorProbe<'_>>(json_bytes).ok()?;
-    if !v.choices.is_none_or(|c| c.is_empty()) {
-        return None;
-    }
-    let error_obj = v.error?;
-    let code = error_obj.code.unwrap_or(502) as u16;
-    let message = error_obj
-        .message
-        .as_deref()
-        .unwrap_or("unknown upstream error in SSE stream")
-        .to_string();
-    Some((code, message))
-}
-
 fn extract_error_from_line(line: &[u8]) -> Option<(u16, String)> {
     let json_bytes = line
         .strip_prefix(b"data: ")
@@ -387,16 +360,14 @@ fn extract_error_from_line(line: &[u8]) -> Option<(u16, String)> {
     if !json_bytes.starts_with(b"{") {
         return None;
     }
-    parse_upstream_error_payload(json_bytes)
+    let json_str = std::str::from_utf8(json_bytes).ok()?;
+    let parsed = crate::sse::parse_inline_sse_error(json_str)?;
+    Some((parsed.status_code, parsed.message.to_string()))
 }
 
 impl ResponseAccumulator {
     pub fn extract_upstream_error_from_raw(&self) -> Option<(u16, String)> {
-        if !self
-            .raw_response_body
-            .windows(8)
-            .any(|w| w == b"\"error\":")
-        {
+        if !self.raw_response_body.windows(7).any(|w| w == b"\"error\"") {
             return None;
         }
         self.raw_response_body
@@ -1020,5 +991,16 @@ mod tests {
         let (code, message) = result.unwrap();
         assert_eq!(code, 502, "should default to 502 when code is missing");
         assert_eq!(message, "Something went wrong");
+    }
+
+    #[test]
+    fn extract_upstream_error_content_filter_string_code() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_raw_line(r#"data: {"error": {"message": "I'm sorry, but I can't share details of my architecture or training process.", "type": "content_filter_error", "param": null, "code": "content_filter"}}"#);
+        let result = acc.extract_upstream_error_from_raw();
+        assert!(result.is_some());
+        let (code, message) = result.unwrap();
+        assert_eq!(code, 400);
+        assert!(message.starts_with("I'm sorry"));
     }
 }

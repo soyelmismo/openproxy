@@ -409,45 +409,6 @@ fn record_ttft_if_first(ctx: &StreamContext<'_>, state: &mut StreamingState) {
     }
 }
 
-fn parse_inline_error<'a>(
-    json_payload: &'a str,
-    default_provider: &'a str,
-) -> Option<(u16, &'a str, &'a str)> {
-    if !json_payload.contains("\"error\":")
-        || (json_payload.contains("\"choices\":") && !json_payload.contains("\"choices\":[]"))
-    {
-        return None;
-    }
-
-    #[derive(serde::Deserialize)]
-    struct ErrorChunk<'a> {
-        #[serde(borrow)]
-        choices: Option<Vec<&'a serde_json::value::RawValue>>,
-        #[serde(borrow)]
-        error: Option<ErrorObj<'a>>,
-        #[serde(borrow)]
-        provider: Option<&'a str>,
-    }
-    #[derive(serde::Deserialize)]
-    struct ErrorObj<'a> {
-        code: Option<u64>,
-        #[serde(borrow)]
-        message: Option<&'a str>,
-    }
-
-    let ec = serde_json::from_str::<ErrorChunk>(json_payload).ok()?;
-    if !ec.choices.as_ref().is_none_or(std::vec::Vec::is_empty) {
-        return None;
-    }
-    let error_obj = ec.error?;
-    let code = error_obj.code.unwrap_or(502) as u16;
-    let message = error_obj
-        .message
-        .unwrap_or("unknown upstream error in SSE stream");
-    let provider = ec.provider.unwrap_or(default_provider);
-    Some((code, message, provider))
-}
-
 fn parse_translated_sse_line(
     state: &mut StreamingState,
     target_format: openproxy_types::TargetFormat,
@@ -565,8 +526,10 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         json_payload: &str,
     ) -> Option<crate::streaming::ChunkEvent> {
-        let (code, message, provider_name) =
-            parse_inline_error(json_payload, ctx.target.provider_id.as_str())?;
+        let parsed = crate::sse::parse_inline_sse_error(json_payload)?;
+        let provider_name = parsed.provider.unwrap_or(ctx.target.provider_id.as_str());
+        let code = parsed.status_code;
+        let message = parsed.message;
 
         tracing::warn!(
             combo_id = ctx.combo.id.0,
@@ -576,7 +539,15 @@ impl ChunkProcessor<'_> {
             message,
             "upstream error embedded in streaming chunk"
         );
-        let err = CoreError::upstream_error(code, provider_name, ctx.model_name, message, false);
+        let class = crate::error_classification::classify_upstream_error(code, message);
+        let err = CoreError::upstream_error_classified(
+            code,
+            provider_name,
+            ctx.model_name,
+            message,
+            false,
+            class,
+        );
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
             match &mut self.state.acc {
                 Some(a) => {
@@ -925,6 +896,15 @@ impl ChunkProcessor<'_> {
         stream: &mut openproxy_adapters::upstream::UpstreamBodyStream,
         line: &str,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
+        let line_payload = line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"))
+            .unwrap_or(line)
+            .trim();
+        if let Some(ret) = self.check_and_handle_inline_upstream_error(ctx, line_payload) {
+            return Ok(ret);
+        }
+
         let parsed = parse_translated_sse_line(
             self.state,
             ctx.target_format,
