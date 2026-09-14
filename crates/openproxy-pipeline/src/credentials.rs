@@ -88,7 +88,15 @@ fn resolve_target_model(t: &ComboTarget, models_map: &HashMap<i64, Model>) -> Op
     };
 
     match models_map.get(&model_row_id.0) {
-        Some(m) => Some(m.clone()),
+        Some(m) if m.active => Some(m.clone()),
+        Some(_) => {
+            tracing::debug!(
+                model_row_id = model_row_id.0,
+                target_id = t.id.0,
+                "skipping combo target whose model is paused/inactive (active = false)"
+            );
+            None
+        }
         None => {
             let err = CoreError::ModelNotFound {
                 provider: "<unknown>".into(),
@@ -385,5 +393,45 @@ mod tests {
             antigravity_project_from_value(&json!({"project_id":"   "})),
             None
         );
+    }
+
+    #[test]
+    fn resolve_target_model_skips_inactive_models() {
+        use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
+        use openproxy_types::models::Model;
+        use std::collections::HashMap;
+
+        let target = ComboTarget {
+            id: ComboTargetId(1),
+            combo_id: ComboId(1),
+            provider_id: ProviderId("p1".into()),
+            account_id: None,
+            model_row_id: Some(ModelRowId(10)),
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+            active: true,
+            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+        };
+
+        let mut models_map = HashMap::new();
+        let mut model = Model {
+            row_id: ModelRowId(10),
+            model_id: ModelId("gpt-4".into()),
+            active: false,
+            ..Default::default()
+        };
+        models_map.insert(10, model.clone());
+
+        assert!(resolve_target_model(&target, &models_map).is_none());
+
+        model.active = true;
+        models_map.insert(10, model);
+        assert!(resolve_target_model(&target, &models_map).is_some());
     }
 }

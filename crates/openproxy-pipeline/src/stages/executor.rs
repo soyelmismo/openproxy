@@ -79,12 +79,48 @@ async fn execute_sequential_targets(
     mut last_result: Option<PipelineResult>,
 ) -> Result<PipelineResult, CoreError> {
     let mut overall_attempt: u8 = 1;
-    for (idx, _target) in to_run.iter().enumerate() {
+    let mut failed_targets = std::collections::HashSet::new();
+    let mut failed_models = std::collections::HashSet::new();
+
+    for (idx, target) in to_run.iter().enumerate() {
+        if failed_targets.contains(&target.target.id) {
+            tracing::info!(
+                combo_id = combo.id.0,
+                target_id = target.target.id.0,
+                provider = %target.target.provider_id,
+                "skipping remaining account for target that already failed in this request"
+            );
+            continue;
+        }
+        if let Some(m) = target.target.model_row_id
+            && failed_models.contains(&m)
+        {
+            tracing::info!(
+                combo_id = combo.id.0,
+                target_id = target.target.id.0,
+                model_row_id = m.0,
+                provider = %target.target.provider_id,
+                "skipping target whose model already failed in this request"
+            );
+            continue;
+        }
+
         match execute_single_target_step(ctx, combo, to_run, idx, race_size, &mut overall_attempt)
             .await
         {
             TargetLoopOutcome::Finish(res) => return Ok(res),
-            TargetLoopOutcome::Continue(res) => last_result = res,
+            TargetLoopOutcome::Continue(res) => {
+                if let Some(ref r) = res
+                    && let Some(ref err) = r.error
+                    && crate::pipeline::is_upstream_health_issue(err)
+                {
+                    failed_targets.insert(target.target.id);
+                    if let Some(m) = target.target.model_row_id {
+                        failed_models.insert(m);
+                    }
+                }
+                last_result = res;
+            }
             TargetLoopOutcome::Skip => {}
         }
     }

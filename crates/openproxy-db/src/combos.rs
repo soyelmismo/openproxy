@@ -67,15 +67,23 @@ crate::def_table_select!(
      LEFT JOIN providers p ON p.id = ct.provider_id \
      LEFT JOIN models m ON m.id = ct.model_row_id \
      LEFT JOIN combos sc ON sc.id = ct.sub_combo_id \
-     LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id",
+     LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
+     LEFT JOIN ( \
+         SELECT ct2.model_row_id, MAX(tc2.cooldown_until) as model_cooldown_until, MAX(tc2.reason) as model_cooldown_reason \
+         FROM target_cooldowns tc2 \
+         INNER JOIN combo_targets ct2 ON ct2.id = tc2.combo_target_id \
+         WHERE ct2.model_row_id IS NOT NULL \
+           AND datetime(tc2.cooldown_until) > datetime('now') \
+         GROUP BY ct2.model_row_id \
+     ) mc ON mc.model_row_id = ct.model_row_id",
     "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
      ct.sub_combo_id, sc.name as sub_combo_name, \
      COALESCE(m.model_id, ''), m.display_name, ct.priority_order, \
-     tc.cooldown_until, \
-     CASE WHEN tc.cooldown_until IS NOT NULL \
-               AND datetime(tc.cooldown_until) > datetime('now') \
+     COALESCE(tc.cooldown_until, mc.model_cooldown_until), \
+     CASE WHEN (tc.cooldown_until IS NOT NULL AND datetime(tc.cooldown_until) > datetime('now')) \
+               OR mc.model_cooldown_until IS NOT NULL \
           THEN 1 ELSE 0 END as in_cooldown, \
-     tc.reason, \
+     COALESCE(tc.reason, mc.model_cooldown_reason), \
      m.context_length, \
      m.max_output_tokens, \
      ct.weight, \
@@ -509,15 +517,27 @@ pub fn combo_in_chain(
 }
 
 pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-    // Targets whose provider has been deactivated (active = 0) or are
-    // in active cooldown in `target_cooldowns` (cooldown_until > now)
-    // are excluded from the routable result.
+    // Targets whose provider has been deactivated (active = 0), whose
+    // model has been deactivated (active = 0), or are in active cooldown
+    // in `target_cooldowns` (either directly or via another target sharing
+    // the same model) are excluded from the routable result.
     crate::db_query_all!(
         conn,
         combo_target_select!(
             "LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
+             LEFT JOIN models m ON m.id = ct.model_row_id \
+             LEFT JOIN ( \
+                 SELECT ct2.model_row_id, MAX(tc2.cooldown_until) as model_cooldown_until \
+                 FROM target_cooldowns tc2 \
+                 INNER JOIN combo_targets ct2 ON ct2.id = tc2.combo_target_id \
+                 WHERE ct2.model_row_id IS NOT NULL \
+                   AND datetime(tc2.cooldown_until) > datetime('now') \
+                 GROUP BY ct2.model_row_id \
+             ) mc ON mc.model_row_id = ct.model_row_id \
              WHERE ct.combo_id = ?1 AND p.active = 1 AND ct.active = 1 \
+                 AND (ct.model_row_id IS NULL OR (m.id IS NOT NULL AND m.active = 1)) \
                  AND (tc.cooldown_until IS NULL OR datetime(tc.cooldown_until) <= datetime('now')) \
+                 AND mc.model_cooldown_until IS NULL \
                  AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL) \
              ORDER BY ct.priority_order ASC, ct.id ASC"
         ),
@@ -1836,5 +1856,65 @@ mod tests {
             .expect("get target")
             .expect("found");
         assert_eq!(t_pass.thinking_effort, None);
+    }
+
+    #[test]
+    fn test_list_targets_excludes_paused_models_and_model_cooldowns() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format, active)
+            VALUES ('p1', 'P1', 'https://example.com', 'none', 'openai', 1);
+
+            INSERT INTO models (id, provider_id, model_id, target_format, active, custom)
+            VALUES (101, 'p1', 'model-active', 'openai', 1, 0),
+                   (102, 'p1', 'model-paused', 'openai', 0, 0),
+                   (103, 'p1', 'model-cooldown', 'openai', 1, 0);
+
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+
+            -- Combo 1 targets:
+            -- Target 1 -> active model (101)
+            -- Target 2 -> paused model (102)
+            -- Target 3 -> model 103 (initially not in cooldown)
+            INSERT INTO combo_targets (id, combo_id, provider_id, model_row_id, priority_order, active)
+            VALUES (1, 1, 'p1', 101, 1, 1),
+                   (2, 1, 'p1', 102, 2, 1),
+                   (3, 1, 'p1', 103, 3, 1);
+
+            -- Combo 2 also targets model 103 under target id 4
+            INSERT INTO combo_targets (id, combo_id, provider_id, model_row_id, priority_order, active)
+            VALUES (4, 2, 'p1', 103, 1, 1);
+            "
+        ).expect("insert test data");
+
+        // 1. Paused model (102) must be excluded from list_targets
+        let targets = list_targets(&conn, ComboId(1)).expect("list targets");
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].id.0, 1);
+        assert_eq!(targets[1].id.0, 3);
+
+        // 2. Put target 3 (model 103) in cooldown
+        crate::cooldowns::record_cooldown(
+            &conn,
+            ComboTargetId(3),
+            "timeout",
+            openproxy_types::CooldownMode::Flat,
+            300,
+            300,
+            2,
+        ).expect("record cooldown");
+
+        // Combo 1 now only has target 1 (target 2 is paused model, target 3 is in cooldown)
+        let targets_c1 = list_targets(&conn, ComboId(1)).expect("list targets c1");
+        assert_eq!(targets_c1.len(), 1);
+        assert_eq!(targets_c1[0].id.0, 1);
+
+        // Combo 2 target 4 also points to model 103: it MUST be excluded because model 103 is in cooldown
+        let targets_c2 = list_targets(&conn, ComboId(2)).expect("list targets c2");
+        assert!(targets_c2.is_empty(), "target 4 must be excluded because its model is in cooldown");
     }
 }
