@@ -240,6 +240,9 @@ fn resolve_target_format(
         openproxy_adapters::adapters::AdapterFormat::Atomesus => {
             openproxy_types::TargetFormat::Atomesus
         }
+        openproxy_adapters::adapters::AdapterFormat::CommandCodeGo => {
+            openproxy_types::TargetFormat::CommandCodeGo
+        }
     }
 }
 

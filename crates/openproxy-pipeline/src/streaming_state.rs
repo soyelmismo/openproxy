@@ -234,6 +234,7 @@ pub(crate) struct StreamingState {
     pub done_sent: bool,
     pub acc: Option<ResponseAccumulator>,
     pub responses_sse_state: crate::sse::ResponsesSseState,
+    pub commandcode_sse_state: crate::sse::CommandCodeSseState,
     pub pii_stage: Option<crate::pii::PiiRestorationStage>,
 }
 
@@ -281,6 +282,7 @@ impl StreamingState {
                 None
             },
             responses_sse_state: crate::sse::ResponsesSseState::default(),
+            commandcode_sse_state: crate::sse::CommandCodeSseState::default(),
             pii_stage: None,
         }
     }
@@ -463,6 +465,13 @@ fn parse_translated_sse_line(
             &mut state.responses_sse_state,
         ),
         openproxy_types::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
+        openproxy_types::TargetFormat::CommandCodeGo => crate::sse::parse_commandcode_sse_line(
+            line,
+            chunk_id,
+            created,
+            model_name,
+            &mut state.commandcode_sse_state,
+        ),
         openproxy_types::TargetFormat::Atomesus => {
             crate::sse::parse_atomesus_sse_line(line, chunk_id, created, model_name)
         }

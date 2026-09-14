@@ -8,6 +8,7 @@
 
 mod anthropic;
 mod atomesus;
+pub mod commandcode;
 mod gemini;
 mod openai;
 mod responses;
@@ -428,6 +429,10 @@ pub use anthropic::{
     translate_anthropic_sse_payload,
 };
 pub use atomesus::parse_atomesus_sse_line;
+pub use commandcode::{
+    CommandCodeSseState, parse_commandcode_sse_line, parse_commandcode_sse_to_unary,
+    parse_commandcode_sse_to_value,
+};
 pub use gemini::parse_gemini_sse_line;
 pub use openai::parse_openai_sse_line;
 pub use responses::{ResponsesSseState, parse_responses_sse_stream_line};

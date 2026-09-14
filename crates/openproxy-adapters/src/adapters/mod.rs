@@ -793,6 +793,7 @@ define_provider_adapter! {
             "cline" => Cline(cline, ClineAdapter),
             "cloudflare-workers-ai" => CloudflareWorkersAI(cloudflare_workers_ai, CloudflareWorkersAIAdapter),
             "codex" => Codex(codex, CodexAdapter),
+            "commandcodego" => CommandCodeGo(commandcode, CommandCodeGoAdapter),
             "gemini" => Gemini(gemini, GeminiAdapter),
             "horde" => Horde(horde, HordeAdapter),
             "kilocode" => Kilocode(kilocode, KilocodeAdapter),
@@ -938,6 +939,7 @@ pub mod atomesus;
 pub mod cline;
 pub mod cloudflare_workers_ai;
 pub mod codex;
+pub mod commandcode;
 pub mod custom_adapter;
 pub mod factory;
 pub mod gemini;
@@ -983,6 +985,7 @@ fn resolve_target_format(format: AdapterFormat, fallback: TargetFormat) -> Targe
         AdapterFormat::Anthropic => TargetFormat::Anthropic,
         AdapterFormat::Responses => TargetFormat::Responses,
         AdapterFormat::Atomesus => TargetFormat::Atomesus,
+        AdapterFormat::CommandCodeGo => TargetFormat::CommandCodeGo,
         AdapterFormat::Gemini => TargetFormat::Gemini,
     }
 }
@@ -993,6 +996,7 @@ fn target_format_path(target_format: TargetFormat) -> &'static str {
         TargetFormat::Anthropic => "/messages",
         TargetFormat::Responses => "/responses",
         TargetFormat::Atomesus => "/chat/atomesus",
+        TargetFormat::CommandCodeGo => "/alpha/generate",
     }
 }
 
@@ -1428,10 +1432,11 @@ mod tests {
     #[test]
     fn builtin_adapters_returns_all() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 17);
+        assert_eq!(v.len(), 18);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"atomesus"));
         assert!(ids.contains(&"cline"));
+        assert!(ids.contains(&"commandcodego"));
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
         assert!(ids.contains(&"opencode-zen"));

@@ -50,6 +50,7 @@ impl_string_enum! {
         Gemini => "gemini",
         Responses => "responses",
         Atomesus => "atomesus",
+        CommandCodeGo => "commandcodego",
     }
     error: "provider format"
 }
@@ -63,6 +64,7 @@ impl ProviderFormat {
             Self::Gemini => TargetFormat::Gemini,
             Self::Responses => TargetFormat::Responses,
             Self::Atomesus => TargetFormat::Atomesus,
+            Self::CommandCodeGo => TargetFormat::CommandCodeGo,
             Self::Openai | Self::Mixed => TargetFormat::Openai,
         }
     }
@@ -143,6 +145,7 @@ mod tests {
         assert_eq!(ProviderFormat::Gemini.as_str(), "gemini");
         assert_eq!(ProviderFormat::Responses.as_str(), "responses");
         assert_eq!(ProviderFormat::Atomesus.as_str(), "atomesus");
+        assert_eq!(ProviderFormat::CommandCodeGo.as_str(), "commandcodego");
     }
 
     #[test]
@@ -170,6 +173,10 @@ mod tests {
         assert_eq!(
             ProviderFormat::parse("atomesus").unwrap(),
             ProviderFormat::Atomesus
+        );
+        assert_eq!(
+            ProviderFormat::parse("commandcodego").unwrap(),
+            ProviderFormat::CommandCodeGo
         );
 
         assert!(ProviderFormat::parse("invalid").is_err());
@@ -200,6 +207,10 @@ mod tests {
         assert_eq!(
             ProviderFormat::Atomesus.default_target_format(),
             TargetFormat::Atomesus
+        );
+        assert_eq!(
+            ProviderFormat::CommandCodeGo.default_target_format(),
+            TargetFormat::CommandCodeGo
         );
         assert_eq!(
             ProviderFormat::Mixed.default_target_format(),

@@ -106,6 +106,10 @@ pub(super) fn translate_non_streaming_body(
             response_body_raw,
             req.openai_request.model.clone(),
         )),
+        openproxy_types::TargetFormat::CommandCodeGo => {
+            <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
+                .map_err(|e| CoreError::Parse(format!("parse commandcode response: {e}")))
+        }
     }
 }
 
@@ -475,18 +479,28 @@ impl UpstreamDispatcher {
         let response_body_raw: serde_json::Value = match serde_json::from_slice(&body_bytes) {
             Ok(v) => v,
             Err(e) => {
-                let err = CoreError::Parse(format!("invalid json in upstream response: {e}"));
-                return self.record_and_fail(
-                    params.req,
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                );
+                if params.target_format == openproxy_types::TargetFormat::CommandCodeGo
+                    && let Ok(body_str) = std::str::from_utf8(&body_bytes)
+                    && let Ok(val) = crate::sse::parse_commandcode_sse_to_value(
+                        body_str,
+                        &params.req.openai_request.model,
+                    )
+                {
+                    val
+                } else {
+                    let err = CoreError::Parse(format!("invalid json in upstream response: {e}"));
+                    return self.record_and_fail(
+                        params.req,
+                        params.combo,
+                        params.target,
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            Some(ttft_ms),
+                            err.http_status(),
+                        ),
+                    );
+                }
             }
         };
 

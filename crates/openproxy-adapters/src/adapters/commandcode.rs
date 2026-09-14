@@ -1,0 +1,705 @@
+//! Command Code adapter.
+//!
+//! Handles reverse-engineered Command Code CLI protocol:
+//! - POST `/alpha/generate` upstream endpoint for Command Code Go accounts.
+//! - Dynamic `x-command-code-version` header acquired from npm registry with local fallback.
+//! - Payload packaging matching Command Code CLI environment and schema.
+//! - Live `/provider/v1/models` discovery and `/alpha/billing/*` quota tracking.
+
+use super::{
+    Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter, ProviderAdapterConfig, Result,
+    TargetFormat, UpstreamClient,
+};
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamRequest};
+use crate::{AdapterAuthType, AdapterFormat};
+use openproxy_types::{AccountQuota, ProviderId, ProviderMetadata};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::sync::OnceLock;
+
+pub const DEFAULT_COMMANDCODE_CLI_VERSION: &str = "1.54.0";
+const NPM_COMMANDCODE_METADATA_URL: &str = "https://registry.npmjs.org/command-code/latest";
+
+static DYNAMIC_CLI_VERSION: OnceLock<RwLock<String>> = OnceLock::new();
+
+fn version_lock() -> &'static RwLock<String> {
+    DYNAMIC_CLI_VERSION.get_or_init(|| RwLock::new(DEFAULT_COMMANDCODE_CLI_VERSION.to_string()))
+}
+
+/// Returns the current dynamic Command Code CLI version.
+/// Respects `OPENPROXY_COMMANDCODE_CLI_VERSION` env var if set.
+pub fn get_commandcode_cli_version() -> String {
+    if let Ok(env_ver) = std::env::var("OPENPROXY_COMMANDCODE_CLI_VERSION")
+        && !env_ver.trim().is_empty()
+    {
+        return env_ver.trim().to_string();
+    }
+    version_lock().read().clone()
+}
+
+/// Updates the dynamic Command Code CLI version.
+pub fn set_commandcode_cli_version(version: String) {
+    let trimmed = version.trim();
+    if !trimmed.is_empty() {
+        *version_lock().write() = trimmed.to_string();
+    }
+}
+
+/// Asynchronously queries npm registry for the latest `command-code` CLI version.
+pub async fn refresh_commandcode_cli_version(upstream_client: &Arc<UpstreamClient>) {
+    let req = UpstreamRequest::get(NPM_COMMANDCODE_METADATA_URL);
+    let cancel = CancellationToken::new();
+    let Ok(resp) = upstream_client
+        .call(req, TimeoutProfile::Quota, cancel)
+        .await
+    else {
+        return;
+    };
+    if !resp.status.is_success() {
+        return;
+    }
+    let Ok(body) = resp.collect().await else {
+        return;
+    };
+    if let Ok(v) = serde_json::from_slice::<Value>(&body)
+        && let Some(ver) = v.get("version").and_then(Value::as_str)
+    {
+        set_commandcode_cli_version(ver.to_string());
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandCodeGoAdapter {
+    config: ProviderAdapterConfig,
+}
+
+impl CommandCodeGoAdapter {
+    pub fn new() -> Self {
+        Self {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("commandcodego"),
+                name: "Command Code Go".into(),
+                base_url: "https://api.commandcode.ai".into(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::CommandCodeGo,
+                extra_headers: vec![
+                    ("x-cli-environment".into(), "production".into()),
+                    ("x-project-slug".into(), "project".into()),
+                    ("x-taste-learning".into(), "true".into()),
+                    ("User-Agent".into(), "cli".into()),
+                ],
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
+            },
+        }
+    }
+}
+
+crate::adapters::derive_default_from_new!(CommandCodeGoAdapter);
+
+impl ProviderAdapter for CommandCodeGoAdapter {
+    fn config(&self) -> &ProviderAdapterConfig {
+        &self.config
+    }
+
+    fn metadata(&self) -> ProviderMetadata {
+        ProviderMetadata {
+            built_in: true,
+            deletable: false,
+            supports_quota: true,
+            quota_refresh_supported: true,
+            requires_oauth: false,
+            oauth_refresh_lead_seconds: None,
+        }
+    }
+
+    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
+        format!("{}/alpha/generate", self.config().base_url)
+    }
+
+    fn build_headers(
+        &self,
+        api_key: &str,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let mut headers = Vec::with_capacity(8 + self.config().extra_headers.len());
+        if let Some((name, value)) = self.build_auth_header(api_key) {
+            headers.push((name, value));
+        }
+        headers.push(("Content-Type".into(), "application/json".into()));
+        headers.push((
+            "x-command-code-version".into(),
+            get_commandcode_cli_version(),
+        ));
+        headers.push(("user-agent".into(), "cli".into()));
+        headers.push(("x-cli-environment".into(), "production".into()));
+        headers.push(("x-project-slug".into(), "project".into()));
+        headers.push(("x-taste-learning".into(), "true".into()));
+        for (k, v) in &self.config().extra_headers {
+            headers.push((k.clone(), v.clone()));
+        }
+        headers
+    }
+
+    fn models_url(&self) -> Option<String> {
+        Some(format!("{}/provider/v1/models", self.config().base_url))
+    }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> Result<bytes::Bytes> {
+        let Ok(mut val) = serde_json::from_slice::<Value>(&body) else {
+            return Ok(body);
+        };
+
+        // If body already has "config" and "params", pass it through
+        if val.get("config").is_some() && val.get("params").is_some() {
+            return Ok(body);
+        }
+
+        let upstream_model = model.as_str();
+        let cc_envelope = transform_openai_to_commandcode(&mut val, upstream_model);
+        serde_json::to_vec(&cc_envelope)
+            .map(bytes::Bytes::from)
+            .map_err(|e| CoreError::Parse(format!("serialize commandcode request: {e}")))
+    }
+
+    async fn fetch_models(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        _api_key: &str,
+    ) -> Result<Vec<DiscoveredModel>> {
+        let url = self
+            .models_url()
+            .ok_or_else(|| CoreError::Internal("missing models_url".into()))?;
+
+        // Opportunistically trigger a background refresh of the CLI version from npm registry
+        let client_clone = Arc::clone(upstream_client);
+        tokio::spawn(async move {
+            refresh_commandcode_cli_version(&client_clone).await;
+        });
+
+        let req = UpstreamRequest::get(&url);
+        let cancel = CancellationToken::new();
+        let resp = upstream_client
+            .call(req, TimeoutProfile::ModelDiscovery, cancel)
+            .await
+            .map_err(|e| CoreError::UpstreamConnection(format!("commandcode /models: {e}")))?;
+
+        if !resp.status.is_success() {
+            return Err(CoreError::UpstreamConnection(format!(
+                "commandcode /models returned status {}",
+                resp.status
+            )));
+        }
+
+        let body = resp
+            .collect()
+            .await
+            .map_err(|e| CoreError::UpstreamConnection(format!("read /models body: {e}")))?;
+
+        let val: Value = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Parse(format!("commandcode /models parse: {e}")))?;
+
+        let data = val
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| CoreError::Parse("expected 'data' array in /models".into()))?;
+
+        let discovered = data
+            .iter()
+            .filter_map(|item| {
+                let id = item.get("id").and_then(Value::as_str)?;
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+                let ctx = item.get("context_length").and_then(Value::as_i64);
+                Some(DiscoveredModel {
+                    model_id: ModelId::new(id),
+                    display_name: name,
+                    target_format: TargetFormat::CommandCodeGo,
+                    context_length: ctx,
+                    max_output_tokens: None,
+                    input_modalities: Some(vec!["text".into(), "image".into()].into()),
+                    output_modalities: Some(vec!["text".into()].into()),
+                    model_type: Some("chat".into()),
+                    family: None,
+                    capabilities: None,
+                })
+            })
+            .collect();
+
+        Ok(discovered)
+    }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        access_token: Option<&str>,
+        _provider_specific: Option<&str>,
+    ) -> Option<Result<AccountQuota>> {
+        let token = access_token.unwrap_or(api_key);
+        if token.is_empty() {
+            return Some(Ok(AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: None,
+                last_fetched_at: openproxy_types::now_unix_secs_str(),
+                fetch_error: Some("commandcode requires token for quota".into()),
+                model_details: None,
+            }));
+        }
+
+        Some(fetch_commandcode_quota(upstream_client, token).await)
+    }
+}
+
+pub fn apply_commandcode_cli_headers(req: &mut UpstreamRequest, token: &str) {
+    let auth_header = format!("Bearer {token}");
+    if let (Ok(name), Ok(val)) = (
+        http::HeaderName::from_bytes(b"authorization"),
+        http::HeaderValue::from_str(&auth_header),
+    ) {
+        req.headers.insert(name, val);
+    }
+    if let (Ok(name), Ok(val)) = (
+        http::HeaderName::from_bytes(b"x-command-code-version"),
+        http::HeaderValue::from_str(&get_commandcode_cli_version()),
+    ) {
+        req.headers.insert(name, val);
+    }
+    if let Ok(name) = http::HeaderName::from_bytes(b"x-cli-environment") {
+        req.headers
+            .insert(name, http::HeaderValue::from_static("production"));
+    }
+    if let Ok(name) = http::HeaderName::from_bytes(b"x-project-slug") {
+        req.headers
+            .insert(name, http::HeaderValue::from_static("project"));
+    }
+    if let Ok(name) = http::HeaderName::from_bytes(b"x-taste-learning") {
+        req.headers
+            .insert(name, http::HeaderValue::from_static("true"));
+    }
+    if let Ok(name) = http::HeaderName::from_bytes(b"user-agent") {
+        req.headers
+            .insert(name, http::HeaderValue::from_static("cli"));
+    }
+}
+
+async fn fetch_commandcode_quota(
+    upstream_client: &Arc<UpstreamClient>,
+    token: &str,
+) -> Result<AccountQuota> {
+    // 1. Query /alpha/billing/credits
+    let credits_url = "https://api.commandcode.ai/alpha/billing/credits";
+    let mut credits_req = UpstreamRequest::get(credits_url);
+    apply_commandcode_cli_headers(&mut credits_req, token);
+    let cancel = CancellationToken::new();
+    let credits_resp = upstream_client
+        .call(credits_req, TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("credits request failed: {e}")))?;
+
+    let mut session_used = None;
+    let mut session_limit = None;
+    let mut session_reset_at = None;
+    let mut weekly_used = None;
+    let mut weekly_limit = None;
+    let mut weekly_reset_at = None;
+
+    if credits_resp.status.is_success()
+        && let Ok(body) = credits_resp.collect().await
+        && let Ok(v) = serde_json::from_slice::<Value>(&body)
+    {
+        let extract_num = |val: Option<&Value>| {
+            val.and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f.round() as i64)))
+        };
+        let extract_reset = |val: Option<&Value>| {
+            val.and_then(|v| {
+                v.as_str()
+                    .map(ToString::to_string)
+                    .or_else(|| v.as_i64().filter(|&n| n > 0).map(|n| n.to_string()))
+                    .or_else(|| {
+                        v.as_f64()
+                            .filter(|&n| n > 0.0)
+                            .map(|n| (n as i64).to_string())
+                    })
+            })
+        };
+
+        if let Some(five_hour) = v
+            .get("windowLimits")
+            .and_then(|w| w.get("fiveHour"))
+            .or_else(|| v.get("fiveHour"))
+        {
+            session_used = extract_num(five_hour.get("used"));
+            session_limit = extract_num(five_hour.get("cap"));
+            session_reset_at = extract_reset(five_hour.get("resetAt"));
+        }
+        if let Some(weekly) = v
+            .get("windowLimits")
+            .and_then(|w| w.get("weekly"))
+            .or_else(|| v.get("weekly"))
+        {
+            weekly_used = extract_num(weekly.get("used"));
+            weekly_limit = extract_num(weekly.get("cap"));
+            weekly_reset_at = extract_reset(weekly.get("resetAt"));
+        }
+    }
+
+    // 2. Query /alpha/billing/subscriptions
+    let mut plan_name = None;
+    let sub_url = "https://api.commandcode.ai/alpha/billing/subscriptions";
+    let mut sub_req = UpstreamRequest::get(sub_url);
+    apply_commandcode_cli_headers(&mut sub_req, token);
+    let cancel = CancellationToken::new();
+    if let Ok(sub_resp) = upstream_client
+        .call(sub_req, TimeoutProfile::Quota, cancel)
+        .await
+        && sub_resp.status.is_success()
+        && let Ok(body) = sub_resp.collect().await
+        && let Ok(v) = serde_json::from_slice::<Value>(&body)
+    {
+        plan_name = v
+            .get("data")
+            .and_then(|d| d.get("planId"))
+            .or_else(|| v.get("planId"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+    }
+
+    Ok(AccountQuota {
+        session_used,
+        session_limit,
+        session_reset_at,
+        weekly_used,
+        weekly_limit,
+        weekly_reset_at,
+        plan_name,
+        last_fetched_at: openproxy_types::now_unix_secs_str(),
+        fetch_error: None,
+        model_details: None,
+    })
+}
+
+fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
+    let messages = val
+        .get_mut("messages")
+        .and_then(|m| m.as_array_mut())
+        .map(std::mem::take)
+        .unwrap_or_default();
+
+    let mut system_prompt = String::new();
+    let mut cc_messages = Vec::with_capacity(messages.len());
+
+    for msg in messages {
+        let role = msg
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .to_ascii_lowercase();
+
+        match role.as_str() {
+            "system" => {
+                let content = extract_content_string(&msg);
+                if !system_prompt.is_empty() {
+                    system_prompt.push('\n');
+                }
+                system_prompt.push_str(&content);
+            }
+            "developer" => {
+                // Degrade developer messages to user messages to avoid rejection
+                let content = extract_content_value(&msg);
+                cc_messages.push(json!({
+                    "role": "user",
+                    "content": content,
+                }));
+            }
+            "assistant" => {
+                let mut parts = Vec::new();
+                if let Some(text) = msg.get("content").and_then(Value::as_str)
+                    && !text.is_empty()
+                {
+                    parts.push(json!({ "type": "text", "text": text }));
+                }
+                if let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) {
+                    for tc in tool_calls {
+                        let id = tc.get("id").and_then(Value::as_str).unwrap_or("");
+                        let func = tc.get("function").unwrap_or(&Value::Null);
+                        let name = func.get("name").and_then(Value::as_str).unwrap_or("");
+                        let args = func
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        let input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
+                        parts.push(json!({
+                            "type": "tool-call",
+                            "toolCallId": id,
+                            "toolName": name,
+                            "input": input,
+                        }));
+                    }
+                }
+                if parts.is_empty() {
+                    parts.push(json!({ "type": "text", "text": "" }));
+                }
+                cc_messages.push(json!({
+                    "role": "assistant",
+                    "content": parts,
+                }));
+            }
+            "tool" => {
+                let id = msg
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let content = extract_content_string(&msg);
+                cc_messages.push(json!({
+                    "role": "tool",
+                    "content": [{
+                        "type": "tool-result",
+                        "toolCallId": id,
+                        "output": {
+                            "type": "text",
+                            "value": content,
+                        }
+                    }]
+                }));
+            }
+            _ => {
+                let content = extract_content_value(&msg);
+                cc_messages.push(json!({
+                    "role": "user",
+                    "content": content,
+                }));
+            }
+        }
+    }
+
+    let mut params_obj = serde_json::Map::new();
+    params_obj.insert("model".into(), json!(model_name));
+    params_obj.insert("messages".into(), json!(cc_messages));
+    params_obj.insert("stream".into(), json!(true));
+
+    if !system_prompt.is_empty() {
+        params_obj.insert("system".into(), json!(system_prompt));
+    }
+
+    if let Some(tools) = val.get("tools").and_then(Value::as_array) {
+        let cc_tools: Vec<Value> = tools
+            .iter()
+            .filter_map(|t| {
+                let func = t.get("function")?;
+                let name = func.get("name")?.as_str()?;
+                let desc = func
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let params = func.get("parameters").cloned().unwrap_or_else(|| json!({}));
+                Some(json!({
+                    "type": "function",
+                    "name": name,
+                    "description": desc,
+                    "input_schema": params,
+                }))
+            })
+            .collect();
+        params_obj.insert("tools".into(), json!(cc_tools));
+    }
+
+    if let Some(max_tokens) = val
+        .get("max_tokens")
+        .or_else(|| val.get("max_completion_tokens"))
+    {
+        params_obj.insert("max_tokens".into(), max_tokens.clone());
+    } else {
+        params_obj.insert("max_tokens".into(), json!(64000));
+    }
+
+    if let Some(temp) = val.get("temperature") {
+        params_obj.insert("temperature".into(), temp.clone());
+    }
+
+    if let Some(reasoning) = val.get("reasoning_effort") {
+        params_obj.insert("reasoning_effort".into(), reasoning.clone());
+    }
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let thread_id = uuid::Uuid::new_v4().to_string();
+
+    json!({
+        "config": {
+            "workingDir": "/",
+            "date": today,
+            "environment": "linux-x86_64, OpenProxy",
+            "structure": [],
+            "isGitRepo": false,
+            "currentBranch": "",
+            "mainBranch": "",
+            "gitStatus": "",
+            "recentCommits": []
+        },
+        "permissionMode": "standard",
+        "memory": null,
+        "taste": null,
+        "skills": null,
+        "params": params_obj,
+        "threadId": thread_id,
+    })
+}
+
+fn extract_content_string(msg: &Value) -> String {
+    match msg.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(arr)) => {
+            let mut buf = String::new();
+            for part in arr {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(text);
+                }
+            }
+            buf
+        }
+        Some(v) => v.to_string(),
+        None => String::new(),
+    }
+}
+
+fn extract_content_value(msg: &Value) -> Value {
+    match msg.get("content") {
+        Some(Value::String(s)) => json!(s),
+        Some(Value::Array(arr)) => {
+            let parts: Vec<Value> = arr
+                .iter()
+                .filter_map(|part| {
+                    let p_type = part.get("type").and_then(Value::as_str).unwrap_or("text");
+                    if p_type == "text" {
+                        let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+                        Some(json!({ "type": "text", "text": text }))
+                    } else if p_type == "image_url" {
+                        let url = part
+                            .get("image_url")
+                            .and_then(|u| u.get("url"))
+                            .and_then(Value::as_str)?;
+                        Some(json!({
+                            "type": "image",
+                            "image": url,
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            json!(parts)
+        }
+        Some(v) => json!(v.to_string()),
+        None => json!(""),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_commandcode_dynamic_version() {
+        assert_eq!(
+            get_commandcode_cli_version(),
+            DEFAULT_COMMANDCODE_CLI_VERSION
+        );
+        set_commandcode_cli_version("2.0.0".into());
+        assert_eq!(get_commandcode_cli_version(), "2.0.0");
+        set_commandcode_cli_version(DEFAULT_COMMANDCODE_CLI_VERSION.into());
+    }
+
+    #[test]
+    fn test_commandcode_wrap_request_body() {
+        let adapter = CommandCodeGoAdapter::new();
+        let body = json!({
+            "model": "claude-sonnet-5",
+            "messages": [
+                { "role": "system", "content": "You are helpful." },
+                { "role": "user", "content": "Hello world" }
+            ],
+            "temperature": 0.7
+        });
+        let bytes = bytes::Bytes::from(serde_json::to_vec(&body).unwrap());
+        let target = openproxy_types::context::ResolvedTarget {
+            target: openproxy_types::combos::ComboTarget {
+                id: openproxy_types::ComboTargetId(1),
+                combo_id: openproxy_types::ComboId(1),
+                provider_id: openproxy_types::ProviderId::new("commandcodego"),
+                account_id: None,
+                model_row_id: Some(openproxy_types::ModelRowId(1)),
+                sub_combo_id: None,
+                priority_order: 0,
+                weight: 100,
+                active: true,
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                thinking_effort: None,
+            },
+            model: openproxy_types::Model {
+                row_id: openproxy_types::ModelRowId(1),
+                provider_id: openproxy_types::ProviderId::new("commandcodego"),
+                target_format: openproxy_types::TargetFormat::CommandCodeGo,
+                discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+                expires_at: None,
+                model_id: openproxy_types::ModelId::new("claude-sonnet-5"),
+                display_name: None,
+                context_length: None,
+                max_output_tokens: None,
+                model_type: "chat".into(),
+                family: None,
+                input_modalities_json: None,
+                output_modalities_json: None,
+                capabilities_json: None,
+                timeout_overrides_json: None,
+                active: true,
+                last_test_status: None,
+                last_test_at: None,
+                custom: false,
+                ..Default::default()
+            },
+            api_key: "dummy".to_string(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
+        let wrapped = adapter
+            .wrap_request_body(
+                bytes,
+                TargetFormat::CommandCodeGo,
+                &ModelId::new("claude-sonnet-5"),
+                &target,
+            )
+            .unwrap();
+
+        let v: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert!(v.get("config").is_some());
+        assert!(v.get("threadId").is_some());
+        let params = v.get("params").unwrap();
+        assert_eq!(params["model"].as_str(), Some("claude-sonnet-5"));
+        assert_eq!(params["system"].as_str(), Some("You are helpful."));
+        assert_eq!(params["stream"].as_bool(), Some(true));
+        assert_eq!(params["temperature"].as_f64(), Some(0.7));
+    }
+}

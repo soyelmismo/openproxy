@@ -332,6 +332,9 @@ fn resolve_effective_target_format(
         adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
         adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
         adapters::AdapterFormat::Atomesus => openproxy_core::models::TargetFormat::Atomesus,
+        adapters::AdapterFormat::CommandCodeGo => {
+            openproxy_core::models::TargetFormat::CommandCodeGo
+        }
     }
 }
 

@@ -46,6 +46,7 @@ tokio-stream = { workspace = true }
 http-body = "1"
 http-body-util = "0.1"
 bytes = "1"
+urlencoding = { workspace = true }
 parking_lot = { workspace = true }
 # Embeds the dashboard SPA's dist/ bundle into the binary so the
 # server ships as a single self-contained executable that serves

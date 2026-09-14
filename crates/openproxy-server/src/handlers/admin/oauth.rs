@@ -55,7 +55,13 @@ pub async fn oauth_authorize(
 
     validate_authorize_flow(&provider, &provider_impl)?;
     let redirect_uri = get_oauth_redirect_uri();
-    let (auth_url, code_verifier, _, state) = provider_impl.build_auth_url(&redirect_uri).await?;
+    let (auth_url, code_verifier, effective_redirect_uri, state) =
+        provider_impl.build_auth_url(&redirect_uri).await?;
+    let redirect_uri = if effective_redirect_uri.is_empty() {
+        redirect_uri
+    } else {
+        effective_redirect_uri
+    };
 
     Ok(Json(serde_json::json!({
         "authorization_url": auth_url,

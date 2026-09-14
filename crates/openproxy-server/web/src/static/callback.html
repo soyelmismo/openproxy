@@ -15,8 +15,10 @@
       const status = document.getElementById('status');
       try {
         const params = new URLSearchParams(window.location.search);
-        const code = params.get('code');
-        const error = params.get('error');
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const code = params.get('code') || params.get('apiKey') || params.get('token') || params.get('key')
+          || hashParams.get('code') || hashParams.get('apiKey') || hashParams.get('token') || hashParams.get('key');
+        const error = params.get('error') || hashParams.get('error');
 
         if (error) {
           status.textContent = 'Authorization failed: ' + error;

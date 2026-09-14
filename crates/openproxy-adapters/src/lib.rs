@@ -15,6 +15,7 @@ pub use adapters::{
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,
     build_discovered_model_full, build_discovered_model_with, builtin_adapters,
     cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter, codex::CodexAdapter,
+    commandcode::CommandCodeGoAdapter, commandcode::apply_commandcode_cli_headers,
     custom_adapter::CustomAdapter, gemini::GeminiAdapter, horde::HordeAdapter,
     kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, minimax::MiniMaxAdapter,
     nous_research::NousResearchAdapter, nvidia_nim::NvidiaNimAdapter,

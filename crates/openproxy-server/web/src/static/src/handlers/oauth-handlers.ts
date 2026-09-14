@@ -55,18 +55,50 @@ export const OAuthLogin: OAuthLoginShape = {
   },
   async pkcePopup(provider: string, authData: AuthData): Promise<void> {
     const popup = window.open(authData.authorization_url, "oauth popup", "width=600,height=700,top=100,left=100");
+    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("openproxy_oauth") : null;
     const code: string = await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        window.removeEventListener("message", handler);
+        window.removeEventListener("storage", storageHandler);
+        if (bc) bc.close();
+      };
+      const onCode = (receivedCode: string) => {
+        cleanup();
+        popup?.close();
+        resolve(receivedCode);
+      };
       const handler = (event: MessageEvent): void => {
-        if (event.origin !== window.location.origin) return;
+        const isAllowedOrigin =
+          event.origin === window.location.origin ||
+          event.origin.replace("127.0.0.1", "localhost") === window.location.origin.replace("127.0.0.1", "localhost");
+        if (!isAllowedOrigin) return;
         const data = event.data as { type?: string; code?: string } | null;
         if (data && data.type === "oauth_code" && typeof data.code === "string") {
-          window.removeEventListener("message", handler);
-          popup?.close();
-          resolve(data.code);
+          onCode(data.code);
         }
       };
+      const storageHandler = (event: StorageEvent): void => {
+        if (event.key === "openproxy_oauth_code" && event.newValue) {
+          try {
+            const parsed = JSON.parse(event.newValue) as { code?: string };
+            if (parsed && typeof parsed.code === "string") {
+              localStorage.removeItem("openproxy_oauth_code");
+              onCode(parsed.code);
+            }
+          } catch {}
+        }
+      };
+      if (bc) {
+        bc.onmessage = (event: MessageEvent) => {
+          const data = event.data as { type?: string; code?: string } | null;
+          if (data && data.type === "oauth_code" && typeof data.code === "string") {
+            onCode(data.code);
+          }
+        };
+      }
       window.addEventListener("message", handler);
-      setTimeout(() => { window.removeEventListener("message", handler); reject(new Error("OAuth timeout")); }, 300000);
+      window.addEventListener("storage", storageHandler);
+      setTimeout(() => { cleanup(); reject(new Error("OAuth timeout")); }, 300000);
     });
     const exchangeResp = await api(`/oauth/${provider}/exchange`, {
       method: "POST",
@@ -95,25 +127,69 @@ export const OAuthLogin: OAuthLoginShape = {
       if (step1) step1.style.display = "none";
       if (step2) step2.style.display = "block";
     }, 2000);
+
+    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("openproxy_oauth") : null;
+    const cleanup = () => {
+      window.removeEventListener("storage", storageHandler);
+      if (bc) bc.close();
+    };
+    const onAutoCode = (receivedCode: string) => {
+      cleanup();
+      if (callbackInput) callbackInput.value = receivedCode;
+      this.submitManualCallback();
+    };
+    const storageHandler = (e: StorageEvent) => {
+      if (e.key === "openproxy_oauth_code" && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue) as { code?: string };
+          if (parsed && typeof parsed.code === "string") {
+            localStorage.removeItem("openproxy_oauth_code");
+            onAutoCode(parsed.code);
+          }
+        } catch {}
+      }
+    };
+    if (bc) {
+      bc.onmessage = (e: MessageEvent) => {
+        const data = e.data as { type?: string; code?: string } | null;
+        if (data && data.type === "oauth_code" && typeof data.code === "string") {
+          onAutoCode(data.code);
+        }
+      };
+    }
+    window.addEventListener("storage", storageHandler);
   },
   async submitManualCallback(): Promise<void> {
     const inputEl = document.getElementById("oauth-callback-input") as HTMLInputElement | null;
     const input = (inputEl ? inputEl.value : "").trim();
     const authData = this._currentAuth;
     if (!authData) { showToast("No OAuth flow in progress", "error"); return; }
-    if (!input) { showToast("Please paste the callback URL", "error"); return; }
+    if (!input) { showToast("Please paste the callback URL or API key", "error"); return; }
     let code: string | null = null;
     let callbackState: string | null = null;
     try {
       const url = new URL(input);
-      code = url.searchParams.get("code");
+      code = url.searchParams.get("code") || url.searchParams.get("apiKey") || url.searchParams.get("token") || url.searchParams.get("key");
       callbackState = url.searchParams.get("state") || url.hash.replace(/^#/, "") || null;
     } catch {
-      const parts = input.split("#", 2);
-      code = parts[0] || null;
-      callbackState = parts[1] || null;
+      // Not a full URL - treat as raw key or fragment
     }
-    if (!code) { showToast("No authorization code found. Paste the full callback URL.", "error"); return; }
+
+    if (!code) {
+      const keyMatch = input.match(/(cmd_[a-zA-Z0-9_\-]+|user_[a-zA-Z0-9_\-]+)/);
+      if (keyMatch) {
+        code = keyMatch[1] ?? null;
+      } else if (input.startsWith("cmd_") || input.startsWith("user_") || input.length >= 16) {
+        const parts = input.split("#", 2);
+        code = parts[0] || null;
+        callbackState = parts[1] || null;
+      }
+    }
+
+    if (!code) {
+      showToast("No authorization code found. Copy the API key from the callback page and paste it here.", "error");
+      return;
+    }
     const exchangeResp = await api(`/oauth/${authData["provider"]}/exchange`, {
       method: "POST",
       body: JSON.stringify({ code, redirect_uri: authData.redirect_uri, code_verifier: authData.code_verifier, state: callbackState || authData.state }),

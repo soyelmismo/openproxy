@@ -76,7 +76,17 @@ fn seed_single_adapter(
     adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
 ) -> Result<bool> {
     let conf = adapter.config();
-    if providers::get(conn, &conf.id)?.is_some() {
+    if let Some(existing) = providers::get(conn, &conf.id)? {
+        let auth = AuthType::parse(conf.auth_type.as_str()).expect("builtin auth_type is valid");
+        if existing.auth_type != auth {
+            conn.execute(
+                "UPDATE providers SET auth_type = ?1 WHERE id = ?2",
+                rusqlite::params![auth.as_str(), conf.id.as_str()],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "update builtin auth_type",
+            ))?;
+        }
         return Ok(false);
     }
 
@@ -238,9 +248,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 17, "first call inserts all seventeen");
+        assert_eq!(n, 18, "first call inserts all eighteen");
 
-        // All seventeen are present and reachable by id.
+        // All eighteen are present and reachable by id.
         for id in [
             "atomesus",
             "openrouter",
@@ -259,6 +269,7 @@ mod tests {
             "cloudflare-workers-ai",
             "cline",
             "vercel-gateway",
+            "commandcodego",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -272,14 +283,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 17);
+        assert_eq!(first, 18);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 17, "still exactly seventeen rows");
+        assert_eq!(count, 18, "still exactly eighteen rows");
     }
 
     #[test]
@@ -303,7 +314,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 16, "only the sixteen missing ones");
+        assert_eq!(n, 17, "only the seventeen missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -377,12 +388,18 @@ mod tests {
             .unwrap();
         assert_eq!(kiro.auth_type, AuthType::OAuth);
         assert_eq!(kiro.format, ProviderFormat::Openai);
+
+        let commandcode = providers::get(&conn, &ProviderId::new("commandcodego"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(commandcode.auth_type, AuthType::Bearer);
+        assert_eq!(commandcode.format, ProviderFormat::CommandCodeGo);
     }
 
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 17);
+        assert_eq!(ids.len(), 18);
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
@@ -399,6 +416,7 @@ mod tests {
         assert!(ids.iter().any(|s| s == "cloudflare-workers-ai"));
         assert!(ids.iter().any(|s| s == "cline"));
         assert!(ids.iter().any(|s| s == "vercel-gateway"));
+        assert!(ids.iter().any(|s| s == "commandcodego"));
     }
 
     #[test]

@@ -158,7 +158,10 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
         // `.nest("/admin", admin_routes)` handles the no-trailing-slash case
         // via the SPA fallback.)
         .route("/", get(admin_ui::index_html))
-        .route("/callback.html", get(admin_ui::callback_html))
+        .route(
+            "/callback.html",
+            get(admin_ui::callback_html).post(admin_ui::callback_html),
+        )
         .route("/health", get(handlers::admin::runtime::admin_health))
         .route(
             "/oauth/callback",

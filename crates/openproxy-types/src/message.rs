@@ -11,6 +11,7 @@ impl_string_enum! {
         Gemini => "gemini",
         Responses => "responses",
         Atomesus => "atomesus",
+        CommandCodeGo => "commandcodego",
     }
     core_error: "target_format"
 }
@@ -401,6 +402,7 @@ mod tests {
             TargetFormat::Gemini,
             TargetFormat::Responses,
             TargetFormat::Atomesus,
+            TargetFormat::CommandCodeGo,
         ] {
             assert_eq!(TargetFormat::parse(fmt.as_str()).unwrap(), fmt);
         }
