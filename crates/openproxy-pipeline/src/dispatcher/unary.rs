@@ -526,6 +526,10 @@ impl UpstreamDispatcher {
             }
         };
 
+        for choice in &mut openai_response.choices {
+            choice.message.extra.remove("raw_response_body");
+        }
+
         if is_empty_response(&openai_response) {
             let err = CoreError::UpstreamConnection(
                 "upstream returned 200 but response is empty (content=null, finish_reason=null, no tool_calls, no reasoning) — treating as error for retry".to_string(),

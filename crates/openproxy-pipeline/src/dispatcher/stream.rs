@@ -544,7 +544,7 @@ impl UpstreamDispatcher {
             session.restore_json_value(val);
         }
 
-        let final_response = if matches!(
+        let mut final_response: Option<openproxy_types::OpenAIResponse> = if matches!(
             params.req.stream_sink.as_ref(),
             Some(crate::race_sink::StreamSink::Discard)
         ) {
@@ -554,6 +554,12 @@ impl UpstreamDispatcher {
         } else {
             None
         };
+
+        if let Some(resp) = final_response.as_mut() {
+            for choice in &mut resp.choices {
+                choice.message.extra.remove("raw_response_body");
+            }
+        }
 
         let recorded_response_body =
             if self.config.pii_config.pii_enabled && self.config.pii_config.pii_redact_logs {

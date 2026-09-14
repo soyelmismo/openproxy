@@ -16,6 +16,7 @@ pub(crate) const MAX_COMMANDCODE_TOOL_CALLS: usize = 128;
 #[derive(Default, Debug)]
 pub struct CommandCodeSseState {
     pub tool_call_ids: Vec<String>,
+    pub tool_calls_streamed: Vec<bool>,
 }
 
 fn map_commandcode_finish_reason(reason: &str) -> String {
@@ -101,10 +102,6 @@ pub fn parse_commandcode_sse_line(
             )))
         }
         "tool-input-start" | "tool-call-start" => {
-            if state.tool_call_ids.len() >= MAX_COMMANDCODE_TOOL_CALLS {
-                tracing::warn!("CommandCodeSseState: tool_calls limit reached");
-                return Ok(None);
-            }
             let id = val
                 .get("toolCallId")
                 .or_else(|| val.get("id"))
@@ -116,7 +113,19 @@ pub fn parse_commandcode_sse_line(
                 .and_then(Value::as_str)
                 .unwrap_or("");
 
+            if let Some(pos) = state.tool_call_ids.iter().position(|i| i == id) {
+                return Ok(Some(make_tool_call_start(
+                    chunk_id, created, model_name, pos as u32, id, name,
+                )));
+            }
+
+            if state.tool_call_ids.len() >= MAX_COMMANDCODE_TOOL_CALLS {
+                tracing::warn!("CommandCodeSseState: tool_calls limit reached");
+                return Ok(None);
+            }
+
             state.tool_call_ids.push(id.to_string());
+            state.tool_calls_streamed.push(false);
             let index = (state.tool_call_ids.len() - 1) as u32;
 
             Ok(Some(make_tool_call_start(
@@ -143,14 +152,19 @@ pub fn parse_commandcode_sse_line(
                 .unwrap_or_else(|| {
                     if state.tool_call_ids.len() < MAX_COMMANDCODE_TOOL_CALLS {
                         state.tool_call_ids.push(id.to_string());
+                        state.tool_calls_streamed.push(true);
                         state.tool_call_ids.len() - 1
                     } else {
                         0
                     }
-                }) as u32;
+                });
+
+            if index < state.tool_calls_streamed.len() {
+                state.tool_calls_streamed[index] = true;
+            }
 
             Ok(Some(make_tool_call_delta(
-                chunk_id, created, model_name, index, delta,
+                chunk_id, created, model_name, index as u32, delta,
             )))
         }
         "tool-call" => {
@@ -176,18 +190,29 @@ pub fn parse_commandcode_sse_line(
                 })
                 .unwrap_or_default();
 
-            let index = state
-                .tool_call_ids
-                .iter()
-                .position(|i| i == id)
-                .unwrap_or_else(|| {
-                    if state.tool_call_ids.len() < MAX_COMMANDCODE_TOOL_CALLS {
-                        state.tool_call_ids.push(id.to_string());
-                        state.tool_call_ids.len() - 1
-                    } else {
-                        0
-                    }
-                }) as u32;
+            if let Some(index) = state.tool_call_ids.iter().position(|i| i == id) {
+                if state.tool_calls_streamed.get(index).copied().unwrap_or(false) {
+                    // Tool call arguments were already streamed via tool-input-delta.
+                    // Do not emit another delta chunk with the full arguments to avoid
+                    // duplicating arguments downstream in SSE client accumulators.
+                    return Ok(None);
+                }
+                if index < state.tool_calls_streamed.len() {
+                    state.tool_calls_streamed[index] = true;
+                }
+                return Ok(Some(make_tool_call_delta(
+                    chunk_id, created, model_name, index as u32, &args,
+                )));
+            }
+
+            if state.tool_call_ids.len() >= MAX_COMMANDCODE_TOOL_CALLS {
+                tracing::warn!("CommandCodeSseState: tool_calls limit reached");
+                return Ok(None);
+            }
+
+            state.tool_call_ids.push(id.to_string());
+            state.tool_calls_streamed.push(true);
+            let index = (state.tool_call_ids.len() - 1) as u32;
 
             let tool_call = json!({
                 "index": index,
@@ -279,7 +304,7 @@ pub fn parse_commandcode_sse_line(
                 has_content: false,
             }))
         }
-        "ping" | "heartbeat" | "start" | "reasoning-start" | "reasoning-end"
+        "ping" | "heartbeat" | "start" | "start-step" | "reasoning-start" | "reasoning-end"
         | "provider-metadata" | "tool-result" => Ok(None),
         _ => Ok(None),
     }
@@ -443,6 +468,27 @@ mod tests {
             .unwrap();
         assert_eq!(c2.delta_tool_calls.len(), 1);
         assert_eq!(c2.delta_tool_calls[0]["function"]["arguments"], "{\"a\":1}");
+
+        // When tool-call event follows tool-input-delta, it must not duplicate arguments
+        let l3 = r#"data: {"type":"tool-call","id":"call_123","name":"calc","input":{"a":1}}"#;
+        let c3 = parse_commandcode_sse_line(l3, "chunk_3", 1000, "claude", &mut state).unwrap();
+        assert!(c3.is_none(), "tool-call after deltas must be deduplicated");
+    }
+
+    #[test]
+    fn test_parse_commandcode_tool_calls_unary_dedup() {
+        let stream = "data: {\"type\":\"tool-input-start\",\"id\":\"call_99\",\"name\":\"delegate_task\"}\n\
+                      data: {\"type\":\"tool-input-delta\",\"id\":\"call_99\",\"delta\":\"{\\\"action\\\":\\\"list\\\"}\"}\n\
+                      data: {\"type\":\"tool-call\",\"id\":\"call_99\",\"name\":\"delegate_task\",\"input\":{\"action\":\"list\"}}\n\
+                      data: {\"type\":\"finish\",\"finishReason\":\"tool_calls\"}\n\
+                      data: [DONE]\n";
+        let resp = parse_commandcode_sse_to_unary(stream, "muse-spark").unwrap();
+        let tc = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
+        assert_eq!(
+            tc["function"]["arguments"].as_str().unwrap(),
+            "{\"action\":\"list\"}",
+            "arguments must not be duplicated into duplicated action list"
+        );
     }
 
     #[test]

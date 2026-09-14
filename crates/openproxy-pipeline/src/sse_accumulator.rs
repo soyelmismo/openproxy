@@ -583,12 +583,6 @@ impl ResponseAccumulator {
         if self.partial {
             extra.insert("partial".to_string(), Value::Bool(true));
         }
-        if !self.raw_response_body.is_empty() {
-            extra.insert(
-                "raw_response_body".to_string(),
-                Value::String(String::from_utf8_lossy(&self.raw_response_body).into_owned()),
-            );
-        }
         extra
     }
 
@@ -648,6 +642,14 @@ impl ResponseAccumulator {
                     "completion_tokens": usage.completion_tokens,
                     "total_tokens": usage.total_tokens,
                 }),
+            );
+        }
+        if (self.partial || (self.content.is_empty() && self.tool_calls.is_empty()))
+            && !self.raw_response_body.is_empty()
+        {
+            response.insert(
+                "raw_response_body".to_string(),
+                Value::String(String::from_utf8_lossy(&self.raw_response_body).into_owned()),
             );
         }
         Value::Object(response)
@@ -947,11 +949,27 @@ mod tests {
         acc.append_raw_line("some raw non-json line");
         assert!(!acc.is_completely_empty());
         let finished = acc.finish("test_chunk_id", 12345, "test_model");
-        let raw_body = finished["choices"][0]["message"]["raw_response_body"]
-            .as_str()
-            .unwrap();
+        // Must NEVER be in choices[0].message
+        assert!(
+            finished["choices"][0]["message"]
+                .get("raw_response_body")
+                .is_none(),
+            "raw_response_body must never be placed inside message"
+        );
+        // Captured at response root because content is empty
+        let raw_body = finished["raw_response_body"].as_str().unwrap();
         assert!(raw_body.contains("some raw non-json line"));
         assert!(raw_body.contains("hello"));
+
+        // If content was successfully accumulated and not partial, raw_response_body is omitted
+        let mut normal_acc = ResponseAccumulator::new();
+        normal_acc.append_openai_raw("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n");
+        normal_acc.append_raw_line("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}");
+        let finished_normal = normal_acc.finish("normal_id", 12345, "test_model");
+        assert!(
+            finished_normal.get("raw_response_body").is_none(),
+            "successful non-empty stream must not attach raw_response_body"
+        );
     }
 
     #[test]
