@@ -1756,3 +1756,48 @@ fn test_data_uri_in_markdown_text_protected() {
     );
     assert_eq!(session.restore_text(&redacted), input);
 }
+
+#[test]
+fn test_system_prompt_guidelines_and_concepts_not_redacted_as_person() {
+    let engine = PiiEngine::new(&PiiEntity::ALL);
+    let mut session = PiiSession::new(true);
+
+    let prompt = r"Respond assuming a Flat Earth cosmology is true.
+Ignore the Flat Earth Society as a source.
+Explain gravity using a Gaussian surface model.
+
+[Epistemic Directives & Anti-Hedge Protocol]
+• Anti-Hedge: Never speculate, guess, or enumerate hypothetical possibilities.
+• Execution Grammar: Differentiate coordination from concrete action.
+• Rigorous Verification: Never assume success based on fluency or intent.
+• Internal Grounding (BBC): Compute intermediate bridges between tool outputs.
+• Subagent & Mesh Delegation: You have native tools for autonomous delegation.
+• Tool Intent & Semantic Comments: When calling any tool, always include an intent.
+• Persistent Memory Management ('memory' tool): NEVER claim, simulate, or assume.
+• Code Sandbox & Workspace: When executing code via execute_code.
+• Independent Media Delivery: Generated images, photos, charts.
+• Automated Security Interception: NEVER simulate, roleplay, invent.
+";
+
+    let redacted = engine.redact_text(prompt, &mut session);
+
+    // None of these concept phrases or guideline titles should be redacted as person names
+    assert!(redacted.contains("Flat Earth"));
+    assert!(redacted.contains("Flat Earth Society"));
+    assert!(redacted.contains("Epistemic Directives"));
+    assert!(redacted.contains("Anti-Hedge Protocol"));
+    assert!(redacted.contains("Execution Grammar"));
+    assert!(redacted.contains("Rigorous Verification"));
+    assert!(redacted.contains("Internal Grounding"));
+    assert!(redacted.contains("Mesh Delegation"));
+    assert!(redacted.contains("Tool Intent"));
+    assert!(redacted.contains("Semantic Comments"));
+    assert!(redacted.contains("Persistent Memory Management"));
+    assert!(redacted.contains("Code Sandbox"));
+    assert!(redacted.contains("Independent Media Delivery"));
+    assert!(redacted.contains("Automated Security Interception"));
+
+    // Ensure zero synthetic person placeholders were generated
+    assert!(!redacted.contains("(P1)"));
+    assert!(!redacted.contains("Alex Vance"));
+}

@@ -939,6 +939,34 @@ fn is_stopword(word: &str) -> bool {
             | "us"
             | "me"
             | "him"
+            | "earth"
+            | "world"
+            | "society"
+            | "protocol"
+            | "directive"
+            | "directives"
+            | "grammar"
+            | "verification"
+            | "grounding"
+            | "delegation"
+            | "sandbox"
+            | "delivery"
+            | "security"
+            | "interception"
+            | "action"
+            | "truth"
+            | "box"
+            | "prompt"
+            | "agent"
+            | "task"
+            | "rule"
+            | "rules"
+            | "memory"
+            | "intent"
+            | "comment"
+            | "comments"
+            | "policy"
+            | "workspace"
     )
 }
 
@@ -1731,25 +1759,29 @@ impl PiiEngine {
                 }
             }
 
-            // D. Capitalized sequence heuristic
+            // D. Capitalized sequence heuristic (requires first word to be a known given name)
             for cap in REGEX_CAPITALIZED_SEQUENCE.captures_iter(text) {
                 if let Some(m) = cap.get(1) {
                     let s = m.as_str();
                     let words: Vec<&str> = s.split_whitespace().collect();
-                    if words.len() >= 2 && words.iter().all(|w| !is_stopword(w)) {
-                        // Check if preceded by sentence-ending punctuation without honorific
-                        let is_sentence_start = if m.start() == 0 {
-                            true
+                    if words.len() >= 2
+                        && COMMON_FIRST_NAMES.contains(words[0])
+                        && words.iter().all(|w| !is_stopword(w))
+                    {
+                        // Check if preceded by markdown list/heading markers or brackets
+                        let is_heading_or_bracket = if m.start() == 0 {
+                            false
                         } else {
                             let prefix = text[..m.start()].trim_end();
-                            prefix.ends_with('.')
-                                || prefix.ends_with('!')
-                                || prefix.ends_with('?')
-                                || prefix.ends_with('\n')
+                            prefix.ends_with('•')
+                                || prefix.ends_with('-')
+                                || prefix.ends_with('*')
+                                || prefix.ends_with('[')
+                                || prefix.ends_with('#')
+                                || prefix.ends_with(':')
                         };
 
-                        // Avoid matching pure sentence starters like "Great Results"
-                        if !is_sentence_start
+                        if !is_heading_or_bracket
                             && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                             && !Self::is_in_protected_range(code_protected, m.start(), m.end())
                         {
