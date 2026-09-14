@@ -15,6 +15,7 @@ pub(crate) const MAX_RESPONSES_TOOL_CALL_ARGS_BYTES: usize = 1_048_576; // 1 MiB
 #[derive(Default, Debug)]
 pub struct ResponsesSseState {
     pub tool_calls: Vec<serde_json::Value>,
+    pub usage: Option<OpenAIUsage>,
 }
 
 pub fn parse_responses_sse_stream_line(
@@ -26,7 +27,11 @@ pub fn parse_responses_sse_stream_line(
 ) -> Result<Option<UpstreamSseChunk>> {
     let data = match parse_sse_data_or_done(line) {
         super::SseDataOrDone::Payload(p) => p,
-        super::SseDataOrDone::Done => return Ok(Some(UpstreamSseChunk::done())),
+        super::SseDataOrDone::Done => {
+            let mut chunk = UpstreamSseChunk::done();
+            chunk.usage = state.usage.clone();
+            return Ok(Some(chunk));
+        }
         super::SseDataOrDone::Skip => return Ok(None),
     };
 
@@ -43,22 +48,53 @@ pub fn parse_responses_sse_stream_line(
     }
 
     let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    let mut usage = None;
-    if let Some(u) = value
+    let usage = value
         .get("usage")
         .or_else(|| value.get("response").and_then(|r| r.get("usage")))
-        && let Ok(mut u_parsed) = <OpenAIUsage as serde::Deserialize>::deserialize(u)
-    {
-        if let Some(val) = u.get("input_tokens").and_then(serde_json::Value::as_u64) {
-            u_parsed.prompt_tokens = val.try_into().unwrap_or(u32::MAX);
-        }
-        if let Some(val) = u.get("output_tokens").and_then(serde_json::Value::as_u64) {
-            u_parsed.completion_tokens = val.try_into().unwrap_or(u32::MAX);
-        }
-        if u_parsed.total_tokens == 0 {
-            u_parsed.total_tokens = u_parsed.prompt_tokens + u_parsed.completion_tokens;
-        }
-        usage = Some(u_parsed);
+        .map(|u| {
+            let prompt_tokens = u
+                .get("input_tokens")
+                .or_else(|| u.get("prompt_tokens"))
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0);
+            let completion_tokens = u
+                .get("output_tokens")
+                .or_else(|| u.get("completion_tokens"))
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0);
+            let total_tokens = u
+                .get("total_tokens")
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
+
+            let cached_tokens = u
+                .get("input_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .or_else(|| {
+                    u.get("prompt_tokens_details")
+                        .and_then(|d| d.get("cached_tokens"))
+                })
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok());
+
+            let prompt_tokens_details =
+                cached_tokens.map(|cached| openproxy_types::PromptTokensDetails {
+                    cached_tokens: Some(cached),
+                });
+
+            OpenAIUsage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                prompt_tokens_details,
+            }
+        });
+
+    if let Some(ref u) = usage {
+        state.usage = Some(u.clone());
     }
 
     if event_type == "response.output_item.added"
@@ -180,6 +216,7 @@ pub fn parse_responses_sse_stream_line(
         if !state.tool_calls.is_empty() {
             stop_reason = Some("tool_calls".to_string());
         }
+        let final_usage = usage.or_else(|| state.usage.clone());
         return Ok(Some(UpstreamSseChunk {
             raw_payload: None,
             payload: serde_json::json!({
@@ -192,10 +229,10 @@ pub fn parse_responses_sse_stream_line(
                     "delta": {},
                     "finish_reason": stop_reason
                 }],
-                "usage": usage
+                "usage": final_usage
             }),
             done: false,
-            usage,
+            usage: final_usage,
             stop_reason,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
@@ -242,5 +279,49 @@ mod tests {
             Some("stop")
         );
         assert_eq!(chunk.usage.as_ref().map(|u| u.total_tokens), Some(5));
+    }
+
+    #[test]
+    fn responses_completed_with_input_output_tokens() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":61,"output_tokens":18,"total_tokens":79,"input_tokens_details":{"cached_tokens":12}}}}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "muse-spark", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        let usage = chunk.usage.expect("usage present");
+        assert_eq!(usage.prompt_tokens, 61);
+        assert_eq!(usage.completion_tokens, 18);
+        assert_eq!(usage.total_tokens, 79);
+        assert_eq!(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(12)
+        );
+        assert_eq!(state.usage.as_ref().map(|u| u.completion_tokens), Some(18));
+    }
+
+    #[test]
+    fn responses_done_carries_persisted_usage_from_prior_event() {
+        let mut state = ResponsesSseState::default();
+        // First event carries usage
+        let line1 = r#"data: {"type":"response.output_item.done","usage":{"input_tokens":100,"output_tokens":25}}"#;
+        let _ = parse_responses_sse_stream_line(line1, "chatcmpl_1", 123, "muse-spark", &mut state)
+            .expect("parse");
+
+        assert_eq!(state.usage.as_ref().map(|u| u.completion_tokens), Some(25));
+
+        // Terminal done sentinel carries persisted usage
+        let line_done = "data: [DONE]";
+        let chunk = parse_responses_sse_stream_line(line_done, "chatcmpl_1", 123, "muse-spark", &mut state)
+            .expect("parse")
+            .expect("done chunk");
+
+        assert!(chunk.done);
+        assert_eq!(chunk.usage.as_ref().map(|u| u.completion_tokens), Some(25));
     }
 }

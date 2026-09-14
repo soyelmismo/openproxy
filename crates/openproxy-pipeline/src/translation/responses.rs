@@ -102,7 +102,10 @@ pub fn responses_to_openai(val: &Value, fallback_model: &str) -> Result<OpenAIRe
         Some("stop".to_string())
     };
 
-    let usage = val.get("usage").map(|u| {
+    let usage = val
+        .get("usage")
+        .or_else(|| val.get("response").and_then(|r| r.get("usage")))
+        .map(|u| {
         let prompt_tokens = u
             .get("input_tokens")
             .or_else(|| u.get("prompt_tokens"))

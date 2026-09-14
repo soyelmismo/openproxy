@@ -63,6 +63,147 @@ pub fn estimate_completion_tokens(text: &str) -> u32 {
     count_tokens(text)
 }
 
+/// Estimate completion tokens from a response body JSON value.
+///
+/// Handles:
+/// - OpenAI format: `choices[].message` or `choices[].delta` with `content`,
+///   `reasoning_content` / `reasoning`, and `tool_calls` (name + arguments + framing).
+/// - Anthropic format: `content` blocks (`text`, `thinking`, `tool_use`).
+/// - Gemini format: `candidates[].content.parts` (`text`, `functionCall`).
+/// - Direct string or fallback object.
+pub fn estimate_completion_tokens_from_body(body: &serde_json::Value) -> u32 {
+    let mut total_tokens = 0u32;
+    let mut found_structured = false;
+
+    // 1. OpenAI shape: choices[].message or choices[].delta
+    if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
+        for choice in choices {
+            let msg = choice.get("message").or_else(|| choice.get("delta"));
+            if let Some(msg) = msg {
+                found_structured = true;
+                // Content
+                if let Some(content) = msg.get("content") {
+                    if let Some(s) = content.as_str()
+                        && !s.is_empty()
+                    {
+                        total_tokens += count_tokens(s);
+                    } else if let Some(parts) = content.as_array() {
+                        for part in parts {
+                            if let Some(s) = part.get("text").and_then(|t| t.as_str())
+                                && !s.is_empty()
+                            {
+                                total_tokens += count_tokens(s);
+                            }
+                        }
+                    }
+                }
+
+                // Reasoning content
+                let reasoning = msg
+                    .get("reasoning_content")
+                    .or_else(|| msg.get("reasoning"))
+                    .and_then(|r| r.as_str());
+                if let Some(r) = reasoning
+                    && !r.is_empty()
+                {
+                    total_tokens += count_tokens(r);
+                }
+
+                // Tool calls
+                if let Some(tool_calls) = msg.get("tool_calls").and_then(|tc| tc.as_array()) {
+                    for tc in tool_calls {
+                        // 4 tokens framing overhead per tool call
+                        total_tokens += 4;
+                        if let Some(func) = tc.get("function") {
+                            if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                total_tokens += count_tokens(name);
+                            }
+                            if let Some(args) = func.get("arguments") {
+                                if let Some(s) = args.as_str() {
+                                    total_tokens += count_tokens(s);
+                                } else if !args.is_null() {
+                                    total_tokens += count_tokens(&args.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Anthropic shape: content: [ { type: "text", text: ... }, { type: "tool_use", ... } ]
+    if let Some(content) = body.get("content").and_then(|c| c.as_array()) {
+        for block in content {
+            found_structured = true;
+            let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match block_type {
+                "text" => {
+                    if let Some(s) = block.get("text").and_then(|t| t.as_str())
+                        && !s.is_empty()
+                    {
+                        total_tokens += count_tokens(s);
+                    }
+                }
+                "thinking" => {
+                    if let Some(s) = block.get("thinking").and_then(|t| t.as_str())
+                        && !s.is_empty()
+                    {
+                        total_tokens += count_tokens(s);
+                    }
+                }
+                "tool_use" => {
+                    total_tokens += 4;
+                    if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                        total_tokens += count_tokens(name);
+                    }
+                    if let Some(input) = block.get("input") {
+                        if let Some(s) = input.as_str() {
+                            total_tokens += count_tokens(s);
+                        } else if !input.is_null() {
+                            total_tokens += count_tokens(&input.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 3. Gemini shape: candidates[].content.parts[]
+    if let Some(candidates) = body.get("candidates").and_then(|c| c.as_array()) {
+        for cand in candidates {
+            if let Some(parts) = cand.pointer("/content/parts").and_then(|p| p.as_array()) {
+                found_structured = true;
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str())
+                        && !text.is_empty()
+                    {
+                        total_tokens += count_tokens(text);
+                    }
+                    if let Some(call) = part.get("functionCall") {
+                        total_tokens += 4;
+                        if let Some(name) = call.get("name").and_then(|n| n.as_str()) {
+                            total_tokens += count_tokens(name);
+                        }
+                        if let Some(args) = call.get("args") {
+                            total_tokens += count_tokens(&args.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !found_structured
+        && let Some(text) = body.as_str()
+    {
+        total_tokens = count_tokens(text);
+    }
+
+    total_tokens
+}
+
 /// Count tokens in a text string using a char-based heuristic (~4 chars/token).
 fn count_tokens(text: &str) -> u32 {
     estimate_tokens_heuristic(text)
@@ -357,5 +498,53 @@ mod tests {
         let text = message_content_to_text(&msg);
         assert!(text.contains("text content"));
         assert!(text.contains("query"));
+    }
+
+    #[test]
+    fn test_estimate_completion_tokens_from_body_tool_calls() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "delegate",
+                            "arguments": "{\"tasks\":[{\"context\":\"Research host logs and system status\"}]}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let tokens = estimate_completion_tokens_from_body(&body);
+        assert!(tokens >= 15, "expected at least 15 tokens for tool call, got {tokens}");
+    }
+
+    #[test]
+    fn test_estimate_completion_tokens_from_body_anthropic_tool_use() {
+        let body = serde_json::json!({
+            "content": [
+                { "type": "thinking", "thinking": "Let me check the tools." },
+                { "type": "tool_use", "name": "get_weather", "input": { "city": "Madrid" } }
+            ]
+        });
+        let tokens = estimate_completion_tokens_from_body(&body);
+        assert!(tokens >= 10, "expected at least 10 tokens for anthropic tool_use, got {tokens}");
+    }
+
+    #[test]
+    fn test_estimate_completion_tokens_from_body_empty() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null
+                }
+            }]
+        });
+        let tokens = estimate_completion_tokens_from_body(&body);
+        assert_eq!(tokens, 0);
     }
 }

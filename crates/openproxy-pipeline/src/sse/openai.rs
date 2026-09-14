@@ -18,7 +18,9 @@ struct OpenAiSseProbe {
 
 #[derive(serde::Deserialize)]
 struct OpenAiUsageProbe {
+    #[serde(alias = "input_tokens")]
     prompt_tokens: Option<u64>,
+    #[serde(alias = "output_tokens")]
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
     #[serde(default)]
