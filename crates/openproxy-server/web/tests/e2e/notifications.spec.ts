@@ -65,15 +65,24 @@ async function seedNotifications(rows: NotificationSeed[]): Promise<number[]> {
   `);
   const ids: number[] = [];
   for (const row of rows) {
-    const stmt = row.created_at ? insertWithTs : insertWithNow;
-    const result = stmt.run(
-      row.kind,
-      JSON.stringify(row.payload),
-      row.read_at ?? null,
-      row.archived_at ?? null,
-      row.created_at ?? null,
-    );
-    ids.push(Number(result.lastInsertRowid));
+    if (row.created_at) {
+      insertWithTs.run(
+        row.kind,
+        JSON.stringify(row.payload),
+        row.read_at ?? null,
+        row.archived_at ?? null,
+        row.created_at,
+      );
+    } else {
+      insertWithNow.run(
+        row.kind,
+        JSON.stringify(row.payload),
+        row.read_at ?? null,
+        row.archived_at ?? null,
+      );
+    }
+    const last = database.prepare("SELECT last_insert_rowid() AS id").get() as { id: number };
+    ids.push(Number(last.id));
   }
   return ids;
 }
