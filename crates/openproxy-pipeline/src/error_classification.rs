@@ -13,10 +13,21 @@ use openproxy_types::CoreError;
 
 #[must_use]
 pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
-    if status == 400
-        && (body.contains("2013") || body.contains("function name or parameters is empty"))
-    {
-        return UpstreamErrorClass::MalformedToolCall;
+    if status == 400 {
+        if body.contains("2013") || body.contains("function name or parameters is empty") {
+            return UpstreamErrorClass::MalformedToolCall;
+        }
+        if !body.is_empty()
+            && (body.contains("Base64")
+                || body.contains("base64")
+                || body.contains("Invalid value")
+                || body.contains("invalid_request_error")
+                || body.contains("INVALID_ARGUMENT")
+                || body.contains("malformed")
+                || body.contains("decoding failed"))
+        {
+            return UpstreamErrorClass::InvalidPayload;
+        }
     }
     if status == 403 {
         if body.contains("VALIDATION_REQUIRED") {
@@ -118,11 +129,23 @@ mod tests {
     }
 
     #[test]
+    fn classification_400_invalid_payload() {
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                r#"{"error":{"code":400,"message":"Invalid value at 'contents[0].parts[1].inline_data.data' (TYPE_BYTES), Base64 decoding failed"}}"#,
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+    }
+
+    #[test]
     fn is_hard_skip_class_method() {
         assert!(UpstreamErrorClass::ValidationRequired.is_hard_skip());
         assert!(UpstreamErrorClass::PermissionDenied.is_hard_skip());
         assert!(UpstreamErrorClass::ResourceExhausted.is_hard_skip());
         assert!(UpstreamErrorClass::MalformedToolCall.is_hard_skip());
+        assert!(UpstreamErrorClass::InvalidPayload.is_hard_skip());
         assert!(!UpstreamErrorClass::Generic.is_hard_skip());
     }
 

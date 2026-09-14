@@ -19,6 +19,7 @@ pub enum UpstreamErrorClass {
     PermissionDenied,
     ResourceExhausted,
     MalformedToolCall,
+    InvalidPayload,
 }
 
 impl UpstreamErrorClass {
@@ -31,6 +32,7 @@ impl UpstreamErrorClass {
                 | Self::PermissionDenied
                 | Self::ResourceExhausted
                 | Self::MalformedToolCall
+                | Self::InvalidPayload
         )
     }
 }
@@ -43,6 +45,7 @@ impl std::fmt::Display for UpstreamErrorClass {
             Self::PermissionDenied => "permission_denied",
             Self::ResourceExhausted => "resource_exhausted",
             Self::MalformedToolCall => "malformed_tool_call",
+            Self::InvalidPayload => "invalid_payload",
         };
         f.write_str(s)
     }
@@ -64,6 +67,7 @@ mod tests {
         assert!(UpstreamErrorClass::PermissionDenied.is_hard_skip());
         assert!(UpstreamErrorClass::ResourceExhausted.is_hard_skip());
         assert!(UpstreamErrorClass::MalformedToolCall.is_hard_skip());
+        assert!(UpstreamErrorClass::InvalidPayload.is_hard_skip());
     }
 
     #[test]
@@ -84,6 +88,10 @@ mod tests {
         assert_eq!(
             UpstreamErrorClass::MalformedToolCall.to_string(),
             "malformed_tool_call"
+        );
+        assert_eq!(
+            UpstreamErrorClass::InvalidPayload.to_string(),
+            "invalid_payload"
         );
     }
 }

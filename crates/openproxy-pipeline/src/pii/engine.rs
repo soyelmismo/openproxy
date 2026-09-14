@@ -27,6 +27,13 @@ static REGEX_URL: LazyLock<Regex> = LazyLock::new(|| {
     .expect("regex compilation failed")
 });
 
+static REGEX_DATA_URI: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)data:(?:[a-zA-Z0-9+.-]+/[a-zA-Z0-9+.-]+)?(?:;[a-zA-Z0-9+.-]+=[a-zA-Z0-9+.-]+)*;base64,[A-Za-z0-9+/=\r\n]+",
+    )
+    .expect("regex compilation failed")
+});
+
 static REGEX_URI_USERINFO_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:[a-zA-Z][a-zA-Z0-9+.-]{2,16}://[a-zA-Z0-9_.~%+-]*:)([^@/\s\n\r"'\\]{3,})(@[a-zA-Z0-9_.~%+-]+)"#)
         .expect("regex compilation failed")
@@ -961,7 +968,12 @@ impl PiiEngine {
             }
         }
 
-        // 2. JSON keys ("key":)
+        // 2. Data URIs (data:image/jpeg;base64,...)
+        for m in REGEX_DATA_URI.find_iter(text) {
+            ranges.push(m.range());
+        }
+
+        // 3. JSON keys ("key":)
         for cap in REGEX_JSON_KEY.captures_iter(text) {
             if let Some(key_match) = cap.get(1) {
                 ranges.push(key_match.range());
@@ -1739,14 +1751,94 @@ impl PiiEngine {
         out
     }
 
+#[inline]
+fn is_probable_base64_payload(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.len() < 64 {
+        return false;
+    }
+    let mut base64_len = 0;
+    for b in trimmed.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' {
+            base64_len += 1;
+        } else if b == b'\r' || b == b'\n' {
+            continue;
+        } else {
+            return false;
+        }
+    }
+    base64_len >= 64
+}
+
+fn is_multimodal_or_metadata_field(key: &str, val: &serde_json::Value) -> bool {
+    // 1. Structural / protocol metadata
+    if matches!(
+        key,
+        "id" | "type"
+            | "name"
+            | "role"
+            | "model"
+            | "mime_type"
+            | "mimeType"
+            | "media_type"
+            | "mediaType"
+            | "format"
+            | "detail"
+    ) {
+        return true;
+    }
+
+    // 2. Multimodal container objects
+    if matches!(key, "inline_data" | "inlineData" | "input_audio" | "audio") {
+        return true;
+    }
+
+    // 3. Anthropic base64 source object
+    if key == "source" && val.get("type").and_then(|t| t.as_str()) == Some("base64") {
+        return true;
+    }
+
+    // 4. Raw base64 or media binary arrays
+    if matches!(key, "b64_json" | "images") {
+        return true;
+    }
+
+    // 5. Image/audio URLs with data URI
+    if key == "url"
+        && let Some(s) = val.as_str()
+        && s.starts_with("data:")
+    {
+        return true;
+    }
+
+    // 6. Generic "data" key containing base64 or data URI
+    if key == "data"
+        && let Some(s) = val.as_str()
+        && (s.starts_with("data:") || Self::is_probable_base64_payload(s))
+    {
+        return true;
+    }
+
+    false
+}
+
     /// Recursively redact strings inside a serde_json::Value.
     /// Structural JSON keys and function identifier names (id, type, name) are preserved.
+    /// Multimodal payload content (base64 images, audio, data URIs) is preserved intact.
     /// If a string is itself serialized JSON (e.g. tool_calls.arguments), it is parsed,
     /// recursively redacted at leaf strings, and re-serialized, guaranteeing valid JSON escaping.
     pub fn redact_json_value(&self, val: &mut serde_json::Value, session: &mut PiiSession) {
         match val {
             serde_json::Value::String(s) => {
                 let trimmed = s.trim();
+                // Preserve RFC 2397 Data URIs (data:image/...;base64,...)
+                if trimmed.starts_with("data:") && trimmed.contains(";base64,") {
+                    return;
+                }
+                // Preserve large continuous base64 media payloads
+                if trimmed.len() >= 256 && Self::is_probable_base64_payload(trimmed) {
+                    return;
+                }
                 if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
                     || (trimmed.starts_with('[') && trimmed.ends_with(']')))
                     && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(s)
@@ -1767,7 +1859,7 @@ impl PiiEngine {
             }
             serde_json::Value::Object(map) => {
                 for (k, v) in map.iter_mut() {
-                    if k == "id" || k == "type" || k == "name" {
+                    if Self::is_multimodal_or_metadata_field(k, v) {
                         continue;
                     }
                     self.redact_json_value(v, session);

@@ -888,6 +888,11 @@ mod gap4_tests {
                 "function name or parameters is empty",
                 UpstreamErrorClass::MalformedToolCall,
             ),
+            (
+                400,
+                "Base64 decoding failed",
+                UpstreamErrorClass::InvalidPayload,
+            ),
             (500, "upstream down", UpstreamErrorClass::Generic),
             (403, "", UpstreamErrorClass::Generic),
         ];

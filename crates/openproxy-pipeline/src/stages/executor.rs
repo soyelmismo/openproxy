@@ -112,7 +112,7 @@ async fn execute_sequential_targets(
             TargetLoopOutcome::Continue(res) => {
                 if let Some(ref r) = res
                     && let Some(ref err) = r.error
-                    && crate::pipeline::is_upstream_health_issue(err)
+                    && (crate::pipeline::is_upstream_health_issue(err) || err.is_hard_skip())
                 {
                     failed_targets.insert(target.target.id);
                     if let Some(m) = target.target.model_row_id {

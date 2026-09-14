@@ -70,7 +70,7 @@ impl RetryPolicy {
             UpstreamError {
                 is_hard_skip: true, ..
             } => false,
-            UpstreamError { status, .. } => *status != 429,
+            UpstreamError { status, .. } => *status != 429 && *status != 400,
             Cancelled(_) | RaceLost => false,
             _ => true,
         }
