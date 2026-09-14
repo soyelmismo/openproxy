@@ -131,15 +131,18 @@ pub fn is_sqlite_busy(err: &openproxy_types::error::CoreError) -> bool {
         .is_some_and(|r| classify_sqlite_error(r) == DbErrorKind::BusyOrLocked)
 }
 
-/// Backoff schedule for SQLite BUSY retries. Three attempts total: at
-/// `t=0` (initial), then `50ms`, then `100ms`.
-pub const BUSY_RETRY_DELAYS: [Duration; 2] =
-    [Duration::from_millis(50), Duration::from_millis(100)];
+/// Backoff schedule for SQLite BUSY retries. Four attempts total: at
+/// `t=0` (initial), then `50ms`, `100ms`, then `250ms`.
+pub const BUSY_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(250),
+];
 
 /// Execute an operation with automatic retry on transient SQLite BUSY/LOCKED errors.
 ///
 /// Intended for use from blocking contexts (e.g. within `spawn_blocking` or thread pools).
-/// At most 3 total attempts are made (initial, then retries after 50ms and 100ms).
+/// At most 4 total attempts are made.
 pub fn with_busy_retry<T, F>(op: &str, mut f: F) -> Result<T>
 where
     F: FnMut() -> Result<T>,
