@@ -320,6 +320,25 @@ mod tests {
     }
 
     #[test]
+    fn test_antigravity_spoofer_invalid_project_skips_header() {
+        for invalid_pid in ["", "test-project", "project-id"] {
+            let spoofer = AntigravitySpoofer::with_project(invalid_pid);
+            let headers = spoofer.headers();
+            assert!(
+                !headers.iter().any(|(k, _)| k == "x-goog-user-project"),
+                "x-goog-user-project header should be omitted for invalid project_id '{invalid_pid}'"
+            );
+
+            let mut req = UpstreamRequest::get("https://dummy.url");
+            spoofer.apply_to_request(&mut req);
+            assert!(
+                req.headers.get("x-goog-user-project").is_none(),
+                "x-goog-user-project header should be omitted from request for invalid project_id '{invalid_pid}'"
+            );
+        }
+    }
+
+    #[test]
     fn test_antigravity_spoofer_apply_to_request() {
         let spoofer = AntigravitySpoofer::with_project("project-xyz");
         let mut req = UpstreamRequest::get("https://dummy.url");
