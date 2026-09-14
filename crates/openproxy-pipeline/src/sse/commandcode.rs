@@ -164,7 +164,11 @@ pub fn parse_commandcode_sse_line(
             }
 
             Ok(Some(make_tool_call_delta(
-                chunk_id, created, model_name, index as u32, delta,
+                chunk_id,
+                created,
+                model_name,
+                index as u32,
+                delta,
             )))
         }
         "tool-call" => {
@@ -191,7 +195,12 @@ pub fn parse_commandcode_sse_line(
                 .unwrap_or_default();
 
             if let Some(index) = state.tool_call_ids.iter().position(|i| i == id) {
-                if state.tool_calls_streamed.get(index).copied().unwrap_or(false) {
+                if state
+                    .tool_calls_streamed
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false)
+                {
                     // Tool call arguments were already streamed via tool-input-delta.
                     // Do not emit another delta chunk with the full arguments to avoid
                     // duplicating arguments downstream in SSE client accumulators.
@@ -201,7 +210,11 @@ pub fn parse_commandcode_sse_line(
                     state.tool_calls_streamed[index] = true;
                 }
                 return Ok(Some(make_tool_call_delta(
-                    chunk_id, created, model_name, index as u32, &args,
+                    chunk_id,
+                    created,
+                    model_name,
+                    index as u32,
+                    &args,
                 )));
             }
 

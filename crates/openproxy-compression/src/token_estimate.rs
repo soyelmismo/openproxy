@@ -195,9 +195,7 @@ pub fn estimate_completion_tokens_from_body(body: &serde_json::Value) -> u32 {
         }
     }
 
-    if !found_structured
-        && let Some(text) = body.as_str()
-    {
+    if !found_structured && let Some(text) = body.as_str() {
         total_tokens = count_tokens(text);
     }
 
@@ -519,7 +517,10 @@ mod tests {
             }]
         });
         let tokens = estimate_completion_tokens_from_body(&body);
-        assert!(tokens >= 15, "expected at least 15 tokens for tool call, got {tokens}");
+        assert!(
+            tokens >= 15,
+            "expected at least 15 tokens for tool call, got {tokens}"
+        );
     }
 
     #[test]
@@ -531,7 +532,10 @@ mod tests {
             ]
         });
         let tokens = estimate_completion_tokens_from_body(&body);
-        assert!(tokens >= 10, "expected at least 10 tokens for anthropic tool_use, got {tokens}");
+        assert!(
+            tokens >= 10,
+            "expected at least 10 tokens for anthropic tool_use, got {tokens}"
+        );
     }
 
     #[test]

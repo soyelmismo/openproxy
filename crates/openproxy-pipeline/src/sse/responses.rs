@@ -317,9 +317,10 @@ mod tests {
 
         // Terminal done sentinel carries persisted usage
         let line_done = "data: [DONE]";
-        let chunk = parse_responses_sse_stream_line(line_done, "chatcmpl_1", 123, "muse-spark", &mut state)
-            .expect("parse")
-            .expect("done chunk");
+        let chunk =
+            parse_responses_sse_stream_line(line_done, "chatcmpl_1", 123, "muse-spark", &mut state)
+                .expect("parse")
+                .expect("done chunk");
 
         assert!(chunk.done);
         assert_eq!(chunk.usage.as_ref().map(|u| u.completion_tokens), Some(25));

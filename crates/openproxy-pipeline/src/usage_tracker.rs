@@ -477,7 +477,10 @@ impl<'a> UsageRecordBuilder<'a> {
                 let Some(ref body) = self.response_body_json else {
                     return (None, false);
                 };
-                let est = openproxy_compression::token_estimate::estimate_completion_tokens_from_body(body);
+                let est =
+                    openproxy_compression::token_estimate::estimate_completion_tokens_from_body(
+                        body,
+                    );
                 if est > 0 {
                     tracing::debug!(
                         request_id = %self.req.request_id,
@@ -754,9 +757,9 @@ impl UsageRecordBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openproxy_types::OpenAIRequest;
     use openproxy_types::combos::{Combo, ComboTarget};
     use openproxy_types::ids::{ComboId, RequestId, TraceId};
-    use openproxy_types::OpenAIRequest;
     use std::sync::Arc;
 
     fn make_test_builder<'a>(

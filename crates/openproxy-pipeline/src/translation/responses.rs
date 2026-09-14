@@ -1,6 +1,8 @@
 //! Translation from OpenAI Responses API envelope to standard OpenAI chat completion response.
 
-use openproxy_types::{CoreError, OpenAIChoice, OpenAIMessage, OpenAIResponse, OpenAIUsage, Result};
+use openproxy_types::{
+    CoreError, OpenAIChoice, OpenAIMessage, OpenAIResponse, OpenAIUsage, Result,
+};
 use serde_json::Value;
 
 /// Translate an upstream OpenAI Responses API JSON response into standard [`OpenAIResponse`].
@@ -106,46 +108,46 @@ pub fn responses_to_openai(val: &Value, fallback_model: &str) -> Result<OpenAIRe
         .get("usage")
         .or_else(|| val.get("response").and_then(|r| r.get("usage")))
         .map(|u| {
-        let prompt_tokens = u
-            .get("input_tokens")
-            .or_else(|| u.get("prompt_tokens"))
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok())
-            .unwrap_or(0);
-        let completion_tokens = u
-            .get("output_tokens")
-            .or_else(|| u.get("completion_tokens"))
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok())
-            .unwrap_or(0);
-        let total_tokens = u
-            .get("total_tokens")
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok())
-            .unwrap_or(prompt_tokens + completion_tokens);
+            let prompt_tokens = u
+                .get("input_tokens")
+                .or_else(|| u.get("prompt_tokens"))
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0);
+            let completion_tokens = u
+                .get("output_tokens")
+                .or_else(|| u.get("completion_tokens"))
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0);
+            let total_tokens = u
+                .get("total_tokens")
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(prompt_tokens + completion_tokens);
 
-        let cached_tokens = u
-            .get("input_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .or_else(|| {
-                u.get("prompt_tokens_details")
-                    .and_then(|d| d.get("cached_tokens"))
-            })
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok());
+            let cached_tokens = u
+                .get("input_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .or_else(|| {
+                    u.get("prompt_tokens_details")
+                        .and_then(|d| d.get("cached_tokens"))
+                })
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok());
 
-        let prompt_tokens_details =
-            cached_tokens.map(|cached| openproxy_types::PromptTokensDetails {
-                cached_tokens: Some(cached),
-            });
+            let prompt_tokens_details =
+                cached_tokens.map(|cached| openproxy_types::PromptTokensDetails {
+                    cached_tokens: Some(cached),
+                });
 
-        OpenAIUsage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-            prompt_tokens_details,
-        }
-    });
+            OpenAIUsage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                prompt_tokens_details,
+            }
+        });
 
     let tool_calls_opt = if tool_calls.is_empty() {
         None
@@ -253,7 +255,10 @@ mod tests {
         });
 
         let resp = responses_to_openai(&raw, "fallback").expect("translated tool calls");
-        assert_eq!(resp.choices[0].finish_reason, Some("tool_calls".to_string()));
+        assert_eq!(
+            resp.choices[0].finish_reason,
+            Some("tool_calls".to_string())
+        );
         let tool_calls = resp.choices[0].message.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0]["id"], "call_123");
