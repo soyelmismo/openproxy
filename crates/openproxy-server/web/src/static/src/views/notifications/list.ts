@@ -336,6 +336,43 @@ async function onDismiss(r: NotificationRow): Promise<void> {
   await archive(r.id);
 }
 
+// ==========
+// DnD — deferred overlay open
+// ==========
+
+/** Pending deferred overlay open. The full-viewport overlay must NOT be
+ *  appended synchronously inside `dragstart`: mounting a
+ *  `position:fixed; inset:0` node in the same tick forces a reflow under
+ *  the drag source and aborts the native drag in some engines. The
+ *  sequence then is dragstart → openOverlay → instant abort → dragend →
+ *  closeOverlay, which the user perceives as "grab cursor shows but drag
+ *  never starts and the modal never opens". Deferring to a macrotask lets
+ *  the browser commit the drag image first. */
+let pendingDndOpen: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDndOverlay(payload: DragPayload): void {
+  if (pendingDndOpen) clearTimeout(pendingDndOpen);
+  pendingDndOpen = setTimeout(() => {
+    pendingDndOpen = null;
+    openOverlay(payload, false);
+  }, 0);
+}
+
+function cancelPendingDndOverlay(): void {
+  if (pendingDndOpen) {
+    clearTimeout(pendingDndOpen);
+    pendingDndOpen = null;
+  }
+}
+
+/** Single predicate for drag affordance. The row class, the `draggable`
+ *  attribute, and both drag handlers must derive from this — never show
+ *  a grab cursor when the drag will no-op (e.g. backfilled rows with a
+ *  matching kind but empty payload ids). */
+export function isRowDraggable(r: NotificationRow): boolean {
+  return DRAGGABLE_KINDS.has(r.kind) && !!payloadModelId(r) && !!payloadProviderId(r);
+}
+
 // W3: model_* notifications inside the 30-day audit window are not
 // deletable by the server (it answers 422 validation). Hide the
 // delete button for those rows so the user can't trigger a doomed
@@ -393,7 +430,7 @@ function renderRow(r: NotificationRow): TemplateResult {
   const body: string = notificationBody(r);
   const ago: string = formatRelativeAgo(r.created_at);
   const unread: boolean = isUnread(r);
-  const draggable: boolean = DRAGGABLE_KINDS.has(r.kind) && !!payloadModelId(r) && !!payloadProviderId(r);
+  const draggable: boolean = isRowDraggable(r);
   const showAddToCombo: boolean = DRAGGABLE_KINDS.has(r.kind);
   const deletable: boolean = isDeletable(r);
   const rowClasses: string = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
@@ -413,11 +450,12 @@ function renderRow(r: NotificationRow): TemplateResult {
           e.dataTransfer.setData("text/plain", modelId);
           e.dataTransfer.effectAllowed = "copy";
         }
-        openOverlay(payload, false);
+        scheduleDndOverlay(payload);
       }
     : null;
   const dragEndHandler: ((e: DragEvent) => void) | null = draggable
     ? (_e: DragEvent) => {
+        cancelPendingDndOverlay();
         closeOverlay();
       }
     : null;
