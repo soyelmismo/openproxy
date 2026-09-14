@@ -84,7 +84,7 @@ pub(super) fn translate_non_streaming_body(
 ) -> Result<OpenAIResponse, CoreError> {
     match target_format {
         openproxy_types::TargetFormat::Responses => {
-            unreachable!("Responses format is handled natively before dispatcher")
+            crate::translation::responses_to_openai(response_body_raw, &req.openai_request.model)
         }
         openproxy_types::TargetFormat::Openai => {
             <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)

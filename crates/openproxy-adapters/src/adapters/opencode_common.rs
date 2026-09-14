@@ -21,13 +21,25 @@ pub enum OpenCodeFlavor {
 pub use classify_opencode_target_format as classify_zen_target_format;
 pub use classify_opencode_target_format as classify_go_target_format;
 
-/// Anthropic-family identifiers (`claude`, `minimax`) go to `/messages`; the
-/// rest are served as OpenAI on `/chat/completions`. The matching is
-/// case-insensitive.
+/// Classify wire target format for OpenCode models (Zen & Go).
+///
+/// Per OpenCode Console routing:
+/// - Anthropic (/messages): claude, minimax, qwen
+/// - Gemini (/models/{model}:streamGenerateContent?alt=sse): gemini
+/// - Responses (/responses): muse-spark, gpt-5, gpt-6, grok
+/// - OpenAI (/chat/completions): deepseek, glm, kimi, mimo, ling, nemotron, big-pickle, etc.
 pub fn classify_opencode_target_format(id: &str) -> TargetFormat {
     let lower = id.to_ascii_lowercase();
-    if lower.contains("claude") || lower.contains("minimax") {
+    if lower.contains("claude") || lower.contains("minimax") || lower.contains("qwen") {
         TargetFormat::Anthropic
+    } else if lower.contains("gemini") {
+        TargetFormat::Gemini
+    } else if lower.contains("muse-spark")
+        || lower.contains("gpt-5")
+        || lower.contains("gpt-6")
+        || lower.contains("grok")
+    {
+        TargetFormat::Responses
     } else {
         TargetFormat::Openai
     }
@@ -42,6 +54,8 @@ fn append_format_auth_headers(
     if target_format == TargetFormat::Anthropic {
         headers.push(("x-api-key".into(), api_key.to_string()));
         headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
+    } else if target_format == TargetFormat::Gemini {
+        headers.push(("x-goog-api-key".into(), api_key.to_string()));
     } else if let Some(auth) = adapter.build_auth_header(api_key) {
         headers.push(auth);
     }
@@ -258,7 +272,27 @@ mod tests {
             TargetFormat::Openai
         );
         assert_eq!(
-            classify_opencode_target_format("gemini-pro"),
+            classify_opencode_target_format("gemini-3-flash"),
+            TargetFormat::Gemini
+        );
+        assert_eq!(
+            classify_opencode_target_format("qwen3.6-plus"),
+            TargetFormat::Anthropic
+        );
+        assert_eq!(
+            classify_opencode_target_format("muse-spark-1.3-contributor-free"),
+            TargetFormat::Responses
+        );
+        assert_eq!(
+            classify_opencode_target_format("gpt-5.6-terra"),
+            TargetFormat::Responses
+        );
+        assert_eq!(
+            classify_opencode_target_format("grok-4.6"),
+            TargetFormat::Responses
+        );
+        assert_eq!(
+            classify_opencode_target_format("mimo-v2.5-free"),
             TargetFormat::Openai
         );
         assert_eq!(
