@@ -448,27 +448,29 @@ async fn fetch_commandcode_quota(
         None
     };
 
-    let monthly_info = match (remaining_monthly, used_monthly) {
-        (Some(rem), Some(used)) if (rem + used) > 0.0 => {
-            let total = rem + used;
-            let pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i64;
-            let reset_desc = period_end.as_deref().and_then(|iso| {
-                chrono::DateTime::parse_from_rfc3339(iso)
-                    .ok()
-                    .map(|dt| dt.format("%b %-d").to_string())
-            });
-            match reset_desc {
-                Some(date) => Some(format!("Monthly: {pct}% · resets {date}")),
-                None => Some(format!("Monthly: {pct}%")),
-            }
-        }
-        _ => None,
+    let mut model_details_vec = Vec::new();
+    if let (Some(rem), Some(used)) = (remaining_monthly, used_monthly)
+        && (rem + used) > 0.0
+    {
+        let total = rem + used;
+        let pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i64;
+        let rem_fraction = ((total - used).max(0.0)) / total;
+        model_details_vec.push(openproxy_types::ModelQuotaDetail {
+            model_id: "Monthly Limit".to_string(),
+            session_used: pct,
+            session_limit: 100,
+            session_reset_at: period_end,
+            remaining_fraction: rem_fraction,
+        });
+    }
+
+    let model_details = if model_details_vec.is_empty() {
+        None
+    } else {
+        Some(model_details_vec.into_boxed_slice())
     };
 
-    let plan_name = Some(humanize_commandcode_plan(
-        plan_id.as_deref(),
-        monthly_info.as_deref(),
-    ));
+    let plan_name = Some(humanize_commandcode_plan(plan_id.as_deref(), None));
 
     Ok(AccountQuota {
         session_used,
@@ -480,7 +482,7 @@ async fn fetch_commandcode_quota(
         plan_name,
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
-        model_details: None,
+        model_details,
     })
 }
 

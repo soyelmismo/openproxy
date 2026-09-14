@@ -85,6 +85,18 @@ export function renderQuotaCell(a: Account): TemplateResult {
   const sessionText = getQuotaText(a.quota_session_used, a.quota_session_limit);
   const weeklyText = getQuotaText(a.quota_weekly_used, a.quota_weekly_limit);
 
+  const monthlyDetail = a.quota_model_details?.find(
+    (d) => d.model_id === "Monthly Limit" || d.model_id === "Monthly Window"
+  );
+  const otherModels = a.quota_model_details?.filter(
+    (d) => d.model_id !== "Monthly Limit" && d.model_id !== "Monthly Window"
+  );
+
+  const monthlyPct = (monthlyDetail && monthlyDetail.session_limit > 0 && monthlyDetail.session_used != null)
+    ? Math.round(monthlyDetail.session_used / monthlyDetail.session_limit * 100) : null;
+  const monthlyColor = getQuotaColor(monthlyPct);
+  const monthlyText = monthlyDetail ? getQuotaText(monthlyDetail.session_used, monthlyDetail.session_limit) : "";
+
   return html`<div class="quota-cell">
     ${a.quota_plan_name ? html`<small class="quota-plan">${a.quota_plan_name}</small>` : null}
     <div class="quota-bar ${sessionColor}">
@@ -105,7 +117,17 @@ export function renderQuotaCell(a: Account): TemplateResult {
         <div class="quota-bar-fill" style="width: ${weeklyPct == null ? 0 : Math.min(100, weeklyPct)}%"></div>
       </div>
     </div>
-    ${a.quota_model_details && a.quota_model_details.length > 0 ? renderModelQuotaRows(a.quota_model_details) : null}
+    ${monthlyDetail ? html`
+    <div class="quota-bar ${monthlyColor}">
+      <div class="quota-bar-header">
+        <span class="quota-bar-label-left">${monthlyDetail.model_id}</span>
+        <span class="quota-bar-label-right">${monthlyText}${resetHint(monthlyDetail.session_reset_at)}</span>
+      </div>
+      <div class="quota-bar-track">
+        <div class="quota-bar-fill" style="width: ${monthlyPct == null ? 0 : Math.min(100, monthlyPct)}%"></div>
+      </div>
+    </div>` : null}
+    ${otherModels && otherModels.length > 0 ? renderModelQuotaRows(otherModels) : null}
   </div>`;
 }
 

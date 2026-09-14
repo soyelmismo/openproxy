@@ -23,7 +23,23 @@ fn find_model_quota_detail(
     })
 }
 
-fn check_session_or_weekly_exhausted(account: &openproxy_types::accounts::Account) -> bool {
+fn is_monthly_window_exhausted(account: &openproxy_types::accounts::Account) -> bool {
+    let Some(details_val) = account.quota_model_details.as_ref() else {
+        return false;
+    };
+    let Ok(details) = serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(
+        details_val.clone(),
+    ) else {
+        return false;
+    };
+    details.into_iter().any(|d| {
+        (d.model_id == "Monthly Limit" || d.model_id == "Monthly Window")
+            && (d.remaining_fraction <= 0.0
+                || (d.session_limit > 0 && d.session_used >= d.session_limit))
+    })
+}
+
+fn check_quota_windows_exhausted(account: &openproxy_types::accounts::Account) -> bool {
     let session_exhausted = matches!(
         (account.quota_session_used, account.quota_session_limit),
         (Some(used), Some(limit)) if used >= limit
@@ -32,7 +48,7 @@ fn check_session_or_weekly_exhausted(account: &openproxy_types::accounts::Accoun
         (account.quota_weekly_used, account.quota_weekly_limit),
         (Some(used), Some(limit)) if used >= limit
     );
-    session_exhausted || weekly_exhausted
+    session_exhausted || weekly_exhausted || is_monthly_window_exhausted(account)
 }
 
 pub(crate) fn evaluate_account_quota(
@@ -41,7 +57,7 @@ pub(crate) fn evaluate_account_quota(
     account: &openproxy_types::accounts::Account,
     requested_model: &str,
 ) -> QuotaStatus {
-    if check_session_or_weekly_exhausted(account) {
+    if check_quota_windows_exhausted(account) {
         return QuotaStatus::Exhausted;
     }
 
@@ -73,11 +89,32 @@ pub(crate) fn get_account_remaining_fraction(
         return detail.remaining_fraction;
     }
 
-    calculate_remaining_fraction(account.quota_session_used, account.quota_session_limit)
-        .or_else(|| {
-            calculate_remaining_fraction(account.quota_weekly_used, account.quota_weekly_limit)
+    let session_or_weekly =
+        calculate_remaining_fraction(account.quota_session_used, account.quota_session_limit)
+            .or_else(|| {
+                calculate_remaining_fraction(account.quota_weekly_used, account.quota_weekly_limit)
+            });
+
+    let monthly = account
+        .quota_model_details
+        .as_ref()
+        .and_then(|val| {
+            serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(val.clone())
+                .ok()
         })
-        .unwrap_or(1.0)
+        .and_then(|details| {
+            details
+                .into_iter()
+                .find(|d| d.model_id == "Monthly Limit" || d.model_id == "Monthly Window")
+                .map(|d| d.remaining_fraction)
+        });
+
+    match (session_or_weekly, monthly) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => 1.0,
+    }
 }
 
 struct TargetWithQuota {
