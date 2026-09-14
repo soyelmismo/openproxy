@@ -709,6 +709,7 @@ html, body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   text-align: center;
 }
 
@@ -820,8 +821,9 @@ html, body {
 .log-type-tag {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 3px;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 4px;
   font-size: 0.72rem;
   font-weight: 600;
@@ -858,6 +860,11 @@ html, body {
   background: rgba(249, 115, 22, 0.12);
   color: var(--chart-orange);
   border-color: rgba(249, 115, 22, 0.3);
+}
+.log-type-tag--pii {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.3);
 }
 
 /* Client response indicator: checkmark (winner) vs dashed circle (internal) */
@@ -1178,7 +1185,7 @@ html, body {
   .log-type-tag {
     font-size: 0.68rem;
     padding: 1px 4px;
-    min-width: 2.8rem;
+    min-width: auto;
     text-align: center;
   }
 
