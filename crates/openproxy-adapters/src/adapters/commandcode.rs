@@ -402,7 +402,53 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
         .unwrap_or_default();
 
     let mut system_prompt = String::new();
-    let mut cc_messages = Vec::with_capacity(messages.len());
+    let mut cc_messages: Vec<Value> = Vec::with_capacity(messages.len());
+    let mut pending_user_blocks: Vec<Value> = Vec::new();
+    let mut pending_assistant_blocks: Vec<Value> = Vec::new();
+
+    let flush_user = |cc_msgs: &mut Vec<Value>, blocks: &mut Vec<Value>| {
+        if blocks.is_empty() {
+            return;
+        }
+        let content = if blocks.len() == 1
+            && blocks[0]
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "text")
+        {
+            let text = blocks[0].get("text").and_then(Value::as_str).unwrap_or("");
+            json!(text)
+        } else {
+            Value::Array(std::mem::take(blocks))
+        };
+        blocks.clear();
+        cc_msgs.push(json!({
+            "role": "user",
+            "content": content,
+        }));
+    };
+
+    let flush_assistant = |cc_msgs: &mut Vec<Value>, blocks: &mut Vec<Value>| {
+        if blocks.is_empty() {
+            return;
+        }
+        let content = if blocks.len() == 1
+            && blocks[0]
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "text")
+        {
+            let text = blocks[0].get("text").and_then(Value::as_str).unwrap_or("");
+            json!(text)
+        } else {
+            Value::Array(std::mem::take(blocks))
+        };
+        blocks.clear();
+        cc_msgs.push(json!({
+            "role": "assistant",
+            "content": content,
+        }));
+    };
 
     for msg in messages {
         let role = msg
@@ -412,28 +458,29 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
             .to_ascii_lowercase();
 
         match role.as_str() {
-            "system" => {
+            "system" | "developer" => {
                 let content = extract_content_string(&msg);
-                if !system_prompt.is_empty() {
-                    system_prompt.push('\n');
+                if !content.is_empty() {
+                    if !system_prompt.is_empty() {
+                        system_prompt.push_str("\n\n");
+                    }
+                    system_prompt.push_str(&content);
                 }
-                system_prompt.push_str(&content);
-            }
-            "developer" => {
-                // Degrade developer messages to user messages to avoid rejection
-                let content = extract_content_value(&msg);
-                cc_messages.push(json!({
-                    "role": "user",
-                    "content": content,
-                }));
             }
             "assistant" => {
-                let mut parts = Vec::new();
-                if let Some(text) = msg.get("content").and_then(Value::as_str)
-                    && !text.is_empty()
-                {
-                    parts.push(json!({ "type": "text", "text": text }));
+                flush_user(&mut cc_messages, &mut pending_user_blocks);
+
+                let text = match msg.get("content") {
+                    Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+                    _ => "",
+                };
+                if !text.is_empty() {
+                    pending_assistant_blocks.push(json!({
+                        "type": "text",
+                        "text": text,
+                    }));
                 }
+
                 if let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) {
                     for tc in tool_calls {
                         let id = tc.get("id").and_then(Value::as_str).unwrap_or("");
@@ -444,48 +491,91 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
                             .and_then(Value::as_str)
                             .unwrap_or("{}");
                         let input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
-                        parts.push(json!({
-                            "type": "tool-call",
-                            "toolCallId": id,
-                            "toolName": name,
-                            "input": input,
-                        }));
+                        if !name.is_empty() {
+                            pending_assistant_blocks.push(json!({
+                                "type": "tool_use",
+                                "id": id,
+                                "name": name,
+                                "input": input,
+                            }));
+                        }
                     }
                 }
-                if parts.is_empty() {
-                    parts.push(json!({ "type": "text", "text": "" }));
+
+                if pending_assistant_blocks.is_empty() {
+                    pending_assistant_blocks.push(json!({
+                        "type": "text",
+                        "text": "",
+                    }));
                 }
-                cc_messages.push(json!({
-                    "role": "assistant",
-                    "content": parts,
-                }));
             }
             "tool" => {
+                flush_assistant(&mut cc_messages, &mut pending_assistant_blocks);
+
                 let id = msg
                     .get("tool_call_id")
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let content = extract_content_string(&msg);
-                cc_messages.push(json!({
-                    "role": "tool",
-                    "content": [{
-                        "type": "tool-result",
-                        "toolCallId": id,
-                        "output": {
-                            "type": "text",
-                            "value": content,
-                        }
-                    }]
-                }));
-            }
-            _ => {
-                let content = extract_content_value(&msg);
-                cc_messages.push(json!({
-                    "role": "user",
+                pending_user_blocks.push(json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
                     "content": content,
                 }));
             }
+            _ => {
+                // user role
+                flush_assistant(&mut cc_messages, &mut pending_assistant_blocks);
+
+                match msg.get("content") {
+                    Some(Value::String(s)) => {
+                        pending_user_blocks.push(json!({
+                            "type": "text",
+                            "text": s,
+                        }));
+                    }
+                    Some(Value::Array(arr)) => {
+                        for part in arr {
+                            let p_type = part.get("type").and_then(Value::as_str).unwrap_or("text");
+                            if p_type == "text" {
+                                let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+                                pending_user_blocks.push(json!({
+                                    "type": "text",
+                                    "text": text,
+                                }));
+                            } else if p_type == "image_url"
+                                && let Some(url) = part
+                                    .get("image_url")
+                                    .and_then(|u| u.get("url"))
+                                    .and_then(Value::as_str)
+                            {
+                                pending_user_blocks.push(json!({
+                                    "type": "image",
+                                    "image": url,
+                                }));
+                            }
+                        }
+                    }
+                    Some(v) => {
+                        pending_user_blocks.push(json!({
+                            "type": "text",
+                            "text": v.to_string(),
+                        }));
+                    }
+                    None => {}
+                }
+            }
         }
+    }
+
+    flush_assistant(&mut cc_messages, &mut pending_assistant_blocks);
+    flush_user(&mut cc_messages, &mut pending_user_blocks);
+
+    if cc_messages.is_empty() {
+        cc_messages.push(json!({
+            "role": "user",
+            "content": "",
+        }));
     }
 
     let mut params_obj = serde_json::Map::new();
@@ -501,22 +591,61 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
         let cc_tools: Vec<Value> = tools
             .iter()
             .filter_map(|t| {
-                let func = t.get("function")?;
+                let func = t.get("function").or(Some(t))?;
                 let name = func.get("name")?.as_str()?;
+                if name.is_empty() {
+                    return None;
+                }
                 let desc = func
                     .get("description")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                let params = func.get("parameters").cloned().unwrap_or_else(|| json!({}));
+                let params = func
+                    .get("parameters")
+                    .or_else(|| func.get("input_schema"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
                 Some(json!({
-                    "type": "function",
                     "name": name,
                     "description": desc,
                     "input_schema": params,
                 }))
             })
             .collect();
-        params_obj.insert("tools".into(), json!(cc_tools));
+        if !cc_tools.is_empty() {
+            params_obj.insert("tools".into(), json!(cc_tools));
+        }
+    }
+
+    if let Some(tc) = val.get("tool_choice") {
+        let translated = if let Some(s) = tc.as_str() {
+            match s {
+                "auto" => Some(json!({"type": "auto"})),
+                "none" => Some(json!({"type": "none"})),
+                "required" => Some(json!({"type": "any"})),
+                _ => None,
+            }
+        } else if let Some(obj) = tc.as_object() {
+            if obj.get("type").and_then(Value::as_str) == Some("function") {
+                let name = obj
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !name.is_empty() {
+                    Some(json!({"type": "tool", "name": name}))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(choice) = translated {
+            params_obj.insert("tool_choice".into(), choice);
+        }
     }
 
     if let Some(max_tokens) = val
@@ -575,40 +704,8 @@ fn extract_content_string(msg: &Value) -> String {
             }
             buf
         }
+        Some(Value::Null) | None => String::new(),
         Some(v) => v.to_string(),
-        None => String::new(),
-    }
-}
-
-fn extract_content_value(msg: &Value) -> Value {
-    match msg.get("content") {
-        Some(Value::String(s)) => json!(s),
-        Some(Value::Array(arr)) => {
-            let parts: Vec<Value> = arr
-                .iter()
-                .filter_map(|part| {
-                    let p_type = part.get("type").and_then(Value::as_str).unwrap_or("text");
-                    if p_type == "text" {
-                        let text = part.get("text").and_then(Value::as_str).unwrap_or("");
-                        Some(json!({ "type": "text", "text": text }))
-                    } else if p_type == "image_url" {
-                        let url = part
-                            .get("image_url")
-                            .and_then(|u| u.get("url"))
-                            .and_then(Value::as_str)?;
-                        Some(json!({
-                            "type": "image",
-                            "image": url,
-                        }))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            json!(parts)
-        }
-        Some(v) => json!(v.to_string()),
-        None => json!(""),
     }
 }
 
@@ -701,5 +798,139 @@ mod tests {
         assert_eq!(params["system"].as_str(), Some("You are helpful."));
         assert_eq!(params["stream"].as_bool(), Some(true));
         assert_eq!(params["temperature"].as_f64(), Some(0.7));
+    }
+
+    #[test]
+    fn test_commandcode_wrap_request_body_with_tool_calls_and_results() {
+        let adapter = CommandCodeGoAdapter::new();
+        let body = json!({
+            "model": "claude-sonnet-5",
+            "messages": [
+                { "role": "system", "content": "System directive" },
+                { "role": "user", "content": "Check files" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "list_files",
+                                "arguments": "{\"path\":\"/root\"}"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc123",
+                    "content": "file1.txt\nfile2.txt"
+                },
+                { "role": "user", "content": "Now read file1" }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_files",
+                        "description": "List directory contents",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string" }
+                            }
+                        }
+                    }
+                }
+            ],
+            "tool_choice": "auto"
+        });
+        let bytes = bytes::Bytes::from(serde_json::to_vec(&body).unwrap());
+        let target = openproxy_types::context::ResolvedTarget {
+            target: openproxy_types::combos::ComboTarget {
+                id: openproxy_types::ComboTargetId(1),
+                combo_id: openproxy_types::ComboId(1),
+                provider_id: openproxy_types::ProviderId::new("commandcodego"),
+                account_id: None,
+                model_row_id: Some(openproxy_types::ModelRowId(1)),
+                sub_combo_id: None,
+                priority_order: 0,
+                weight: 100,
+                active: true,
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                thinking_effort: None,
+            },
+            model: openproxy_types::Model {
+                row_id: openproxy_types::ModelRowId(1),
+                provider_id: openproxy_types::ProviderId::new("commandcodego"),
+                target_format: openproxy_types::TargetFormat::CommandCodeGo,
+                discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+                expires_at: None,
+                model_id: openproxy_types::ModelId::new("claude-sonnet-5"),
+                display_name: None,
+                context_length: None,
+                max_output_tokens: None,
+                model_type: "chat".into(),
+                family: None,
+                input_modalities_json: None,
+                output_modalities_json: None,
+                capabilities_json: None,
+                timeout_overrides_json: None,
+                active: true,
+                last_test_status: None,
+                last_test_at: None,
+                custom: false,
+                ..Default::default()
+            },
+            api_key: "dummy".to_string(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
+        let wrapped = adapter
+            .wrap_request_body(
+                bytes,
+                TargetFormat::CommandCodeGo,
+                &ModelId::new("claude-sonnet-5"),
+                &target,
+            )
+            .unwrap();
+
+        let v: Value = serde_json::from_slice(&wrapped).unwrap();
+        let params = v.get("params").unwrap();
+        let msgs = params["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+
+        // Turn 1: user
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[0]["content"], "Check files");
+
+        // Turn 2: assistant with tool_use
+        assert_eq!(msgs[1]["role"], "assistant");
+        let a_blocks = msgs[1]["content"].as_array().unwrap();
+        assert_eq!(a_blocks[0]["type"], "tool_use");
+        assert_eq!(a_blocks[0]["id"], "call_abc123");
+        assert_eq!(a_blocks[0]["name"], "list_files");
+        assert_eq!(a_blocks[0]["input"]["path"], "/root");
+
+        // Turn 3: user with tool_result + user text
+        assert_eq!(msgs[2]["role"], "user");
+        let u_blocks = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(u_blocks[0]["type"], "tool_result");
+        assert_eq!(u_blocks[0]["tool_use_id"], "call_abc123");
+        assert_eq!(u_blocks[0]["content"], "file1.txt\nfile2.txt");
+        assert_eq!(u_blocks[1]["type"], "text");
+        assert_eq!(u_blocks[1]["text"], "Now read file1");
+
+        // Tools: Anthropic format (no "type": "function")
+        let tools = params["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["name"], "list_files");
+        assert!(tools[0].get("type").is_none());
+        assert!(tools[0].get("input_schema").is_some());
     }
 }
