@@ -298,6 +298,68 @@ pub fn apply_commandcode_cli_headers(req: &mut UpstreamRequest, token: &str) {
     }
 }
 
+fn extract_commandcode_reset(val: Option<&Value>) -> Option<String> {
+    val.and_then(|v| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "0")
+            .map(ToString::to_string)
+            .or_else(|| v.as_i64().filter(|&n| n > 0).map(|n| n.to_string()))
+            .or_else(|| {
+                v.as_f64()
+                    .filter(|&n| n > 0.0)
+                    .map(|n| (n as i64).to_string())
+            })
+    })
+}
+
+fn parse_commandcode_window(win: Option<&Value>) -> (Option<i64>, Option<i64>, Option<String>) {
+    let Some(win) = win else {
+        return (None, None, None);
+    };
+    let reset = extract_commandcode_reset(win.get("resetAt"));
+    let Some(used) = win.get("used").and_then(Value::as_f64) else {
+        return (None, None, reset);
+    };
+    let Some(cap) = win.get("cap").and_then(Value::as_f64) else {
+        return (None, None, reset);
+    };
+
+    if cap <= 0.0 {
+        return (None, None, reset);
+    }
+
+    let is_exceeded = win
+        .get("exceeded")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let mut pct = ((used / cap) * 100.0).round().clamp(0.0, 100.0) as i64;
+    if is_exceeded {
+        pct = 100;
+    }
+
+    (Some(pct), Some(100), reset)
+}
+
+fn humanize_commandcode_plan(plan_id: Option<&str>, monthly_info: Option<&str>) -> String {
+    let base = match plan_id {
+        Some("individual-go") => "Command Code · Go",
+        Some("individual-pro") => "Command Code · Pro",
+        Some("individual-goat") => "Command Code · GOAT",
+        Some("individual-max-10x") => "Command Code · Max 10×",
+        Some("individual-max-20x") => "Command Code · Max 20×",
+        Some("team-pro") => "Command Code · Team Pro",
+        Some(other) if !other.is_empty() => other,
+        _ => "Command Code",
+    };
+
+    match monthly_info {
+        Some(info) if !info.is_empty() => format!("{base} · {info}"),
+        _ => base.to_string(),
+    }
+}
+
 async fn fetch_commandcode_quota(
     upstream_client: &Arc<UpstreamClient>,
     token: &str,
@@ -318,67 +380,95 @@ async fn fetch_commandcode_quota(
     let mut weekly_used = None;
     let mut weekly_limit = None;
     let mut weekly_reset_at = None;
+    let mut remaining_monthly = None;
 
     if credits_resp.status.is_success()
         && let Ok(body) = credits_resp.collect().await
         && let Ok(v) = serde_json::from_slice::<Value>(&body)
     {
-        let extract_num = |val: Option<&Value>| {
-            val.and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f.round() as i64)))
-        };
-        let extract_reset = |val: Option<&Value>| {
-            val.and_then(|v| {
-                v.as_str()
-                    .map(ToString::to_string)
-                    .or_else(|| v.as_i64().filter(|&n| n > 0).map(|n| n.to_string()))
-                    .or_else(|| {
-                        v.as_f64()
-                            .filter(|&n| n > 0.0)
-                            .map(|n| (n as i64).to_string())
-                    })
-            })
-        };
+        let limits = v.get("windowLimits").unwrap_or(&v);
+        let (s_used, s_limit, s_reset) = parse_commandcode_window(limits.get("fiveHour"));
+        session_used = s_used;
+        session_limit = s_limit;
+        session_reset_at = s_reset;
 
-        if let Some(five_hour) = v
-            .get("windowLimits")
-            .and_then(|w| w.get("fiveHour"))
-            .or_else(|| v.get("fiveHour"))
-        {
-            session_used = extract_num(five_hour.get("used"));
-            session_limit = extract_num(five_hour.get("cap"));
-            session_reset_at = extract_reset(five_hour.get("resetAt"));
-        }
-        if let Some(weekly) = v
-            .get("windowLimits")
-            .and_then(|w| w.get("weekly"))
-            .or_else(|| v.get("weekly"))
-        {
-            weekly_used = extract_num(weekly.get("used"));
-            weekly_limit = extract_num(weekly.get("cap"));
-            weekly_reset_at = extract_reset(weekly.get("resetAt"));
-        }
+        let (w_used, w_limit, w_reset) = parse_commandcode_window(limits.get("weekly"));
+        weekly_used = w_used;
+        weekly_limit = w_limit;
+        weekly_reset_at = w_reset;
+
+        remaining_monthly = v
+            .get("credits")
+            .and_then(|c| c.get("monthlyCredits"))
+            .and_then(Value::as_f64);
     }
 
     // 2. Query /alpha/billing/subscriptions
-    let mut plan_name = None;
     let sub_url = "https://api.commandcode.ai/alpha/billing/subscriptions";
     let mut sub_req = UpstreamRequest::get(sub_url);
     apply_commandcode_cli_headers(&mut sub_req, token);
     let cancel = CancellationToken::new();
-    if let Ok(sub_resp) = upstream_client
+    let (plan_id, period_end) = if let Ok(sub_resp) = upstream_client
         .call(sub_req, TimeoutProfile::Quota, cancel)
         .await
         && sub_resp.status.is_success()
         && let Ok(body) = sub_resp.collect().await
         && let Ok(v) = serde_json::from_slice::<Value>(&body)
     {
-        plan_name = v
-            .get("data")
-            .and_then(|d| d.get("planId"))
-            .or_else(|| v.get("planId"))
+        let data = v.get("data").unwrap_or(&v);
+        let plan = data
+            .get("planId")
             .and_then(Value::as_str)
             .map(ToString::to_string);
-    }
+        let end = data
+            .get("currentPeriodEnd")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        (plan, end)
+    } else {
+        (None, None)
+    };
+
+    // 3. Query /alpha/usage/summary for monthly spent credits
+    let summary_url = "https://api.commandcode.ai/alpha/usage/summary";
+    let mut summary_req = UpstreamRequest::get(summary_url);
+    apply_commandcode_cli_headers(&mut summary_req, token);
+    let cancel = CancellationToken::new();
+    let used_monthly = if let Ok(summary_resp) = upstream_client
+        .call(summary_req, TimeoutProfile::Quota, cancel)
+        .await
+        && summary_resp.status.is_success()
+        && let Ok(body) = summary_resp.collect().await
+        && let Ok(v) = serde_json::from_slice::<Value>(&body)
+    {
+        v.get("totalMonthlyCredits")
+            .and_then(Value::as_f64)
+            .or_else(|| v.get("totalCost").and_then(Value::as_f64))
+    } else {
+        None
+    };
+
+    let monthly_info = match (remaining_monthly, used_monthly) {
+        (Some(rem), Some(used)) if (rem + used) > 0.0 => {
+            let total = rem + used;
+            let pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i64;
+            let reset_desc = period_end.as_deref().and_then(|iso| {
+                chrono::DateTime::parse_from_rfc3339(iso)
+                    .ok()
+                    .map(|dt| dt.format("%b %-d").to_string())
+            });
+            match reset_desc {
+                Some(date) => Some(format!("Monthly: {pct}% · resets {date}")),
+                None => Some(format!("Monthly: {pct}%")),
+            }
+        }
+        _ => None,
+    };
+
+    let plan_name = Some(humanize_commandcode_plan(
+        plan_id.as_deref(),
+        monthly_info.as_deref(),
+    ));
 
     Ok(AccountQuota {
         session_used,
@@ -933,5 +1023,64 @@ mod tests {
         assert_eq!(tools[0]["name"], "list_files");
         assert!(tools[0].get("type").is_none());
         assert!(tools[0].get("input_schema").is_some());
+    }
+
+    #[test]
+    fn test_parse_commandcode_window_normalizes_to_percentages() {
+        // 5-hour window: used 0.21 out of 3.0 cap -> 7%
+        let win_5h = json!({
+            "used": 0.21,
+            "cap": 3.0,
+            "exceeded": false,
+            "resetAt": 0
+        });
+        let (used, limit, reset) = parse_commandcode_window(Some(&win_5h));
+        assert_eq!(used, Some(7));
+        assert_eq!(limit, Some(100));
+        assert_eq!(reset, None);
+
+        // Weekly window: used 0.196657126 out of 6.0 cap -> 3%
+        let win_weekly = json!({
+            "used": 0.196657126,
+            "cap": 6.0,
+            "exceeded": false,
+            "resetAt": 1789984055925i64
+        });
+        let (w_used, w_limit, w_reset) = parse_commandcode_window(Some(&win_weekly));
+        assert_eq!(w_used, Some(3));
+        assert_eq!(w_limit, Some(100));
+        assert_eq!(w_reset.as_deref(), Some("1789984055925"));
+
+        // Exceeded window clamps to 100%
+        let win_exceeded = json!({
+            "used": 3.5,
+            "cap": 3.0,
+            "exceeded": true,
+            "resetAt": "1789984000000"
+        });
+        let (e_used, e_limit, _) = parse_commandcode_window(Some(&win_exceeded));
+        assert_eq!(e_used, Some(100));
+        assert_eq!(e_limit, Some(100));
+
+        // Zero cap returns None
+        let win_zero = json!({ "used": 0.0, "cap": 0.0 });
+        let (z_used, z_limit, _) = parse_commandcode_window(Some(&win_zero));
+        assert_eq!(z_used, None);
+        assert_eq!(z_limit, None);
+    }
+
+    #[test]
+    fn test_humanize_commandcode_plan() {
+        assert_eq!(
+            humanize_commandcode_plan(Some("individual-go"), Some("Monthly: 2% · resets Oct 14")),
+            "Command Code · Go · Monthly: 2% · resets Oct 14"
+        );
+
+        assert_eq!(
+            humanize_commandcode_plan(Some("individual-pro"), None),
+            "Command Code · Pro"
+        );
+
+        assert_eq!(humanize_commandcode_plan(None, None), "Command Code");
     }
 }
