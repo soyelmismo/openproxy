@@ -1801,3 +1801,37 @@ Explain gravity using a Gaussian surface model.
     assert!(!redacted.contains("(P1)"));
     assert!(!redacted.contains("Alex Vance"));
 }
+
+#[test]
+fn test_seed_existing_placeholders_utf8_char_boundaries() {
+    let mut session = PiiSession::new(true);
+
+    // Adversarial multi-byte inputs that previously caused panic inside seed_existing_placeholders:
+    // '…' is \u{2026} (3 bytes: \xE2\x80\xA6)
+    // '🚀' is \u{1F680} (4 bytes)
+    // 'ñ' is \u{00F1} (2 bytes)
+    let adversarial = "Here is a truncated secret: sk-… and another sk-proj-🚀 and sec_…\n\
+                       Also IP prefix truncated: 10.240.… and 10.240.árbol\n\
+                       Also numeric prefix truncated: 89410294… and 89410294🚀\n\
+                       Email prefix with non-ascii: testñ99@outlook.com and …12@fastmail.com\n\
+                       Bracketed format: <KEY_…> and <KEY_15> and (P…)\n\
+                       Persona placeholder with multi-byte: Alex Vance (P3) and Marcus Sterling [P7]";
+
+    // Must never panic on multi-byte boundaries
+    session.seed_existing_placeholders(adversarial);
+
+    // Verify correct parsing of valid placeholders despite adversarial multi-byte surrounding text
+    assert_eq!(*session.counts.get(&PiiEntity::Secret).unwrap_or(&0), 15);
+    assert_eq!(*session.counts.get(&PiiEntity::Person).unwrap_or(&0), 7);
+    assert_eq!(*session.counts.get(&PiiEntity::Email).unwrap_or(&0), 99);
+}
+
+#[test]
+fn test_seed_existing_placeholders_exact_sk_ellipsis_panic() {
+    let mut session = PiiSession::new(true);
+    // Exact panic from production log:
+    // start byte index 18171 is not a char boundary; it is inside '…' (bytes 18170..18173 of string)
+    let padding = "a".repeat(18167);
+    let text = format!("{padding}sk-…more text sk-proj-… op_live_… 10.240.…");
+    session.seed_existing_placeholders(&text);
+}

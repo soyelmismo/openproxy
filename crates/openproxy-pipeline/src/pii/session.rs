@@ -18,6 +18,14 @@ pub struct PiiSession {
     pub reversible: bool,
 }
 
+#[inline]
+fn next_char_boundary(s: &str, mut idx: usize) -> usize {
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx.min(s.len())
+}
+
 impl PiiSession {
     pub fn new(reversible: bool) -> Self {
         Self {
@@ -71,7 +79,7 @@ impl PiiSession {
                             let c = self.counts.entry(entity).or_insert(0);
                             *c = (*c).max(n);
                         }
-                        curr = start_idx + rel_gt + 1;
+                        curr = next_char_boundary(text, start_idx + rel_gt + 1);
                     } else {
                         break;
                     }
@@ -90,7 +98,7 @@ impl PiiSession {
                         let c = self.counts.entry(PiiEntity::Person).or_insert(0);
                         *c = (*c).max(n);
                     }
-                    curr = start_idx + rel_close + 1;
+                    curr = next_char_boundary(text, start_idx + rel_close + 1);
                 } else {
                     break;
                 }
@@ -104,15 +112,16 @@ impl PiiSession {
                 let end_name = curr + rel;
                 let prefix_str = &text[..end_name];
                 let digit_start = prefix_str
-                    .rfind(|c: char| !c.is_ascii_digit())
-                    .map_or(end_name, |idx| idx + 1);
+                    .char_indices()
+                    .rfind(|&(_, c)| !c.is_ascii_digit())
+                    .map_or(0, |(idx, c)| idx + c.len_utf8());
                 if digit_start < end_name
                     && let Ok(n) = prefix_str[digit_start..end_name].parse::<usize>()
                 {
                     let c = self.counts.entry(PiiEntity::Email).or_insert(0);
                     *c = (*c).max(n);
                 }
-                curr = end_name + domain.len();
+                curr = next_char_boundary(text, end_name + domain.len());
             }
         }
 
@@ -132,7 +141,7 @@ impl PiiSession {
                     *c = (*c).max(n);
                 }
             }
-            curr = start + 1;
+            curr = next_char_boundary(text, start);
         }
 
         // 5. Realistic Secret placeholders: sec_...{c} or sk-...{c}
@@ -151,7 +160,7 @@ impl PiiSession {
                         *c = (*c).max(n);
                     }
                 }
-                curr = start + token.len().max(1);
+                curr = next_char_boundary(text, start + token.len());
             }
         }
 
@@ -170,7 +179,7 @@ impl PiiSession {
                 let c = self.counts.entry(PiiEntity::Secret).or_insert(0);
                 *c = (*c).max(n);
             }
-            curr = start + digits.len().max(1);
+            curr = next_char_boundary(text, start + digits.len());
         }
     }
 }
