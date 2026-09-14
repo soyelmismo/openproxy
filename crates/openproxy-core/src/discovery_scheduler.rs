@@ -630,6 +630,15 @@ async fn handle_discovery_outcome(
                 "discovery tick: refresh complete",
             );
 
+            openproxy_types::models::publish_models_refreshed(
+                openproxy_types::models::ModelsRefreshedEvent {
+                    provider_id: provider.clone(),
+                    models_refreshed: upsert.touched,
+                    new_model_ids: upsert.new_model_ids.iter().map(|id| id.0.clone()).collect(),
+                    models_activated: 0,
+                },
+            );
+
             let db_pool_clone = Arc::clone(db_pool);
             let provider_clone = provider.clone();
             let keyword = provider_row.and_then(|p| p.auto_activate_keyword.clone());

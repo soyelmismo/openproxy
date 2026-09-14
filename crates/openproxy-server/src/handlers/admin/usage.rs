@@ -603,6 +603,7 @@ async fn run_ws_usage_event_loop(
 ) {
     let mut usage_rx = state.usage_tx().subscribe();
     let mut stage_rx = state.stage_tx().subscribe();
+    let mut models_rx = state.models_refreshed_tx().subscribe();
     let mut notification_rx =
         openproxy_core::notifications::try_get_tx().map(tokio::sync::broadcast::Sender::subscribe);
 
@@ -612,6 +613,15 @@ async fn run_ws_usage_event_loop(
             stage = stage_rx.recv() => {
                 if !handle_stage_event(stage, &outbox_tx).await {
                     break;
+                }
+            }
+            models = models_rx.recv() => {
+                match models {
+                    Ok(m) => {
+                        outbox_send(&outbox_tx, json!({ "type": "models_refreshed", "data": m })).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
             usage = usage_rx.recv() => {

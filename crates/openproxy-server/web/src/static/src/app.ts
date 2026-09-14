@@ -19,6 +19,7 @@ import { state } from "./state/index.js";
 import { logsGoPage } from "./views/logs.js";
 import { loadLang } from "./i18n/index.js";
 import { liveLogsStore } from "./state/live-logs-store.js";
+import { initModelsSync } from "./state/models-sync.js";
 
 // Expose the global `state` for the e2e suite (and operator
 // debugging in the browser console). The dashboard is an internal
@@ -137,6 +138,7 @@ async function boot(): Promise<void> {
   mountShell();
   installRouter();
   startBgPoll();
+  initModelsSync();
   navigate();
 }
 void boot();

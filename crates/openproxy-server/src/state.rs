@@ -51,6 +51,8 @@ pub struct AppState {
     /// The live-log dashboard subscribes to both senders and
     /// multiplexes them into a single WS stream.
     stage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
+    models_refreshed_tx:
+        tokio::sync::broadcast::Sender<openproxy_types::models::ModelsRefreshedEvent>,
     /// Shared toggle that controls whether the pipeline records full
     /// request/response bodies and headers in the `usage` table.
     /// The chat handler passes a clone of this `Arc` into every
@@ -206,6 +208,7 @@ impl AppState {
 
         let usage_tx = usage::init_usage_broadcast();
         let stage_tx = usage::init_stage_broadcast();
+        let models_refreshed_tx = openproxy_core::models::init_models_refreshed_broadcast();
         openproxy_core::notifications::init_broadcast();
 
         let recording_ttl_secs_cell = Arc::new(RwLock::new(recording_ttl_secs));
@@ -307,6 +310,7 @@ impl AppState {
             upstream_client,
             usage_tx,
             stage_tx,
+            models_refreshed_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
             compression_mode_cell,
@@ -432,6 +436,7 @@ impl AppState {
             upstream_client,
             usage_tx: usage::init_usage_broadcast(),
             stage_tx: usage::init_stage_broadcast(),
+            models_refreshed_tx: openproxy_core::models::init_models_refreshed_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(config.timeouts)),
             compression_mode_cell: Arc::new(RwLock::new(
@@ -656,6 +661,13 @@ impl AppState {
     /// in real time.
     pub fn stage_tx(&self) -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent> {
         tokio::sync::broadcast::Sender::clone(&self.stage_tx)
+    }
+
+    /// Borrow the models_refreshed broadcast sender.
+    pub fn models_refreshed_tx(
+        &self,
+    ) -> tokio::sync::broadcast::Sender<openproxy_types::models::ModelsRefreshedEvent> {
+        tokio::sync::broadcast::Sender::clone(&self.models_refreshed_tx)
     }
 
     /// Return a clone of the shared recording flag. The chat handler

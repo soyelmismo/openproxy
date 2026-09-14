@@ -219,7 +219,14 @@ pub(crate) fn spawn_background_provider_refresh(
             account_id,
             ttl_seconds: None,
         };
-        let _ = run_provider_refresh(s, &provider_id, q).await;
+        match run_provider_refresh(s, &provider_id, q).await {
+            Ok(_) => {
+                tracing::info!(provider_id = %provider_id, "background provider refresh succeeded");
+            }
+            Err(e) => {
+                tracing::warn!(provider_id = %provider_id, error = %e, "background provider refresh failed");
+            }
+        }
     });
 }
 
@@ -341,6 +348,15 @@ pub(crate) async fn run_provider_refresh(
 
     spawn_favicon_fetch_if_needed(&s, &provider);
     let activated = apply_provider_auto_activation(&s, &provider).await?;
+
+    openproxy_types::models::publish_models_refreshed(
+        openproxy_types::models::ModelsRefreshedEvent {
+            provider_id: provider.clone(),
+            models_refreshed: upsert.touched,
+            new_model_ids: upsert.new_model_ids.iter().map(|id| id.0.clone()).collect(),
+            models_activated: activated,
+        },
+    );
 
     Ok(Json(serde_json::json!({
         "provider": provider_id_str,

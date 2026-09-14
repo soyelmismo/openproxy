@@ -21,6 +21,7 @@ import { showApiError, ensureModalRoot } from "../lib/ui-utils.js";
 import { showConfirm, showPrompt } from "../lib/show-confirm.js";
 import { mutateAndRefresh } from "../lib/mutate.js";
 import { renderOpModal } from "../components/render-op-modal.js";
+import { pollForDiscoveredModels } from "../state/models-sync.js";
 
 function summarizeApiKey(key: string): string {
   const trimmed = key.trim();
@@ -415,7 +416,8 @@ export function showCreateAccount(providerId: string): void {
       state.accounts = (await api("/accounts")) as typeof state.accounts;
       close();
       requestUpdate();
-      showToast("Account created", "success");
+      showToast("Account created. Discovering models...", "info");
+      pollForDiscoveredModels(providerId);
     } catch (err: unknown) {
       showApiError(err, "Error");
       renderModal();
@@ -445,7 +447,8 @@ export function showCreateAccount(providerId: string): void {
       state.accounts = (await api("/accounts")) as typeof state.accounts;
       close();
       requestUpdate();
-      showToast(`Created ${parsedKeys.length} accounts`, "success");
+      showToast(`Created ${parsedKeys.length} accounts. Discovering models...`, "info");
+      pollForDiscoveredModels(providerId);
     } catch (err: unknown) {
       showApiError(err, "Error");
       renderModal();
@@ -756,8 +759,13 @@ export async function updateAccountKey(id: number, e: Event, close?: () => void)
       method: "PUT",
       body: JSON.stringify({ api_key: apiKey }),
     });
+    const acc = (state.accounts || []).find((a) => a.id === id);
+    const pid = acc?.provider_id;
     state.accounts = await api("/accounts") as typeof state.accounts;
     if (close) close(); else closeUpdateAccountKey();
+    if (pid) {
+      pollForDiscoveredModels(pid);
+    }
     // We do NOT call requestUpdate() here — the API key is
     // not displayed in the underlying accounts table, so there's
     // nothing visible to refresh. A full rebuild would close any

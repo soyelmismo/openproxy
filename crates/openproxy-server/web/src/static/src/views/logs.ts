@@ -18,10 +18,17 @@ import { clockStore } from "../state/clock-store.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 import type { NotificationEvent } from "../lib/types/notifications.js";
 
+export interface ModelsRefreshedEventData {
+  provider_id: string;
+  models_refreshed: number;
+  new_model_ids?: string[];
+  models_activated?: number;
+}
+
 // Keep legacy WsEnvelope for compatibility with ws-bus.ts and notifications
 export interface WsEnvelope {
-  type: "history" | "row" | "stage" | "lag_warning" | "resync" | "pong" | "error" | "notification" | "snapshot" | "attempt_event" | "usage_row" | "gap";
-  data?: StageEvent | RecentUsageRow | NotificationEvent;
+  type: "history" | "row" | "stage" | "lag_warning" | "resync" | "pong" | "error" | "notification" | "snapshot" | "attempt_event" | "usage_row" | "gap" | "models_refreshed";
+  data?: StageEvent | RecentUsageRow | NotificationEvent | ModelsRefreshedEventData;
   row?: unknown;
   rows?: RecentUsageRow[];
   message?: string;

@@ -52,7 +52,10 @@
 //!   implementation [`SqliteModelRepository`].
 //! - **`discovery`** — [`DiscoveryService`] that orchestrates
 //!   fetch → upsert → auto-activate.
-pub use openproxy_types::{DiscoveredModel, Model, TargetFormat, UpsertResult};
+pub use openproxy_types::{
+    DiscoveredModel, Model, ModelsRefreshedEvent, TargetFormat, UpsertResult,
+    publish_models_refreshed,
+};
 
 // ── Submodules ──────────────────────────────────────────────────────
 pub mod discovery;
@@ -71,6 +74,24 @@ pub use openproxy_db::models::{
 };
 
 pub use discovery::DiscoveryService;
+
+pub static MODELS_REFRESHED_SENDER: std::sync::OnceLock<
+    tokio::sync::broadcast::Sender<ModelsRefreshedEvent>,
+> = std::sync::OnceLock::new();
+
+pub fn init_models_refreshed_broadcast() -> tokio::sync::broadcast::Sender<ModelsRefreshedEvent> {
+    let (tx, _rx) = tokio::sync::broadcast::channel(64);
+    let _ = MODELS_REFRESHED_SENDER.set(tokio::sync::broadcast::Sender::clone(&tx));
+    let _ = openproxy_types::models::MODELS_REFRESHED_PUBLISHER
+        .set(Box::new(publish_models_refreshed_global));
+    tx
+}
+
+fn publish_models_refreshed_global(event: ModelsRefreshedEvent) {
+    if let Some(tx) = MODELS_REFRESHED_SENDER.get() {
+        let _ = tx.send(event);
+    }
+}
 
 pub fn upsert_many(
     conn: &rusqlite::Connection,

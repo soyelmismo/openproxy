@@ -62,3 +62,52 @@ pub struct UpsertResult {
     pub touched: usize,
     pub new_model_ids: Box<[ModelId]>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelsRefreshedEvent {
+    pub provider_id: ProviderId,
+    pub models_refreshed: usize,
+    pub new_model_ids: Vec<String>,
+    pub models_activated: u64,
+}
+
+pub static MODELS_REFRESHED_PUBLISHER: std::sync::OnceLock<
+    Box<dyn Fn(ModelsRefreshedEvent) + Send + Sync>,
+> = std::sync::OnceLock::new();
+
+pub fn publish_models_refreshed(event: ModelsRefreshedEvent) {
+    if let Some(publisher) = MODELS_REFRESHED_PUBLISHER.get() {
+        publisher(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn test_publish_models_refreshed() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = Arc::clone(&called);
+
+        let _ = MODELS_REFRESHED_PUBLISHER.set(Box::new(move |event: ModelsRefreshedEvent| {
+            called_clone.store(true, Ordering::SeqCst);
+            assert_eq!(event.provider_id.as_str(), "test-provider");
+            assert_eq!(event.models_refreshed, 5);
+            assert_eq!(event.new_model_ids, vec!["m1".to_string()]);
+            assert_eq!(event.models_activated, 2);
+        }));
+
+        let event = ModelsRefreshedEvent {
+            provider_id: ProviderId::new("test-provider"),
+            models_refreshed: 5,
+            new_model_ids: vec!["m1".to_string()],
+            models_activated: 2,
+        };
+
+        publish_models_refreshed(event);
+        assert!(called.load(Ordering::SeqCst));
+    }
+}
