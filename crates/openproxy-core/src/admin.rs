@@ -159,6 +159,13 @@ pub struct UpdateProviderInput {
     pub proxy_rotation_errors: Option<String>,
     pub proxy_rotation_mode: Option<String>,
     pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
+    /// Toggle for `providers.notif_keyword_only` (migration 000074).
+    /// Three-state, mirroring `auto_activate_keyword`:
+    /// * missing key -> `None` (no-op),
+    /// * `true` / `false` -> `Some(Some(_))` (set the flag),
+    /// * explicit `null` -> `Some(None)` (normalised to 0 on write: the column
+    ///   is `NOT NULL DEFAULT 0`).
+    pub notif_keyword_only: Option<Option<bool>>,
 }
 
 impl Validatable for UpdateProviderInput {
@@ -186,6 +193,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             ProxyRotationErrors,
             ProxyRotationMode,
             RateLimitScope,
+            NotifKeywordOnly,
         }
 
         struct V;
@@ -226,6 +234,23 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                             out.proxy_rotation_mode = Some(map.next_value()?);
                         }
                         Field::RateLimitScope => out.rate_limit_scope = Some(map.next_value()?),
+                        Field::NotifKeywordOnly => {
+                            // Three-state like `auto_activate_keyword`: pull
+                            // the raw JSON so `null` and "absent" stay
+                            // distinguishable.
+                            let raw: serde_json::Value = map.next_value()?;
+                            out.notif_keyword_only = Some(if raw.is_null() {
+                                None
+                            } else {
+                                Some(serde_json::from_value(raw).map_err(
+                                    |e| {
+                                        serde::de::Error::custom(format!(
+                                            "notif_keyword_only must be bool or null: {e}"
+                                        ))
+                                    },
+                                )?)
+                            });
+                        }
                         Field::AutoActivateKeyword => {
                             // The whole point of this custom deserialize:
                             // pull the raw value, then branch on whether
@@ -281,6 +306,7 @@ pub fn update_provider(
             proxy_rotation_errors: input.proxy_rotation_errors.as_deref(),
             proxy_rotation_mode: input.proxy_rotation_mode.as_deref(),
             rate_limit_scope: input.rate_limit_scope,
+            notif_keyword_only: input.notif_keyword_only,
         },
     )
 }
@@ -1644,6 +1670,7 @@ mod tests {
                 use_proxies: None,
                 proxy_rotation_errors: None,
                 proxy_rotation_mode: None,
+                notif_keyword_only: None,
             },
         )
         .expect("update");
@@ -1664,6 +1691,7 @@ mod tests {
                 use_proxies: None,
                 proxy_rotation_errors: None,
                 proxy_rotation_mode: None,
+                notif_keyword_only: None,
             },
         )
         .expect("clear");
@@ -1678,6 +1706,113 @@ mod tests {
         )
         .expect_err("missing id");
         assert!(matches!(err, CoreError::ProviderNotFound(_)));
+    }
+
+    /// W2 (migration 000074): the JSON `notif_keyword_only` flag flows through
+    /// the existing PATCH path (`UpdateProviderInput` -> `update_provider` ->
+    /// `providers::update` -> SQL) without touching the other fields, and the
+    /// toggle is persisted on the row.
+    #[test]
+    fn update_provider_patch_sets_notif_keyword_only() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        create_provider(
+            &conn,
+            CreateProviderInput {
+                rate_limit_scope: None,
+                id: "p".into(),
+                name: "Original".into(),
+                base_url: "https://example.com".into(),
+                auth_type: "bearer".into(),
+                format: "openai".into(),
+                extra_headers_json: None,
+            },
+        )
+        .expect("seed");
+
+        // Before: column defaults to 0.
+        let before: i64 = conn
+            .query_row(
+                "SELECT notif_keyword_only FROM providers WHERE id = 'p'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("select before");
+        assert_eq!(before, 0, "default must be 0");
+
+        // PATCH only the toggle (true) — mirrors `{"notif_keyword_only": true}`.
+        update_provider(
+            &conn,
+            &ProviderId::new("p"),
+            &UpdateProviderInput {
+                rate_limit_scope: None,
+                name: None,
+                base_url: None,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                use_proxies: None,
+                proxy_rotation_errors: None,
+                proxy_rotation_mode: None,
+                notif_keyword_only: Some(Some(true)),
+            },
+        )
+        .expect("patch toggle on");
+
+        let after: i64 = conn
+            .query_row(
+                "SELECT notif_keyword_only FROM providers WHERE id = 'p'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("select after");
+        assert_eq!(after, 1, "toggle must be persisted as 1");
+
+        // Other fields untouched.
+        let p = list_providers(&conn).expect("list").pop().expect("present");
+        assert_eq!(&*p.name, "Original", "name untouched by toggle patch");
+
+        // Flip back off (false).
+        update_provider(
+            &conn,
+            &ProviderId::new("p"),
+            &UpdateProviderInput {
+                rate_limit_scope: None,
+                name: None,
+                base_url: None,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                use_proxies: None,
+                proxy_rotation_errors: None,
+                proxy_rotation_mode: None,
+                notif_keyword_only: Some(Some(false)),
+            },
+        )
+        .expect("patch toggle off");
+
+        let off: i64 = conn
+            .query_row(
+                "SELECT notif_keyword_only FROM providers WHERE id = 'p'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("select off");
+        assert_eq!(off, 0, "toggle must flip back to 0");
+
+        // Missing key -> no-op: row stays at 0, no error.
+        update_provider(
+            &conn,
+            &ProviderId::new("p"),
+            &UpdateProviderInput::default(),
+        )
+        .expect("patch default no-op");
+        let still_off: i64 = conn
+            .query_row(
+                "SELECT notif_keyword_only FROM providers WHERE id = 'p'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("select still off");
+        assert_eq!(still_off, 0, "absent key must not flip the toggle");
     }
 
     #[test]
@@ -1701,6 +1836,31 @@ mod tests {
         // Bad type surfaces as a deserialization error.
         let bad = serde_json::from_str::<UpdateProviderInput>(r#"{"auto_activate_keyword": 42}"#);
         assert!(bad.is_err());
+    }
+
+    /// W2 (migration 000074): `notif_keyword_only` uses the same three-state
+    /// JSON semantics as `auto_activate_keyword` — absent -> `None` (no-op),
+    /// explicit `null` -> `Some(None)`, `true`/`false` -> `Some(Some(_))`.
+    #[test]
+    fn update_provider_input_notif_keyword_only_three_state_deserialize() {
+        let absent: UpdateProviderInput = serde_json::from_str("{}").unwrap();
+        assert!(absent.notif_keyword_only.is_none(), "missing key -> no-op");
+
+        let cleared: UpdateProviderInput =
+            serde_json::from_str(r#"{"notif_keyword_only": null}"#).unwrap();
+        assert!(matches!(cleared.notif_keyword_only, Some(None)));
+
+        let on: UpdateProviderInput =
+            serde_json::from_str(r#"{"notif_keyword_only": true}"#).unwrap();
+        assert!(matches!(on.notif_keyword_only, Some(Some(true))));
+
+        let off: UpdateProviderInput =
+            serde_json::from_str(r#"{"notif_keyword_only": false}"#).unwrap();
+        assert!(matches!(off.notif_keyword_only, Some(Some(false))));
+
+        // Bad type surfaces as a deserialization error.
+        let bad = serde_json::from_str::<UpdateProviderInput>(r#"{"notif_keyword_only": 42}"#);
+        assert!(bad.is_err(), "non-bool must be rejected");
     }
 
     #[test]

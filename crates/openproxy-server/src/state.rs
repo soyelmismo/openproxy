@@ -100,6 +100,11 @@ pub struct AppState {
     quota_protection_cell: Arc<parking_lot::RwLock<openproxy_types::config::QuotaProtectionConfig>>,
     /// Hot-swappable configuration for PII redaction.
     pii_config_cell: Arc<parking_lot::RwLock<openproxy_types::config::PiiConfig>>,
+    /// Hot-swappable global notifications master switch (W1).
+    /// When false, `openproxy_core::notifications` insert helpers
+    /// early-return without INSERT or broadcast. Default true.
+    /// Persisted under the `notifications_enabled` key in `app_config`.
+    notifications_enabled_cell: Arc<AtomicBool>,
     /// In-memory selection registry for the LKGP / least_used /
     /// p2c priority modes (migration 000035). Tracks per-target
     /// recent success timestamps and request counts so the
@@ -197,6 +202,7 @@ impl AppState {
         let mut recording_ttl_secs = db::app_config::RECORDING_TTL_DEFAULT_SECS;
         let mut idle_chunk_retryable = db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT;
         let mut compression_mode = openproxy_compression::CompressionMode::Off;
+        let mut notifications_enabled = db::app_config::NOTIFICATIONS_ENABLED_DEFAULT;
 
         run_database_maintenance(
             &mut db_pool.writer(),
@@ -204,6 +210,7 @@ impl AppState {
             &mut recording_ttl_secs,
             &mut idle_chunk_retryable,
             &mut compression_mode,
+            &mut notifications_enabled,
         )?;
 
         let usage_tx = usage::init_usage_broadcast();
@@ -216,6 +223,10 @@ impl AppState {
         let compression_mode_cell = Arc::new(RwLock::new(compression_mode));
         let quota_protection_cell = Arc::new(RwLock::new(config.quota_protection.clone()));
         let pii_config_cell = Arc::new(RwLock::new(config.pii.clone()));
+        let notifications_enabled_cell = Arc::new(AtomicBool::new(notifications_enabled));
+        // Mirror the persisted flag into the core-level gate so insert
+        // paths are gated from the very first request after boot.
+        openproxy_core::notifications::set_enabled(notifications_enabled);
 
         let master_key = Arc::new(MasterKey::from_env()?);
         let initial_adapters = Self::load_adapters(&db_pool)?;
@@ -320,6 +331,7 @@ impl AppState {
             idle_chunk_retryable_cell,
             quota_protection_cell,
             pii_config_cell,
+            notifications_enabled_cell,
             selection_registry,
             circuit_breaker,
             predictive_limiter,
@@ -450,6 +462,9 @@ impl AppState {
             )),
             quota_protection_cell: Arc::new(RwLock::new(config.quota_protection)),
             pii_config_cell: Arc::new(RwLock::new(config.pii)),
+            notifications_enabled_cell: Arc::new(AtomicBool::new(
+                db::app_config::NOTIFICATIONS_ENABLED_DEFAULT,
+            )),
             selection_registry,
             circuit_breaker,
             predictive_limiter,
@@ -771,6 +786,20 @@ impl AppState {
         *self.pii_config_cell.write() = config;
     }
 
+    /// Read the current global notifications flag (hot-swappable W1).
+    pub fn notifications_enabled(&self) -> bool {
+        self.notifications_enabled_cell
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Replace the live global notifications flag. Called by the
+    /// admin PUT endpoint after the DB UPSERT.
+    pub fn set_notifications_enabled(&self, enabled: bool) {
+        self.notifications_enabled_cell
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+        openproxy_core::notifications::set_enabled(enabled);
+    }
+
     /// Return a clone of the shared selection registry. The chat
     /// handler passes this into every `Pipeline` it builds via
     /// [`openproxy_pipeline::Pipeline::with_selection_registry`]
@@ -864,6 +893,7 @@ fn run_database_maintenance(
     recording_ttl_secs: &mut i64,
     idle_chunk_retryable: &mut bool,
     compression_mode: &mut openproxy_compression::CompressionMode,
+    notifications_enabled: &mut bool,
 ) -> anyhow::Result<()> {
     openproxy_db::migrations::run(w)?;
     load_persisted_config_overrides(
@@ -872,6 +902,7 @@ fn run_database_maintenance(
         recording_ttl_secs,
         idle_chunk_retryable,
         compression_mode,
+        notifications_enabled,
     )?;
     // NOTE: `seed_and_backfill_database` is intentionally NOT called
     // here. It used to run inline at boot and could take tens of
@@ -905,6 +936,7 @@ fn load_persisted_runtime_flags(
     w: &openproxy_db::conn::WriterGuard<'_>,
     recording_ttl_secs: &mut i64,
     idle_chunk_retryable: &mut bool,
+    notifications_enabled: &mut bool,
 ) -> anyhow::Result<()> {
     if let Some(ttl) = openproxy_db::app_config::load_recording_ttl_from_db(w)? {
         *recording_ttl_secs = ttl;
@@ -920,6 +952,14 @@ fn load_persisted_runtime_flags(
     tracing::info!(
         idle_chunk_retryable = *idle_chunk_retryable,
         "loaded idle_chunk_retryable from app_config (default false)"
+    );
+
+    if let Some(val) = openproxy_db::app_config::load_notifications_enabled_from_db(w)? {
+        *notifications_enabled = val;
+    }
+    tracing::info!(
+        notifications_enabled = *notifications_enabled,
+        "loaded notifications_enabled from app_config (default true)"
     );
     Ok(())
 }
@@ -968,9 +1008,10 @@ fn load_persisted_config_overrides(
     recording_ttl_secs: &mut i64,
     idle_chunk_retryable: &mut bool,
     compression_mode: &mut openproxy_compression::CompressionMode,
+    notifications_enabled: &mut bool,
 ) -> anyhow::Result<()> {
     load_persisted_timeouts(w, config)?;
-    load_persisted_runtime_flags(w, recording_ttl_secs, idle_chunk_retryable)?;
+    load_persisted_runtime_flags(w, recording_ttl_secs, idle_chunk_retryable, notifications_enabled)?;
     load_persisted_compression_and_quota(w, config, compression_mode)?;
     Ok(())
 }

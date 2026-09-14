@@ -4,7 +4,7 @@ use openproxy_types::{
     DiscoveredModel, Model, ModelId, ModelRowId, ProviderId, Result, TargetFormat, UpsertResult,
     normalize_model_id,
 };
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -434,6 +434,7 @@ fn notify_auto_activated_models(
     provider: &ProviderId,
     keyword: Option<&str>,
     newly_active: &[(String, Option<String>)],
+    notif_keyword_only: bool,
 ) -> Result<()> {
     let notifications_present: bool = tx
         .query_row(
@@ -446,6 +447,43 @@ fn notify_auto_activated_models(
     if !notifications_present || newly_active.is_empty() {
         return Ok(());
     }
+
+    // `notif_keyword_only` (providers.notif_keyword_only, migration 000074)
+    // restricts notification creation to the keyword-matched models. The
+    // filter is applied ONLY in the `Some(keyword)` branch: with a keyword
+    // set, only rows whose `model_id` matches the keyword are candidates for
+    // a `model_auto_activated` notification.
+    //
+    // `keyword = None` + toggle ON is an explicit no-op: without a keyword
+    // there is no match to restrict to, so behaviour stays normal (every
+    // newly-active model notifies). Documented, not silent.
+    //
+    // The match reuses SQLite's own LIKE operator (identical, case-insensitive
+    // for ASCII semantics as `query_newly_active_models`, no PRAGMA touched)
+    // so the keyword logic is not duplicated in Rust.
+    let candidates: Vec<&(String, Option<String>)> = match (notif_keyword_only, keyword) {
+        (true, Some(k)) => {
+            let mut keep: Vec<&(String, Option<String>)> = Vec::with_capacity(newly_active.len());
+            for entry in newly_active {
+                // `SELECT ?1 LIKE '%' || ?2 || '%'` — same LIKE condition as
+                // the SQL filter in `query_newly_active_models`.
+                let matches: i64 = tx
+                    .query_row(
+                        "SELECT ?1 LIKE '%' || ?2 || '%'",
+                        params![entry.0.as_str(), k],
+                        |r| r.get(0),
+                    )
+                    .map_err(map_db_error)?;
+                if matches != 0 {
+                    keep.push(entry);
+                }
+            }
+            keep
+        }
+        // Toggle ON without a keyword: no-op, normal behaviour.
+        // Toggle OFF: normal behaviour.
+        _ => newly_active.iter().collect(),
+    };
 
     let already_notified: std::collections::HashSet<String> = {
         let mut stmt = tx
@@ -460,8 +498,8 @@ fn notify_auto_activated_models(
         rows.filter_map(std::result::Result::ok).collect()
     };
 
-    let to_notify: Vec<_> = newly_active
-        .iter()
+    let to_notify: Vec<_> = candidates
+        .into_iter()
         .filter(|(model_id, _)| {
             let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
             !already_notified.contains(&dedup)
@@ -497,15 +535,39 @@ fn notify_auto_activated_models(
     Ok(())
 }
 
+/// Read the per-provider `notif_keyword_only` toggle (migration 000074).
+/// A missing provider row (should not happen in practice) reads as `false`
+/// so the notification path degrades to normal behaviour.
+fn provider_notif_keyword_only(conn: &Connection, provider: &ProviderId) -> Result<bool> {
+    let flag: Option<i64> = conn
+        .query_row(
+            "SELECT notif_keyword_only FROM providers WHERE id = ?1",
+            params![provider.as_str()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(map_db_error)?;
+    Ok(flag.is_some_and(|v| v != 0))
+}
+
 pub fn apply_auto_activation(
     conn: &Connection,
     provider: &ProviderId,
     keyword: Option<&str>,
 ) -> Result<u64> {
+    // The toggle only narrows the *notification* set (see
+    // `notify_auto_activated_models`); model activation itself is unchanged.
+    let notif_keyword_only = provider_notif_keyword_only(conn, provider)?;
     let tx = conn.unchecked_transaction().map_err(map_db_error)?;
     let newly_active = query_newly_active_models(&tx, provider, keyword)?;
     let updated = update_models_active_status(&tx, provider, keyword)?;
-    notify_auto_activated_models(&tx, provider, keyword, &newly_active)?;
+    notify_auto_activated_models(
+        &tx,
+        provider,
+        keyword,
+        &newly_active,
+        notif_keyword_only,
+    )?;
     tx.commit().map_err(map_db_error)?;
     Ok(updated as u64)
 }
@@ -1074,5 +1136,172 @@ mod tests {
             Err(CoreError::Database { .. }) => {}
             other => panic!("expected Database error, got {other:?}"),
         }
+    }
+
+    /// W2 (migration 000074): with the toggle ON and a keyword set,
+    /// `notify_auto_activated_models` must only INSERT a
+    /// `model_auto_activated` notification for the keyword-matched
+    /// candidate. The helper is called directly with a fabricated
+    /// `newly_active` list (containing both a match and a non-match) so the
+    /// filter is observable: `query_newly_active_models` already pre-filters
+    /// by LIKE, so an end-to-end call would hide the toggle entirely.
+    #[test]
+    fn notif_keyword_only_suppresses_non_matching_newly_active() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        let provider = CoreProviderId::new("w2_suppress");
+        seed_provider(&conn, &provider);
+
+        let candidates: Vec<(String, Option<String>)> = vec![
+            ("claude-3".to_string(), Some("Claude 3".to_string())),
+            ("gpt-4".to_string(), Some("GPT-4".to_string())),
+        ];
+
+        let tx = conn.unchecked_transaction().expect("tx");
+        notify_auto_activated_models(&tx, &provider, Some("claude"), &candidates, true)
+            .expect("notify");
+        tx.commit().expect("commit");
+
+        let notified: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT dedup_key FROM notifications \
+                     WHERE kind = 'model_auto_activated' AND provider_id = ?1",
+                )
+                .expect("prep");
+            let rows = stmt
+                .query_map(rusqlite::params![provider.as_str()], |r| {
+                    r.get::<_, String>(0)
+                })
+                .expect("query");
+            rows.map(|r| r.expect("row")).collect()
+        };
+
+        assert_eq!(notified.len(), 1, "only the keyword-matched model notifies");
+        assert!(
+            notified[0].contains("claude-3"),
+            "matched model must be claude-3, got {notified:?}"
+        );
+        assert!(
+            !notified.iter().any(|k| k.contains("gpt-4")),
+            "gpt-4 must be suppressed by notif_keyword_only"
+        );
+    }
+
+    /// W2 (migration 000074): toggle ON without a keyword is an explicit
+    /// no-op — with no keyword there is nothing to restrict to, so every
+    /// candidate still notifies (documented normal behaviour).
+    #[test]
+    fn notif_keyword_only_on_without_keyword_is_noop() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        let provider = CoreProviderId::new("w2_noop");
+        seed_provider(&conn, &provider);
+
+        let candidates: Vec<(String, Option<String>)> = vec![
+            ("claude-3".to_string(), None),
+            ("gpt-4".to_string(), None),
+        ];
+
+        let tx = conn.unchecked_transaction().expect("tx");
+        notify_auto_activated_models(&tx, &provider, None, &candidates, true).expect("notify");
+        tx.commit().expect("commit");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notifications \
+                 WHERE kind = 'model_auto_activated' AND provider_id = ?1",
+                rusqlite::params![provider.as_str()],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 2, "None + toggle ON must NOT suppress (no-op)");
+    }
+
+    /// W2 (migration 000074): toggle OFF (the default) keeps legacy
+    /// behaviour — the toggle only ever NARROWS the notification set, it
+    /// never widens it. Same fabricated candidates as the suppress test:
+    /// both notify because the toggle is off.
+    #[test]
+    fn notif_keyword_only_off_default_notifies_all() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        let provider = CoreProviderId::new("w2_off");
+        seed_provider(&conn, &provider);
+
+        let candidates: Vec<(String, Option<String>)> = vec![
+            ("claude-3".to_string(), None),
+            ("gpt-4".to_string(), None),
+        ];
+
+        let tx = conn.unchecked_transaction().expect("tx");
+        notify_auto_activated_models(&tx, &provider, Some("claude"), &candidates, false)
+            .expect("notify");
+        tx.commit().expect("commit");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notifications \
+                 WHERE kind = 'model_auto_activated' AND provider_id = ?1",
+                rusqlite::params![provider.as_str()],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 2, "toggle OFF must notify every candidate");
+    }
+
+    /// W2 (migration 000074) end-to-end: the toggle is read from the
+    /// `providers` row by `apply_auto_activation`, and a real discovery
+    /// cycle with the toggle ON still notifies the keyword-matched model.
+    #[test]
+    fn notif_keyword_only_end_to_end_applies_toggle_from_provider_row() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        let provider = CoreProviderId::new("w2_e2e");
+        seed_provider(&conn, &provider);
+        seed_models(&conn, &provider, &["claude-3", "gpt-4"]);
+
+        // Mirror a fresh discovery cycle: newly discovered, not yet active.
+        conn.execute(
+            "UPDATE models SET active = 0 WHERE provider_id = ?1",
+            rusqlite::params![provider.as_str()],
+        )
+        .expect("deactivate models");
+
+        conn.execute(
+            "UPDATE providers SET notif_keyword_only = 1 WHERE id = ?1",
+            rusqlite::params![provider.as_str()],
+        )
+        .expect("toggle on");
+
+        apply_auto_activation(&conn, &provider, Some("claude")).expect("apply with keyword");
+
+        let keys: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT dedup_key FROM notifications \
+                     WHERE kind = 'model_auto_activated' AND provider_id = ?1",
+                )
+                .expect("prep");
+            let rows = stmt
+                .query_map(rusqlite::params![provider.as_str()], |r| {
+                    r.get::<_, String>(0)
+                })
+                .expect("query");
+            rows.map(|r| r.expect("row")).collect()
+        };
+        assert_eq!(keys.len(), 1, "exactly the matched model notifies");
+        assert!(keys[0].contains("claude-3"), "got {keys:?}");
+        assert!(
+            !keys.iter().any(|k| k.contains("gpt-4")),
+            "gpt-4 must not notify"
+        );
+
+        // Dedup key format is unchanged.
+        assert!(
+            keys[0].starts_with("w2_e2e:claude-3:auto"),
+            "dedup key format changed: {}",
+            keys[0]
+        );
     }
 }

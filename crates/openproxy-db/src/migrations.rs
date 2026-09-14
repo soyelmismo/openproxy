@@ -260,6 +260,47 @@ mod tests {
         assert_eq!(rows, expected, "applied versions match the embedded list");
     }
 
+    /// W4: the 000074_notif_keyword_only migration must be part of the
+    /// embedded list and must have added the `providers.notif_keyword_only`
+    /// column with a default of 0 (three-state: 0=off, 1=on, NULL=cleared).
+    #[test]
+    fn test_migrations_count_includes_000074() {
+        let versions: Vec<i64> = MIGRATIONS.iter().map(|m| m.version).collect();
+        assert!(
+            versions.contains(&74),
+            "embedded MIGRATIONS must include 000074; got {versions:?}"
+        );
+
+        let dir = tempdir();
+        let path = dir.join("notif-kw.db");
+        let mut conn = Connection::open(&path).expect("open");
+        run(&mut conn).expect("run");
+
+        // The column exists on `providers` after the migration chain runs.
+        let has_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('providers') WHERE name = 'notif_keyword_only'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("pragma_table_info");
+        assert_eq!(has_column, 1, "providers.notif_keyword_only missing");
+
+        // Its declared default is 0.
+        let default_value: Option<String> = conn
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('providers') WHERE name = 'notif_keyword_only'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("pragma dflt_value");
+        assert_eq!(
+            default_value.as_deref(),
+            Some("0"),
+            "notif_keyword_only must default to 0"
+        );
+    }
+
     #[test]
     fn end_to_end_via_dbpool_is_idempotent() {
         use crate::conn::DbPool;

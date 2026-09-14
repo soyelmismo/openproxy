@@ -121,6 +121,8 @@ pub struct Provider {
     #[serde(default = "default_proxy_rotation_errors")]
     pub proxy_rotation_errors: Box<str>,
     pub rate_limit_scope: RateLimitScope,
+    #[serde(default)]
+    pub notif_keyword_only: bool,
     #[serde(default = "default_proxy_rotation_mode")]
     pub proxy_rotation_mode: Box<str>,
     /// Cached favicon as a data URI (`data:image/png;base64,...`).

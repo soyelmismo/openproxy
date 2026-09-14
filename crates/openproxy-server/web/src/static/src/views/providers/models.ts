@@ -15,6 +15,7 @@ import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { showApiError } from '../../lib/ui-utils.js';
 import { icons } from '../../lib/icons.js';
+import { t } from '../../i18n/index.js';
 import {
   applySort,
   SORTABLE_COLUMNS,
@@ -118,7 +119,27 @@ export function onSetProviderPage(providerId: string, page: number): void {
   requestUpdate();
 }
 
-// ---- Per-provider settings handlers ----
+// W3: per-provider "notify on keyword matches only" toggle. Only sent
+// when `auto_activate_keyword` is set; clearing the keyword (handled by
+// onUpdateAutoActivate) hides the toggle, so we never send the field
+// without a keyword. Three-state: unset -> null on clear.
+async function onToggleNotifKeywordOnly(
+  providerId: string,
+  next: boolean,
+): Promise<void> {
+  const body = { notif_keyword_only: next ? true : null };
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    const p = (state.providers || []).find((x) => x.id === providerId);
+    if (p) p.notif_keyword_only = next;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error');
+  }
+}
 
 async function onUpdateAutoActivate(
   providerId: string,
@@ -324,6 +345,22 @@ export function renderModelsSection(
         </label>
         <small>Models whose ID contains this string are auto-enabled on refresh. Empty = enable all new models.</small>
       </div>
+
+      ${provider.auto_activate_keyword && provider.auto_activate_keyword.trim()
+        ? html`<div class="auto-activate-bar" style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
+              <button type="button" role="switch" aria-checked=${provider.notif_keyword_only ? 'true' : 'false'}
+                      class="toggle-btn ${provider.notif_keyword_only ? 'on' : 'off'}"
+                      @click=${() => { void onToggleNotifKeywordOnly(provider.id, !provider.notif_keyword_only); }}>
+                <span class="toggle-thumb"></span>
+              </button>
+              ${t('providers.detail.notif_keyword_only')}
+            </label>
+            <small>${provider.notif_keyword_only
+              ? t('providers.detail.notif_keyword_only_help_on')
+              : t('providers.detail.notif_keyword_only_help_off')}</small>
+          </div>`
+        : html``}
 
       <div class="auto-activate-bar" style="margin-top: 1rem; display: flex; gap: 2rem; align-items: center; flex-wrap: wrap;">
         <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">

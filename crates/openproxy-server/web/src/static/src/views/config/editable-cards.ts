@@ -42,6 +42,7 @@ let livePiiEnabled = false;
 let livePiiReversible = true;
 let livePiiRedactLogs = true;
 let livePiiEntities: string[] = ["email", "phone", "ip", "credit_card", "secret", "person"];
+let liveNotificationsEnabled = true; // W3: default true
 
 function normalizePiiEntity(entity: string): string {
   if (entity === "card") return "credit_card";
@@ -79,6 +80,7 @@ export function applyServerConfig(payload: ConfigPayload): void {
   livePiiRedactLogs = pii.pii_redact_logs ?? true;
   const rawEntities: string[] = pii.pii_entities ?? ["email", "phone", "ip", "credit_card", "secret", "person"];
   livePiiEntities = Array.from(new Set(rawEntities.map(normalizePiiEntity)));
+  liveNotificationsEnabled = payload.notifications_enabled ?? true;
 }
 
 // ── Per-section save helpers (used by both the @change handlers
@@ -202,6 +204,27 @@ async function patchPiiConfig(cfgUpdate: {
   }
 }
 
+async function patchNotificationsEnabled(enabled: boolean): Promise<boolean> {
+  const prev = liveNotificationsEnabled;
+  liveNotificationsEnabled = enabled; // optimistic
+  requestUpdate();
+  try {
+    await api("/config/notifications-enabled", {
+      method: "PUT",
+      body: JSON.stringify({ notifications_enabled: enabled }),
+    });
+    const cfg = getConfig();
+    if (cfg) cfg.notifications_enabled = enabled;
+    showToast(t("config.notifications.toast.set", { value: String(enabled) }), "success");
+    return true;
+  } catch (e: unknown) {
+    liveNotificationsEnabled = prev; // revert
+    showToast(t("config.toast.error", { message: errStr(e) }), "error");
+    requestUpdate();
+    return false;
+  }
+}
+
 // ── @change / @click handlers (bound from the lit-html template) ────
 
 async function onTimeoutChange(field: TimeoutKey, e: Event): Promise<void> {
@@ -253,6 +276,11 @@ async function onToggleQuotaProtection(): Promise<void> {
   const nextEnabled = !liveQuotaProtectionEnabled;
   const ok = await patchQuotaProtection(nextEnabled, liveQuotaProtectionThreshold);
   if (ok) liveQuotaProtectionEnabled = nextEnabled;
+}
+
+// W3: global notifications master switch.
+async function onToggleNotificationsEnabled(): Promise<void> {
+  await patchNotificationsEnabled(!liveNotificationsEnabled);
 }
 
 async function onQuotaThresholdChange(e: Event): Promise<void> {
@@ -396,6 +424,25 @@ export function renderIdleChunkCard(): TemplateResult {
         <span class="config-help">${liveIdleChunkRetryable
           ? t("config.idle_chunk.help_on")
           : t("config.idle_chunk.help_off")}</span>
+      </label>
+    </div>
+  `);
+}
+
+export function renderNotificationsCard(): TemplateResult {
+  return card(t("config.notifications.title"), html`
+    <p class="muted">${t("config.notifications.description")}</p>
+    <div class="config-grid">
+      <label class="config-field">
+        <span class="config-label">${t("config.notifications.enabled")}</span>
+        <button type="button" role="switch" aria-checked=${liveNotificationsEnabled ? "true" : "false"}
+                class="toggle-btn ${liveNotificationsEnabled ? "on" : "off"}"
+                @click=${() => { void onToggleNotificationsEnabled(); }}>
+          <span class="toggle-thumb"></span>
+        </button>
+        <span class="config-help">${liveNotificationsEnabled
+          ? t("config.notifications.help_on")
+          : t("config.notifications.help_off")}</span>
       </label>
     </div>
   `);

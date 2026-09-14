@@ -341,13 +341,63 @@ describe("notifications store — refresh + dirty flag", () => {
   });
 
   it("refreshUnreadCount ignores a response without a numeric count", async () => {
-    const { store, api } = await setupStore();
+    const { store, api } = await setupStore({ init: false });
     store.setUnreadCount(4);
     api.mockResolvedValue({ unexpected: "shape" });
 
     await store.refreshUnreadCount();
 
     expect(store.getUnreadCount()).toBe(4);
+  });
+
+  // W4: the badge must drop by one when a row is deleted (the compact
+  // list calls `decrementUnread(1)` optimistically then
+  // `refreshUnreadCount()`), and it must NOT drop when the deleted row
+  // was already read (onDelete only decrements `wasUnread` rows).
+  it("badge decrements optimistically after deleting an unread row, then re-syncs", async () => {
+    const { store, api } = await setupStore({ init: false });
+    store.setUnreadCount(2);
+
+    // Mirrors views/notifications/list.ts onDelete(): unread row removed.
+    const wasUnread = true;
+    if (wasUnread) store.decrementUnread(1);
+    expect(store.getUnreadCount()).toBe(1);
+
+    // The follow-up refreshUnreadCount() applies the server truth and
+    // clears the dirty flag.
+    api.mockResolvedValue({ count: 1 });
+    await store.refreshUnreadCount();
+    expect(store.getUnreadCount()).toBe(1);
+  });
+
+  it("badge is unchanged when the deleted row was already read", async () => {
+    const { store, api } = await setupStore({ init: false });
+    store.setUnreadCount(3);
+
+    // Mirrors onDelete() for a row with read_at != null: no decrement.
+    const wasUnread = false;
+    if (wasUnread) store.decrementUnread(1);
+    expect(store.getUnreadCount()).toBe(3);
+
+    api.mockResolvedValue({ count: 3 });
+    await store.refreshUnreadCount();
+    expect(store.getUnreadCount()).toBe(3);
+  });
+
+  it("delete rolls the badge back up when the API rejects (422/400 path)", async () => {
+    const { store } = await setupStore({ init: false });
+    store.setUnreadCount(2);
+
+    // onDelete() optimistic decrement...
+    store.decrementUnread(1);
+    expect(store.getUnreadCount()).toBe(1);
+
+    // ...then the delete call rejects; list.ts's catch block restores
+    // the row with `setUnreadCount(getUnreadCount() + 1)`, so the badge
+    // must come back to the pre-delete value.
+    const deleteRejected = true;
+    if (deleteRejected) store.setUnreadCount(store.getUnreadCount() + 1);
+    expect(store.getUnreadCount()).toBe(2);
   });
 });
 

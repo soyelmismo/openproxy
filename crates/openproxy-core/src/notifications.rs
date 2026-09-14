@@ -30,6 +30,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast;
 
 pub const KIND_MODEL_NEW: &str = "model_new";
@@ -93,6 +94,29 @@ pub const CODE_QUOTA_LOW: &str = "quota_low";
 /// Process-global broadcast channel for real-time push to WS clients.
 /// Subscribed by `stream_usage_rows` in handlers/admin.rs (see F2).
 pub static NOTIF_TX: OnceLock<broadcast::Sender<NotificationEvent>> = OnceLock::new();
+
+/// Process-global master switch for notifications (W1). When `false`,
+/// every insert path early-returns without touching the DB and without
+/// broadcasting, so no row is created and no WS client is poked.
+///
+/// Default `true` (notifications on). Hydrated at boot from the
+/// `notifications_enabled` key in `app_config` by
+/// `openproxy-server/src/state.rs`, and flipped at runtime by
+/// `PUT /admin/api/config/notifications-enabled`.
+static NOTIFICATIONS_ENABLED: AtomicBool = AtomicBool::new(
+    openproxy_db::app_config::NOTIFICATIONS_ENABLED_DEFAULT,
+);
+
+/// Read the current global notifications flag.
+pub fn is_enabled() -> bool {
+    NOTIFICATIONS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Replace the live global notifications flag. Called by the admin
+/// PUT endpoint after the DB UPSERT and by the boot hydration path.
+pub fn set_enabled(enabled: bool) {
+    NOTIFICATIONS_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 /// Initialize the broadcast channel. Called once at server startup from
 /// state.rs. Idempotent — subsequent calls are no-ops and return the
@@ -165,8 +189,8 @@ pub struct SystemPayload {
 // ---------- DB operations (re-exported from openproxy-db) ----------
 
 pub use openproxy_db::notifications::{
-    NotificationRow, archive, archive_all, delete, insert, insert_many, list, mark_all_read,
-    mark_read, unread_count,
+    NotificationRow, RETENTION_DAYS, RETENTION_OFFSET, archive, archive_all, delete, insert,
+    insert_many, list, mark_all_read, mark_read, prune, unread_count,
 };
 
 /// Same as [`insert`] but also broadcasts the event to WS clients if a new
@@ -180,6 +204,11 @@ pub fn insert_and_broadcast(
     dedup_key: Option<&str>,
     provider_id: Option<&str>,
 ) -> Result<Option<i64>> {
+    // W1 global gate: when notifications are disabled, do NOT insert and
+    // do NOT broadcast. Callers treat `Ok(None)` as "nothing emitted".
+    if !is_enabled() {
+        return Ok(None);
+    }
     let id = insert(conn, kind, payload, dedup_key, provider_id)?;
     if let Some(id) = id {
         broadcast_one(conn, id, kind, payload)?;
@@ -200,6 +229,10 @@ pub fn broadcast_one(
     kind: &str,
     payload: &serde_json::Value,
 ) -> Result<()> {
+    // W1 global gate: nothing to broadcast when notifications are off.
+    if !is_enabled() {
+        return Ok(());
+    }
     let created_at = openproxy_db::notifications::get_created_at(conn, id)?
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     if let Some(tx) = try_get_tx() {
@@ -227,6 +260,10 @@ pub fn record_system(
     provider_id: Option<&str>,
     details: Option<&serde_json::Value>,
 ) -> Result<Option<i64>> {
+    // W1 global gate: skip payload construction + insert + broadcast.
+    if !is_enabled() {
+        return Ok(None);
+    }
     let payload = serde_json::json!({
         "code": code,
         "message": message,
@@ -234,6 +271,33 @@ pub fn record_system(
         "details": details,
     });
     insert_and_broadcast(conn, KIND_SYSTEM, &payload, Some(code), provider_id)
+}
+
+/// W1 gate helper for the batch insert path (`models::sync::upsert_many`).
+///
+/// Returns `true` when notifications are enabled and the caller should
+/// proceed with `insert_many`; `false` when the global switch is off and
+/// the caller must skip the INSERT entirely (no rows, no broadcast).
+pub fn insert_many_enabled() -> bool {
+    is_enabled()
+}
+
+/// Same contract as [`insert_many`] but honors the global W1 gate: when
+/// notifications are disabled it returns an empty result instead of
+/// inserting rows. Use this from transactional callers (e.g.
+/// `models::sync::upsert_many`) so the gate is enforced without breaking
+/// the DAO-level `insert_many` used by in-memory DAO tests.
+pub fn insert_many_gated(
+    conn: &Connection,
+    kind: &str,
+    rows: &[(serde_json::Value, Option<String>, Option<String>)],
+) -> Result<Vec<(i64, serde_json::Value)>> {
+    if !is_enabled() {
+        return Ok(Vec::new());
+    }
+    let res = openproxy_db::notifications::insert_many(conn, kind, rows)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    Ok(res)
 }
 
 #[cfg(test)]

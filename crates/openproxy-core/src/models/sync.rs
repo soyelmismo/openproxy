@@ -278,6 +278,14 @@ pub fn generate_events(
         return Ok(events);
     }
 
+    // W1 global gate: when notifications are disabled, skip every INSERT
+    // in this transaction and return no events (callers then broadcast
+    // nothing). The `notifications` table exists but we must not write
+    // rows while the master switch is off.
+    if !crate::notifications::insert_many_enabled() {
+        return Ok(events);
+    }
+
     let already_notified: std::collections::HashSet<String> = {
         let mut stmt = tx
             .prepare(
@@ -314,7 +322,7 @@ pub fn generate_events(
         .collect();
 
     if !new_models_rows.is_empty()
-        && let Ok(results) = crate::notifications::insert_many(
+        && let Ok(results) = crate::notifications::insert_many_gated(
             tx,
             crate::notifications::KIND_MODEL_NEW,
             &new_models_rows,
@@ -338,7 +346,7 @@ pub fn generate_events(
         })
         .collect();
 
-    if let Ok(results) = crate::notifications::insert_many(
+    if let Ok(results) = crate::notifications::insert_many_gated(
         tx,
         crate::notifications::KIND_MODEL_GONE,
         &deleted_models_rows,

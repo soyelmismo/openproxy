@@ -227,6 +227,39 @@ pub fn save_proxy_test_url(conn: &Connection, url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Default value for notifications_enabled flag.
+pub const NOTIFICATIONS_ENABLED_DEFAULT: bool = true;
+
+/// Load notifications_enabled flag. Defaults to true when the row is absent.
+pub fn load_notifications_enabled_from_db(conn: &Connection) -> Result<Option<bool>> {
+    let raw_opt: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_config WHERE key = 'notifications_enabled'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(crate::error::map_db_error)?;
+
+    match raw_opt {
+        Some(raw) => Ok(Some(serde_json::from_str::<bool>(&raw).unwrap_or(true))),
+        None => Ok(Some(true)),
+    }
+}
+
+/// Save notifications_enabled flag.
+pub fn save_notifications_enabled_to_db(conn: &Connection, value: bool, _now: i64) -> Result<()> {
+    let raw = serde_json::to_string(&value).map_err(crate::error::map_db_error)?;
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES ('notifications_enabled', ?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = ?1, updated_at = ?2",
+        params![raw, now],
+    )
+    .map_err(crate::error::map_db_error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +330,40 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(count, 5);
+        }
+    }
+
+    #[test]
+    fn notifications_enabled_roundtrip_through_db() {
+        let pool = DbPool::test_pool_with_prefix("openproxy-appcfg-notif").unwrap();
+
+        // Default is true even when no row exists yet
+        {
+            let w = pool.writer();
+            let got = load_notifications_enabled_from_db(&w).unwrap();
+            assert_eq!(got, Some(true));
+        }
+
+        // Save false
+        {
+            let w = pool.writer();
+            save_notifications_enabled_to_db(&w, false, 1_700_000_004).unwrap();
+        }
+        {
+            let w = pool.writer();
+            let got = load_notifications_enabled_from_db(&w).unwrap();
+            assert_eq!(got, Some(false));
+        }
+
+        // Save true again
+        {
+            let w = pool.writer();
+            save_notifications_enabled_to_db(&w, true, 1_700_000_005).unwrap();
+        }
+        {
+            let w = pool.writer();
+            let got = load_notifications_enabled_from_db(&w).unwrap();
+            assert_eq!(got, Some(true));
         }
     }
 }

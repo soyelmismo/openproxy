@@ -2502,18 +2502,19 @@ abbr {
   100% { transform: scale(1); }
 }
 
-/* Notifications view */
+/* Notifications view — compact rows: one notification per line. */
 .notification-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   align-items: stretch;
 }
 .notification-card {
-  display: grid;
-  grid-template-columns: 28px 1fr;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
   /* Faint background tint from the accent color — gives each
@@ -2541,13 +2542,15 @@ abbr {
   border-color: var(--card-accent, var(--color-primary));
 }
 .notification-card-icon {
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   line-height: 1;
   text-align: center;
+  flex: 0 0 auto;
+  width: 24px;
   /* `--icon-color` is set inline (via `style="--icon-color: var(--color-warn);"`)
-   * by `renderCard` for `system` notifications whose `payload.code`
+   * by `renderRow` for `system` notifications whose `payload.code`
    * has a per-code color override (see `SYSTEM_CODE_COLOR_VAR` in
-   * `views/notifications.ts`). When unset, falls back to the default
+   * `views/notifications/shared.ts`). When unset, falls back to the default
    * `--card-accent` / `--color-text-muted` coloring. */
   color: var(--icon-color, var(--card-accent, var(--color-text-muted)));
 }
@@ -2557,14 +2560,16 @@ abbr {
 .notification-card-body {
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  height: 100%;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
 }
 .notification-card-text {
   font-size: var(--fs-sm);
   word-break: break-word;
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .notification-card-meta {
   display: flex;
@@ -2572,7 +2577,9 @@ abbr {
   align-items: center;
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .notification-card-kind {
   text-transform: uppercase;
@@ -2595,9 +2602,27 @@ abbr {
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  flex-wrap: wrap;
-  margin-top: auto;
-  padding-top: var(--space-1);
+  flex-wrap: nowrap;
+  margin-top: 0;
+  padding-top: 0;
+  flex: 0 0 auto;
+}
+/* Mobile (≤640px): stack the card vertically so the meta and
+ * actions wrap instead of overflowing the viewport. Desktop layout
+ * and the drag-and-drop handlers are untouched (flex-direction and
+ * DnD attributes are not modified above 640px). */
+@media (max-width: 640px) {
+  .notification-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .notification-card-meta {
+    white-space: normal;
+    flex-wrap: wrap;
+  }
+  .notification-card-actions {
+    flex-wrap: wrap;
+  }
 }
 .notification-empty {
   padding: var(--space-6) var(--space-4);

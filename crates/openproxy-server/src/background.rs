@@ -464,6 +464,24 @@ pub(crate) fn prune_usage_and_dead_proxies(
             "prune_usage_and_dead_proxies: writer lock contention, skipping dead-proxy prune"
         );
     }
+    // W1 retention: notifications older than 1 day are deleted only when
+    // they are archived or read — unread active rows are never touched.
+    // Runs on the same hourly maintenance tick as usage pruning.
+    if let Some(w) = prune_pool.try_writer_for(std::time::Duration::from_secs(5)) {
+        match openproxy_db::notifications::prune(&w) {
+            Ok(deleted) if deleted > 0 => {
+                tracing::info!(deleted, "pruned stale notifications (retention 1 day)");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "notification prune failed");
+            }
+        }
+    } else {
+        tracing::warn!(
+            "prune_usage_and_dead_proxies: writer lock contention, skipping notification prune"
+        );
+    }
 }
 
 pub(crate) fn execute_vacuum_cycle(

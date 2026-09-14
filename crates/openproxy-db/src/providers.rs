@@ -27,6 +27,9 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
         rate_limit_scope,
     } = new;
     let result = conn.execute(
+        // `notif_keyword_only` is intentionally absent: the column is
+        // `NOT NULL DEFAULT 0` (migration 000074) so a freshly created
+        // provider starts with the toggle off.
         "INSERT INTO providers(id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, rate_limit_scope) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
@@ -55,7 +58,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 crate::def_table_select!(
     provider_select,
     "providers",
-    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64"
+    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64, notif_keyword_only"
 );
 
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
@@ -99,6 +102,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         rate_limit_scope: @enum_parse(12, RateLimitScope),
         proxy_rotation_mode: @box_str(13),
         favicon_base64: @opt_box_str(14),
+        notif_keyword_only: @bool(15),
     })
 }
 

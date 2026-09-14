@@ -145,6 +145,9 @@ export interface Provider {
   metadata?: ProviderMetadata;
   active_models?: number;
   total_models?: number;
+  /** W2: when true, only fire a notification for newly discovered
+   *  models that match this provider's `auto_activate_keyword`. */
+  notif_keyword_only?: boolean;
 }
 
 // ----------------------------------------------------------------------------

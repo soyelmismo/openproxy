@@ -25,6 +25,9 @@ pub struct RuntimeConfigResponse {
     pub pii_reversible: bool,
     pub pii_redact_logs: bool,
     pub pii_entities: Vec<openproxy_types::config::PiiEntity>,
+    /// When false, notification inserts and broadcasts are globally
+    /// suppressed (W1). Default true.
+    pub notifications_enabled: bool,
 }
 
 pub fn router() -> axum::Router<AppState> {
@@ -51,6 +54,10 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/maintenance",
             axum::routing::get(get_maintenance_config).put(put_maintenance_config),
+        )
+        .route(
+            "/notifications-enabled",
+            axum::routing::put(put_notifications_enabled),
         )
         .route("/vacuum-status", axum::routing::get(get_vacuum_status))
         .route("/backfill-status", axum::routing::get(get_backfill_status))
@@ -82,6 +89,7 @@ pub async fn get_runtime_config(
         pii_redact_logs: pii.pii_redact_logs,
         pii_entities: pii.pii_entities.clone(),
         pii,
+        notifications_enabled: s.notifications_enabled(),
     }))
 }
 
@@ -313,6 +321,36 @@ runtime_config_put!(
         response: serde_json::json!({
             "recording_ttl_secs": ttl_secs,
             "applies_to": "next_prune_tick",
+        }),
+    }
+);
+
+// PUT /admin/api/config/notifications-enabled
+//
+// Toggle the global notifications master switch (W1). When disabled,
+// notification inserts and broadcasts are suppressed everywhere; when
+// re-enabled, generation resumes. Persisted under the
+// `notifications_enabled` key in `app_config`; the live flag is flipped
+// immediately so subsequent requests are gated without a restart.
+runtime_config_put!(
+    put_notifications_enabled(Json(body)) -> enabled {
+        extract: body
+            .get("notifications_enabled")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "notifications_enabled must be a boolean".into(),
+                ))
+            })?,
+        save: core_db::app_config::save_notifications_enabled_to_db,
+        state: set_notifications_enabled,
+        log: tracing::info!(
+            enabled = enabled,
+            "updated notifications_enabled via admin API"
+        ),
+        response: serde_json::json!({
+            "notifications_enabled": enabled,
+            "applies_to": "next_notification_event",
         }),
     }
 );

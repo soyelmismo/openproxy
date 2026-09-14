@@ -1822,6 +1822,7 @@ mod tests {
               favicon_base64 TEXT,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              notif_keyword_only INTEGER NOT NULL DEFAULT 0 CHECK (notif_keyword_only IN (0, 1)),
               CHECK (format IN ('openai', 'anthropic', 'mixed', 'gemini', 'responses'))
             );
             CREATE TABLE accounts (

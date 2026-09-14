@@ -336,11 +336,57 @@ async function onDismiss(r: NotificationRow): Promise<void> {
   await archive(r.id);
 }
 
+// W3: model_* notifications inside the 30-day audit window are not
+// deletable by the server (it answers 422 validation). Hide the
+// delete button for those rows so the user can't trigger a doomed
+// request; we also guard the handler on the same condition.
+function isDeletable(r: NotificationRow): boolean {
+  if (r.kind !== "model_new" && r.kind !== "model_gone" && r.kind !== "model_auto_activated") {
+    return true; // system rows are always deletable
+  }
+  // model_* rows are only deletable once older than 30 days. We
+  // don't have the server's exact boundary on the client, so we
+  // rely on the conditional button + 422 toast fallback below.
+  return false;
+}
+
+// DELETE /notifications/{id} — W3. Behaves like archive for the badge:
+// decrement the unread count and refresh it from the server, because
+// the row leaves the active list either way.
+async function onDelete(r: NotificationRow): Promise<void> {
+  if (!isDeletable(r)) return;
+  const snapshot: NotificationRow[] = rows;
+  const wasUnread: boolean = rows.find((x) => x.id === r.id)?.read_at === null;
+  rows = rows.filter((x) => x.id !== r.id);
+  if (wasUnread) decrementUnread(1);
+  requestUpdate();
+
+  if (hasMore && !isLoadingMore && (rows.length < 10 || (filter !== "all" && rows.filter(matchesFilter).length === 0))) {
+    void loadMore();
+  }
+
+  try {
+    await api(`/notifications/${r.id}`, { method: "DELETE" });
+    void refreshUnreadCount();
+  } catch (e: unknown) {
+    // The server answers 422 for model_* rows inside the audit
+    // window we couldn't predict client-side — surface it and
+    // roll the row back.
+    rows = snapshot;
+    if (wasUnread) {
+      setUnreadCount(getUnreadCount() + 1);
+    }
+    requestUpdate();
+    void refreshUnreadCount();
+    showToast(t("notifications.error.delete_failed"), "error");
+  }
+}
+
 // ==========
-// Card rendering
+// Row rendering (compact: one row per notification)
 // ==========
 
-function renderCard(r: NotificationRow): TemplateResult {
+function renderRow(r: NotificationRow): TemplateResult {
   const icon: TemplateResult = notificationIcon(r);
   const iconColorVar: string | null = notificationIconColorVar(r);
   const cardColor: string = notificationCardColor(r);
@@ -349,8 +395,9 @@ function renderCard(r: NotificationRow): TemplateResult {
   const unread: boolean = isUnread(r);
   const draggable: boolean = DRAGGABLE_KINDS.has(r.kind) && !!payloadModelId(r) && !!payloadProviderId(r);
   const showAddToCombo: boolean = DRAGGABLE_KINDS.has(r.kind);
-  const cardClasses: string = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
-  const cardStyle: string = `--card-accent: ${cardColor};${iconColorVar ? ` --icon-color: ${iconColorVar};` : ""}`;
+  const deletable: boolean = isDeletable(r);
+  const rowClasses: string = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
+  const rowStyle: string = `--card-accent: ${cardColor};${iconColorVar ? ` --icon-color: ${iconColorVar};` : ""}`;
   const dragStartHandler: ((e: DragEvent) => void) | null = draggable
     ? (e: DragEvent) => {
         const providerId: string = payloadProviderId(r);
@@ -374,19 +421,19 @@ function renderCard(r: NotificationRow): TemplateResult {
         closeOverlay();
       }
     : null;
-  return html`<div class=${cardClasses} data-id=${String(r.id)}
-      style=${cardStyle}
+  return html`<div class=${rowClasses} data-id=${String(r.id)}
+      style=${rowStyle}
       draggable=${draggable ? "true" : "false"}
       @dragstart=${dragStartHandler}
       @dragend=${dragEndHandler}
     >
-    <div class="notification-card-icon" style=${cardStyle} aria-hidden="true">${icon}</div>
+    <div class="notification-card-icon" style=${rowStyle} aria-hidden="true">${icon}</div>
     <div class="notification-card-body">
       <div class="notification-card-text">${body}</div>
       <div class="notification-card-meta">
         <span class="notification-card-kind">${notificationKindLabel(r)}</span>
         ${ago ? html`<span class="notification-card-ago">${ago}</span>` : nothing}
-        ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")}></span>` : nothing}
+        ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")} aria-label=${t("common.unread")}></span>` : nothing}
       </div>
       <div class="notification-card-actions">
         ${payloadProviderId(r)
@@ -395,7 +442,13 @@ function renderCard(r: NotificationRow): TemplateResult {
         ${showAddToCombo
           ? html`<button class="small" @click=${() => onAddToComboClick(r)}>${t("notifications.action.add_to_combo")}</button>`
           : nothing}
+        ${unread
+          ? html`<button class="small" @click=${() => { void markAsRead(r.id); }}>${t("notifications.action.mark_read")}</button>`
+          : nothing}
         <button class="small danger" @click=${() => { void onDismiss(r); }}>${t("notifications.action.dismiss")}</button>
+        ${deletable
+          ? html`<button class="small danger" @click=${() => { void onDelete(r); }}>${t("notifications.action.delete")}</button>`
+          : nothing}
       </div>
     </div>
   </div>`;
@@ -462,7 +515,7 @@ function renderList(): TemplateResult {
       ${hasMore ? renderLoadMoreButton() : nothing}
     </div>`;
   }
-  return html`${noUnreadHint}<div class="notification-list">${filtered.map(renderCard)}</div>${hasMore ? html`
+  return html`${noUnreadHint}<div class="notification-list">${filtered.map(renderRow)}</div>${hasMore ? html`
     <div style="display:flex;justify-content:center;margin:var(--space-4, 1rem) 0;">
       ${renderLoadMoreButton()}
     </div>

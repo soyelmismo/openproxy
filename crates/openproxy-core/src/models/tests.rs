@@ -23,6 +23,7 @@ fn fresh_db() -> Connection {
                  health_status TEXT NOT NULL DEFAULT 'healthy',
                  active        INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
                  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                 notif_keyword_only INTEGER NOT NULL DEFAULT 0 CHECK (notif_keyword_only IN (0, 1)),
                  CHECK (health_status IN ('healthy', 'degraded', 'unhealthy'))
              );
              CREATE TABLE models (

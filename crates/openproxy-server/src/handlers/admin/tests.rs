@@ -1547,3 +1547,120 @@ async fn put_pii_persists_new_config_and_updates_memory() {
     assert_eq!(json["pii"]["pii_enabled"], true);
     assert_eq!(json["pii"]["pii_redact_logs"], false);
 }
+
+/// W2 (migration 000074): end-to-end PATCH through the *mounted* admin
+/// router. Exercises the real HTTP path — `providers::router()` ->
+/// `update_provider` -> `Json<UpdateProviderInput>` -> `core_admin` ->
+/// SQL — and reads the persisted column back from the DB.
+#[tokio::test]
+async fn patch_provider_sets_notif_keyword_only_over_http() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+
+    // Seed a provider row directly (create endpoint is out of scope here).
+    {
+        let w = state.db_pool().writer();
+        openproxy_db::providers::create(
+            &w,
+            openproxy_db::providers::NewProvider {
+                id: &openproxy_types::ProviderId::new("w2http"),
+                name: "W2 HTTP",
+                base_url: "https://example.invalid",
+                auth_type: openproxy_types::AuthType::Bearer,
+                format: openproxy_types::ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: Some("claude"),
+                rate_limit_scope: openproxy_types::RateLimitScope::Account,
+            },
+        )
+        .expect("seed provider");
+    }
+
+    let read_flag = |state: &AppState| -> i64 {
+        state
+            .db_pool()
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT notif_keyword_only FROM providers WHERE id = 'w2http'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+            })
+            .expect("read flag")
+    };
+    assert_eq!(read_flag(&state), 0, "default must be 0 before the PATCH");
+
+    let app = axum::Router::new()
+        .nest("/admin/providers", super::providers::router())
+        .with_state(state.clone());
+
+    // PATCH only the toggle.
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/admin/providers/w2http")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"notif_keyword_only": true}"#))
+        .expect("build req");
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("PATCH hung >5s")
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK, "PATCH must return 200");
+    assert_eq!(read_flag(&state), 1, "toggle must persist as 1 over HTTP");
+
+    // The PATCH must not clobber the sibling keyword column.
+    let kw: Option<String> = state
+        .db_pool()
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT auto_activate_keyword FROM providers WHERE id = 'w2http'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+        })
+        .expect("read keyword");
+    assert_eq!(kw.as_deref(), Some("claude"), "sibling column untouched");
+
+    // Flip it back off through the same route.
+    let app = axum::Router::new()
+        .nest("/admin/providers", super::providers::router())
+        .with_state(state.clone());
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/admin/providers/w2http")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"notif_keyword_only": false}"#))
+        .expect("build req");
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("PATCH hung >5s")
+        .expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(read_flag(&state), 0, "toggle must flip back to 0");
+
+    // Bad type is rejected, not silently coerced.
+    let app = axum::Router::new()
+        .nest("/admin/providers", super::providers::router())
+        .with_state(state.clone());
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/admin/providers/w2http")
+        .header("authorization", format!("Bearer {plaintext}"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"notif_keyword_only": "yes"}"#))
+        .expect("build req");
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("PATCH hung >5s")
+        .expect("oneshot");
+    assert!(
+        resp.status().is_client_error(),
+        "non-bool must be a 4xx, got {:?}",
+        resp.status()
+    );
+    assert_eq!(read_flag(&state), 0, "rejected PATCH must not mutate");
+}

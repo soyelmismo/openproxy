@@ -64,6 +64,8 @@ export interface ConfigPayload {
     pii_redact_logs?: boolean | null;
     pii_entities?: string[] | null;
   } | null;
+  /** W3: global notifications master switch (top-level in the payload). */
+  notifications_enabled?: boolean | null;
   pii_enabled?: boolean | null;
   pii_reversible?: boolean | null;
   pii_redact_logs?: boolean | null;

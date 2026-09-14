@@ -290,6 +290,12 @@ pub fn get_created_at(conn: &Connection, id: i64) -> Result<Option<String>> {
 /// - `before_id`: for cursor pagination — only return rows with `id < before_id`.
 ///
 /// Archived rows (`archived_at IS NOT NULL`) are always excluded.
+///
+/// W1 retention window: rows older than [`RETENTION_DAYS`] are also
+/// excluded so the tray never shows entries the prune job is about to
+/// delete. `created_at` is stored as `datetime('now')` (UTC,
+/// `YYYY-MM-DD HH:MM:SS`), which compares correctly against
+/// `datetime('now', '-1 day')`.
 pub fn list(
     conn: &Connection,
     unread_only: bool,
@@ -300,31 +306,70 @@ pub fn list(
     let sql = if unread_only {
         notification_select!(
             "WHERE archived_at IS NULL AND read_at IS NULL \
+             AND created_at >= datetime('now', ?3) \
              AND id < COALESCE(?1, 9223372036854775807) \
              ORDER BY id DESC LIMIT ?2"
         )
     } else {
         notification_select!(
             "WHERE archived_at IS NULL \
+             AND created_at >= datetime('now', ?3) \
              AND id < COALESCE(?1, 9223372036854775807) \
              ORDER BY id DESC LIMIT ?2"
         )
     };
 
-    crate::db_query_all!(conn, sql, params![before_id, limit], "list notifications")
+    crate::db_query_all!(
+        conn,
+        sql,
+        params![before_id, limit, RETENTION_OFFSET],
+        "list notifications"
+    )
 }
 
-/// Count unread, non-archived notifications.
+/// Count unread, non-archived notifications inside the W1 retention
+/// window, so the dashboard badge matches what [`list`] can actually
+/// return (a badge counting rows the tray no longer shows would lie).
 pub fn unread_count(conn: &Connection) -> Result<i64> {
     let count: Option<i64> = crate::db_query_one!(
         conn,
         "SELECT COUNT(*) FROM notifications \
-         WHERE read_at IS NULL AND archived_at IS NULL",
-        [],
+         WHERE read_at IS NULL AND archived_at IS NULL \
+         AND created_at >= datetime('now', ?1)",
+        params![RETENTION_OFFSET],
         |row| row.get(0),
         "unread_count"
     )?;
     Ok(count.unwrap_or(0))
+}
+
+/// W1 fixed retention: prune only archived-or-read notifications older
+/// than this many days. Unread active rows are NEVER deleted (the user
+/// hasn't seen them yet), so the tray can't silently lose a pending
+/// alert. `created_at` is `datetime('now')` — same format as
+/// `datetime('now', <offset>)`, so the comparison is a plain string
+/// compare on UTC timestamps.
+pub const RETENTION_DAYS: i64 = 1;
+
+/// SQLite modifier passed to `datetime('now', ...)` for [`RETENTION_DAYS`].
+/// Kept as a constant so `list`/`unread_count`/`prune` can never drift
+/// apart: the visual window and the delete window must be identical.
+pub const RETENTION_OFFSET: &str = "-1 day";
+
+/// Delete notifications older than [`RETENTION_DAYS`] **only** when they
+/// are archived or read. Returns the number of rows deleted.
+///
+/// Safety contract (W1): a row with `archived_at IS NULL AND read_at IS
+/// NULL` is never touched, no matter how old it is.
+pub fn prune(conn: &Connection) -> Result<usize> {
+    crate::db_execute!(
+        conn,
+        "DELETE FROM notifications \
+         WHERE created_at < datetime('now', ?1) \
+         AND (archived_at IS NOT NULL OR read_at IS NOT NULL)",
+        params![RETENTION_OFFSET],
+        "prune notifications"
+    )
 }
 
 /// Mark a single notification as read (sets `read_at` to now). Idempotent.
@@ -497,5 +542,103 @@ mod tests {
         let reinserted = insert_many(&conn, "model_new", &rows).unwrap();
         assert_eq!(reinserted.len(), count);
         assert_eq!(inserted, reinserted);
+    }
+
+    /// W1: prune deletes only archived/read rows older than 1 day; a
+    /// 2-day-old UNREAD active row must survive untouched.
+    #[test]
+    fn prune_keeps_old_unread_deletes_old_read_and_archived() {
+        let conn = fresh_db();
+        let mk = |dedup: &str| {
+            insert(
+                &conn,
+                "model_new",
+                &serde_json::json!({}),
+                Some(dedup),
+                Some("p1"),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let old_unread = mk("old_unread");
+        let old_read = mk("old_read");
+        let old_archived = mk("old_archived");
+        let fresh_unread = mk("fresh_unread");
+        mark_read(&conn, old_read).unwrap();
+        archive(&conn, old_archived).unwrap();
+
+        // Age the first three rows to 2 days old; leave the 4th fresh.
+        conn.execute(
+            "UPDATE notifications SET created_at = datetime('now', '-2 days') WHERE id IN (?1, ?2, ?3)",
+            params![old_unread, old_read, old_archived],
+        )
+        .unwrap();
+
+        let deleted = prune(&conn).unwrap();
+        assert_eq!(deleted, 2, "only the old read + old archived rows go");
+
+        let survivors: Vec<i64> = {
+            let mut stmt = conn
+                .prepare("SELECT id FROM notifications ORDER BY id")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).unwrap();
+            rows.filter_map(std::result::Result::ok).collect()
+        };
+        assert!(
+            survivors.contains(&old_unread),
+            "2-day-old UNREAD row must never be pruned"
+        );
+        assert!(
+            survivors.contains(&fresh_unread),
+            "fresh row must survive"
+        );
+        assert!(!survivors.contains(&old_read));
+        assert!(!survivors.contains(&old_archived));
+    }
+
+    /// W1: list()/unread_count() hide rows older than the 1-day window so
+    /// the tray and badge can't advertise rows prune will delete.
+    #[test]
+    fn list_and_unread_count_apply_one_day_window() {
+        let conn = fresh_db();
+        let fresh = insert(
+            &conn,
+            "model_new",
+            &serde_json::json!({}),
+            Some("win:fresh"),
+            Some("p1"),
+        )
+        .unwrap()
+        .unwrap();
+        let stale = insert(
+            &conn,
+            "model_new",
+            &serde_json::json!({}),
+            Some("win:stale"),
+            Some("p1"),
+        )
+        .unwrap()
+        .unwrap();
+        conn.execute(
+            "UPDATE notifications SET created_at = datetime('now', '-2 days') WHERE id = ?1",
+            params![stale],
+        )
+        .unwrap();
+
+        let ids: Vec<i64> = list(&conn, false, 50, None)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert!(ids.contains(&fresh));
+        assert!(
+            !ids.contains(&stale),
+            "list() must exclude rows outside the 1-day window"
+        );
+        assert_eq!(
+            unread_count(&conn).unwrap(),
+            1,
+            "badge must not count out-of-window rows"
+        );
     }
 }

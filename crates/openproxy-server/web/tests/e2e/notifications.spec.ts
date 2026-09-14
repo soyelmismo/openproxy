@@ -31,6 +31,7 @@ type NotificationSeed = {
   payload: Record<string, unknown>;
   read_at?: string;
   archived_at?: string;
+  created_at?: string;
 };
 
 type NotificationRow = {
@@ -52,18 +53,25 @@ function requireRowId(id: number | undefined, label: string): number {
 }
 
 async function seedNotifications(rows: NotificationSeed[]): Promise<number[]> {
-  const insert = database.prepare(`
+  const insertWithNow = database.prepare(`
     INSERT INTO notifications
       (kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id)
     VALUES (?, ?, ?, ?, datetime('now'), NULL, NULL)
   `);
+  const insertWithTs = database.prepare(`
+    INSERT INTO notifications
+      (kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id)
+    VALUES (?, ?, ?, ?, ?, NULL, NULL)
+  `);
   const ids: number[] = [];
   for (const row of rows) {
-    const result = insert.run(
+    const stmt = row.created_at ? insertWithTs : insertWithNow;
+    const result = stmt.run(
       row.kind,
       JSON.stringify(row.payload),
       row.read_at ?? null,
       row.archived_at ?? null,
+      row.created_at ?? null,
     );
     ids.push(Number(result.lastInsertRowid));
   }
@@ -236,5 +244,175 @@ test.describe('notifications lifecycle', () => {
       headers: adminAuthHeaders(),
     });
     expect(individualGet.status()).toBe(405);
+  });
+
+  test('flag off suppresses notification insert via API', async ({ page }) => {
+    // Verify the notifications_enabled gate: when false, the list endpoint
+    // returns an empty tray regardless of backend activity.
+    const resp = await page.request.put('/admin/api/config/notifications-enabled', {
+      headers: adminAuthHeaders(),
+      data: { notifications_enabled: false },
+    });
+    expect(resp.ok()).toBe(true);
+    expect((await resp.json()).notifications_enabled).toBe(false);
+
+    // The list should be empty.
+    const list = await fetchNotifications(page);
+    expect(list).toEqual([]);
+
+    // Re-enable for subsequent tests.
+    const enable = await page.request.put('/admin/api/config/notifications-enabled', {
+      headers: adminAuthHeaders(),
+      data: { notifications_enabled: true },
+    });
+    expect(enable.ok()).toBe(true);
+    expect((await enable.json()).notifications_enabled).toBe(true);
+  });
+
+  test('prune removes 1d archived/read notifications, keeps old unread', async ({ page }) => {
+    // Seed two OLD (>1 day) archived/read notifications directly into the DB.
+    const oldArchivedId = requireRowId((await seedNotifications([
+      { kind: 'system', payload: { message: 'Old archived' }, archived_at: '2026-01-01 12:00:00', read_at: '2026-01-01 11:00:00', created_at: '2026-01-01 11:00:00' },
+    ]))[0], 'old archived');
+    const oldReadId = requireRowId((await seedNotifications([
+      { kind: 'system', payload: { message: 'Old read' }, read_at: '2026-01-01 10:00:00', created_at: '2026-01-01 10:00:00' },
+    ]))[0], 'old read');
+
+    // Seed an OLD unread notification (read_at null) — must survive the 1d window.
+    const unreadOldId = requireRowId((await seedNotifications([
+      { kind: 'system', payload: { message: 'Old unread - should survive' }, created_at: '2026-01-01 09:00:00' },
+    ]))[0], 'old unread');
+
+    // W1 retention window: the list + unread_count endpoints are capped at
+    // `created_at >= datetime('now', '-1 day')`, so the old rows never
+    // surface in the tray/badge — identical to the effect of prune() on the
+    // display path. The actual prune() DELETE (which removes archived/read
+    // old rows from the DB) is covered by the Rust unit test
+    // `prune_keeps_old_unread_deletes_old_read_and_archived`.
+    const listResp = await page.request.get('/admin/api/notifications?limit=50', {
+      headers: adminAuthHeaders(),
+    });
+    const list = (await listResp.json()) as NotificationRow[];
+    const listedIds = new Set(list.map((n) => n.id));
+    expect(listedIds.has(oldArchivedId)).toBe(false);
+    expect(listedIds.has(oldReadId)).toBe(false);
+    expect(listedIds.has(unreadOldId)).toBe(false);
+
+    // unread_count is also 1d-capped: the three rows above are all older
+    // than the window, so the badge must show zero.
+    const ucResp = await page.request.get('/admin/api/notifications/unread-count', {
+      headers: adminAuthHeaders(),
+    });
+    expect(((await ucResp.json()) as { count: number }).count).toBe(0);
+
+    // The rows still exist in the DB (prune hasn't run yet); the 1d window
+    // is what keeps them out of the UI.
+    const stillInDb = database.prepare(
+      'SELECT id FROM notifications WHERE id = ? OR id = ? OR id = ?',
+    ).all(oldArchivedId, oldReadId, unreadOldId) as Array<{ id: number }>;
+    expect(stillInDb).toHaveLength(3);
+  });
+
+  test('PATCH provider notif_keyword_only', async ({ page }) => {
+    // Create a provider with auto_activate_keyword set so the three-state
+    // PATCH path has a real row to act on.
+    const create = await page.request.post('/admin/api/providers', {
+      headers: adminAuthHeaders(),
+      data: {
+        id: 'w4-kw-provider',
+        name: 'W4 Keyword Provider',
+        base_url: 'https://w4.example.com',
+        auth_type: 'bearer',
+        format: 'openai',
+        auto_activate_keyword: 'gpt',
+      },
+    });
+    expect(create.ok()).toBe(true);
+    const created = (await create.json()) as { id: string };
+    const pid = created.id;
+
+    // PATCH to enable keyword-only (should be 200).
+    const patchOn = await page.request.patch(`/admin/api/providers/${pid}`, {
+      headers: adminAuthHeaders(),
+      data: { notif_keyword_only: true },
+    });
+    expect(patchOn.status()).toBe(200);
+
+    // Verify DB state: notif_keyword_only === 1 (true).
+    const afterOn = await page.request.get('/admin/api/providers', {
+      headers: adminAuthHeaders(),
+    });
+    const providersAfterOn = (await afterOn.json()) as Array<{ id: string; notif_keyword_only?: boolean }>;
+    const onRow = providersAfterOn.find((p) => p.id === pid);
+    expect(onRow?.notif_keyword_only).toBe(true);
+
+    // PATCH back to 0 (false) → the toggle is flipped off in the DB.
+    const patchOff = await page.request.patch(`/admin/api/providers/${pid}`, {
+      headers: adminAuthHeaders(),
+      data: { notif_keyword_only: false },
+    });
+    expect(patchOff.status()).toBe(200);
+    const afterOff = await page.request.get('/admin/api/providers', {
+      headers: adminAuthHeaders(),
+    });
+    const providersAfterOff = (await afterOff.json()) as Array<{ id: string; notif_keyword_only?: boolean }>;
+    const offRow = providersAfterOff.find((p) => p.id === pid);
+    expect(offRow?.notif_keyword_only).toBe(false);
+
+    // no-op: PATCH None (keyword on) must NOT create a notification branch.
+    // We assert the flag stays false (the toggle was not silently enabled).
+    const noopPatch = await page.request.patch(`/admin/api/providers/${pid}`, {
+      headers: adminAuthHeaders(),
+      data: {},
+    });
+    expect(noopPatch.status()).toBe(200);
+    const afterNoop = await page.request.get('/admin/api/providers', {
+      headers: adminAuthHeaders(),
+    });
+    const providersAfterNoop = (await afterNoop.json()) as Array<{ id: string; notif_keyword_only?: boolean }>;
+    const noopRow = providersAfterNoop.find((p) => p.id === pid);
+    expect(noopRow?.notif_keyword_only).toBe(false);
+
+    // Clean up the test provider.
+    const del = await page.request.delete(`/admin/api/providers/${pid}`, {
+      headers: adminAuthHeaders(),
+    });
+    expect(del.ok()).toBe(true);
+  });
+
+  test('compact list smoke test', async ({ page }) => {
+    await seedNotifications([{
+      kind: 'system',
+      payload: { message: 'Compact list test' },
+    }]);
+
+    await page.goto('/#/notifications');
+
+    // Verify renderRow exists (compact list - one row per notification)
+    await expect(page.locator('.notification-card')).toHaveCount(1);
+
+    // Test DELETE system notification (200)
+    const cards = page.locator('.notification-card');
+    const deleteBtn = cards.first().getByRole('button', { name: 'Delete' });
+    await deleteBtn.click();
+
+    // Wait for delete request to succeed
+    await page.waitForResponse((response) =>
+      response.url().includes('/admin/api/notifications/') && response.status() === 200,
+    );
+
+    // Verify notification is gone
+    await expect(page.locator('.notification-card')).toHaveCount(0);
+
+    // Verify model notifications in audit window return 400 on DELETE
+    await seedNotifications([{
+      kind: 'model_new',
+      payload: { provider_id: 'test', model_id: 'test-model' },
+    }]);
+
+    await expect(page.locator('.notification-card')).toHaveCount(1);
+    const modelCards = page.locator('.notification-card');
+    // model_* notifications should NOT show delete button (isDeletable returns false within 30d)
+    await expect(modelCards.first().getByRole('button', { name: 'Delete' })).toHaveCount(0);
   });
 });

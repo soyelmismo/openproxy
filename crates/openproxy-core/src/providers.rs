@@ -83,7 +83,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
     let row = conn
         .query_row(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64, notif_keyword_only \
              FROM providers WHERE id = ?1",
             params![id.as_str()],
             row_to_provider,
@@ -114,7 +114,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
 pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64, notif_keyword_only \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -142,7 +142,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
 pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64 \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64, notif_keyword_only \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -330,6 +330,13 @@ pub struct UpdateProviderParams<'a> {
     pub proxy_rotation_errors: Option<&'a str>,
     pub proxy_rotation_mode: Option<&'a str>,
     pub rate_limit_scope: Option<RateLimitScope>,
+    /// Three-state toggle for `providers.notif_keyword_only` (migration 000074):
+    /// * `None` — column not part of this update (no-op).
+    /// * `Some(Some(true/false))` — set the flag to 1 / 0.
+    /// * `Some(None)` — normalise to 0 (`false`); the column is NOT NULL so it
+    ///   cannot truly be cleared. Kept for symmetry with
+    ///   `auto_activate_keyword`.
+    pub notif_keyword_only: Option<Option<bool>>,
 }
 
 /// Partial update: only the fields the caller supplies are touched.
@@ -378,6 +385,12 @@ fn build_provider_update_clauses(
     if let Some(v) = params.rate_limit_scope {
         sets.push("rate_limit_scope = ?");
         bound_values.push(Box::new(v.as_str().to_string()));
+    }
+    if let Some(v) = params.notif_keyword_only {
+        sets.push("notif_keyword_only = ?");
+        // Three-state: `Some(None)` (explicit null) normalises to 0 because
+        // the column is NOT NULL DEFAULT 0 — it cannot be cleared.
+        bound_values.push(Box::new(i64::from(v.unwrap_or(false))));
     }
 }
 
@@ -484,6 +497,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let use_proxies = use_proxies != 0;
     let proxy_rotation_mode: String = row.get(13)?;
     let favicon_base64: Option<String> = row.get(14)?;
+    let notif_keyword_only: i64 = row.get(15)?;
 
     Ok(Provider {
         id: ProviderId::new(id),
@@ -501,6 +515,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         rate_limit_scope,
         proxy_rotation_mode: proxy_rotation_mode.into_boxed_str(),
         favicon_base64: favicon_base64.map(String::into_boxed_str),
+        notif_keyword_only: notif_keyword_only != 0,
     })
 }
 

@@ -1776,6 +1776,7 @@ mod tests {
             format,
             extra_headers_json: None,
             auto_activate_keyword: None,
+            notif_keyword_only: false,
             rate_limit_scope: openproxy_types::RateLimitScope::Account,
             active: true,
             created_at: "2026-01-01T00:00:00Z".into(),
