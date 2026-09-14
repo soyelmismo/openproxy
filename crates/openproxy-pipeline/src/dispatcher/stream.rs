@@ -186,12 +186,22 @@ impl UpstreamDispatcher {
             }
         }
 
-        // If stream ended without [DONE], flush any pending PII restoration stage buffer to client
-        if !state.done_sent
-            && let Some(residual_json) = state.pii_stage.as_mut().and_then(|s| s.finalize())
-        {
-            let sse_bytes = crate::sse::build_sse_frame(&residual_json);
-            let _ = sink.send(sse_bytes).await;
+        // If stream ended without [DONE], flush any pending PII restoration stage buffer to client,
+        // and emit terminal [DONE] if the stream was valid and not cancelled.
+        if !state.done_sent {
+            if let Some(residual_json) = state.pii_stage.as_mut().and_then(|s| s.finalize()) {
+                let sse_bytes = crate::sse::build_sse_frame(&residual_json);
+                let _ = sink.send(sse_bytes).await;
+            }
+            let mut rx = tokio::sync::watch::Receiver::clone(&req.client_disconnected);
+            if super::fail::is_client_disconnected(&mut rx).is_none()
+                && state.acc.as_ref().is_some_and(|a| !a.is_empty())
+            {
+                let _ = sink
+                    .send(bytes::Bytes::clone(&crate::pipeline::SSE_DONE_BYTES))
+                    .await;
+                state.done_sent = true;
+            }
         }
 
         let client_disconnected = if state.done_sent {
@@ -552,6 +562,11 @@ impl UpstreamDispatcher {
                 response_body_json
             };
 
+        let is_client_response = !matches!(
+            params.req.stream_sink.as_ref(),
+            Some(crate::race_sink::StreamSink::Discard)
+        ) && !params.req.race_cancelled;
+
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
             params.req,
@@ -578,6 +593,7 @@ impl UpstreamDispatcher {
         .response_headers(None)
         .is_streaming(true)
         .stream_complete(done_sent)
+        .client_response(is_client_response)
         .stop_reason(stop_reason)
         .record()
         {

@@ -248,6 +248,7 @@ impl UsageTracker {
             .request_headers(request_headers)
             .is_streaming(is_streaming)
             .stream_complete(stream_complete)
+            .client_response(false)
             .record()
         {
             Ok(id) => id,
@@ -290,6 +291,7 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) response_headers: Option<std::collections::BTreeMap<String, String>>,
     pub(crate) is_streaming: bool,
     pub(crate) stream_complete: bool,
+    pub(crate) client_response: bool,
     pub(crate) stop_reason: Option<String>,
     pub(crate) proxy_url: Option<String>,
     pub(crate) proxy_status: Option<String>,
@@ -328,6 +330,7 @@ impl<'a> UsageRecordBuilder<'a> {
             response_headers: None,
             is_streaming: false,
             stream_complete: false,
+            client_response: false,
             stop_reason: None,
             proxy_url: None,
             proxy_status: None,
@@ -423,6 +426,10 @@ impl<'a> UsageRecordBuilder<'a> {
     }
     pub fn stream_complete(mut self, stream_complete: bool) -> Self {
         self.stream_complete = stream_complete;
+        self
+    }
+    pub fn client_response(mut self, client_response: bool) -> Self {
+        self.client_response = client_response;
         self
     }
     pub fn stop_reason(mut self, stop_reason: Option<String>) -> Self {
@@ -651,6 +658,9 @@ impl UsageRecordBuilder<'_> {
         }
         if self.is_proxy_rotated {
             flags |= USAGE_FLAG_PROXY_ROTATED;
+        }
+        if self.client_response {
+            flags |= USAGE_FLAG_CLIENT_RESPONSE;
         }
 
         UsageInput {

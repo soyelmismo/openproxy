@@ -209,6 +209,7 @@ impl UpstreamDispatcher {
                 .response_headers(None)
                 .is_streaming(false)
                 .stream_complete(true)
+                .client_response(true)
                 .stop_reason(None)
                 .record()
             {

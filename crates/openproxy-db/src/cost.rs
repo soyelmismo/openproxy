@@ -85,12 +85,13 @@ fn insert_usage_record(
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted\
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
+            was_winner\
          ) VALUES (\
             ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42\
+            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43\
          )",
         params![
             request_id,
@@ -147,6 +148,7 @@ fn insert_usage_record(
             i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
             input.cached_tokens.map(i64::from),
             input.pii_redacted,
+            i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
         ],
     )
     .map_err(crate::error::map_db_error)?;
@@ -291,13 +293,121 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
     Ok(total_updated)
 }
 
+fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUsageRow> {
+    let id: i64 = r.get(0)?;
+    let req_id: String = r.get(1)?;
+    let trace_id: String = r.get(2)?;
+    let provider_id_str: String = r.get(3)?;
+    let upstream_model_id: String = r.get(4)?;
+    let status_code: u16 = r.get(5)?;
+    let total_ms: i64 = r.get(6)?;
+    let prompt_tokens: Option<u32> = r.get(7)?;
+    let completion_tokens: Option<u32> = r.get(8)?;
+    let cost_usd: Option<f64> = r.get(9)?;
+    let connect_ms: Option<i64> = r.get(10)?;
+    let ttft_ms: Option<i64> = r.get(11)?;
+    let error_message: Option<String> = r.get(12)?;
+    let race_total: Option<u8> = r.get(13)?;
+    let race_attempts: Option<u8> = r.get(14)?;
+    let is_streaming: i64 = r.get(15)?;
+    let stream_complete: i64 = r.get(16)?;
+    let race_lost: i64 = r.get(17)?;
+    let created_at: String = r.get(18)?;
+    let stop_reason: Option<String> = r.get(19)?;
+    let compression_savings_pct: Option<f64> = r.get(20)?;
+    let compression_techniques: Option<String> = r.get(21)?;
+    let client_response: i64 = r.get(22)?;
+    let prompt_tokens_estimated: i64 = r.get(23)?;
+    let completion_tokens_estimated: i64 = r.get(24)?;
+    let endpoint_kind_str: String = r.get(25)?;
+    let proxy_url: Option<String> = r.get(26)?;
+    let proxy_status: Option<String> = r.get(27)?;
+    let is_proxy_rotated: i64 = r.get(28)?;
+    let cached_tokens: Option<u32> = r.get(29)?;
+    let pii_redacted: Option<String> = r.get(30)?;
+
+    let mut flags = 0u8;
+    if race_lost != 0 {
+        flags |= USAGE_FLAG_RACE_LOST;
+    }
+    if is_streaming != 0 {
+        flags |= USAGE_FLAG_IS_STREAMING;
+    }
+    if stream_complete != 0 {
+        flags |= USAGE_FLAG_STREAM_COMPLETE;
+    }
+    if client_response != 0 {
+        flags |= USAGE_FLAG_CLIENT_RESPONSE;
+    }
+    if prompt_tokens_estimated != 0 {
+        flags |= USAGE_FLAG_PROMPT_ESTIMATED;
+    }
+    if completion_tokens_estimated != 0 {
+        flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
+    }
+    if is_proxy_rotated != 0 {
+        flags |= USAGE_FLAG_PROXY_ROTATED;
+    }
+
+    Ok(RecentUsageRow {
+        id: UsageId(id),
+        request_id: req_id,
+        trace_id,
+        provider_id: openproxy_types::ids::ProviderId::new(provider_id_str),
+        upstream_model_id,
+        status_code,
+        total_ms: total_ms.max(0) as u64,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+        cost_usd,
+        created_at,
+        connect_ms: connect_ms.map(|c| c.max(0) as u64),
+        ttft_ms: ttft_ms.map(|t| t.max(0) as u64),
+        request_body_json: None,
+        response_body_json: None,
+        request_headers: None,
+        response_headers: None,
+        error_message,
+        race_total,
+        race_attempts,
+        stop_reason,
+        compression_savings_pct,
+        compression_techniques,
+        pii_redacted,
+        proxy_url,
+        proxy_status,
+        flags,
+        endpoint_kind: endpoint_kind_str.parse().unwrap_or_default(),
+    })
+}
+
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
-    conn.execute(
-        "UPDATE usage SET client_responded = 1 WHERE id = ?1",
-        params![row_id.0],
-    )
-    .map(|_| ())
-    .map_err(crate::error::map_db_error_ctx("mark_client_response"))
+    let affected = conn
+        .execute(
+            "UPDATE usage SET was_winner = 1, client_response = 1 WHERE id = ?1",
+            params![row_id.0],
+        )
+        .map_err(crate::error::map_db_error_ctx("mark_client_response"))?;
+
+    if affected > 0
+        && let Ok(mut stmt) = conn.prepare(
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at, stop_reason, \
+                    compression_savings_pct, compression_techniques, \
+                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
+             FROM usage \
+             WHERE id = ?1",
+        )
+        && let Ok(row) = stmt.query_row(params![row_id.0], map_recent_usage_from_row)
+    {
+        publish_usage_row(row);
+    }
+    Ok(())
 }
 
 pub fn mark_winner_usage_row(
@@ -306,12 +416,35 @@ pub fn mark_winner_usage_row(
     attempt: u8,
     target_id: openproxy_types::ids::ComboTargetId,
 ) -> openproxy_types::Result<()> {
-    conn.execute(
-        "UPDATE usage SET was_winner = 1, client_response = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
-        params![request_id, attempt, target_id.0],
-    )
-    .map(|_| ())
-    .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))
+    let affected = conn
+        .execute(
+            "UPDATE usage SET was_winner = 1, client_response = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
+            params![request_id, attempt, target_id.0],
+        )
+        .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
+
+    if affected > 0
+        && let Ok(mut stmt) = conn.prepare(
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at, stop_reason, \
+                    compression_savings_pct, compression_techniques, \
+                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
+             FROM usage \
+             WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        && let Ok(row) = stmt.query_row(
+            params![request_id, attempt, target_id.0],
+            map_recent_usage_from_row,
+        )
+    {
+        publish_usage_row(row);
+    }
+    Ok(())
 }
 
 pub fn record_no_healthy_targets_row(
@@ -541,5 +674,107 @@ mod tests {
             "record_with_retry failed: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_client_response_and_winner_lifecycle() {
+        let pool = DbPool::test_pool_with_prefix("openproxy-cost-client-resp").expect("open pool");
+        let conn = pool.writer();
+        let req_id = RequestId::new();
+        let target_id = openproxy_types::ids::ComboTargetId(42);
+
+        // 1. Initial insert with USAGE_FLAG_CLIENT_RESPONSE
+        let input_winner = UsageInput {
+            request_id: req_id,
+            trace_id: "trace-win-1".to_string(),
+            attempt: 1,
+            provider_id: ProviderId::new("test"),
+            account_id: None,
+            combo_id: None,
+            model_row_id: None,
+            upstream_model_id: "test-model".to_string(),
+            combo_target_id: Some(target_id),
+            prompt_tokens: Some(10),
+            completion_tokens: Some(20),
+            cached_tokens: None,
+            connect_ms: None,
+            ttft_ms: None,
+            total_ms: 100,
+            status_code: 200,
+            error_msg: None,
+            error_message: None,
+            race_total: 1,
+            race_attempts: 1,
+            api_key_id: None,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            pii_redacted: None,
+            proxy_url: None,
+            proxy_status: None,
+            flags: USAGE_FLAG_CLIENT_RESPONSE,
+            endpoint_kind: EndpointKind::Chat,
+        };
+
+        let rowid1 = record(&conn, &input_winner).expect("insert winner");
+        let (cr1, ww1): (i64, i64) = conn
+            .query_row(
+                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
+                rusqlite::params![rowid1.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("query row 1");
+        assert_eq!(cr1, 1);
+        assert_eq!(ww1, 1);
+
+        // 2. Initial insert with flags: 0 (non-winner / intermediate failure)
+        let req_id_fail = RequestId::new();
+        let mut input_fail = input_winner.clone();
+        input_fail.request_id = req_id_fail;
+        input_fail.flags = 0;
+        let rowid2 = record(&conn, &input_fail).expect("insert non-winner");
+        let (cr2, ww2): (i64, i64) = conn
+            .query_row(
+                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
+                rusqlite::params![rowid2.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("query row 2");
+        assert_eq!(cr2, 0);
+        assert_eq!(ww2, 0);
+
+        // 3. Update via mark_winner_usage_row
+        mark_winner_usage_row(&conn, &req_id_fail.to_string(), 1, target_id)
+            .expect("mark_winner_usage_row");
+        let (cr2_after, ww2_after): (i64, i64) = conn
+            .query_row(
+                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
+                rusqlite::params![rowid2.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("query row 2 after mark_winner");
+        assert_eq!(cr2_after, 1);
+        assert_eq!(ww2_after, 1);
+
+        // 4. Update via mark_client_response by row ID
+        let req_id_3 = RequestId::new();
+        let mut input_3 = input_winner;
+        input_3.request_id = req_id_3;
+        input_3.flags = 0;
+        let rowid3 = record(&conn, &input_3).expect("insert row 3");
+        mark_client_response(&conn, rowid3).expect("mark_client_response");
+        let (cr3, ww3): (i64, i64) = conn
+            .query_row(
+                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
+                rusqlite::params![rowid3.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("query row 3 after mark_client_response");
+        assert_eq!(cr3, 1);
+        assert_eq!(ww3, 1);
     }
 }

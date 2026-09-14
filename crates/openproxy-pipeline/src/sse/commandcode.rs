@@ -271,7 +271,7 @@ pub fn parse_commandcode_sse_line(
             Ok(Some(UpstreamSseChunk {
                 raw_payload: None,
                 payload,
-                done: false,
+                done: true,
                 usage,
                 stop_reason: Some(finish_reason),
                 delta_reasoning: None,
@@ -299,10 +299,6 @@ pub fn parse_commandcode_sse_to_unary(body_str: &str, model_name: &str) -> Resul
         else {
             continue;
         };
-
-        if chunk.done {
-            break;
-        }
 
         if let Some(r) = chunk.delta_reasoning {
             reasoning_content
@@ -347,6 +343,10 @@ pub fn parse_commandcode_sse_to_unary(body_str: &str, model_name: &str) -> Resul
 
         if let Some(u) = chunk.usage {
             usage = Some(u);
+        }
+
+        if chunk.done {
+            break;
         }
     }
 
@@ -457,6 +457,7 @@ mod tests {
             chunk.payload["choices"][0]["finish_reason"].as_str(),
             Some("stop")
         );
+        assert!(chunk.done);
         let usage = chunk.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.completion_tokens, 34);

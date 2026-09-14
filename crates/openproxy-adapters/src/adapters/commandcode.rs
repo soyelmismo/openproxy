@@ -401,54 +401,23 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
         .map(std::mem::take)
         .unwrap_or_default();
 
+    // Pass 1: index tool_call id -> name
+    let mut tool_id_to_name = std::collections::HashMap::new();
+    for msg in &messages {
+        if let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) {
+            for tc in tool_calls {
+                let id = tc.get("id").and_then(Value::as_str).unwrap_or("");
+                let func = tc.get("function").unwrap_or(&Value::Null);
+                let name = func.get("name").and_then(Value::as_str).unwrap_or("");
+                if !id.is_empty() && !name.is_empty() {
+                    tool_id_to_name.insert(id.to_string(), name.to_string());
+                }
+            }
+        }
+    }
+
     let mut system_prompt = String::new();
     let mut cc_messages: Vec<Value> = Vec::with_capacity(messages.len());
-    let mut pending_user_blocks: Vec<Value> = Vec::new();
-    let mut pending_assistant_blocks: Vec<Value> = Vec::new();
-
-    let flush_user = |cc_msgs: &mut Vec<Value>, blocks: &mut Vec<Value>| {
-        if blocks.is_empty() {
-            return;
-        }
-        let content = if blocks.len() == 1
-            && blocks[0]
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t == "text")
-        {
-            let text = blocks[0].get("text").and_then(Value::as_str).unwrap_or("");
-            json!(text)
-        } else {
-            Value::Array(std::mem::take(blocks))
-        };
-        blocks.clear();
-        cc_msgs.push(json!({
-            "role": "user",
-            "content": content,
-        }));
-    };
-
-    let flush_assistant = |cc_msgs: &mut Vec<Value>, blocks: &mut Vec<Value>| {
-        if blocks.is_empty() {
-            return;
-        }
-        let content = if blocks.len() == 1
-            && blocks[0]
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t == "text")
-        {
-            let text = blocks[0].get("text").and_then(Value::as_str).unwrap_or("");
-            json!(text)
-        } else {
-            Value::Array(std::mem::take(blocks))
-        };
-        blocks.clear();
-        cc_msgs.push(json!({
-            "role": "assistant",
-            "content": content,
-        }));
-    };
 
     for msg in messages {
         let role = msg
@@ -468,14 +437,13 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
                 }
             }
             "assistant" => {
-                flush_user(&mut cc_messages, &mut pending_user_blocks);
-
+                let mut blocks: Vec<Value> = Vec::new();
                 let text = match msg.get("content") {
                     Some(Value::String(s)) if !s.is_empty() => s.as_str(),
                     _ => "",
                 };
                 if !text.is_empty() {
-                    pending_assistant_blocks.push(json!({
+                    blocks.push(json!({
                         "type": "text",
                         "text": text,
                     }));
@@ -491,45 +459,56 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
                             .and_then(Value::as_str)
                             .unwrap_or("{}");
                         let input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
-                        if !name.is_empty() {
-                            pending_assistant_blocks.push(json!({
-                                "type": "tool_use",
-                                "id": id,
-                                "name": name,
-                                "input": input,
-                            }));
-                        }
+                        blocks.push(json!({
+                            "type": "tool-call",
+                            "toolCallId": id,
+                            "toolName": name,
+                            "input": input,
+                        }));
                     }
                 }
 
-                if pending_assistant_blocks.is_empty() {
-                    pending_assistant_blocks.push(json!({
+                if blocks.is_empty() {
+                    blocks.push(json!({
                         "type": "text",
                         "text": "",
                     }));
                 }
+
+                cc_messages.push(json!({
+                    "role": "assistant",
+                    "content": blocks,
+                }));
             }
             "tool" => {
-                flush_assistant(&mut cc_messages, &mut pending_assistant_blocks);
-
                 let id = msg
                     .get("tool_call_id")
                     .and_then(Value::as_str)
                     .unwrap_or("");
+                let tool_name = tool_id_to_name.get(id).map_or("", |s| s.as_str());
                 let content = extract_content_string(&msg);
-                pending_user_blocks.push(json!({
-                    "type": "tool_result",
-                    "tool_use_id": id,
-                    "content": content,
+
+                cc_messages.push(json!({
+                    "role": "tool",
+                    "content": [
+                        {
+                            "type": "tool-result",
+                            "toolCallId": id,
+                            "toolName": tool_name,
+                            "output": {
+                                "type": "text",
+                                "value": content,
+                            }
+                        }
+                    ],
                 }));
             }
             _ => {
                 // user role
-                flush_assistant(&mut cc_messages, &mut pending_assistant_blocks);
-
+                let mut blocks: Vec<Value> = Vec::new();
                 match msg.get("content") {
                     Some(Value::String(s)) => {
-                        pending_user_blocks.push(json!({
+                        blocks.push(json!({
                             "type": "text",
                             "text": s,
                         }));
@@ -539,7 +518,7 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
                             let p_type = part.get("type").and_then(Value::as_str).unwrap_or("text");
                             if p_type == "text" {
                                 let text = part.get("text").and_then(Value::as_str).unwrap_or("");
-                                pending_user_blocks.push(json!({
+                                blocks.push(json!({
                                     "type": "text",
                                     "text": text,
                                 }));
@@ -549,7 +528,7 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
                                     .and_then(|u| u.get("url"))
                                     .and_then(Value::as_str)
                             {
-                                pending_user_blocks.push(json!({
+                                blocks.push(json!({
                                     "type": "image",
                                     "image": url,
                                 }));
@@ -557,24 +536,38 @@ fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
                         }
                     }
                     Some(v) => {
-                        pending_user_blocks.push(json!({
+                        blocks.push(json!({
                             "type": "text",
                             "text": v.to_string(),
                         }));
                     }
                     None => {}
                 }
+
+                if blocks.is_empty() {
+                    blocks.push(json!({
+                        "type": "text",
+                        "text": "",
+                    }));
+                }
+
+                cc_messages.push(json!({
+                    "role": "user",
+                    "content": blocks,
+                }));
             }
         }
     }
 
-    flush_assistant(&mut cc_messages, &mut pending_assistant_blocks);
-    flush_user(&mut cc_messages, &mut pending_user_blocks);
-
     if cc_messages.is_empty() {
         cc_messages.push(json!({
             "role": "user",
-            "content": "",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "",
+                }
+            ],
         }));
     }
 
@@ -904,28 +897,36 @@ mod tests {
         let v: Value = serde_json::from_slice(&wrapped).unwrap();
         let params = v.get("params").unwrap();
         let msgs = params["messages"].as_array().unwrap();
-        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs.len(), 4);
 
         // Turn 1: user
         assert_eq!(msgs[0]["role"], "user");
-        assert_eq!(msgs[0]["content"], "Check files");
+        let u1_blocks = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(u1_blocks[0]["type"], "text");
+        assert_eq!(u1_blocks[0]["text"], "Check files");
 
-        // Turn 2: assistant with tool_use
+        // Turn 2: assistant with tool-call
         assert_eq!(msgs[1]["role"], "assistant");
         let a_blocks = msgs[1]["content"].as_array().unwrap();
-        assert_eq!(a_blocks[0]["type"], "tool_use");
-        assert_eq!(a_blocks[0]["id"], "call_abc123");
-        assert_eq!(a_blocks[0]["name"], "list_files");
+        assert_eq!(a_blocks[0]["type"], "tool-call");
+        assert_eq!(a_blocks[0]["toolCallId"], "call_abc123");
+        assert_eq!(a_blocks[0]["toolName"], "list_files");
         assert_eq!(a_blocks[0]["input"]["path"], "/root");
 
-        // Turn 3: user with tool_result + user text
-        assert_eq!(msgs[2]["role"], "user");
-        let u_blocks = msgs[2]["content"].as_array().unwrap();
-        assert_eq!(u_blocks[0]["type"], "tool_result");
-        assert_eq!(u_blocks[0]["tool_use_id"], "call_abc123");
-        assert_eq!(u_blocks[0]["content"], "file1.txt\nfile2.txt");
-        assert_eq!(u_blocks[1]["type"], "text");
-        assert_eq!(u_blocks[1]["text"], "Now read file1");
+        // Turn 3: tool result
+        assert_eq!(msgs[2]["role"], "tool");
+        let t_blocks = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(t_blocks[0]["type"], "tool-result");
+        assert_eq!(t_blocks[0]["toolCallId"], "call_abc123");
+        assert_eq!(t_blocks[0]["toolName"], "list_files");
+        assert_eq!(t_blocks[0]["output"]["type"], "text");
+        assert_eq!(t_blocks[0]["output"]["value"], "file1.txt\nfile2.txt");
+
+        // Turn 4: user text
+        assert_eq!(msgs[3]["role"], "user");
+        let u2_blocks = msgs[3]["content"].as_array().unwrap();
+        assert_eq!(u2_blocks[0]["type"], "text");
+        assert_eq!(u2_blocks[0]["text"], "Now read file1");
 
         // Tools: Anthropic format (no "type": "function")
         let tools = params["tools"].as_array().unwrap();
