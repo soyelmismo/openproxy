@@ -60,16 +60,15 @@ import type {
 
 function renderMetrics(): TemplateResult {
   if (!summary) return html``;
-  const buckets = groupByStatus(byStatus);
-  const statusTotal = buckets.s2xx + buckets.s4xx + buckets.s5xx + buckets.other;
-  const successRate = statusTotal > 0 ? buckets.s2xx / statusTotal : NaN;
+  const successRate = summary.unique_requests > 0 ? summary.winners / summary.unique_requests : NaN;
   const totalTokens = summary.total_prompt_tokens + summary.total_completion_tokens;
   const costPerRequest = summary.unique_requests > 0 ? summary.total_cost_usd / summary.unique_requests : 0;
   const p95Total = latency?.p95_total_ms;
-  const successTone = !Number.isFinite(successRate) ? "" : successRate >= 0.99 ? "is-good" : successRate >= 0.95 ? "is-warn" : "is-bad";
+  const successTone = !Number.isFinite(successRate) ? "" : successRate >= 0.95 ? "is-good" : successRate >= 0.85 ? "is-warn" : "is-bad";
+  const failedRequests = Math.max(0, summary.unique_requests - summary.winners);
   return html`<div class="analytics-metrics" aria-label=${t("analytics.summary")}>
     ${metric(t("analytics.summary.unique_requests"), fmtNumber(summary.unique_requests), `${fmtNumber(summary.total_attempts)} ${t("analytics.metric.attempts")}`)}
-    ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(buckets.s4xx + buckets.s5xx)} ${t("analytics.metric.failed_responses")}`, successTone)}
+    ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(failedRequests)} ${t("analytics.metric.failed_responses")}`, successTone)}
     ${metric(t("analytics.metric.tokens"), fmtNumber(totalTokens), `${fmtNumber(summary.total_prompt_tokens)} in · ${fmtNumber(summary.total_completion_tokens)} out`)}
     ${metric("API Cache", fmtPercent(summary.total_prompt_tokens > 0 ? summary.total_cached_tokens / summary.total_prompt_tokens : 0), `${fmtNumber(summary.total_cached_tokens)} prompt tokens cached`, summary.total_cached_tokens > 0 ? "is-good" : "")}
     ${metric("Local Compression", fmtPercent((summary.avg_compression_savings_pct ?? 0) / 100), "Avg token savings when active", "is-good")}
@@ -122,13 +121,15 @@ function renderStatusHealth(): TemplateResult {
     { label: t("analytics.status.other"), value: buckets.other, cls: "other" },
   ];
   const total = entries.reduce((sum, item) => sum + item.value, 0);
-  const successRate = total > 0 ? buckets.s2xx / total : NaN;
+  const successRate = summary && summary.unique_requests > 0
+    ? summary.winners / summary.unique_requests
+    : (total > 0 ? buckets.s2xx / total : NaN);
   const health = !Number.isFinite(successRate)
     ? t("analytics.status.no_data")
-    : successRate >= 0.99 ? t("analytics.status.healthy")
-    : successRate >= 0.95 ? t("analytics.status.attention")
+    : successRate >= 0.95 ? t("analytics.status.healthy")
+    : successRate >= 0.85 ? t("analytics.status.attention")
     : t("analytics.status.degraded");
-  const healthTone = !Number.isFinite(successRate) ? "neutral" : successRate >= 0.99 ? "good" : successRate >= 0.95 ? "warn" : "bad";
+  const healthTone = !Number.isFinite(successRate) ? "neutral" : successRate >= 0.95 ? "good" : successRate >= 0.85 ? "warn" : "bad";
   return html`<section class="card analytics-status-card">
     <div class="analytics-card-heading"><div><h3>${t("analytics.chart.status_codes")}</h3><p>${t("analytics.chart.status_codes.subtitle")}</p></div><span class="analytics-health-label ${healthTone}">${health}</span></div>
     <div class="analytics-status-hero"><strong>${fmtPercent(successRate)}</strong><span>${t("analytics.metric.success_rate")}</span></div>

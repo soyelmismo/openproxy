@@ -199,28 +199,28 @@ Please email real_user@domain.com for questions."#;
 
     let redacted = engine.redact_text(complex_text, &mut session);
 
-    // Fenced code block content preserved
-    assert!(redacted.contains(r#"support_email = "internal@test.com""#));
-    assert!(redacted.contains(r#"api_key="sk-proj-secretinsidecodeblock12345""#));
+    // Sensitive entities inside code blocks and inline code ARE safely pseudonymized
+    assert!(!redacted.contains("internal@test.com"));
+    assert!(!redacted.contains("sk-proj-secretinsidecodeblock12345"));
+    assert!(!redacted.contains("sk-proj-inlinecode12345"));
 
-    // Inline code preserved
-    assert!(redacted.contains(r#"`secret_key="sk-proj-inlinecode12345"`"#));
+    // Code structure and valid placeholders are preserved inside code blocks
+    assert!(redacted.contains(r#"support_email = ""#));
+    assert!(redacted.contains(r#"client = OpenAI(api_key=""#));
+    assert!(redacted.contains(r#"`secret_key=""#));
 
     // URL preserved
     assert!(redacted.contains("https://api.service.com/users/alice@example.com"));
 
     // JSON keys preserved ("user_email" and "user_ip" intact)
-    assert!(
-        redacted.contains(r#""user_email": "alex.turner1@fastmail.com""#)
-            || redacted.contains(r#""user_email": alex.turner1@fastmail.com"#)
-    );
+    assert!(redacted.contains(r#""user_email": "#));
     assert!(
         redacted.contains(r#""user_ip": "10.240.0.1""#)
             || redacted.contains(r#""user_ip": 10.240.0.1"#)
     );
 
     // Normal prose email redacted
-    assert!(redacted.contains("Please email alex.turner1@fastmail.com for questions."));
+    assert!(!redacted.contains("real_user@domain.com"));
 
     // Restoration recovers original
     let restored = session.restore_text(&redacted);
@@ -904,9 +904,12 @@ fn test_nested_markdown_code_fences_preservation() {
     let mut session = PiiSession::new(true);
     let nested_markdown = "````markdown\n```rust\nlet email = \"alice@example.com\";\n```\n````";
     let redacted_nested = engine_all.redact_text(nested_markdown, &mut session);
+    assert!(!redacted_nested.contains("alice@example.com"));
+    assert!(redacted_nested.contains("alex.turner1@fastmail.com"));
+    let restored = session.restore_text(&redacted_nested);
     assert_eq!(
-        redacted_nested, nested_markdown,
-        "Nested code fence leaked PII redaction: {redacted_nested}"
+        restored, nested_markdown,
+        "Nested code fence restoration failed: {restored}"
     );
 }
 
@@ -1309,10 +1312,12 @@ fn test_tool_calls_and_tool_messages_redaction_roundtrip() {
         restored_choice.message.tool_calls.as_ref().unwrap()[0]["function"]["arguments"]
             .as_str()
             .unwrap();
-    assert_eq!(
-        restored_tc_args,
-        "{\"target\": \"alice@example.com\", \"key\": \"sk-test1234567890abcdef1234567890abcdef\"}"
-    );
+    let parsed_restored: serde_json::Value = serde_json::from_str(restored_tc_args).unwrap();
+    let expected_args: serde_json::Value = serde_json::json!({
+        "target": "alice@example.com",
+        "key": "sk-test1234567890abcdef1234567890abcdef"
+    });
+    assert_eq!(parsed_restored, expected_args);
 }
 
 #[test]
@@ -1398,3 +1403,218 @@ fn test_high_volume_pii_scalability_and_zero_collision() {
     let restored = session.restore_text(&sample_text);
     assert_eq!(restored, expected_text);
 }
+
+#[test]
+fn test_tool_calls_nested_json_arguments_preserves_syntax() {
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+
+    let original_args = r#"{"new_string":"def build_subtitle_manifest(files: list, family_token: str) -> dict:\n    url = f\"https://v.listo.click/serve?id={f['ID']}&token=my_real_secret_token_12345678\"\n    return url"}"#;
+
+    let msg = OpenAIMessage {
+        role: "assistant".to_string(),
+        content: None,
+        name: None,
+        tool_call_id: None,
+        tool_calls: Some(vec![serde_json::json!({
+            "id": "call_patch_123",
+            "type": "function",
+            "function": {
+                "name": "patch",
+                "arguments": original_args
+            }
+        })]),
+        extra: serde_json::Map::new(),
+    };
+
+    let redacted_msgs = engine.redact_messages(&[msg], &mut session);
+    assert_eq!(redacted_msgs.len(), 1);
+
+    let redacted_tc = &redacted_msgs[0].tool_calls.as_ref().unwrap()[0];
+    let redacted_args_str = redacted_tc["function"]["arguments"].as_str().unwrap();
+
+    // Critical: The redacted arguments must parse as 100% valid JSON!
+    let parsed: serde_json::Value = serde_json::from_str(redacted_args_str)
+        .expect("Redacted tool_calls.arguments MUST remain valid JSON!");
+
+    let new_str = parsed["new_string"].as_str().unwrap();
+
+    // 1. Real secret must be replaced
+    assert!(!new_str.contains("my_real_secret_token_12345678"));
+    assert!(new_str.contains("sec_"));
+
+    // 2. Python type annotation `family_token: str` must NOT be corrupted
+    assert!(new_str.contains("family_token: str"));
+
+    // 3. Roundtrip restoration
+    let mut resp = OpenAIResponse {
+        id: "resp_123".to_string(),
+        object: "chat.completion".to_string(),
+        created: 1234567890,
+        model: "gpt-4".to_string(),
+        choices: vec![OpenAIChoice {
+            index: 0,
+            message: redacted_msgs[0].clone(),
+            finish_reason: Some("tool_calls".to_string()),
+        }],
+        usage: None,
+    };
+
+    session.restore_openai_response(&mut resp);
+    let restored_tc = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
+    let restored_args_str = restored_tc["function"]["arguments"].as_str().unwrap();
+    let restored_parsed: serde_json::Value = serde_json::from_str(restored_args_str).unwrap();
+
+    assert_eq!(
+        restored_parsed["new_string"].as_str().unwrap(),
+        serde_json::from_str::<serde_json::Value>(original_args).unwrap()["new_string"]
+            .as_str()
+            .unwrap()
+    );
+}
+
+#[test]
+fn test_url_sensitive_param_and_template_hardened() {
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+
+    // Template variables like {token} and type annotations like `family_token: str` must NOT match as secrets
+    let code_snippet = r#"def fetch(family_token: str):
+    url = f"https://v.listo.click/serve?id={f['ID']}&token={family_token}",
+    return url"#;
+
+    let redacted_code = engine.redact_text(code_snippet, &mut session);
+    assert_eq!(
+        redacted_code, code_snippet,
+        "Template interpolations {{var}} and type annotations must not be redacted as secrets"
+    );
+
+    // Escaped quotes in JSON-like strings must not lose their backslash
+    let json_escaped = r#"\"url\": \"https://example.com/api?token=real_secret_key_89012345\",\n"#;
+    let redacted_escaped = engine.redact_text(json_escaped, &mut session);
+
+    assert!(!redacted_escaped.contains("real_secret_key_89012345"));
+    assert!(redacted_escaped.contains("token=sec_"));
+    // Escaped quote after token MUST keep its backslash
+    assert!(
+        redacted_escaped.contains(r#"\",\n"#),
+        "Trailing backslash before quote must never be swallowed: {redacted_escaped}"
+    );
+
+    let restored = session.restore_text(&redacted_escaped);
+    assert_eq!(restored, json_escaped);
+}
+
+#[test]
+fn test_code_block_and_backtick_redacts_emails_ips_and_secrets_reversibly() {
+    let engine = PiiEngine::new(&PiiEntity::ALL);
+    let mut session = PiiSession::new(true);
+
+    let input = r"
+Soy `hermeona@navi.land`. Envío correos con Himalaya.
+Bash command:
+```bash
+sshpass -p0 ssh root@100.66.0.2 -p 2369
+```
+Servers:
+| **rot** (PC Miguel) | `100.109.155.87` | CachyOS Arch |
+| **OCI arm64** | `100.103.80.69` | ARM64 |
+SSH: `sshpass -p0 ssh rot@100.109.155.87`. Aparece como `miguel-pc-linux`
+";
+
+    let redacted = engine.redact_text(input, &mut session);
+
+    // 1. Sensitive emails must be redacted even inside backticks
+    assert!(!redacted.contains("hermeona@navi.land"));
+    assert!(redacted.contains("@fastmail.com") || redacted.contains("@outlook.com"));
+
+    // 2. Sensitive IPs must be redacted even inside backticks and code blocks
+    assert!(!redacted.contains("100.66.0.2"));
+    assert!(!redacted.contains("100.109.155.87"));
+    assert!(!redacted.contains("100.103.80.69"));
+    assert!(redacted.contains("10.240."));
+
+    // 3. Single-char sshpass password -p0 must be redacted
+    assert!(!redacted.contains("-p0"));
+    assert!(redacted.contains("sshpass -psec_"));
+
+    // 4. Person name Miguel in (PC Miguel) must be redacted
+    assert!(!redacted.contains("PC Miguel"));
+    assert!(redacted.contains("PC Alex Vance (P1)"));
+
+    // 5. Hostname inside backticks `miguel-pc-linux` is protected code/identifier
+    assert!(redacted.contains("`miguel-pc-linux`"));
+
+    // 6. Restoration losslessly recovers original text
+    let restored = session.restore_text(&redacted);
+    assert_eq!(restored, input);
+}
+
+#[test]
+fn test_single_word_person_name_miguel_and_contextual_user_markers() {
+    let engine = PiiEngine::new(&[PiiEntity::Person]);
+    let mut session = PiiSession::new(true);
+
+    let input = r#"
+## Mi relación con Miguel
+Excepto cuando Miguel quiere romperme.
+**Source:** Telegram ("DM with miguel")
+**User:** "miguel"
+SOUL→wiki→internet→Miguel
+14-mayo (Miguel)
+"#;
+
+    let redacted = engine.redact_text(input, &mut session);
+
+    // Miguel and miguel must be redacted
+    assert!(!redacted.contains("Miguel"));
+    assert!(!redacted.contains("miguel"));
+
+    // Both "Miguel" and "miguel" map to the SAME synthetic person placeholder (P1)
+    assert!(redacted.contains("## Mi relación con Alex Vance (P1)"));
+    assert!(redacted.contains("Excepto cuando Alex Vance (P1) quiere romperme."));
+    assert!(redacted.contains(r#"**Source:** Telegram ("DM with Alex Vance (P1)")"#));
+    assert!(redacted.contains(r#"**User:** "Alex Vance (P1)""#));
+    assert!(redacted.contains("SOUL→wiki→internet→Alex Vance (P1)"));
+    assert!(redacted.contains("14-mayo (Alex Vance (P1))"));
+
+    // Restoration restores capitalized "Miguel"
+    let restored = session.restore_text(&redacted);
+    assert!(restored.contains("## Mi relación con Miguel"));
+    assert!(restored.contains("Excepto cuando Miguel quiere romperme."));
+}
+
+#[test]
+fn test_telegram_chat_and_user_numeric_ids_remain_valid_json_integers_and_strings() {
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+
+    let input = r#"{"platform": "telegram", "chat_id": "6077244180", "chat_type": "dm", "user_id": "6077244180", "message_id": "88706", "numeric_chat": 6077244180}"#;
+
+    let redacted = engine.redact_text(input, &mut session);
+
+    // Original ID must be gone
+    assert!(!redacted.contains("6077244180"));
+
+    // Redacted placeholder must be pure numeric of length 10
+    assert!(redacted.contains("89410294"));
+
+    // Critical: JSON remains 100% valid!
+    let parsed: serde_json::Value = serde_json::from_str(&redacted)
+        .expect("Redacted JSON containing numeric IDs must remain valid JSON");
+
+    let chat_id_str = parsed["chat_id"].as_str().unwrap();
+    assert_eq!(chat_id_str.len(), 10);
+    assert!(chat_id_str.chars().all(|c| c.is_ascii_digit()));
+
+    let user_id_str = parsed["user_id"].as_str().unwrap();
+    assert_eq!(chat_id_str, user_id_str);
+
+    let numeric_chat = parsed["numeric_chat"].as_u64().unwrap();
+    assert!(numeric_chat >= 1_000_000_000);
+
+    // Reversible restoration
+    let restored = session.restore_text(&redacted);
+    assert_eq!(restored, input);
+}
+

@@ -330,20 +330,20 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              COUNT(DISTINCT request_id)                                    AS unique_requests, \
              COUNT(*)                                                      AS total_rows, \
              COUNT(DISTINCT trace_id)                                      AS total_attempts, \
-             SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)                AS winners, \
+             SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
              SUM(CASE WHEN race_lost = 1 THEN 1 ELSE 0 END)                AS losers, \
-             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)            AS errors, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
-             AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
-             COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms, \
-             SUM(CASE WHEN cost_usd IS NULL AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing, \
-             AVG(connect_ms) FILTER (WHERE status_code < 400 AND connect_ms IS NOT NULL) AS avg_success_connect_ms, \
-             AVG(ttft_ms) FILTER (WHERE status_code < 400 AND ttft_ms IS NOT NULL) AS avg_success_ttft_ms, \
-             AVG(total_ms) FILTER (WHERE status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms, \
-             AVG(compression_savings_pct) AS avg_compression_savings_pct \
+             SUM(CASE WHEN status_code >= 400 OR (status_code = 0 AND (error_msg IS NULL OR error_msg != 'predict_skipped')) THEN 1 ELSE 0 END) AS errors, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd, \
+             AVG(ttft_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND ttft_ms IS NOT NULL) AS avg_ttft_ms, \
+             COALESCE(AVG(total_ms) FILTER (WHERE error_msg IS NULL OR error_msg != 'predict_skipped'), 0.0) AS avg_total_ms, \
+             SUM(CASE WHEN cost_usd IS NULL AND prompt_tokens > 0 AND status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS rows_with_null_pricing, \
+             AVG(connect_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND connect_ms IS NOT NULL) AS avg_success_connect_ms, \
+             AVG(ttft_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND ttft_ms IS NOT NULL) AS avg_success_ttft_ms, \
+             AVG(total_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms, \
+             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct \
          FROM usage {}",
         w.sql,
     );
@@ -384,12 +384,12 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
              upstream_model_id, \
              COUNT(DISTINCT request_id)                       AS unique_requests, \
              COUNT(*)                                         AS total_rows, \
-             SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd, \
-             AVG(compression_savings_pct)                     AS avg_compression_savings_pct \
+             SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd, \
+             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct \
          FROM usage {} \
          GROUP BY provider_id, upstream_model_id \
          ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC",
@@ -445,12 +445,12 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
              provider_id, \
              COUNT(DISTINCT request_id)                       AS unique_requests, \
              COUNT(*)                                         AS total_rows, \
-             SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd, \
-             AVG(compression_savings_pct)                     AS avg_compression_savings_pct \
+             SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd, \
+             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct \
          FROM usage {} \
          GROUP BY provider_id \
          ORDER BY total_cost_usd DESC, provider_id ASC",
@@ -500,9 +500,9 @@ pub fn monthly_by_provider(
              strftime('%Y-%m', created_at)                     AS month, \
              COUNT(DISTINCT request_id)                       AS unique_requests, \
              COUNT(*)                                         AS total_rows, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd \
          FROM usage {} \
          GROUP BY provider_id, month \
          ORDER BY month ASC, total_cost_usd DESC, provider_id ASC",
@@ -552,10 +552,10 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
              strftime('%Y-%m-%d', created_at)                     AS date, \
              COUNT(DISTINCT request_id)                           AS unique_requests, \
              COUNT(*)                                             AS total_rows, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
-             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(cost_usd), 0.0)                         AS total_cost_usd, \
-             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)  AS errors \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd, \
+             SUM(CASE WHEN status_code >= 400 OR (status_code = 0 AND (error_msg IS NULL OR error_msg != 'predict_skipped')) THEN 1 ELSE 0 END) AS errors \
          FROM usage {} \
          GROUP BY date \
          ORDER BY date ASC",
@@ -618,8 +618,8 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
              provider_id, \
              COUNT(DISTINCT request_id)                          AS unique_requests, \
              COUNT(*)                                            AS total_rows, \
-             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors, \
-             COALESCE(SUM(cost_usd), 0.0)                        AS total_cost_usd \
+             SUM(CASE WHEN status_code >= 400 OR (status_code = 0 AND (error_msg IS NULL OR error_msg != 'predict_skipped')) THEN 1 ELSE 0 END) AS errors, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd \
          FROM usage {} \
          GROUP BY account_id, provider_id \
          ORDER BY total_cost_usd DESC, account_id ASC",
@@ -664,12 +664,19 @@ fn row_to_by_status(row: &Row<'_>) -> rusqlite::Result<ByStatusRow> {
 /// comes first; ties broken by `status_code` ascending.
 pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>> {
     let w = BuiltWhere::from_filter(f);
+    let mut clauses: Vec<String> = Vec::new();
+    if !w.sql.is_empty() {
+        let bare = w.sql.trim_start_matches("WHERE ").to_string();
+        clauses.push(format!("({bare})"));
+    }
+    clauses.push("(error_msg IS NULL OR error_msg != 'predict_skipped')".to_string());
+    clauses.push("status_code > 0".to_string());
+    let where_clause = format!("WHERE {}", clauses.join(" AND "));
     let sql = format!(
         "SELECT status_code, COUNT(*) AS cnt \
-         FROM usage {} \
+         FROM usage {where_clause} \
          GROUP BY status_code \
          ORDER BY cnt DESC, status_code ASC",
-        w.sql,
     );
 
     let mut stmt = conn
@@ -704,7 +711,7 @@ fn row_to_error_row(row: &Row<'_>) -> rusqlite::Result<ErrorRow> {
     })
 }
 
-/// Recent error rows (`status_code >= 400`), newest first, capped at `limit`.
+/// Recent error rows (`status_code >= 400` or real network failures), newest first, capped at `limit`.
 ///
 /// `limit` is a hard cap on the number of returned rows; callers typically
 /// pass 100 (matching the spec example) and the value is forwarded verbatim
@@ -720,7 +727,10 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
         let bare = w.sql.trim_start_matches("WHERE ").to_string();
         clauses.push(format!("({bare})"));
     }
-    clauses.push("status_code >= 400".to_string());
+    clauses.push(
+        "(status_code >= 400 OR (status_code = 0 AND (error_msg IS NULL OR error_msg != 'predict_skipped')))"
+            .to_string(),
+    );
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
 
     let mut sql = String::new();

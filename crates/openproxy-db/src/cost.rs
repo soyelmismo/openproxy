@@ -11,11 +11,15 @@ use std::sync::LazyLock;
 use crate::error::with_busy_retry;
 
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64>, Option<f64>) {
-    let cost = pricing::compute_cost_opt(
-        price,
-        input.prompt_tokens.unwrap_or(0),
-        input.completion_tokens.unwrap_or(0),
-    );
+    let cost = if input.status_code >= 200 && input.status_code < 400 {
+        pricing::compute_cost_opt(
+            price,
+            input.prompt_tokens.unwrap_or(0),
+            input.completion_tokens.unwrap_or(0),
+        )
+    } else {
+        Some(0.0)
+    };
     let tps = match (input.completion_tokens, input.ttft_ms) {
         (Some(c), Some(ttft)) if c > 0 && input.total_ms > ttft => {
             let denom = (input.total_ms - ttft) as f64;

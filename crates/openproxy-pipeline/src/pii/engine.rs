@@ -3,6 +3,7 @@
 use openproxy_types::config::PiiEntity;
 use openproxy_types::message::OpenAIMessage;
 use regex::Regex;
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::ops::Range;
 use std::str::FromStr;
@@ -27,18 +28,18 @@ static REGEX_URL: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static REGEX_URI_USERINFO_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:[a-zA-Z][a-zA-Z0-9+.-]{2,16}://[a-zA-Z0-9_.~%+-]*:)([^@/\s\n\r"']{3,})(@[a-zA-Z0-9_.~%+-]+)"#)
+    Regex::new(r#"(?:[a-zA-Z][a-zA-Z0-9+.-]{2,16}://[a-zA-Z0-9_.~%+-]*:)([^@/\s\n\r"'\\]{3,})(@[a-zA-Z0-9_.~%+-]+)"#)
         .expect("regex compilation failed")
 });
 
 static REGEX_URL_SENSITIVE_PARAM: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)[?&](?:token|api[_-]?key|secret|auth|password|passwd|access[_-]?token|refresh[_-]?token|key)=([^&#\s<>"'`]{6,})"#)
+    Regex::new(r#"(?i)[?&](?:token|api[_-]?key|secret|auth|password|passwd|access[_-]?token|refresh[_-]?token|key)=([^&#\s<>"'`\\()\[\]{}]{6,})"#)
         .expect("regex compilation failed")
 });
 
 static REGEX_DSN_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)\b[a-zA-Z0-9_.~%+-]+:([^@/\s\n\r"':]{3,})@(?:tcp|unix|[a-zA-Z0-9_.-]+(?::[0-9]+)?)"#,
+        r#"(?i)\b[a-zA-Z0-9_.~%+-]+:([^@/\s\n\r"':\\]{3,})@(?:tcp|unix|[a-zA-Z0-9_.-]+(?::[0-9]+)?)"#,
     )
     .expect("regex compilation failed")
 });
@@ -133,6 +134,18 @@ static REGEX_SECRET_CLI_FLAGS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:[\s"'\[,]|^)-p\s*['"]?([^'"\s\n\r,\]]{4,})['"]?|(?:[\s"'\[,]|^)-u\s+[a-zA-Z0-9_.-]+:([^'"\s\n\r,\]]{4,})"#).expect("regex compilation failed")
 });
 
+static REGEX_SECRET_SSHPASS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bsshpass\b[^\n\r`"']*?\s+-p(?:\s*['"]([^'"\n\r`\\]+)['"]|\s*([^\s'"\n\r`\\]+))"#)
+        .expect("regex compilation failed")
+});
+
+static REGEX_SECRET_PLATFORM_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)["']?\b(?:[a-z0-9_]*(?:chat|user)_?id|[a-z0-9_]*chat|telegram_?id|channel_?id|sender_?id|target_?id)\b["']?[ \t]*[:=][ \t]*["']?([0-9]{6,16})["']?|(?i)\(ID:\s*["']?([0-9]{6,16})["']?\)"#,
+    )
+    .expect("regex compilation failed")
+});
+
 static REGEX_SECRET_PASSWORD_HASH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:^|[\s"':])((?:\$2[aby]?\$|\$\$2[aby]?\$\$|\$apr1\$|\$6\$|\$argon2[a-z]*\$)[A-Za-z0-9./$]{20,})"#)
         .expect("regex compilation failed")
@@ -155,7 +168,7 @@ static REGEX_NATIONAL_ID_US: LazyLock<Regex> =
 
 static REGEX_SECRET_LABELED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)["']?\b([a-z0-9_.-]*(?:password|passwd|secret|token|api_?key|private_?key|access_?key|contrase[nñ]a|clave|id[_-]?de[_-]?cuenta|account[_-]?id)[a-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;]{4,}))|(?i)\b(id\s+de\s+(?:cuenta|clave(?:\s+de\s+acceso)?)|token\s+de\s+(?:api|acceso)|clave\s+(?:de\s+acceso\s+)?secreta|clave\s+de\s+acceso)\s*[\r\n]+[ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;]{4,}))"#,
+        r#"(?i)["']?\b([a-z0-9_.-]*(?:password|passwd|secret|token|api_?key|private_?key|access_?key|contrase[nñ]a|clave|id[_-]?de[_-]?cuenta|account[_-]?id)[a-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;\\()\[\]{}<>`|]{4,}))|(?i)\b(id\s+de\s+(?:cuenta|clave(?:\s+de\s+acceso)?)|token\s+de\s+(?:api|acceso)|clave\s+(?:de\s+acceso\s+)?secreta|clave\s+de\s+acceso)\s*[\r\n]+[ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;\\()\[\]{}<>`|]{4,}))"#,
     )
     .expect("regex compilation failed")
 });
@@ -175,8 +188,33 @@ static REGEX_HONORIFIC_NAME: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static REGEX_CAPITALIZED_SEQUENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b([A-Z][a-z]{1,15}\s+[A-Z][a-z]{1,15}(?:\s+[A-Z][a-z]{1,15})?)\b")
+    Regex::new(r"\b([A-Z][a-z]{1,15}[ \t]+[A-Z][a-z]{1,15}(?:[ \t]+[A-Z][a-z]{1,15})?)\b")
         .expect("regex compilation failed")
+});
+
+static REGEX_CONTEXTUAL_PERSON: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)\b(?:User|Usuario|Autor|Author|Creator|Dueño|Dueno)\b[ \t*]*[:=][ \t*]*["']?([A-Za-z]{3,15})["']?|(?i)\b(?:DM\s+with|chat\s+con|hablar\s+con|relaci[oó]n\s+con)\s+["']?([A-Za-z]{3,15})["']?|(?i)\b(?:PC|Laptop|Desktop)\s+([A-Z][a-z]{2,15})\b"#,
+    )
+    .expect("regex compilation failed")
+});
+
+static COMMON_FIRST_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "Miguel", "Carlos", "Alejandro", "Javier", "Fernando", "Alvaro", "Andres", "Diego",
+        "Mateo", "Gabriel", "Santiago", "Manuel", "Lucas", "Rodrigo", "Gonzalo", "Ignacio",
+        "Pablo", "Pedro", "Juan", "Jose", "Luis", "Maria", "Carmen", "Ana", "Laura", "Sofia",
+        "Isabel", "Elena", "Marta", "Lucia", "Paula", "Sara", "Claudia", "Beatriz", "Teresa",
+        "Patricia", "David", "Daniel", "Alex", "Alexander", "Michael", "John", "James", "Robert",
+        "William", "Thomas", "Richard", "Charles", "Joseph", "Sarah", "Emily", "Jessica", "Emma",
+        "Olivia", "Ava", "Isabella",
+    ]
+    .into_iter()
+    .collect()
+});
+
+static REGEX_SINGLE_WORD_CAPITALIZED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b([A-Z][a-z]{2,15})\b").expect("regex compilation failed")
 });
 
 // ── Shannon Entropy Calculation ──────────────────────────────────────
@@ -241,6 +279,18 @@ pub fn is_valid_secret_value(key: &str, val: &str) -> bool {
     if val.starts_with('<') && val.ends_with('>') {
         return false;
     }
+    if (val.starts_with('{') && val.ends_with('}'))
+        || (val.starts_with("${") && val.ends_with('}'))
+        || (val.starts_with("{{") && val.ends_with("}}"))
+        || (val.starts_with('%') && val.ends_with('%'))
+        || (val.starts_with('[') && val.ends_with(']'))
+        || (val.starts_with('(') && val.ends_with(')'))
+        || val.contains('{')
+        || val.contains('}')
+        || val.contains('\\')
+    {
+        return false;
+    }
     if val.starts_with("${") {
         return false;
     }
@@ -272,6 +322,26 @@ pub fn is_valid_secret_value(key: &str, val: &str) -> bool {
             | "disabled"
             | "optional"
             | "required"
+            | "str"
+            | "int"
+            | "bool"
+            | "float"
+            | "bytes"
+            | "list"
+            | "dict"
+            | "set"
+            | "tuple"
+            | "any"
+            | "object"
+            | "string"
+            | "number"
+            | "boolean"
+            | "array"
+            | "char"
+            | "void"
+            | "unknown"
+            | "never"
+            | "symbol"
             | "cámbialo"
             | "cambialo"
             | "cambiar"
@@ -304,7 +374,7 @@ pub fn is_valid_secret_value(key: &str, val: &str) -> bool {
     {
         return false;
     }
-    if val.len() < 10 && val.chars().all(|c| c.is_ascii_digit()) {
+    if key != "-p_sshpass" && val.len() < 10 && val.chars().all(|c| c.is_ascii_digit()) {
         return false;
     }
     true
@@ -850,22 +920,12 @@ impl PiiEngine {
         self.entities.contains(&entity)
     }
 
-    /// Identify protected spans (code blocks, inline code, URLs, JSON keys)
-    /// that must not be modified or corrupted.
-    pub fn find_protected_ranges(&self, text: &str) -> Vec<Range<usize>> {
+    /// Identify syntax-protected spans (URLs with carveouts, JSON keys)
+    /// that must not have their structural boundaries corrupted.
+    pub fn find_syntax_protected_ranges(&self, text: &str) -> Vec<Range<usize>> {
         let mut ranges = Vec::new();
 
-        // 1. Fenced code blocks ```...``` and ~~~...~~~
-        for m in REGEX_FENCED_CODE.find_iter(text) {
-            ranges.push(m.range());
-        }
-
-        // 2. Inline code `...`
-        for m in REGEX_INLINE_CODE.find_iter(text) {
-            ranges.push(m.range());
-        }
-
-        // 3. URLs (https://..., ftp://..., postgres://..., etc.)
+        // 1. URLs (https://..., ftp://..., postgres://..., etc.)
         for m in REGEX_URL.find_iter(text) {
             let url_str = m.as_str();
             let mut carveouts: Vec<Range<usize>> = Vec::new();
@@ -901,13 +961,38 @@ impl PiiEngine {
             }
         }
 
-        // 4. JSON keys ("key":)
+        // 2. JSON keys ("key":)
         for cap in REGEX_JSON_KEY.captures_iter(text) {
             if let Some(key_match) = cap.get(1) {
                 ranges.push(key_match.range());
             }
         }
 
+        Self::merge_ranges(ranges)
+    }
+
+    /// Identify code blocks (fenced ``` and inline `) to avoid heuristic false-positives
+    /// on code variables, types, or syntax.
+    pub fn find_code_protected_ranges(&self, text: &str) -> Vec<Range<usize>> {
+        let mut ranges = Vec::new();
+
+        // 1. Fenced code blocks ```...``` and ~~~...~~~
+        for m in REGEX_FENCED_CODE.find_iter(text) {
+            ranges.push(m.range());
+        }
+
+        // 2. Inline code `...`
+        for m in REGEX_INLINE_CODE.find_iter(text) {
+            ranges.push(m.range());
+        }
+
+        Self::merge_ranges(ranges)
+    }
+
+    /// Identify all protected spans (combining syntax and code protection).
+    pub fn find_protected_ranges(&self, text: &str) -> Vec<Range<usize>> {
+        let mut ranges = self.find_syntax_protected_ranges(text);
+        ranges.extend(self.find_code_protected_ranges(text));
         Self::merge_ranges(ranges)
     }
 
@@ -942,7 +1027,8 @@ impl PiiEngine {
     pub(crate) fn collect_candidates<'a>(
         &self,
         text: &'a str,
-        protected: &[Range<usize>],
+        syntax_protected: &[Range<usize>],
+        code_protected: &[Range<usize>],
     ) -> Vec<Candidate<'a>> {
         let mut candidates = Vec::new();
 
@@ -954,7 +1040,7 @@ impl PiiEngine {
                     let raw = m.as_str();
                     let trimmed = raw.trim_end_matches('.');
                     let end = start + trimmed.len();
-                    if trimmed.len() >= 20 && !Self::is_in_protected_range(protected, start, end) {
+                    if trimmed.len() >= 20 && !Self::is_in_protected_range(syntax_protected, start, end) {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -965,7 +1051,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_AWS.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -975,7 +1061,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_OPENAI.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -985,7 +1071,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_ANTHROPIC.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -995,7 +1081,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_GITHUB.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1005,7 +1091,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_SLACK.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1015,7 +1101,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_GOOGLE.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1025,7 +1111,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_CLOUDFLARE.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1035,7 +1121,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_TELEGRAM.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1045,7 +1131,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_PRIVATE_KEY_PEM.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1070,7 +1156,7 @@ impl PiiEngine {
                 };
                 let key_str = key_m.as_str();
                 let val_raw = val_m.as_str();
-                let trimmed_val = val_raw.trim_end_matches([';', ',']);
+                let trimmed_val = val_raw.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
 
                 // If unquoted and followed by more text on the same line, check if it's natural language prose
                 if (cap.get(4).is_some() || cap.get(8).is_some()) && val_m.end() < text.len() {
@@ -1087,7 +1173,7 @@ impl PiiEngine {
                 if trimmed_val.len() >= 4 && is_valid_secret_value(key_str, trimmed_val) {
                     let start = val_m.start();
                     let end = start + trimmed_val.len();
-                    if !Self::is_in_protected_range(protected, start, end) {
+                    if !Self::is_in_protected_range(syntax_protected, start, end) {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1099,17 +1185,19 @@ impl PiiEngine {
             }
             for cap in REGEX_URL_SENSITIVE_PARAM.captures_iter(text) {
                 if let Some(val_m) = cap.get(1) {
-                    let start = val_m.start();
-                    let end = val_m.end();
                     let val = val_m.as_str();
-                    if is_valid_secret_value("token", val)
-                        && !Self::is_in_protected_range(protected, start, end)
+                    let trimmed_val = val.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
+                    let start = val_m.start();
+                    let end = start + trimmed_val.len();
+                    if trimmed_val.len() >= 6
+                        && is_valid_secret_value("token", trimmed_val)
+                        && !Self::is_in_protected_range(syntax_protected, start, end)
                     {
                         candidates.push(Candidate {
                             start,
                             end,
                             entity: PiiEntity::Secret,
-                            matched_text: val,
+                            matched_text: trimmed_val,
                         });
                     }
                 }
@@ -1130,7 +1218,7 @@ impl PiiEngine {
                 }
                 let s = m.as_str();
                 if is_high_entropy_secret(s)
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1141,7 +1229,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_JWT.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1155,7 +1243,7 @@ impl PiiEngine {
                     let start = pass_m.start();
                     let end = pass_m.end();
                     let pass_str = pass_m.as_str();
-                    if !Self::is_in_protected_range(protected, start, end) {
+                    if !Self::is_in_protected_range(syntax_protected, start, end) {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1171,7 +1259,7 @@ impl PiiEngine {
                     let end = pass_m.end();
                     let pass_str = pass_m.as_str();
                     if is_valid_secret_value("password", pass_str)
-                        && !Self::is_in_protected_range(protected, start, end)
+                        && !Self::is_in_protected_range(syntax_protected, start, end)
                     {
                         candidates.push(Candidate {
                             start,
@@ -1187,7 +1275,7 @@ impl PiiEngine {
                     let start = hash_m.start();
                     let end = hash_m.end();
                     let hash_str = hash_m.as_str();
-                    if !Self::is_in_protected_range(protected, start, end) {
+                    if !Self::is_in_protected_range(syntax_protected, start, end) {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1201,7 +1289,7 @@ impl PiiEngine {
                 if let Some(m) = cap.get(1) {
                     let start = m.start();
                     let end = m.end();
-                    if !Self::is_in_protected_range(protected, start, end) {
+                    if !Self::is_in_protected_range(syntax_protected, start, end) {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1212,7 +1300,7 @@ impl PiiEngine {
                 }
             }
             for m in REGEX_SECRET_AI_CLOUD_PLATFORMS.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1228,8 +1316,43 @@ impl PiiEngine {
                     let end = m.end();
                     let val = m.as_str();
                     if is_valid_secret_value("-p", val)
-                        && !Self::is_in_protected_range(protected, start, end)
+                        && !Self::is_in_protected_range(syntax_protected, start, end)
                     {
+                        candidates.push(Candidate {
+                            start,
+                            end,
+                            entity: PiiEntity::Secret,
+                            matched_text: val,
+                        });
+                    }
+                }
+            }
+            for cap in REGEX_SECRET_SSHPASS.captures_iter(text) {
+                let m = cap.get(1).or_else(|| cap.get(2));
+                if let Some(m) = m {
+                    let start = m.start();
+                    let end = m.end();
+                    let val = m.as_str();
+                    if !val.is_empty()
+                        && is_valid_secret_value("-p_sshpass", val)
+                        && !Self::is_in_protected_range(syntax_protected, start, end)
+                    {
+                        candidates.push(Candidate {
+                            start,
+                            end,
+                            entity: PiiEntity::Secret,
+                            matched_text: val,
+                        });
+                    }
+                }
+            }
+            for cap in REGEX_SECRET_PLATFORM_ID.captures_iter(text) {
+                let m = cap.get(1).or_else(|| cap.get(2));
+                if let Some(m) = m {
+                    let start = m.start();
+                    let end = m.end();
+                    let val = m.as_str();
+                    if !Self::is_in_protected_range(syntax_protected, start, end) {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1242,7 +1365,7 @@ impl PiiEngine {
             for m in REGEX_NATIONAL_ID_ES.find_iter(text) {
                 let s = m.as_str();
                 if is_valid_spanish_id(s)
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1258,7 +1381,7 @@ impl PiiEngine {
                 {
                     let verif_char = m_verif.as_str().chars().next().unwrap_or('?');
                     if is_valid_chilean_rut(m_digits.as_str(), verif_char)
-                        && !Self::is_in_protected_range(protected, m_full.start(), m_full.end())
+                        && !Self::is_in_protected_range(syntax_protected, m_full.start(), m_full.end())
                     {
                         candidates.push(Candidate {
                             start: m_full.start(),
@@ -1271,7 +1394,7 @@ impl PiiEngine {
             }
             for m in REGEX_NATIONAL_ID_US.find_iter(text) {
                 let s = m.as_str();
-                if is_valid_ssn(s) && !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if is_valid_ssn(s) && !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1285,7 +1408,7 @@ impl PiiEngine {
         // ── 2. Email Addresses ──
         if self.has_entity(PiiEntity::Email) {
             for m in REGEX_EMAIL.find_iter(text) {
-                if !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1323,7 +1446,7 @@ impl PiiEngine {
                 let s = m.as_str();
                 let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
                 if luhn_check(&digits)
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1335,7 +1458,7 @@ impl PiiEngine {
             }
             for m in REGEX_IBAN_CANDIDATE.find_iter(text) {
                 let s = m.as_str();
-                if is_valid_iban(s) && !Self::is_in_protected_range(protected, m.start(), m.end()) {
+                if is_valid_iban(s) && !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1372,7 +1495,7 @@ impl PiiEngine {
                 }
 
                 if Ipv4Addr::from_str(s).is_ok()
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1387,7 +1510,7 @@ impl PiiEngine {
                 let s = m.as_str();
                 if s.contains(':')
                     && Ipv6Addr::from_str(s).is_ok()
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1425,7 +1548,7 @@ impl PiiEngine {
                 let digit_count = s.chars().filter(|c| c.is_ascii_digit()).count();
                 if (7..=15).contains(&digit_count)
                     && !REGEX_DATE_OR_TIME.is_match(s)
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1467,7 +1590,7 @@ impl PiiEngine {
                 let digit_count = s.chars().filter(|c| c.is_ascii_digit()).count();
                 if (7..=15).contains(&digit_count)
                     && !REGEX_DATE_OR_TIME.is_match(s)
-                    && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                 {
                     candidates.push(Candidate {
                         start: m.start(),
@@ -1481,13 +1604,13 @@ impl PiiEngine {
 
         // ── 6. Person Names ──
         if self.has_entity(PiiEntity::Person) {
-            // A. Honorific names
-            for cap in REGEX_HONORIFIC_NAME.captures_iter(text) {
-                if let Some(m) = cap.get(1) {
+            // A. Contextual person markers (User: "miguel", DM with miguel, PC Miguel, etc.)
+            for cap in REGEX_CONTEXTUAL_PERSON.captures_iter(text) {
+                let m = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3));
+                if let Some(m) = m {
                     let s = m.as_str();
-                    let words: Vec<&str> = s.split_whitespace().collect();
-                    if words.iter().all(|w| !is_stopword(w))
-                        && !Self::is_in_protected_range(protected, m.start(), m.end())
+                    if !is_stopword(s)
+                        && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
                     {
                         candidates.push(Candidate {
                             start: m.start(),
@@ -1499,7 +1622,44 @@ impl PiiEngine {
                 }
             }
 
-            // B. Capitalized sequence heuristic
+            // B. Common first names (standalone capitalized words like Miguel, Carlos, etc.)
+            for cap in REGEX_SINGLE_WORD_CAPITALIZED.captures_iter(text) {
+                if let Some(m) = cap.get(1) {
+                    let s = m.as_str();
+                    if COMMON_FIRST_NAMES.contains(s)
+                        && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
+                        && !Self::is_in_protected_range(code_protected, m.start(), m.end())
+                    {
+                        candidates.push(Candidate {
+                            start: m.start(),
+                            end: m.end(),
+                            entity: PiiEntity::Person,
+                            matched_text: s,
+                        });
+                    }
+                }
+            }
+
+            // C. Honorific names
+            for cap in REGEX_HONORIFIC_NAME.captures_iter(text) {
+                if let Some(m) = cap.get(1) {
+                    let s = m.as_str();
+                    let words: Vec<&str> = s.split_whitespace().collect();
+                    if words.iter().all(|w| !is_stopword(w))
+                        && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
+                        && !Self::is_in_protected_range(code_protected, m.start(), m.end())
+                    {
+                        candidates.push(Candidate {
+                            start: m.start(),
+                            end: m.end(),
+                            entity: PiiEntity::Person,
+                            matched_text: s,
+                        });
+                    }
+                }
+            }
+
+            // D. Capitalized sequence heuristic
             for cap in REGEX_CAPITALIZED_SEQUENCE.captures_iter(text) {
                 if let Some(m) = cap.get(1) {
                     let s = m.as_str();
@@ -1518,7 +1678,8 @@ impl PiiEngine {
 
                         // Avoid matching pure sentence starters like "Great Results"
                         if !is_sentence_start
-                            && !Self::is_in_protected_range(protected, m.start(), m.end())
+                            && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
+                            && !Self::is_in_protected_range(code_protected, m.start(), m.end())
                         {
                             candidates.push(Candidate {
                                 start: m.start(),
@@ -1543,8 +1704,9 @@ impl PiiEngine {
 
         session.seed_existing_placeholders(text);
 
-        let protected = self.find_protected_ranges(text);
-        let mut candidates = self.collect_candidates(text, &protected);
+        let syntax_protected = self.find_syntax_protected_ranges(text);
+        let code_protected = self.find_code_protected_ranges(text);
+        let mut candidates = self.collect_candidates(text, &syntax_protected, &code_protected);
 
         if candidates.is_empty() {
             return text.to_string();
@@ -1579,9 +1741,22 @@ impl PiiEngine {
 
     /// Recursively redact strings inside a serde_json::Value.
     /// Structural JSON keys and function identifier names (id, type, name) are preserved.
+    /// If a string is itself serialized JSON (e.g. tool_calls.arguments), it is parsed,
+    /// recursively redacted at leaf strings, and re-serialized, guaranteeing valid JSON escaping.
     pub fn redact_json_value(&self, val: &mut serde_json::Value, session: &mut PiiSession) {
         match val {
             serde_json::Value::String(s) => {
+                let trimmed = s.trim();
+                if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                    || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+                    && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(s)
+                {
+                    self.redact_json_value(&mut parsed, session);
+                    if let Ok(serialized) = serde_json::to_string(&parsed) {
+                        *s = serialized;
+                        return;
+                    }
+                }
                 let redacted = self.redact_text(s, session);
                 *s = redacted;
             }
@@ -1617,6 +1792,13 @@ impl PiiEngine {
                 // Intercept content of all messages
                 if let Some(ref mut content) = cloned.content {
                     self.redact_json_value(content, session);
+                }
+
+                // Intercept extra fields (e.g. reasoning_content, thought)
+                for (k, v) in &mut cloned.extra {
+                    if k == "reasoning_content" || k == "thought" {
+                        self.redact_json_value(v, session);
+                    }
                 }
 
                 // Intercept tool_calls arguments in any message

@@ -206,7 +206,8 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
         clauses.push(format!("({bare})"));
     }
     clauses.push("race_lost = 0".to_string());
-    clauses.push("status_code < 400".to_string());
+    clauses.push("status_code >= 200 AND status_code < 400".to_string());
+    clauses.push("(error_msg IS NULL OR error_msg != 'predict_skipped')".to_string());
 
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
 

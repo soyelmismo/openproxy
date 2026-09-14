@@ -538,6 +538,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                 "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens \
                  FROM usage \
                  WHERE cost_usd = 0.0 \
+                   AND status_code >= 200 AND status_code < 400 \
                    AND (prompt_tokens > 0 OR completion_tokens > 0)",
             )
             .map_err(openproxy_db::error::map_db_error)?;

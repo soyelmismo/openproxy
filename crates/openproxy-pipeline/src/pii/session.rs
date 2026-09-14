@@ -154,6 +154,24 @@ impl PiiSession {
                 curr = start + token.len().max(1);
             }
         }
+
+        // 6. Numeric Secret placeholders: 89410294...
+        let mut curr = 0;
+        const NUM_SECRET_PREFIX: &str = "89410294";
+        while let Some(rel) = text[curr..].find(NUM_SECRET_PREFIX) {
+            let start = curr + rel + NUM_SECRET_PREFIX.len();
+            let digits = text[start..]
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap_or("");
+            if !digits.is_empty()
+                && let Ok(n) = digits.parse::<usize>()
+            {
+                let c = self.counts.entry(PiiEntity::Secret).or_insert(0);
+                *c = (*c).max(n);
+            }
+            curr = start + digits.len().max(1);
+        }
     }
 }
 
@@ -203,6 +221,23 @@ impl PiiSession {
             return existing.clone();
         }
 
+        if entity == PiiEntity::Person
+            && let Some((existing_key, existing_placeholder)) = self
+                .forward
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(original))
+        {
+            let placeholder = existing_placeholder.clone();
+            let existing_key = existing_key.clone();
+            self.forward.insert(original.to_string(), placeholder.clone());
+            if original.chars().any(|c| c.is_uppercase())
+                && !existing_key.chars().any(|c| c.is_uppercase())
+            {
+                self.reverse.insert(placeholder.clone(), original.to_string());
+            }
+            return placeholder;
+        }
+
         let count = self.counts.entry(entity).or_insert(0);
         *count += 1;
         let c = *count;
@@ -240,7 +275,19 @@ impl PiiSession {
                 format!("{name}{c}@{domain}")
             }
             PiiEntity::Secret => {
-                if original.starts_with("sk-proj-") {
+                if original.chars().all(|ch| ch.is_ascii_digit()) && original.len() >= 6 {
+                    let len = original.len();
+                    let prefix = "89410294";
+                    if len > prefix.len() {
+                        let width = len - prefix.len();
+                        let max_v = 10_usize.pow(width as u32);
+                        format!("{prefix}{:0width$}", c % max_v, width = width)
+                    } else {
+                        let width = len - 1;
+                        let max_v = 10_usize.pow(width as u32);
+                        format!("9{:0width$}", c % max_v, width = width)
+                    }
+                } else if original.starts_with("sk-proj-") {
                     format!("sk-proj-x7K9mP2vL4wN8qR1tY6uI3oE5aB0zD{c:02}")
                 } else if original.starts_with("sk-") {
                     format!("sk-x7K9mP2vL4wN8qR1tY6uI3oE5aB0zD{c:02}")
@@ -375,6 +422,17 @@ impl PiiSession {
 
         match val {
             serde_json::Value::String(s) => {
+                let trimmed = s.trim();
+                if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                    || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+                    && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(s)
+                {
+                    self.restore_json_value(&mut parsed);
+                    if let Ok(serialized) = serde_json::to_string(&parsed) {
+                        *s = serialized;
+                        return;
+                    }
+                }
                 let restored = self.restore_text(s);
                 *s = restored;
             }

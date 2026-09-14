@@ -31,7 +31,7 @@ fn compute_tokens_per_sec(input: &UsageInput) -> Option<f64> {
 /// Per C3: tokens_per_sec is None if any guard fails.
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Option<f64>) {
     let cost = match input.status_code {
-        0..400 => pricing::compute_cost_with_cache(
+        200..400 => pricing::compute_cost_with_cache(
             price,
             input.prompt_tokens.unwrap_or(0),
             input.completion_tokens.unwrap_or(0),
