@@ -1011,7 +1011,12 @@ fn load_persisted_config_overrides(
     notifications_enabled: &mut bool,
 ) -> anyhow::Result<()> {
     load_persisted_timeouts(w, config)?;
-    load_persisted_runtime_flags(w, recording_ttl_secs, idle_chunk_retryable, notifications_enabled)?;
+    load_persisted_runtime_flags(
+        w,
+        recording_ttl_secs,
+        idle_chunk_retryable,
+        notifications_enabled,
+    )?;
     load_persisted_compression_and_quota(w, config, compression_mode)?;
     Ok(())
 }

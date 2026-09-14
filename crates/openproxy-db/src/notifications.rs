@@ -588,10 +588,7 @@ mod tests {
             survivors.contains(&old_unread),
             "2-day-old UNREAD row must never be pruned"
         );
-        assert!(
-            survivors.contains(&fresh_unread),
-            "fresh row must survive"
-        );
+        assert!(survivors.contains(&fresh_unread), "fresh row must survive");
         assert!(!survivors.contains(&old_read));
         assert!(!survivors.contains(&old_archived));
     }

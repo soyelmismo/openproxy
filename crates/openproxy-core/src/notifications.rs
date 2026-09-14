@@ -103,9 +103,8 @@ pub static NOTIF_TX: OnceLock<broadcast::Sender<NotificationEvent>> = OnceLock::
 /// `notifications_enabled` key in `app_config` by
 /// `openproxy-server/src/state.rs`, and flipped at runtime by
 /// `PUT /admin/api/config/notifications-enabled`.
-static NOTIFICATIONS_ENABLED: AtomicBool = AtomicBool::new(
-    openproxy_db::app_config::NOTIFICATIONS_ENABLED_DEFAULT,
-);
+static NOTIFICATIONS_ENABLED: AtomicBool =
+    AtomicBool::new(openproxy_db::app_config::NOTIFICATIONS_ENABLED_DEFAULT);
 
 /// Read the current global notifications flag.
 pub fn is_enabled() -> bool {

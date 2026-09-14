@@ -561,13 +561,7 @@ pub fn apply_auto_activation(
     let tx = conn.unchecked_transaction().map_err(map_db_error)?;
     let newly_active = query_newly_active_models(&tx, provider, keyword)?;
     let updated = update_models_active_status(&tx, provider, keyword)?;
-    notify_auto_activated_models(
-        &tx,
-        provider,
-        keyword,
-        &newly_active,
-        notif_keyword_only,
-    )?;
+    notify_auto_activated_models(&tx, provider, keyword, &newly_active, notif_keyword_only)?;
     tx.commit().map_err(map_db_error)?;
     Ok(updated as u64)
 }
@@ -1198,10 +1192,8 @@ mod tests {
         let provider = CoreProviderId::new("w2_noop");
         seed_provider(&conn, &provider);
 
-        let candidates: Vec<(String, Option<String>)> = vec![
-            ("claude-3".to_string(), None),
-            ("gpt-4".to_string(), None),
-        ];
+        let candidates: Vec<(String, Option<String>)> =
+            vec![("claude-3".to_string(), None), ("gpt-4".to_string(), None)];
 
         let tx = conn.unchecked_transaction().expect("tx");
         notify_auto_activated_models(&tx, &provider, None, &candidates, true).expect("notify");
@@ -1229,10 +1221,8 @@ mod tests {
         let provider = CoreProviderId::new("w2_off");
         seed_provider(&conn, &provider);
 
-        let candidates: Vec<(String, Option<String>)> = vec![
-            ("claude-3".to_string(), None),
-            ("gpt-4".to_string(), None),
-        ];
+        let candidates: Vec<(String, Option<String>)> =
+            vec![("claude-3".to_string(), None), ("gpt-4".to_string(), None)];
 
         let tx = conn.unchecked_transaction().expect("tx");
         notify_auto_activated_models(&tx, &provider, Some("claude"), &candidates, false)

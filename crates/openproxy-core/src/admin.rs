@@ -242,13 +242,11 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                             out.notif_keyword_only = Some(if raw.is_null() {
                                 None
                             } else {
-                                Some(serde_json::from_value(raw).map_err(
-                                    |e| {
-                                        serde::de::Error::custom(format!(
-                                            "notif_keyword_only must be bool or null: {e}"
-                                        ))
-                                    },
-                                )?)
+                                Some(serde_json::from_value(raw).map_err(|e| {
+                                    serde::de::Error::custom(format!(
+                                        "notif_keyword_only must be bool or null: {e}"
+                                    ))
+                                })?)
                             });
                         }
                         Field::AutoActivateKeyword => {
