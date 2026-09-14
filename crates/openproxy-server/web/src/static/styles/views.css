@@ -2607,14 +2607,24 @@ abbr {
   padding-top: 0;
   flex: 0 0 auto;
 }
-/* Mobile (≤640px): stack the card vertically so the meta and
- * actions wrap instead of overflowing the viewport. Desktop layout
- * and the drag-and-drop handlers are untouched (flex-direction and
- * DnD attributes are not modified above 640px). */
+/* Mobile (≤640px): stack the card vertically with text on top and
+ * actions in their own full-width row below, so the buttons never
+ * squeeze the notification text. Desktop layout and the
+ * drag-and-drop handlers are untouched (row direction and DnD
+ * attributes are not modified above 640px). */
 @media (max-width: 640px) {
   .notification-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .notification-card-body {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .notification-card-text {
+    flex: 1 1 auto;
+    width: 100%;
   }
   .notification-card-meta {
     white-space: normal;
@@ -2622,6 +2632,10 @@ abbr {
   }
   .notification-card-actions {
     flex-wrap: wrap;
+    width: 100%;
+    border-top: var(--border-w) var(--border-style) var(--color-border);
+    padding-top: var(--space-2);
+    margin-top: var(--space-1);
   }
 }
 .notification-empty {
