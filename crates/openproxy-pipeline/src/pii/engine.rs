@@ -208,21 +208,69 @@ static REGEX_CONTEXTUAL_PERSON: LazyLock<Regex> = LazyLock::new(|| {
 
 static COMMON_FIRST_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "Miguel", "Carlos", "Alejandro", "Javier", "Fernando", "Alvaro", "Andres", "Diego",
-        "Mateo", "Gabriel", "Santiago", "Manuel", "Lucas", "Rodrigo", "Gonzalo", "Ignacio",
-        "Pablo", "Pedro", "Juan", "Jose", "Luis", "Maria", "Carmen", "Ana", "Laura", "Sofia",
-        "Isabel", "Elena", "Marta", "Lucia", "Paula", "Sara", "Claudia", "Beatriz", "Teresa",
-        "Patricia", "David", "Daniel", "Alex", "Alexander", "Michael", "John", "James", "Robert",
-        "William", "Thomas", "Richard", "Charles", "Joseph", "Sarah", "Emily", "Jessica", "Emma",
-        "Olivia", "Ava", "Isabella",
+        "Miguel",
+        "Carlos",
+        "Alejandro",
+        "Javier",
+        "Fernando",
+        "Alvaro",
+        "Andres",
+        "Diego",
+        "Mateo",
+        "Gabriel",
+        "Santiago",
+        "Manuel",
+        "Lucas",
+        "Rodrigo",
+        "Gonzalo",
+        "Ignacio",
+        "Pablo",
+        "Pedro",
+        "Juan",
+        "Jose",
+        "Luis",
+        "Maria",
+        "Carmen",
+        "Ana",
+        "Laura",
+        "Sofia",
+        "Isabel",
+        "Elena",
+        "Marta",
+        "Lucia",
+        "Paula",
+        "Sara",
+        "Claudia",
+        "Beatriz",
+        "Teresa",
+        "Patricia",
+        "David",
+        "Daniel",
+        "Alex",
+        "Alexander",
+        "Michael",
+        "John",
+        "James",
+        "Robert",
+        "William",
+        "Thomas",
+        "Richard",
+        "Charles",
+        "Joseph",
+        "Sarah",
+        "Emily",
+        "Jessica",
+        "Emma",
+        "Olivia",
+        "Ava",
+        "Isabella",
     ]
     .into_iter()
     .collect()
 });
 
-static REGEX_SINGLE_WORD_CAPITALIZED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b([A-Z][a-z]{2,15})\b").expect("regex compilation failed")
-});
+static REGEX_SINGLE_WORD_CAPITALIZED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b([A-Z][a-z]{2,15})\b").expect("regex compilation failed"));
 
 // ── Shannon Entropy Calculation ──────────────────────────────────────
 
@@ -1052,7 +1100,9 @@ impl PiiEngine {
                     let raw = m.as_str();
                     let trimmed = raw.trim_end_matches('.');
                     let end = start + trimmed.len();
-                    if trimmed.len() >= 20 && !Self::is_in_protected_range(syntax_protected, start, end) {
+                    if trimmed.len() >= 20
+                        && !Self::is_in_protected_range(syntax_protected, start, end)
+                    {
                         candidates.push(Candidate {
                             start,
                             end,
@@ -1168,7 +1218,8 @@ impl PiiEngine {
                 };
                 let key_str = key_m.as_str();
                 let val_raw = val_m.as_str();
-                let trimmed_val = val_raw.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
+                let trimmed_val =
+                    val_raw.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
 
                 // If unquoted and followed by more text on the same line, check if it's natural language prose
                 if (cap.get(4).is_some() || cap.get(8).is_some()) && val_m.end() < text.len() {
@@ -1198,7 +1249,8 @@ impl PiiEngine {
             for cap in REGEX_URL_SENSITIVE_PARAM.captures_iter(text) {
                 if let Some(val_m) = cap.get(1) {
                     let val = val_m.as_str();
-                    let trimmed_val = val.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
+                    let trimmed_val =
+                        val.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
                     let start = val_m.start();
                     let end = start + trimmed_val.len();
                     if trimmed_val.len() >= 6
@@ -1393,7 +1445,11 @@ impl PiiEngine {
                 {
                     let verif_char = m_verif.as_str().chars().next().unwrap_or('?');
                     if is_valid_chilean_rut(m_digits.as_str(), verif_char)
-                        && !Self::is_in_protected_range(syntax_protected, m_full.start(), m_full.end())
+                        && !Self::is_in_protected_range(
+                            syntax_protected,
+                            m_full.start(),
+                            m_full.end(),
+                        )
                     {
                         candidates.push(Candidate {
                             start: m_full.start(),
@@ -1406,7 +1462,9 @@ impl PiiEngine {
             }
             for m in REGEX_NATIONAL_ID_US.find_iter(text) {
                 let s = m.as_str();
-                if is_valid_ssn(s) && !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                if is_valid_ssn(s)
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
+                {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1470,7 +1528,9 @@ impl PiiEngine {
             }
             for m in REGEX_IBAN_CANDIDATE.find_iter(text) {
                 let s = m.as_str();
-                if is_valid_iban(s) && !Self::is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                if is_valid_iban(s)
+                    && !Self::is_in_protected_range(syntax_protected, m.start(), m.end())
+                {
                     candidates.push(Candidate {
                         start: m.start(),
                         end: m.end(),
@@ -1751,76 +1811,76 @@ impl PiiEngine {
         out
     }
 
-#[inline]
-fn is_probable_base64_payload(s: &str) -> bool {
-    let trimmed = s.trim();
-    if trimmed.len() < 64 {
-        return false;
-    }
-    let mut base64_len = 0;
-    for b in trimmed.bytes() {
-        if b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' {
-            base64_len += 1;
-        } else if b == b'\r' || b == b'\n' {
-            continue;
-        } else {
+    #[inline]
+    fn is_probable_base64_payload(s: &str) -> bool {
+        let trimmed = s.trim();
+        if trimmed.len() < 64 {
             return false;
         }
-    }
-    base64_len >= 64
-}
-
-fn is_multimodal_or_metadata_field(key: &str, val: &serde_json::Value) -> bool {
-    // 1. Structural / protocol metadata
-    if matches!(
-        key,
-        "id" | "type"
-            | "name"
-            | "role"
-            | "model"
-            | "mime_type"
-            | "mimeType"
-            | "media_type"
-            | "mediaType"
-            | "format"
-            | "detail"
-    ) {
-        return true;
+        let mut base64_len = 0;
+        for b in trimmed.bytes() {
+            if b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' {
+                base64_len += 1;
+            } else if b == b'\r' || b == b'\n' {
+                continue;
+            } else {
+                return false;
+            }
+        }
+        base64_len >= 64
     }
 
-    // 2. Multimodal container objects
-    if matches!(key, "inline_data" | "inlineData" | "input_audio" | "audio") {
-        return true;
-    }
+    fn is_multimodal_or_metadata_field(key: &str, val: &serde_json::Value) -> bool {
+        // 1. Structural / protocol metadata
+        if matches!(
+            key,
+            "id" | "type"
+                | "name"
+                | "role"
+                | "model"
+                | "mime_type"
+                | "mimeType"
+                | "media_type"
+                | "mediaType"
+                | "format"
+                | "detail"
+        ) {
+            return true;
+        }
 
-    // 3. Anthropic base64 source object
-    if key == "source" && val.get("type").and_then(|t| t.as_str()) == Some("base64") {
-        return true;
-    }
+        // 2. Multimodal container objects
+        if matches!(key, "inline_data" | "inlineData" | "input_audio" | "audio") {
+            return true;
+        }
 
-    // 4. Raw base64 or media binary arrays
-    if matches!(key, "b64_json" | "images") {
-        return true;
-    }
+        // 3. Anthropic base64 source object
+        if key == "source" && val.get("type").and_then(|t| t.as_str()) == Some("base64") {
+            return true;
+        }
 
-    // 5. Image/audio URLs with data URI
-    if key == "url"
-        && let Some(s) = val.as_str()
-        && s.starts_with("data:")
-    {
-        return true;
-    }
+        // 4. Raw base64 or media binary arrays
+        if matches!(key, "b64_json" | "images") {
+            return true;
+        }
 
-    // 6. Generic "data" key containing base64 or data URI
-    if key == "data"
-        && let Some(s) = val.as_str()
-        && (s.starts_with("data:") || Self::is_probable_base64_payload(s))
-    {
-        return true;
-    }
+        // 5. Image/audio URLs with data URI
+        if key == "url"
+            && let Some(s) = val.as_str()
+            && s.starts_with("data:")
+        {
+            return true;
+        }
 
-    false
-}
+        // 6. Generic "data" key containing base64 or data URI
+        if key == "data"
+            && let Some(s) = val.as_str()
+            && (s.starts_with("data:") || Self::is_probable_base64_payload(s))
+        {
+            return true;
+        }
+
+        false
+    }
 
     /// Recursively redact strings inside a serde_json::Value.
     /// Structural JSON keys and function identifier names (id, type, name) are preserved.

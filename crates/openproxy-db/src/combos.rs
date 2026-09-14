@@ -1906,7 +1906,8 @@ mod tests {
             300,
             300,
             2,
-        ).expect("record cooldown");
+        )
+        .expect("record cooldown");
 
         // Combo 1 now only has target 1 (target 2 is paused model, target 3 is in cooldown)
         let targets_c1 = list_targets(&conn, ComboId(1)).expect("list targets c1");
@@ -1915,6 +1916,9 @@ mod tests {
 
         // Combo 2 target 4 also points to model 103: it MUST be excluded because model 103 is in cooldown
         let targets_c2 = list_targets(&conn, ComboId(2)).expect("list targets c2");
-        assert!(targets_c2.is_empty(), "target 4 must be excluded because its model is in cooldown");
+        assert!(
+            targets_c2.is_empty(),
+            "target 4 must be excluded because its model is in cooldown"
+        );
     }
 }

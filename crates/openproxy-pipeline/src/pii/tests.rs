@@ -1651,7 +1651,12 @@ fn test_multimodal_image_url_base64_payload_preserved_without_corruption() {
     let redacted_msgs = engine.redact_messages(&[msg], &mut session);
     assert_eq!(redacted_msgs.len(), 1);
 
-    let content_arr = redacted_msgs[0].content.as_ref().unwrap().as_array().unwrap();
+    let content_arr = redacted_msgs[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .as_array()
+        .unwrap();
     let text_part = &content_arr[0];
     let image_part = &content_arr[1];
 
@@ -1671,7 +1676,10 @@ fn test_multimodal_image_url_base64_payload_preserved_without_corruption() {
 
     // 3. No secrets falsely detected in the base64 image
     let secret_count = session.counts.get(&PiiEntity::Secret).copied().unwrap_or(0);
-    assert_eq!(secret_count, 0, "Base64 image data must not trigger false secret redactions");
+    assert_eq!(
+        secret_count, 0,
+        "Base64 image data must not trigger false secret redactions"
+    );
 }
 
 #[test]
@@ -1695,7 +1703,10 @@ fn test_multimodal_gemini_inline_data_and_anthropic_source_preserved() {
 
     let parts = &gemini_val["contents"][0]["parts"];
     assert!(!parts[0]["text"].as_str().unwrap().contains("John Doe"));
-    assert_eq!(parts[1]["inline_data"]["data"].as_str().unwrap(), raw_base64);
+    assert_eq!(
+        parts[1]["inline_data"]["data"].as_str().unwrap(),
+        raw_base64
+    );
 
     // Anthropic shape: messages[].content[].source.data
     let mut anthropic_val = serde_json::json!({
@@ -1717,8 +1728,16 @@ fn test_multimodal_gemini_inline_data_and_anthropic_source_preserved() {
 
     engine.redact_json_value(&mut anthropic_val, &mut session);
     let anthropic_content = &anthropic_val["messages"][0]["content"];
-    assert!(!anthropic_content[0]["text"].as_str().unwrap().contains("John Doe"));
-    assert_eq!(anthropic_content[1]["source"]["data"].as_str().unwrap(), raw_base64);
+    assert!(
+        !anthropic_content[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("John Doe")
+    );
+    assert_eq!(
+        anthropic_content[1]["source"]["data"].as_str().unwrap(),
+        raw_base64
+    );
 }
 
 #[test]
@@ -1731,7 +1750,9 @@ fn test_data_uri_in_markdown_text_protected() {
 
     let redacted = engine.redact_text(&input, &mut session);
     assert!(!redacted.contains("John Doe"));
-    assert!(redacted.contains(data_uri), "Embedded Data URI must remain uncorrupted");
+    assert!(
+        redacted.contains(data_uri),
+        "Embedded Data URI must remain uncorrupted"
+    );
     assert_eq!(session.restore_text(&redacted), input);
 }
-

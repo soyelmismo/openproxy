@@ -229,11 +229,13 @@ impl PiiSession {
         {
             let placeholder = existing_placeholder.clone();
             let existing_key = existing_key.clone();
-            self.forward.insert(original.to_string(), placeholder.clone());
+            self.forward
+                .insert(original.to_string(), placeholder.clone());
             if original.chars().any(|c| c.is_uppercase())
                 && !existing_key.chars().any(|c| c.is_uppercase())
             {
-                self.reverse.insert(placeholder.clone(), original.to_string());
+                self.reverse
+                    .insert(placeholder.clone(), original.to_string());
             }
             return placeholder;
         }
