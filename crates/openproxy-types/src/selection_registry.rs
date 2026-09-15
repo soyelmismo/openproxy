@@ -297,4 +297,28 @@ mod tests {
         assert_eq!(removed, 2);
         assert_eq!(registry.len(), 0);
     }
+
+    #[test]
+    fn test_last_activity_within() {
+        let registry = SelectionRegistry::new();
+        let target_1 = ComboTargetId(1);
+        let target_2 = ComboTargetId(2);
+
+        // Non-existent target returns 0
+        assert_eq!(registry.last_activity_within(target_1, 10), 0);
+
+        // Record request updates activity
+        registry.record_request(target_1);
+        let act1 = registry.last_activity_within(target_1, 10);
+        assert!(act1 > 0);
+
+        // Record failure updates activity
+        registry.record_failure(target_2);
+        let act2 = registry.last_activity_within(target_2, 10);
+        assert!(act2 > 0);
+
+        // Outside window (0 seconds window) returns 0
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(registry.last_activity_within(target_1, 0), 0);
+    }
 }
