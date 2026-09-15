@@ -125,9 +125,9 @@ fn test_secrets_and_api_keys_redaction() {
     );
     let redacted = engine.redact_text(&input, &mut session);
 
-    assert!(redacted.contains("Bearer sec_8f7b6c5d4e3a2b109f8e7d6c5b4a3f"));
-    assert!(redacted.contains("sk-proj-x7K9mP2vL4wN8qR1tY6uI3oE5aB0zD"));
-    assert!(redacted.contains("ghp_7xK9mP2vL4wN8qR1tY6uI3oE5aB0zD"));
+    assert!(redacted.contains("Bearer sec_"));
+    assert!(redacted.contains("sk-proj-"));
+    assert!(redacted.contains("ghp_"));
     assert!(!redacted.contains("secret_bearer_token_1234567890"));
     assert!(!redacted.contains("sk-proj-1234567890abcdefghijklmn"));
     assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
@@ -1834,4 +1834,38 @@ fn test_seed_existing_placeholders_exact_sk_ellipsis_panic() {
     let padding = "a".repeat(18167);
     let text = format!("{padding}sk-…more text sk-proj-… op_live_… 10.240.…");
     session.seed_existing_placeholders(&text);
+}
+
+#[test]
+fn test_deterministic_compact_secret_placeholders() {
+    let key = "6df92a6a557b4e72898e81d430db23a6";
+    let mut s1 = PiiSession::new(true);
+    let p1 = s1.get_or_create_placeholder(PiiEntity::Secret, key);
+
+    // 1. Compact: 12 chars (sec_ + 8 hex chars), saving 20 chars vs original 32 chars
+    assert_eq!(p1.len(), 12);
+    assert!(p1.starts_with("sec_"));
+
+    // 2. Deterministic across separate sessions/requests
+    let mut s2 = PiiSession::new(true);
+    let p2 = s2.get_or_create_placeholder(PiiEntity::Secret, key);
+    assert_eq!(
+        p1, p2,
+        "Placeholder must be 100% deterministic for cache stability"
+    );
+
+    // 3. Roundtrip restoration
+    let prompt = format!("Authorization token: {p1}");
+    assert_eq!(
+        s1.restore_text(&prompt),
+        format!("Authorization token: {key}")
+    );
+
+    // 4. OpenAI project keys are also compact (16 chars) and deterministic
+    let proj_key = "sk-proj-1234567890abcdefghijklmn";
+    let proj_p1 = s1.get_or_create_placeholder(PiiEntity::Secret, proj_key);
+    assert_eq!(proj_p1.len(), 16);
+    assert!(proj_p1.starts_with("sk-proj-"));
+    let proj_p2 = s2.get_or_create_placeholder(PiiEntity::Secret, proj_key);
+    assert_eq!(proj_p1, proj_p2);
 }

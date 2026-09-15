@@ -26,6 +26,16 @@ fn next_char_boundary(s: &str, mut idx: usize) -> usize {
     idx.min(s.len())
 }
 
+#[inline]
+pub fn fnv1a_hash(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &byte in s.as_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 impl PiiSession {
     pub fn new(reversible: bool) -> Self {
         Self {
@@ -286,40 +296,43 @@ impl PiiSession {
                 format!("{name}{c}@{domain}")
             }
             PiiEntity::Secret => {
+                let h = fnv1a_hash(original);
+                let h32 = (h & 0xFFFF_FFFF) as u32;
+
                 if original.chars().all(|ch| ch.is_ascii_digit()) && original.len() >= 6 {
                     let len = original.len();
                     let prefix = "89410294";
                     if len > prefix.len() {
                         let width = len - prefix.len();
                         let max_v = 10_usize.pow(width as u32);
-                        format!("{prefix}{:0width$}", c % max_v, width = width)
+                        format!("{prefix}{:0width$}", (h as usize) % max_v, width = width)
                     } else {
                         let width = len - 1;
                         let max_v = 10_usize.pow(width as u32);
-                        format!("9{:0width$}", c % max_v, width = width)
+                        format!("9{:0width$}", (h as usize) % max_v, width = width)
                     }
                 } else if original.starts_with("sk-proj-") {
-                    format!("sk-proj-x7K9mP2vL4wN8qR1tY6uI3oE5aB0zD{c:02}")
+                    format!("sk-proj-{h32:08x}")
                 } else if original.starts_with("sk-") {
-                    format!("sk-x7K9mP2vL4wN8qR1tY6uI3oE5aB0zD{c:02}")
+                    format!("sk-{h32:08x}")
                 } else if original.starts_with("op_live_") {
-                    format!("op_live_7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b{c:02}")
+                    format!("op_live_{h32:08x}")
                 } else if original.starts_with("op_test_") {
-                    format!("op_test_7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b{c:02}")
+                    format!("op_test_{h32:08x}")
                 } else if original.starts_with("mcp_live_") {
-                    format!("mcp_live_7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b{c:02}")
+                    format!("mcp_live_{h32:08x}")
                 } else if original.starts_with("mcp_test_") {
-                    format!("mcp_test_7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b{c:02}")
+                    format!("mcp_test_{h32:08x}")
                 } else if original.starts_with("ghp_") {
-                    format!("ghp_7xK9mP2vL4wN8qR1tY6uI3oE5aB0zD{c:02}")
+                    format!("ghp_{h32:08x}")
                 } else if original.starts_with("gho_") {
-                    format!("gho_7xK9mP2vL4wN8qR1tY6uI3oE5aB0zD{c:02}")
+                    format!("gho_{h32:08x}")
                 } else if original.starts_with("xoxb-") {
-                    format!("xoxb-token-placeholder-{c:02}")
+                    format!("xoxb_{h32:08x}")
                 } else if original.starts_with("Bearer ") {
-                    format!("Bearer sec_8f7b6c5d4e3a2b109f8e7d6c5b4a3f{c:02}")
+                    format!("Bearer sec_{h32:08x}")
                 } else {
-                    format!("sec_8f7b6c5d4e3a2b109f8e7d6c5b4a3f{c:02}")
+                    format!("sec_{h32:08x}")
                 }
             }
             PiiEntity::Phone => {
@@ -373,6 +386,17 @@ impl PiiSession {
                 format!("{first} {last} (P{c})")
             }
         };
+
+        let mut placeholder = placeholder;
+        if let Some(existing_original) = self.reverse.get(&placeholder)
+            && existing_original != original
+        {
+            let mut tie_breaker = 1;
+            while self.reverse.contains_key(&placeholder) {
+                placeholder = format!("{placeholder}_{tie_breaker}");
+                tie_breaker += 1;
+            }
+        }
 
         self.forward
             .insert(original.to_string(), placeholder.clone());

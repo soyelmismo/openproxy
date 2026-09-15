@@ -201,16 +201,29 @@ impl TargetFormatter for ResponsesFormatter {
 fn extract_system_and_messages(
     messages_ref: &[OpenAIMessage],
 ) -> (Option<String>, Vec<&OpenAIMessage>) {
-    let mut system_instructions = None;
+    let mut instructions_parts = Vec::new();
     let mut messages_without_system = Vec::new();
+    let mut leading_system = true;
+
     for msg in messages_ref {
-        if msg.role == "system" && system_instructions.is_none() {
-            system_instructions = Some(content_to_text(msg.content.as_ref()));
+        if msg.role == "system" && leading_system {
+            let text = content_to_text(msg.content.as_ref());
+            if !text.is_empty() {
+                instructions_parts.push(text);
+            }
         } else {
+            leading_system = false;
             messages_without_system.push(msg);
         }
     }
-    (system_instructions, messages_without_system)
+
+    let instructions = if instructions_parts.is_empty() {
+        None
+    } else {
+        Some(instructions_parts.join("\n\n"))
+    };
+
+    (instructions, messages_without_system)
 }
 
 fn format_responses_tools(tools: Option<&[Value]>) -> Option<Value> {
@@ -378,13 +391,31 @@ fn convert_content_item_to_part(item: &Value, text_type: &str) -> Option<Value> 
 
 fn convert_msg_content_to_parts(content: Option<&Value>, text_type: &str) -> Vec<Value> {
     match content {
-        Some(Value::String(text)) => vec![json!({ "type": text_type, "text": text })],
+        Some(Value::String(text)) if !text.is_empty() => {
+            vec![json!({ "type": text_type, "text": text })]
+        }
         Some(Value::Array(arr)) => arr
             .iter()
             .filter_map(|item| convert_content_item_to_part(item, text_type))
+            .filter(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(|t| !t.is_empty())
+            })
             .collect(),
-        Some(value) => vec![json!({ "type": text_type, "text": value.to_string() })],
-        None => vec![json!({ "type": text_type, "text": "" })],
+        Some(value) if !value.is_null() => {
+            let s = if let Some(s) = value.as_str() {
+                s.to_string()
+            } else {
+                value.to_string()
+            };
+            if !s.is_empty() {
+                vec![json!({ "type": text_type, "text": s })]
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -429,17 +460,39 @@ fn convert_single_message_to_responses_input(msg: &OpenAIMessage, input_items: &
         return;
     }
 
-    let text_type = if msg.role == "assistant" {
-        "output_text"
-    } else {
-        "input_text"
-    };
+    if msg.role == "system" {
+        input_items.push(json!({
+            "role": "system",
+            "content": content_to_text(msg.content.as_ref())
+        }));
+        return;
+    }
 
-    let parts = convert_msg_content_to_parts(msg.content.as_ref(), text_type);
-    input_items.push(json!({
-        "role": msg.role,
-        "content": parts
-    }));
+    let has_tool_calls = msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+
+    if msg.role == "assistant" {
+        let parts = convert_msg_content_to_parts(msg.content.as_ref(), "output_text");
+        if !parts.is_empty() {
+            input_items.push(json!({
+                "role": "assistant",
+                "content": parts
+            }));
+        } else if !has_tool_calls {
+            input_items.push(json!({
+                "role": "assistant",
+                "content": [json!({ "type": "output_text", "text": "" })]
+            }));
+        }
+    } else {
+        let mut parts = convert_msg_content_to_parts(msg.content.as_ref(), "input_text");
+        if parts.is_empty() {
+            parts.push(json!({ "type": "input_text", "text": "" }));
+        }
+        input_items.push(json!({
+            "role": msg.role,
+            "content": parts
+        }));
+    }
 
     if let Some(tool_calls) = &msg.tool_calls {
         convert_msg_tool_calls(tool_calls, input_items);
@@ -518,6 +571,102 @@ mod tests {
             items[1].get("type").and_then(Value::as_str),
             Some("function_call_output")
         );
+    }
+
+    #[test]
+    fn test_responses_input_assistant_tool_calls_omits_empty_text() {
+        let assistant = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_123",
+                "type": "function",
+                "function": { "name": "web_search", "arguments": "{\"q\":\"test\"}" }
+            })]),
+            extra: serde_json::Map::new(),
+        };
+        let input = messages_to_responses_input(&[&assistant]);
+        let items = input.as_array().expect("input array");
+
+        // Should ONLY contain the function_call, without any preceding empty assistant message
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("type").and_then(Value::as_str),
+            Some("function_call")
+        );
+        assert_eq!(
+            items[0].get("call_id").and_then(Value::as_str),
+            Some("call_123")
+        );
+    }
+
+    #[test]
+    fn test_responses_input_assistant_commentary_and_tool_calls() {
+        let assistant = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some(Value::String("Voy a buscar.".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_123",
+                "type": "function",
+                "function": { "name": "web_search", "arguments": "{\"q\":\"test\"}" }
+            })]),
+            extra: serde_json::Map::new(),
+        };
+        let input = messages_to_responses_input(&[&assistant]);
+        let items = input.as_array().expect("input array");
+
+        // Should contain assistant text commentary, then function_call
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0].get("role").and_then(Value::as_str),
+            Some("assistant")
+        );
+        assert_eq!(
+            items[0]["content"][0]["text"].as_str(),
+            Some("Voy a buscar.")
+        );
+        assert_eq!(
+            items[1].get("type").and_then(Value::as_str),
+            Some("function_call")
+        );
+    }
+
+    #[test]
+    fn test_responses_input_consecutive_system_messages() {
+        let sys1 = OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(Value::String("Prompt 1".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        };
+        let sys2 = OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(Value::String("Prompt 2".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        };
+        let user = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(Value::String("hi".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        };
+
+        let all_msgs = [sys1, sys2, user];
+        let (instructions, msgs) = extract_system_and_messages(&all_msgs);
+        assert_eq!(instructions, Some("Prompt 1\n\nPrompt 2".to_string()));
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "user");
     }
 
     #[test]
