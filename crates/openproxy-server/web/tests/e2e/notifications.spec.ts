@@ -419,6 +419,10 @@ test.describe('notifications lifecycle', () => {
       payload: { provider_id: 'test', model_id: 'test-model' },
     }]);
 
+    // The tray only fetches on mount — a direct DB seed behind its back
+    // never reaches the UI without a remount. Reload so fetchInitial
+    // picks the seeded row up (same as seeding before the first goto).
+    await page.reload();
     await expect(page.locator('.notification-card')).toHaveCount(1);
     const modelCards = page.locator('.notification-card');
     // model_* notifications should NOT show delete button (isDeletable returns false within 30d)
