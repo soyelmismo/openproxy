@@ -535,3 +535,27 @@
   font-family: var(--font-mono);
 }
 .debug-table-wrap {}
+
+/* ----- Mobile responsive (≤768px): logs row becomes stacked card
+   (historical views.css:887-1317). The shared `.responsive-card-table`
+   mobile card mode is owned by components/tables.css. ----- */
+@media (max-width: 768px) {
+  .log-row {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 8px 10px;
+    gap: 4px;
+  }
+  .log-col-time, .log-col-phase, .log-col-endpoint, .log-col-client,
+  .log-col-status, .log-col-provider, .log-col-model, .log-col-tokens,
+  .log-col-latency, .log-col-cost, .log-col-cache, .log-col-compress {
+    width: 100% !important;
+    text-align: left !important;
+  }
+  /* Logs scroll areas collapse to viewport height on mobile. */
+  .logs {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 56px);
+  }
+}

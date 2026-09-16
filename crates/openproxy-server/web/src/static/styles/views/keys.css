@@ -172,39 +172,19 @@
 .switch.is-on::after {
   transform: translateX(18px);
 }
-.round {
+ .round {
   border-radius: var(--radius-pill);
 }
-.small {
-  font-size: var(--fs-xs);
-}
-.secondary {
-  background: transparent;
-  color: var(--color-text-muted);
-  border: var(--border-w) var(--border-style) var(--color-border);
-}
-.primary {
-  background: var(--color-primary);
-  color: var(--color-primary-fg);
-  border-color: var(--color-primary);
-}
-.danger {
-  color: var(--color-error);
-  border-color: var(--color-error);
-}
-.success {
-  background: var(--color-success-soft);
-  color: var(--color-success);
-}
+/* Note: button sizing/colour variants (button.primary, button.small,
+   button.danger, button.secondary, button.success) live in
+   components/forms.css. The .responsive-card-table mobile card-mode
+   is owned by components/tables.css inside @media (max-width:768px).
+   Don't redefine them here — it would override the desktop table
+   layout in proxies, debug-logs, combos, providers models, etc. */
 .banner-warning {
   background: var(--color-warn-soft);
   color: var(--color-warn);
   border: var(--border-w) var(--border-style) var(--color-warn);
   padding: var(--space-3);
   border-radius: var(--radius-md);
-}
-.responsive-card-table {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
 }

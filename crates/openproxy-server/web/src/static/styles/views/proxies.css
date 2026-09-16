@@ -298,6 +298,8 @@
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
 }
+/* `.mobile-proxy-source-card-cell` is hidden by default (desktop)
+   and revealed by the mobile @media block below. */
 .mobile-proxy-source-card-cell {
   display: none;
 }
@@ -402,4 +404,44 @@
 @keyframes pg-spin {
   to { transform: rotate(360deg); }
 }
-.slider { width: 100%; }
+/* Note: the toggle switch uses .slider as the inner thumb (component
+   in components/forms.css). Don't redefine it globally here. */
+
+/* ----- Mobile responsive (≤768px): actions with buttons render as
+   3-column grid (historical views.css:6171). Without this, the
+   inline-flex .actions from other views collapses the button bar. ----- */
+@media (max-width: 768px) {
+  .actions:has(button) {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1.1fr;
+    gap: 4px;
+    width: 100%;
+    margin-bottom: 6px;
+  }
+  .actions:has(button) button {
+    height: 28px;
+    font-size: 0.7rem;
+    padding: 0 4px;
+    border-radius: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    white-space: nowrap;
+  }
+  /* Mobile card view for proxy sources (mirrors historical
+     views.css:6337-6346). Shared `.responsive-card-table` mobile
+     card mode is owned by components/tables.css. */
+  tr.proxy-source-card-row > td:not(.mobile-proxy-source-card-cell) {
+    display: none;
+  }
+  tr.proxy-source-card-row > td.mobile-proxy-source-card-cell {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+}

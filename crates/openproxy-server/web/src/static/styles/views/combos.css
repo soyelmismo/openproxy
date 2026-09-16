@@ -206,9 +206,9 @@
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
 }
-.off {
-  display: none;
-}
+/* Note: no `.off` utility here — status pills with `.off` (e.g.
+   `<span class="status-pill off">`) must remain visible. The class
+   only affects the badge label colour via badges.css. */
 
 /* ----- Combos remaining selectors ----- */
 .race-input {
@@ -247,4 +247,34 @@
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
+}
+
+/* ----- Mobile responsive (≤768px): combo target rows as stacked
+   fields with data-label ::before, mirroring the historical layout.
+   The shared `.responsive-card-table` mobile card mode is owned by
+   components/tables.css inside @media (max-width:768px). ----- */
+@media (max-width: 768px) {
+  .combo-target-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .combo-target-card-row td {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    width: 100%;
+  }
+  .combo-target-card-row .col-target-drag {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
 }

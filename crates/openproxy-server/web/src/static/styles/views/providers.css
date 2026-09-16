@@ -226,29 +226,8 @@
   border-radius: var(--radius-pill);
   color: var(--color-text-muted);
 }
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: var(--fs-xs);
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-2);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  color: var(--color-text-muted);
-}
-.actions {
-  display: inline-flex;
-  gap: var(--space-1);
-}
-.actions-cell {
-  display: flex;
-  gap: var(--space-1);
-  justify-content: flex-end;
-}
-.actions-col {
-  text-align: right;
-}
+/* `.chip` base style (with border-radius) lives in components/badges.css.
+   `.actions` is a shared component too — see components/forms.css. */
 .card-actions-bar {
   display: flex;
   align-items: center;
@@ -672,4 +651,67 @@
   align-items: center;
   gap: var(--space-1);
   font-size: var(--fs-xs);
+}
+
+/* ----- Mobile responsive (≤768px): account cards as stacked fields
+   with data-label ::before, mirroring the historical views.css block. ----- */
+@media (max-width: 768px) {
+  .account-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .account-card-row td {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    width: 100%;
+  }
+  .account-card-row .col-account-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .account-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-md);
+    font-weight: 600;
+    width: 100%;
+    min-width: 0;
+  }
+  .account-name {
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: calc(100% - 24px);
+  }
+  .account-card-row .col-account-created {
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .account-actions-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .account-actions-wrap button {
+    flex: 1 1 auto;
+    min-height: 38px;
+    justify-content: center;
+    font-size: var(--fs-xs);
+  }
 }
