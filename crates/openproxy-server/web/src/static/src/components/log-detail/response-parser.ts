@@ -313,9 +313,9 @@ export function renderRawResponseBlock(response: unknown): TemplateResult {
 
 /** Render the raw response stream body block (always open by default for debugging interrupted / empty streams). */
 export function renderRawResponseBodyBlock(rawBody: string): TemplateResult {
-  return html`<div class="log-detail-raw-stream-captured" style="margin-bottom: var(--space-md);">
-    <h5 style="margin: 0 0 var(--space-xs) 0; font-size: var(--font-sm); color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Captured Raw Upstream Stream (Interrupted / Empty)</h5>
-    <pre class="json-viewer" style="white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; background: var(--bg-surface-2); font-family: var(--font-mono); font-size: var(--font-xs); padding: var(--space-sm); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">${rawBody}</pre>
+  return html`<div class="log-detail-raw-stream-captured" style="margin-bottom: var(--space-3);">
+    <h5 style="margin: 0 0 var(--space-1) 0; font-size: var(--fs-sm); color: var(--color-text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Captured Raw Upstream Stream (Interrupted / Empty)</h5>
+    <pre class="json-viewer" style="white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; background: var(--color-surface-2); font-family: var(--font-mono); font-size: var(--fs-xs); padding: var(--space-2); border-radius: var(--radius-sm); border: 1px solid var(--color-border);">${rawBody}</pre>
   </div>`;
 }
 

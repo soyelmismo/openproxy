@@ -1,0 +1,31 @@
+/* ============================================
+   FREE PROXIES & PROXY SOURCES VIEW STYLES
+   ============================================ */
+
+.free-proxies-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.proxy-status-pill {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+}
+.proxy-status-pill.active {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+.proxy-status-pill.error {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+}
+
+.proxy-latency {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}

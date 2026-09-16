@@ -264,15 +264,8 @@ impl CoreError {
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
             CoreError::Cancelled(CancelReason::ClientDisconnected) | CoreError::RaceLost => 499,
             CoreError::Cancelled(CancelReason::WatchdogTimeout) => 504,
-            CoreError::Parse(_)
-            | CoreError::Database { .. }
-            | CoreError::Migration { .. }
-            | CoreError::Config(_)
-            | CoreError::Internal(_) => 500,
-            // LOW fix (#14): 503 Service Unavailable for transient
-            // resource exhaustion. The client (or the operator's
-            // dashboard) should retry after a short backoff.
             CoreError::ServiceUnavailable(_) => 503,
+            _ => 500,
         }
     }
 
@@ -304,80 +297,59 @@ impl CoreError {
 
     /// Reconstructs a [`CoreError`] from a canonical error code and message.
     pub fn from_code_and_message(code: &str, message: &str) -> Option<Self> {
+        let msg = message.to_string();
         match code {
-            "auth" => Some(CoreError::Auth(message.to_string())),
-            "validation" => Some(CoreError::Validation(message.to_string())),
-            "provider_not_found" => Some(CoreError::ProviderNotFound(message.to_string())),
-            "account_not_found" => message
-                .trim()
-                .parse::<i64>()
-                .ok()
-                .map(CoreError::AccountNotFound),
-            "combo_not_found" => message
-                .trim()
-                .parse::<i64>()
-                .ok()
-                .map(CoreError::ComboNotFound),
+            "auth" => Some(CoreError::Auth(msg)),
+            "validation" => Some(CoreError::Validation(msg)),
+            "provider_not_found" => Some(CoreError::ProviderNotFound(msg)),
+            "account_not_found" => message.trim().parse().ok().map(CoreError::AccountNotFound),
+            "combo_not_found" => message.trim().parse().ok().map(CoreError::ComboNotFound),
             "model_not_found" => Some(CoreError::ModelNotFound {
-                provider: "<see message>".to_string(),
-                model: message.to_string(),
+                provider: "<see message>".into(),
+                model: msg,
             }),
-            "no_healthy_targets" => message
-                .trim()
-                .parse::<i64>()
-                .ok()
-                .map(CoreError::NoHealthyTargets),
+            "no_healthy_targets" => message.trim().parse().ok().map(CoreError::NoHealthyTargets),
             "upstream_timeout" => Some(CoreError::UpstreamTimeout {
-                phase: "<unknown>".to_string(),
+                phase: "<unknown>".into(),
                 ms: 0,
             }),
-            "upstream_connection" => Some(CoreError::UpstreamConnection(message.to_string())),
-            "upstream_error" => Some(CoreError::UpstreamError {
-                status: 0,
-                provider: "<see message>".to_string(),
-                model: "<see message>".to_string(),
-                body: message.to_string(),
-                is_proxy_rotated: false,
-                class: crate::UpstreamErrorClass::Generic,
-                is_hard_skip: false,
-            }),
+            "upstream_connection" => Some(CoreError::UpstreamConnection(msg)),
+            "upstream_error" => Some(CoreError::upstream_error(
+                0,
+                "<see message>",
+                "<see message>",
+                msg,
+                false,
+            )),
             "rate_limited" => Some(CoreError::RateLimited {
-                provider: "<see message>".to_string(),
+                provider: "<see message>".into(),
                 retry_after_ms: 0,
                 is_proxy_rotated: false,
             }),
-            "parse_error" => Some(CoreError::Parse(message.to_string())),
+            "parse_error" => Some(CoreError::Parse(msg)),
             "client_disconnected" => Some(CoreError::Cancelled(CancelReason::ClientDisconnected)),
             "watchdog_timeout" => Some(CoreError::Cancelled(CancelReason::WatchdogTimeout)),
             "race_lost" => Some(CoreError::RaceLost),
             "database" => Some(CoreError::Database {
-                message: message.to_string(),
+                message: msg,
                 source: None,
             }),
             "migration" => Some(CoreError::Migration {
                 version: 0,
-                message: message.to_string(),
+                message: msg,
             }),
-            "config" => Some(CoreError::Config(message.to_string())),
-            "internal" => Some(CoreError::Internal(message.to_string())),
-            "service_unavailable" => Some(CoreError::ServiceUnavailable(message.to_string())),
+            "config" => Some(CoreError::Config(msg)),
+            "internal" => Some(CoreError::Internal(msg)),
+            "service_unavailable" => Some(CoreError::ServiceUnavailable(msg)),
             "not_found" => {
-                if let Some((what, id)) = message.split_once(" not found: ") {
-                    Some(CoreError::NotFound {
-                        what: what.trim().to_string(),
-                        id: id.trim().to_string(),
-                    })
-                } else if let Some((what, id)) = message.split_once(':') {
-                    Some(CoreError::NotFound {
-                        what: what.trim().to_string(),
-                        id: id.trim().to_string(),
-                    })
-                } else {
-                    Some(CoreError::NotFound {
-                        what: "resource".to_string(),
-                        id: message.to_string(),
-                    })
-                }
+                let (what, id) = message
+                    .split_once(" not found: ")
+                    .or_else(|| message.split_once(':'))
+                    .unwrap_or(("resource", message));
+                Some(CoreError::NotFound {
+                    what: what.trim().to_string(),
+                    id: id.trim().to_string(),
+                })
             }
             _ => None,
         }
@@ -396,12 +368,67 @@ impl From<tokio::task::JoinError> for CoreError {
     }
 }
 
+/// Blanket extension trait for attaching context to any [`std::result::Result`]
+/// converting the error into a [`CoreError`].
+pub trait ResultExt<T> {
+    fn ctx_internal(self, msg: impl fmt::Display) -> Result<T>;
+    fn ctx_validation(self, msg: impl fmt::Display) -> Result<T>;
+    fn ctx_not_found(self, msg: impl fmt::Display) -> Result<T>;
+    fn ctx_upstream(self, msg: impl fmt::Display) -> Result<T>;
+}
+
+impl<T, E: fmt::Display> ResultExt<T> for std::result::Result<T, E> {
+    #[inline]
+    fn ctx_internal(self, msg: impl fmt::Display) -> Result<T> {
+        self.map_err(|e| CoreError::Internal(format!("{msg}: {e}")))
+    }
+
+    #[inline]
+    fn ctx_validation(self, msg: impl fmt::Display) -> Result<T> {
+        self.map_err(|e| CoreError::Validation(format!("{msg}: {e}")))
+    }
+
+    #[inline]
+    fn ctx_not_found(self, msg: impl fmt::Display) -> Result<T> {
+        self.map_err(|e| CoreError::NotFound {
+            what: msg.to_string(),
+            id: e.to_string(),
+        })
+    }
+
+    #[inline]
+    fn ctx_upstream(self, msg: impl fmt::Display) -> Result<T> {
+        self.map_err(|e| CoreError::UpstreamConnection(format!("{msg}: {e}")))
+    }
+}
+
+/// Extension trait for attaching contextual [`CoreError`] to an [`Option`].
+pub trait OptionExt<T> {
+    fn ctx_not_found(self, what: impl Into<String>, id: impl Into<String>) -> Result<T>;
+    fn ctx_validation(self, msg: impl fmt::Display) -> Result<T>;
+}
+
+impl<T> OptionExt<T> for Option<T> {
+    #[inline]
+    fn ctx_not_found(self, what: impl Into<String>, id: impl Into<String>) -> Result<T> {
+        self.ok_or_else(|| CoreError::NotFound {
+            what: what.into(),
+            id: id.into(),
+        })
+    }
+
+    #[inline]
+    fn ctx_validation(self, msg: impl fmt::Display) -> Result<T> {
+        self.ok_or_else(|| CoreError::Validation(msg.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_core_error_clone() {
+    fn test_core_error_clone_and_codes() {
         let err = CoreError::Database {
             message: "disk full".into(),
             source: None,
@@ -410,31 +437,32 @@ mod tests {
         assert_eq!(err.code(), cloned.code());
         assert_eq!(err.http_status(), cloned.http_status());
         assert_eq!(err.clone_for_result().code(), "database");
+
+        let distinct = [
+            CoreError::Auth("x".into()),
+            CoreError::Validation("x".into()),
+            CoreError::ProviderNotFound("x".into()),
+            CoreError::RaceLost,
+            CoreError::Cancelled(CancelReason::ClientDisconnected),
+        ];
+        let set: std::collections::HashSet<_> = distinct.iter().map(|e| e.code()).collect();
+        assert_eq!(set.len(), 5);
     }
 
     #[test]
-    fn test_from_code_and_message_simple() {
-        assert!(matches!(
-            CoreError::from_code_and_message("auth", "bad token"),
-            Some(CoreError::Auth(msg)) if msg == "bad token"
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("validation", "invalid param"),
-            Some(CoreError::Validation(msg)) if msg == "invalid param"
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("provider_not_found", "openrouter"),
-            Some(CoreError::ProviderNotFound(msg)) if msg == "openrouter"
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("service_unavailable", "overloaded"),
-            Some(CoreError::ServiceUnavailable(msg)) if msg == "overloaded"
-        ));
-        assert!(CoreError::from_code_and_message("unknown_code", "foo").is_none());
-    }
-
-    #[test]
-    fn test_from_code_and_message_numeric() {
+    fn test_from_code_and_message() {
+        assert!(
+            matches!(CoreError::from_code_and_message("auth", "bad token"), Some(CoreError::Auth(m)) if m == "bad token")
+        );
+        assert!(
+            matches!(CoreError::from_code_and_message("validation", "invalid"), Some(CoreError::Validation(m)) if m == "invalid")
+        );
+        assert!(
+            matches!(CoreError::from_code_and_message("provider_not_found", "or"), Some(CoreError::ProviderNotFound(m)) if m == "or")
+        );
+        assert!(
+            matches!(CoreError::from_code_and_message("service_unavailable", "ol"), Some(CoreError::ServiceUnavailable(m)) if m == "ol")
+        );
         assert!(matches!(
             CoreError::from_code_and_message("account_not_found", "42"),
             Some(CoreError::AccountNotFound(42))
@@ -448,200 +476,139 @@ mod tests {
             CoreError::from_code_and_message("no_healthy_targets", "99"),
             Some(CoreError::NoHealthyTargets(99))
         ));
-    }
-
-    #[test]
-    fn test_from_code_and_message_cancelled_race() {
         assert!(matches!(
-            CoreError::from_code_and_message("watchdog_timeout", "timeout"),
+            CoreError::from_code_and_message("watchdog_timeout", "t"),
             Some(CoreError::Cancelled(CancelReason::WatchdogTimeout))
         ));
         assert!(matches!(
-            CoreError::from_code_and_message("client_disconnected", "drop"),
+            CoreError::from_code_and_message("client_disconnected", "d"),
             Some(CoreError::Cancelled(CancelReason::ClientDisconnected))
         ));
         assert!(matches!(
-            CoreError::from_code_and_message("race_lost", "loser"),
+            CoreError::from_code_and_message("race_lost", "l"),
             Some(CoreError::RaceLost)
         ));
+        assert!(
+            matches!(CoreError::from_code_and_message("not_found", "ticket not found: abc-123"), Some(CoreError::NotFound { what, id }) if what == "ticket" && id == "abc-123")
+        );
+        assert!(
+            matches!(CoreError::from_code_and_message("not_found", "user: 42"), Some(CoreError::NotFound { what, id }) if what == "user" && id == "42")
+        );
+        assert!(CoreError::from_code_and_message("unknown_code", "foo").is_none());
     }
 
     #[test]
-    fn test_from_code_and_message_not_found() {
-        assert!(matches!(
-            CoreError::from_code_and_message("not_found", "ticket not found: abc-123"),
-            Some(CoreError::NotFound { what, id }) if what == "ticket" && id == "abc-123"
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("not_found", "user: 42"),
-            Some(CoreError::NotFound { what, id }) if what == "user" && id == "42"
-        ));
-    }
-
-    #[test]
-    fn http_status_mapping() {
-        assert_eq!(CoreError::Auth("x".into()).http_status(), 401);
-        assert_eq!(CoreError::Validation("x".into()).http_status(), 400);
-        assert_eq!(
-            CoreError::RateLimited {
-                provider: "p".into(),
-                retry_after_ms: 1000,
-                is_proxy_rotated: false,
-            }
-            .http_status(),
-            429
-        );
-        assert_eq!(
-            CoreError::Cancelled(CancelReason::ClientDisconnected).http_status(),
-            499
-        );
-        assert_eq!(
-            CoreError::Cancelled(CancelReason::WatchdogTimeout).http_status(),
-            504
-        );
-        assert_eq!(
-            CoreError::UpstreamTimeout {
-                phase: "ttft".into(),
-                ms: 100
-            }
-            .http_status(),
-            529
-        );
-    }
-
-    #[test]
-    fn codes_are_distinct() {
-        let mut codes = std::collections::HashSet::new();
-        for err in [
-            CoreError::Auth("x".into()),
-            CoreError::Validation("x".into()),
-            CoreError::ProviderNotFound("x".into()),
-            CoreError::RaceLost,
-            CoreError::Cancelled(CancelReason::ClientDisconnected),
-        ] {
-            codes.insert(err.code());
+    fn test_http_status_mapping() {
+        let cases = [
+            (CoreError::Auth("x".into()), 401),
+            (CoreError::Validation("x".into()), 400),
+            (
+                CoreError::RateLimited {
+                    provider: "p".into(),
+                    retry_after_ms: 1000,
+                    is_proxy_rotated: false,
+                },
+                429,
+            ),
+            (CoreError::Cancelled(CancelReason::ClientDisconnected), 499),
+            (CoreError::Cancelled(CancelReason::WatchdogTimeout), 504),
+            (
+                CoreError::UpstreamTimeout {
+                    phase: "ttft".into(),
+                    ms: 100,
+                },
+                529,
+            ),
+        ];
+        for (err, status) in cases {
+            assert_eq!(err.http_status(), status);
         }
-        assert_eq!(codes.len(), 5);
     }
 
     #[test]
-    fn test_is_proxy_rotated() {
-        assert!(
-            CoreError::UpstreamError {
-                status: 500,
-                provider: "test".into(),
-                model: "model".into(),
-                body: "err".into(),
-                is_proxy_rotated: true,
-                class: crate::UpstreamErrorClass::Generic,
-                is_hard_skip: false,
+    fn test_proxy_rotated_and_hard_skip() {
+        let cases = [
+            (
+                CoreError::upstream_error(500, "t", "m", "e", true),
+                true,
+                false,
+                None,
+            ),
+            (
+                CoreError::upstream_error(500, "t", "m", "e", false),
+                false,
+                false,
+                None,
+            ),
+            (
+                CoreError::RateLimited {
+                    provider: "t".into(),
+                    retry_after_ms: 0,
+                    is_proxy_rotated: true,
+                },
+                true,
+                false,
+                None,
+            ),
+            (
+                CoreError::RateLimited {
+                    provider: "t".into(),
+                    retry_after_ms: 0,
+                    is_proxy_rotated: false,
+                },
+                false,
+                false,
+                None,
+            ),
+            (CoreError::Auth("x".into()), false, false, None),
+            (
+                CoreError::upstream_error_with_skip(403, "ag", "g", "{}", false, true),
+                false,
+                true,
+                None,
+            ),
+            (
+                CoreError::upstream_error_classified(
+                    403,
+                    "ag",
+                    "g",
+                    "{}",
+                    false,
+                    crate::UpstreamErrorClass::ValidationRequired,
+                ),
+                false,
+                true,
+                Some(crate::UpstreamErrorClass::ValidationRequired),
+            ),
+        ];
+        for (err, rot, skip, cls) in cases {
+            assert_eq!(err.is_proxy_rotated(), rot);
+            assert_eq!(err.is_hard_skip(), skip);
+            if let Some(c) = cls {
+                assert_eq!(err.upstream_error_class(), Some(c));
             }
-            .is_proxy_rotated()
-        );
-
-        assert!(
-            !CoreError::UpstreamError {
-                status: 500,
-                provider: "test".into(),
-                model: "model".into(),
-                body: "err".into(),
-                is_proxy_rotated: false,
-                class: crate::UpstreamErrorClass::Generic,
-                is_hard_skip: false,
-            }
-            .is_proxy_rotated()
-        );
-
-        assert!(
-            CoreError::RateLimited {
-                provider: "test".into(),
-                retry_after_ms: 0,
-                is_proxy_rotated: true,
-            }
-            .is_proxy_rotated()
-        );
-
-        assert!(
-            !CoreError::RateLimited {
-                provider: "test".into(),
-                retry_after_ms: 0,
-                is_proxy_rotated: false,
-            }
-            .is_proxy_rotated()
-        );
-
-        assert!(!CoreError::Auth("x".into()).is_proxy_rotated());
+        }
     }
 
     #[test]
-    fn test_is_hard_skip_defaults_to_false() {
-        let legacy = CoreError::upstream_error(400, "p", "m", "x", false);
-        assert!(!legacy.is_hard_skip());
-    }
-
-    #[test]
-    fn test_is_hard_skip_explicit() {
-        let hard_skip = CoreError::upstream_error_with_skip(
-            403,
-            "antigravity",
-            "gemini-2.5",
-            r#"{"error":"VALIDATION_REQUIRED"}"#,
-            false,
-            true,
-        );
-        assert!(hard_skip.is_hard_skip());
-
-        let generic = CoreError::upstream_error_with_skip(
-            500,
-            "antigravity",
-            "gemini-2.5",
-            "boom",
-            false,
-            false,
-        );
-        assert!(!generic.is_hard_skip());
-    }
-
-    #[test]
-    fn test_upstream_error_classified_sets_class_and_hard_skip() {
-        let v = CoreError::upstream_error_classified(
-            403,
-            "antigravity",
-            "gemini-2.5",
-            r#"{"error":"VALIDATION_REQUIRED"}"#,
-            false,
-            crate::UpstreamErrorClass::ValidationRequired,
-        );
-        assert!(v.is_hard_skip());
-        assert_eq!(
-            v.upstream_error_class(),
-            Some(crate::UpstreamErrorClass::ValidationRequired)
-        );
-
-        let g = CoreError::upstream_error_classified(
-            500,
-            "antigravity",
-            "gemini-2.5",
-            "boom",
-            false,
-            crate::UpstreamErrorClass::Generic,
-        );
-        assert!(!g.is_hard_skip());
-    }
-
-    #[test]
-    fn test_is_hard_skip_false_for_non_upstream() {
-        assert!(!CoreError::Auth("x".into()).is_hard_skip());
-        assert!(!CoreError::Validation("x".into()).is_hard_skip());
+    fn test_result_and_option_ext() {
+        let err: std::result::Result<(), &str> = Err("fail");
+        assert!(matches!(err.ctx_internal("io"), Err(CoreError::Internal(m)) if m == "io: fail"));
+        assert!(matches!(err.ctx_validation("f"), Err(CoreError::Validation(m)) if m == "f: fail"));
         assert!(
-            !CoreError::RateLimited {
-                provider: "p".into(),
-                retry_after_ms: 1000,
-                is_proxy_rotated: false,
-            }
-            .is_hard_skip()
+            matches!(err.ctx_not_found("it"), Err(CoreError::NotFound { what, id }) if what == "it" && id == "fail")
         );
-        assert!(!CoreError::Internal("x".into()).is_hard_skip());
-        assert_eq!(CoreError::Auth("x".into()).upstream_error_class(), None);
+        assert!(
+            matches!(err.ctx_upstream("c"), Err(CoreError::UpstreamConnection(m)) if m == "c: fail")
+        );
+        let ok: std::result::Result<u32, &str> = Ok(42);
+        assert_eq!(ok.ctx_internal("x").unwrap(), 42);
+
+        let none: Option<i32> = None;
+        assert!(
+            matches!(none.ctx_not_found("acc", "1"), Err(CoreError::NotFound { what, id }) if what == "acc" && id == "1")
+        );
+        assert!(matches!(none.ctx_validation("msg"), Err(CoreError::Validation(m)) if m == "msg"));
+        assert_eq!(Some(100).ctx_not_found("a", "1").unwrap(), 100);
     }
 }

@@ -1,0 +1,142 @@
+/* ============================================
+   BADGES, CHIPS & STATUS INDICATORS
+   ============================================ */
+
+/* ----- Badges & Chips ----- */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.badge-info    { background: var(--color-info-soft);    color: var(--color-info);    border-color: var(--color-info); }
+.badge-success { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.badge-warn    { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.badge-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }
+.badge-cooldown{ background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.badge-inactive{ background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); font-size: 0.7rem; }
+.badge-virtual { background: var(--color-phase-soft);   color: var(--color-phase-text);   border-color: var(--color-border-soft); font-style: italic; }
+
+.chip {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+.chip.combo-chip { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); }
+.virtual-provider { font-style: italic; color: var(--color-text-muted); }
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  background: var(--color-info-soft);
+  color: var(--color-info);
+  border: var(--border-w) var(--border-style) var(--color-info);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.model-chip button {
+  background: transparent;
+  border: none;
+  padding: 0 0.15rem;
+  color: var(--color-info);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* ----- Status pill ----- */
+.status-pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  border: var(--border-w) var(--border-style) currentColor;
+  background: transparent;
+}
+.status-pill.ok, .status-pill.on, .status-pill.success {
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+}
+.status-pill.warn {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+}
+.status-pill.err, .status-pill.error, .status-pill.off, .status-pill.danger {
+  color: var(--color-error);
+  background: var(--color-error-soft);
+  border-color: var(--color-error);
+}
+.status-pill.lost {
+  color: var(--color-status-lost);
+  background: var(--color-status-lost-soft);
+  border-color: var(--color-status-lost);
+}
+
+/* ----- Quota bar ----- */
+.quota-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: var(--space-2) 0;
+}
+.quota-bar.mini {
+  margin: 0;
+  gap: 0;
+}
+.quota-bar-track {
+  height: 8px;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  position: relative;
+  overflow: hidden;
+}
+.quota-bar-fill {
+  height: 100%;
+  background: var(--color-success, #22c55e);
+  transition: width var(--t-base);
+}
+.quota-bar.ok .quota-bar-fill,
+.quota-bar-fill.ok { background: var(--color-success, #22c55e); }
+.quota-bar.warn .quota-bar-fill,
+.quota-bar-fill.warn { background: var(--color-warn, #f59e0b); }
+.quota-bar.danger .quota-bar-fill,
+.quota-bar-fill.error { background: var(--color-error, #ef4444); }
+.quota-bar-label { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+/* ----- Connection badge & Status dot ----- */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.logs-connection-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 0.55rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  line-height: 1;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  user-select: none;
+  white-space: nowrap;
+}
+.logs-connection-badge.connected    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.logs-connection-badge.connecting,
+.logs-connection-badge.reconnecting { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.logs-connection-badge.disconnected { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }

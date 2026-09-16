@@ -11,7 +11,10 @@
   --color-bg:           #f5f7fa;
   --color-surface:      var(--c-canvas);
   --color-surface-2:    #f0f3f7;
+  --color-surface-hover: rgba(0, 0, 0, 0.04);
+  --color-surface-soft:  var(--color-surface-2);
   --color-text:         #17212b;
+  --color-text-emphasis:#0d151c;
   --color-text-muted:   #667085;
   --color-text-inverse: var(--c-canvas);
   --color-link:         var(--c-link);
@@ -65,7 +68,10 @@
   --color-bg:           #151413;     /* warm dark ash */
   --color-surface:      #1c1b1a;     /* warm ash surface */
   --color-surface-2:    #262523;     /* warm ash surface 2 */
+  --color-surface-hover: rgba(255, 255, 255, 0.04);
+  --color-surface-soft:  var(--color-surface-2);
   --color-text:         #f2efe9;     /* warm soft white */
+  --color-text-emphasis:#ffffff;
   --color-text-muted:   #a39e95;     /* warm ash muted */
   --color-text-inverse: #151413;
   --color-link:         #7aa2f7;
@@ -152,7 +158,10 @@
     --color-bg:           #151413;
     --color-surface:      #1c1b1a;
     --color-surface-2:    #262523;
+    --color-surface-hover: rgba(255, 255, 255, 0.04);
+    --color-surface-soft:  var(--color-surface-2);
     --color-text:         #f2efe9;
+    --color-text-emphasis:#ffffff;
     --color-text-muted:   #a39e95;
     --color-text-inverse: #151413;
     --color-link:         #7aa2f7;

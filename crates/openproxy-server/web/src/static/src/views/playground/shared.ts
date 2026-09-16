@@ -252,196 +252,28 @@ export function copyText(text: string, label = 'Content'): void {
 // Model type inference
 // ==========
 
+const CHAT_GUARDS = ['gemini', 'gpt-', 'claude', 'qwen', 'llama', 'mistral', 'mixtral', 'deepseek', 'gemma', 'inkling', 'mimo', 'muse-spark'];
+const AUDIO_EXPLICIT = ['whisper', 'tts', '-asr', '_asr', '/asr', 'deepgram', 'speechmatics', 'elevenlabs', 'fish-audio'];
+const IMAGE_EXPLICIT = ['dall-e', 'imagen', 'flux', 'midjourney', 'sdxl', 'seedream', 'nano-banana', 'lucid-origin', 'grok-imagine'];
+const CHAT_EXCEPTIONS = ['gpt-4o-audio', 'gpt-4-audio', 'qwen-audio-chat', 'qwen2-audio-instruct', 'stepaudio-2.5-chat', 'stepaudio-2.5-realtime', 'diffusiongemma', 'sdft'];
+const AUDIO_KEYWORDS = ['whisper', 'speechify', 'melotts', 'melo-tts', 'kokoro', 'fish-audio', 'fish-speech', 'chattts', 'cosyvoice', 'openvoice', 'parler-tts', 'speechmatics', 'tts-1', 'inworld-tts', 'elevenlabs', 'eleven-labs', 'eleven_multilingual', 'stable-audio', 'musicgen', 'audioldm', 'seamless-m4t', 'sensevoice', 'voxtral-mini-tts', 'xai-tts', '-tts', '_tts', '/tts', 'preview-tts', '-asr'];
+const EMBED_KEYWORDS = ['text-embedding', 'embedding', 'embeddings', 'embedder', 'model2vec', 'bge-', '/bge-', 'bge_', 'bge.', 'embed-qa', 'embedcode', 'pplx-embed', 'mistral-embed', 'codestral-embed', 'arctic-embed', 'nomic-embed', 'voyage-embed', 'nv-embed', 'gte-', 'e5-', 'embed-v'];
+const IMAGE_KEYWORDS = ['dall-e', 'dalle', 'midjourney', 'ideogram', 'recraft', 'flux', 'sdxl', 'stable-diffusion', 'stable_diffusion', 'stablediffusion', 'stable-image', 'sd-turbo', 'sdxl-turbo', 'sd-1.5', 'sd-2.1', 'sd-3', 'sd-3.5', 'sd3', 'sd3.5', 'imagen', 'dreamshaper', 'pony', 'animagine', 'zavychroma', 'novafast', 'albedobase', 'edge of realism', 'zeipher female', 'mhxl', 'rag illustrious', 'mistoon anime', 'bb95 furry', 'camelliamix', 'anything v3', 'anything v5', 'perfect world', 'abyss orangemix', 'stable cascade', 'playbookxl', 'rundiffusion', 'playground-v2', 'kandinsky', 'kolors', 'auraflow', 'lumina-image', 'hunyuan-dit', 'pixart', 'cogview', 'gameart', 'art of mtg', 'duchaiten', 'duc haiten', 'nai-diffusion', 'diffusion'];
+
 export function inferModelTypeFrontend(
   modelId: string,
   rawType?: string | null,
 ): ModalityType | 'rerank' {
-  const idLower = modelId.toLowerCase();
-  const isChatGuard =
-    idLower.includes('gemini') ||
-    idLower.includes('gpt-') ||
-    idLower.includes('claude') ||
-    idLower.includes('qwen') ||
-    idLower.includes('llama') ||
-    idLower.includes('mistral') ||
-    idLower.includes('mixtral') ||
-    idLower.includes('deepseek') ||
-    idLower.includes('gemma') ||
-    idLower.includes('inkling') ||
-    idLower.includes('mimo') ||
-    idLower.includes('muse-spark');
-  const isAudioExplicit =
-    idLower.includes('whisper') ||
-    idLower.includes('tts') ||
-    idLower.includes('-asr') ||
-    idLower.includes('_asr') ||
-    idLower.includes('/asr') ||
-    idLower.includes('deepgram') ||
-    idLower.includes('speechmatics') ||
-    idLower.includes('elevenlabs') ||
-    idLower.includes('fish-audio');
-  const isImageExplicit =
-    idLower.includes('dall-e') ||
-    idLower.includes('imagen') ||
-    idLower.includes('flux') ||
-    idLower.includes('midjourney') ||
-    idLower.includes('sdxl') ||
-    idLower.includes('seedream') ||
-    idLower.includes('nano-banana') ||
-    idLower.includes('lucid-origin') ||
-    idLower.includes('grok-imagine');
-
-  if (isChatGuard && !isAudioExplicit && !isImageExplicit) {
-    return 'chat';
-  }
-
+  const s = modelId.toLowerCase();
+  if (CHAT_GUARDS.some((k) => s.includes(k)) && !AUDIO_EXPLICIT.some((k) => s.includes(k)) && !IMAGE_EXPLICIT.some((k) => s.includes(k))) return 'chat';
   const t = (rawType || '').toLowerCase();
-  if (t === 'image' || t === 'embedding' || t === 'audio' || t === 'rerank') {
-    return t as ModalityType | 'rerank';
-  }
-  if (idLower.includes('deepgram')) return 'audio';
-  if (
-    idLower.includes('gpt-4o-audio') ||
-    idLower.includes('gpt-4-audio') ||
-    idLower.includes('qwen-audio-chat') ||
-    idLower.includes('qwen2-audio-instruct') ||
-    idLower.includes('stepaudio-2.5-chat') ||
-    idLower.includes('stepaudio-2.5-realtime')
-  ) {
-    return 'chat';
-  }
-  if (
-    idLower.includes('whisper') ||
-    idLower.includes('speechify') ||
-    idLower.includes('melotts') ||
-    idLower.includes('melo-tts') ||
-    idLower.includes('kokoro') ||
-    idLower.includes('fish-audio') ||
-    idLower.includes('fish-speech') ||
-    idLower.includes('chattts') ||
-    idLower.includes('cosyvoice') ||
-    idLower.includes('openvoice') ||
-    idLower.includes('parler-tts') ||
-    idLower.includes('speechmatics') ||
-    idLower.includes('tts-1') ||
-    idLower.includes('inworld-tts') ||
-    idLower.includes('elevenlabs') ||
-    idLower.includes('eleven-labs') ||
-    idLower.includes('eleven_multilingual') ||
-    idLower.includes('stable-audio') ||
-    idLower.includes('musicgen') ||
-    idLower.includes('audioldm') ||
-    idLower.includes('seamless-m4t') ||
-    idLower.includes('sensevoice') ||
-    idLower.includes('voxtral-mini-tts') ||
-    idLower.includes('xai-tts') ||
-    (idLower.includes('telnyx-') && idLower.includes('tts')) ||
-    idLower.endsWith('-tts') ||
-    idLower.endsWith('_tts') ||
-    idLower.endsWith('/tts') ||
-    idLower.includes('-tts-') ||
-    idLower.includes('_tts_') ||
-    idLower.includes('/tts-') ||
-    idLower.includes('preview-tts') ||
-    idLower.includes('-tts-preview') ||
-    idLower.endsWith('-asr') ||
-    idLower.includes('-asr-') ||
-    idLower.includes('-asr')
-  ) {
-    return 'audio';
-  }
-  if (idLower.includes('rerank')) return 'rerank';
-  if (
-    idLower.includes('text-embedding') ||
-    idLower.includes('embedding') ||
-    idLower.includes('embeddings') ||
-    idLower.includes('embedder') ||
-    idLower.includes('model2vec') ||
-    idLower.includes('bge-') ||
-    idLower.includes('/bge-') ||
-    idLower.includes('bge_') ||
-    idLower.includes('bge.') ||
-    idLower.includes('embed-qa') ||
-    idLower.includes('embedcode') ||
-    idLower.includes('pplx-embed') ||
-    idLower.includes('mistral-embed') ||
-    idLower.includes('codestral-embed') ||
-    idLower.includes('arctic-embed') ||
-    idLower.includes('nomic-embed') ||
-    idLower.includes('voyage-embed') ||
-    idLower.includes('nv-embed') ||
-    idLower.includes('gte-') ||
-    idLower.includes('e5-') ||
-    idLower.includes('embed-v') ||
-    (idLower.includes('embed') &&
-      !idLower.includes('embedded-') &&
-      !idLower.includes('embed_chat') &&
-      !idLower.includes('embeddable'))
-  ) {
-    return 'embedding';
-  }
-  if (idLower.includes('diffusiongemma') || idLower.includes('sdft')) return 'chat';
-  if (
-    idLower.includes('dall-e') ||
-    idLower.includes('dalle') ||
-    idLower.includes('midjourney') ||
-    idLower.includes('ideogram') ||
-    idLower.includes('recraft') ||
-    idLower.includes('flux') ||
-    idLower.includes('sdxl') ||
-    idLower.includes('stable-diffusion') ||
-    idLower.includes('stable_diffusion') ||
-    idLower.includes('stablediffusion') ||
-    idLower.includes('stable-image') ||
-    idLower.includes('sd-turbo') ||
-    idLower.includes('sdxl-turbo') ||
-    idLower.includes('sd-1.5') ||
-    idLower.includes('sd-2.1') ||
-    idLower.includes('sd-3') ||
-    idLower.includes('sd-3.5') ||
-    idLower.includes('sd3') ||
-    idLower.includes('sd3.5') ||
-    idLower.includes('imagen-') ||
-    idLower.includes('imagen/') ||
-    idLower.startsWith('imagen-') ||
-    idLower === 'imagen' ||
-    idLower.includes('dreamshaper') ||
-    idLower.includes('pony') ||
-    idLower.includes('animagine') ||
-    idLower.includes('zavychroma') ||
-    idLower.includes('novafast') ||
-    idLower.includes('albedobase') ||
-    idLower.includes('edge of realism') ||
-    idLower.includes('zeipher female') ||
-    idLower.includes('mhxl') ||
-    idLower.includes('rag illustrious') ||
-    idLower.includes('mistoon anime') ||
-    idLower.includes('bb95 furry') ||
-    idLower.includes('camelliamix') ||
-    idLower.includes('anything v3') ||
-    idLower.includes('anything v5') ||
-    idLower.includes('perfect world') ||
-    idLower.includes('abyss orangemix') ||
-    idLower.includes('stable cascade') ||
-    idLower.includes('playbookxl') ||
-    idLower.includes('rundiffusion') ||
-    idLower.includes('playground-v2') ||
-    idLower.includes('kandinsky') ||
-    idLower.includes('kolors') ||
-    idLower.includes('auraflow') ||
-    idLower.includes('lumina-image') ||
-    idLower.includes('hunyuan-dit') ||
-    idLower.includes('pixart') ||
-    idLower.includes('cogview') ||
-    idLower.includes('gameart') ||
-    idLower.includes('art of mtg') ||
-    idLower.includes('duchaiten') ||
-    idLower.includes('duc haiten') ||
-    idLower.includes('nai-diffusion') ||
-    idLower.includes('diffusion')
-  ) {
-    return 'image';
-  }
+  if (t === 'image' || t === 'embedding' || t === 'audio' || t === 'rerank') return t as ModalityType | 'rerank';
+  if (s.includes('deepgram')) return 'audio';
+  if (CHAT_EXCEPTIONS.some((k) => s.includes(k))) return 'chat';
+  if (AUDIO_KEYWORDS.some((k) => s.includes(k))) return 'audio';
+  if (s.includes('rerank')) return 'rerank';
+  if (EMBED_KEYWORDS.some((k) => s.includes(k)) || (s.includes('embed') && !s.includes('embedded-') && !s.includes('embed_chat') && !s.includes('embeddable'))) return 'embedding';
+  if (IMAGE_KEYWORDS.some((k) => s.includes(k))) return 'image';
   return 'chat';
 }
 

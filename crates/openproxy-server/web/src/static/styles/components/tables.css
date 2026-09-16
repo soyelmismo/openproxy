@@ -1,0 +1,114 @@
+/* ============================================
+   TABLES & DATA GRID COMPONENT STYLES
+   ============================================ */
+
+/* ----- Tables ----- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-md);
+}
+th, td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  vertical-align: top;
+}
+th {
+  background: var(--color-surface-2);
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+tbody tr:hover { background: var(--color-surface-2); }
+tr.selected { background: var(--color-primary-soft); }
+
+/* ----- Sortable table headers ----- */
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  transition: background-color 80ms ease-out;
+}
+th.sortable:hover {
+  background: var(--color-surface-hover, rgba(0, 0, 0, 0.04));
+}
+th.sortable.sorted {
+  background: var(--color-primary-soft, rgba(59, 130, 246, 0.08));
+  color: var(--color-primary, inherit);
+}
+th.sortable .sort-indicator {
+  display: inline-block;
+  margin-left: 0.3em;
+  font-size: 0.85em;
+  color: var(--color-primary, inherit);
+  min-width: 0.9em;
+}
+
+/* ============================================
+   DRAG & DROP — target row reorder
+   ============================================ */
+
+.drag-handle {
+  cursor: grab;
+  text-align: center;
+  font-size: 1.1rem;
+  color: var(--color-text-muted);
+  user-select: none;
+  width: 1.8rem;
+}
+.drag-handle:hover {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+tr.dnd-dragging {
+  opacity: 0.35;
+  background: var(--color-surface-2);
+  transition: none;
+}
+
+tr.dnd-placeholder td {
+  height: 3px;
+  padding: 0;
+  background: var(--color-primary);
+  border: none;
+}
+
+/* ----- Responsive card table (generic helper) ----- */
+@media (max-width: 768px) {
+  .responsive-card-table thead { display: none; }
+  .responsive-card-table tbody { display: flex; flex-direction: column; gap: var(--space-2); }
+  .responsive-card-row {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-1);
+  }
+  .responsive-card-row > td {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 0;
+    border: none;
+  }
+  .responsive-card-row > td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .responsive-card-row > td.hidden-mobile { display: none; }
+  .responsive-card-row > td.empty-row { display: block; text-align: center; }
+}

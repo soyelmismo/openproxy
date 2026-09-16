@@ -453,26 +453,24 @@ mod tests {
         assert_eq!(id1, id2);
     }
 
+    fn ins(conn: &Connection, dedup: &str) -> i64 {
+        insert(
+            conn,
+            "model_new",
+            &serde_json::json!({}),
+            Some(dedup),
+            Some("p1"),
+        )
+        .unwrap()
+        .unwrap()
+    }
+
     #[test]
     fn unread_count_and_read() {
         let conn = fresh_db();
         assert_eq!(unread_count(&conn).unwrap(), 0);
-        insert(
-            &conn,
-            "model_new",
-            &serde_json::json!({}),
-            Some("p1:m1"),
-            Some("p1"),
-        )
-        .unwrap();
-        insert(
-            &conn,
-            "model_new",
-            &serde_json::json!({}),
-            Some("p1:m2"),
-            Some("p1"),
-        )
-        .unwrap();
+        ins(&conn, "p1:m1");
+        ins(&conn, "p1:m2");
         assert_eq!(unread_count(&conn).unwrap(), 2);
         let id = list(&conn, true, 10, None).unwrap()[0].id;
         mark_read(&conn, id).unwrap();
@@ -482,160 +480,88 @@ mod tests {
     #[test]
     fn mark_all_read_skips_archived() {
         let conn = fresh_db();
-        let id_active = insert(
-            &conn,
-            "model_new",
-            &serde_json::json!({}),
-            Some("p1:active"),
-            Some("p1"),
-        )
-        .unwrap()
-        .unwrap();
-        let id_archived = insert(
-            &conn,
-            "model_new",
-            &serde_json::json!({}),
-            Some("p1:archived"),
-            Some("p1"),
-        )
-        .unwrap()
-        .unwrap();
+        let id_active = ins(&conn, "p1:active");
+        let id_archived = ins(&conn, "p1:archived");
         archive(&conn, id_archived).unwrap();
-        let changed = mark_all_read(&conn).unwrap();
-        assert_eq!(changed, 1);
+        assert_eq!(mark_all_read(&conn).unwrap(), 1);
         assert_eq!(unread_count(&conn).unwrap(), 0);
 
-        let active_read_at: Option<String> = conn
+        let active: Option<String> = conn
             .query_row(
                 "SELECT read_at FROM notifications WHERE id = ?1",
                 params![id_active],
-                |row| row.get(0),
+                |r| r.get(0),
             )
             .unwrap();
-        let archived_read_at: Option<String> = conn
+        let archived: Option<String> = conn
             .query_row(
                 "SELECT read_at FROM notifications WHERE id = ?1",
                 params![id_archived],
-                |row| row.get(0),
+                |r| r.get(0),
             )
             .unwrap();
-        assert!(active_read_at.is_some());
-        assert!(archived_read_at.is_none());
+        assert!(active.is_some() && archived.is_none());
     }
 
     #[test]
     fn test_insert_many_large_batch() {
         let conn = fresh_db();
         let count = 350;
-        let mut rows = Vec::with_capacity(count);
-        for i in 0..count {
-            rows.push((
-                serde_json::json!({"item": i}),
-                Some(format!("dedup_{i}")),
-                Some("test_provider".to_string()),
-            ));
-        }
-
+        let rows: Vec<_> = (0..count)
+            .map(|i| {
+                (
+                    serde_json::json!({"item": i}),
+                    Some(format!("dedup_{i}")),
+                    Some("test_provider".to_string()),
+                )
+            })
+            .collect();
         let inserted = insert_many(&conn, "model_new", &rows).unwrap();
         assert_eq!(inserted.len(), count);
-
         let reinserted = insert_many(&conn, "model_new", &rows).unwrap();
-        assert_eq!(reinserted.len(), count);
         assert_eq!(inserted, reinserted);
     }
 
-    /// W1: prune deletes only archived/read rows older than 1 day; a
-    /// 2-day-old UNREAD active row must survive untouched.
     #[test]
     fn prune_keeps_old_unread_deletes_old_read_and_archived() {
         let conn = fresh_db();
-        let mk = |dedup: &str| {
-            insert(
-                &conn,
-                "model_new",
-                &serde_json::json!({}),
-                Some(dedup),
-                Some("p1"),
-            )
-            .unwrap()
-            .unwrap()
-        };
-        let old_unread = mk("old_unread");
-        let old_read = mk("old_read");
-        let old_archived = mk("old_archived");
-        let fresh_unread = mk("fresh_unread");
+        let old_unread = ins(&conn, "old_unread");
+        let old_read = ins(&conn, "old_read");
+        let old_archived = ins(&conn, "old_archived");
+        let fresh_unread = ins(&conn, "fresh_unread");
         mark_read(&conn, old_read).unwrap();
         archive(&conn, old_archived).unwrap();
 
-        // Age the first three rows to 2 days old; leave the 4th fresh.
-        conn.execute(
-            "UPDATE notifications SET created_at = datetime('now', '-2 days') WHERE id IN (?1, ?2, ?3)",
-            params![old_unread, old_read, old_archived],
-        )
-        .unwrap();
+        conn.execute("UPDATE notifications SET created_at = datetime('now', '-2 days') WHERE id IN (?1, ?2, ?3)", params![old_unread, old_read, old_archived]).unwrap();
+        assert_eq!(prune(&conn).unwrap(), 2);
 
-        let deleted = prune(&conn).unwrap();
-        assert_eq!(deleted, 2, "only the old read + old archived rows go");
-
-        let survivors: Vec<i64> = {
-            let mut stmt = conn
-                .prepare("SELECT id FROM notifications ORDER BY id")
-                .unwrap();
-            let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).unwrap();
-            rows.filter_map(std::result::Result::ok).collect()
-        };
-        assert!(
-            survivors.contains(&old_unread),
-            "2-day-old UNREAD row must never be pruned"
-        );
-        assert!(survivors.contains(&fresh_unread), "fresh row must survive");
-        assert!(!survivors.contains(&old_read));
-        assert!(!survivors.contains(&old_archived));
+        let survivors: Vec<i64> = conn
+            .prepare("SELECT id FROM notifications ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect();
+        assert!(survivors.contains(&old_unread) && survivors.contains(&fresh_unread));
+        assert!(!survivors.contains(&old_read) && !survivors.contains(&old_archived));
     }
 
-    /// W1: list()/unread_count() hide rows older than the 1-day window so
-    /// the tray and badge can't advertise rows prune will delete.
     #[test]
     fn list_and_unread_count_apply_one_day_window() {
         let conn = fresh_db();
-        let fresh = insert(
-            &conn,
-            "model_new",
-            &serde_json::json!({}),
-            Some("win:fresh"),
-            Some("p1"),
-        )
-        .unwrap()
-        .unwrap();
-        let stale = insert(
-            &conn,
-            "model_new",
-            &serde_json::json!({}),
-            Some("win:stale"),
-            Some("p1"),
-        )
-        .unwrap()
-        .unwrap();
+        let fresh = ins(&conn, "win:fresh");
+        let stale = ins(&conn, "win:stale");
         conn.execute(
             "UPDATE notifications SET created_at = datetime('now', '-2 days') WHERE id = ?1",
             params![stale],
         )
         .unwrap();
-
         let ids: Vec<i64> = list(&conn, false, 50, None)
             .unwrap()
             .into_iter()
             .map(|r| r.id)
             .collect();
-        assert!(ids.contains(&fresh));
-        assert!(
-            !ids.contains(&stale),
-            "list() must exclude rows outside the 1-day window"
-        );
-        assert_eq!(
-            unread_count(&conn).unwrap(),
-            1,
-            "badge must not count out-of-window rows"
-        );
+        assert!(ids.contains(&fresh) && !ids.contains(&stale));
+        assert_eq!(unread_count(&conn).unwrap(), 1);
     }
 }

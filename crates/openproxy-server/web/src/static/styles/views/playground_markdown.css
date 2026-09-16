@@ -1,0 +1,76 @@
+/* =============================================================================
+   PLAYGROUND MARKDOWN & CODE HIGHLIGHTING STYLES
+   ============================================================================= */
+
+.markdown-body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--color-text);
+}
+.markdown-body p { margin-bottom: 0.75em; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--color-primary);
+  padding-left: 1em;
+  color: var(--color-text-muted);
+  margin: 0.75em 0;
+}
+
+/* Code Blocks with Header & Copy Button */
+.code-block-wrap {
+  position: relative;
+  background: var(--color-bg);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  margin: 0.75em 0;
+  overflow: hidden;
+}
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--color-surface-2);
+  padding: 0.3rem var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.code-block-wrap pre {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* Markdown Tables */
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75em 0;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--color-border);
+  padding: 0.35rem 0.6rem;
+  font-size: var(--fs-xs);
+}
+.markdown-body th {
+  background: var(--color-surface-2);
+}
+
+/* Math LaTeX / KaTeX */
+.katex-display {
+  overflow-x: auto;
+  padding: 0.5em 0;
+}

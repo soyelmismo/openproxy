@@ -60,7 +60,10 @@
   --color-bg:           #f5f7fa;
   --color-surface:      var(--c-canvas);
   --color-surface-2:    #f0f3f7;
+  --color-surface-hover: rgba(0, 0, 0, 0.04);
+  --color-surface-soft:  var(--color-surface-2);
   --color-text:         #17212b;
+  --color-text-emphasis:#0d151c;
   --color-text-muted:   #667085;
   --color-text-inverse: var(--c-canvas);
   --color-link:         var(--c-link);
@@ -192,8 +195,9 @@
   --layout-max-w:              1280px;
 
   /* ----- Z layers ----- */
-  --z-sidebar: 10;
-  --z-header:  20;
-  --z-modal:   1000;
-  --z-toast:   2000;
+  --z-sidebar:  10;
+  --z-header:   20;
+  --z-dropdown: 100;
+  --z-modal:    1000;
+  --z-toast:    2000;
 }

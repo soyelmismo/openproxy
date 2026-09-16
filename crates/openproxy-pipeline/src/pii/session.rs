@@ -311,28 +311,26 @@ impl PiiSession {
                         let max_v = 10_usize.pow(width as u32);
                         format!("9{:0width$}", (h as usize) % max_v, width = width)
                     }
-                } else if original.starts_with("sk-proj-") {
-                    format!("sk-proj-{h32:08x}")
-                } else if original.starts_with("sk-") {
-                    format!("sk-{h32:08x}")
-                } else if original.starts_with("op_live_") {
-                    format!("op_live_{h32:08x}")
-                } else if original.starts_with("op_test_") {
-                    format!("op_test_{h32:08x}")
-                } else if original.starts_with("mcp_live_") {
-                    format!("mcp_live_{h32:08x}")
-                } else if original.starts_with("mcp_test_") {
-                    format!("mcp_test_{h32:08x}")
-                } else if original.starts_with("ghp_") {
-                    format!("ghp_{h32:08x}")
-                } else if original.starts_with("gho_") {
-                    format!("gho_{h32:08x}")
-                } else if original.starts_with("xoxb-") {
-                    format!("xoxb_{h32:08x}")
-                } else if original.starts_with("Bearer ") {
-                    format!("Bearer sec_{h32:08x}")
                 } else {
-                    format!("sec_{h32:08x}")
+                    const SECRET_PREFIX_MAP: &[(&str, &str)] = &[
+                        ("sk-proj-", "sk-proj-"),
+                        ("sk-", "sk-"),
+                        ("op_live_", "op_live_"),
+                        ("op_test_", "op_test_"),
+                        ("mcp_live_", "mcp_live_"),
+                        ("mcp_test_", "mcp_test_"),
+                        ("ghp_", "ghp_"),
+                        ("gho_", "gho_"),
+                        ("xoxb-", "xoxb_"),
+                        ("Bearer ", "Bearer sec_"),
+                    ];
+                    let prefix = SECRET_PREFIX_MAP
+                        .iter()
+                        .find_map(|(pattern, out_prefix)| {
+                            original.starts_with(pattern).then_some(*out_prefix)
+                        })
+                        .unwrap_or("sec_");
+                    format!("{prefix}{h32:08x}")
                 }
             }
             PiiEntity::Phone => {

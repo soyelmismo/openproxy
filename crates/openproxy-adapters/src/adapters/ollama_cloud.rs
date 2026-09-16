@@ -1,6 +1,7 @@
 use super::{
     Arc, CoreError, Deserialize, DiscoveredModel, ModelId, Result, TargetFormat, UpstreamClient,
 };
+use openproxy_types::ResultExt;
 
 // =====================================================================
 // Ollama Cloud
@@ -42,15 +43,15 @@ declare_openai_adapter!(
             let response = upstream_client
                 .call(req, crate::upstream::TimeoutProfile::ModelDiscovery, cancel)
                 .await
-                .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {url}: {e}")))?;
+                .ctx_upstream(format!("ollama-cloud /api/tags: {url}"))?;
 
             if !response.status.is_success() {
                 let status = response.status.as_u16();
-                let err_body = response.collect().await.map_err(|e| CoreError::UpstreamConnection(format!("failed to read error body: {e}")))?;
+                let err_body = response.collect().await.ctx_upstream("failed to read error body")?;
                 return Err(CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: status {status}: {}", String::from_utf8_lossy(&err_body))));
             }
 
-            let resp_bytes = response.collect().await.map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {url}: {e}")))?;
+            let resp_bytes = response.collect().await.ctx_upstream(format!("ollama-cloud /api/tags: {url}"))?;
             let payload: OllamaTagsResponse = serde_json::from_slice(&resp_bytes)
                 .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {url}: parse: {e}")))?;
 

@@ -1,17 +1,10 @@
 pub use openproxy_adapters::MockAdapter;
 use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
 pub mod combos {
-    use super::{AccountId, ComboId, Connection, ModelRowId, ProviderId};
-    pub use openproxy_types::combos::Strategy;
+    use super::{ComboId, Connection};
+    pub use openproxy_types::combos::{AddTargetInput, Strategy};
 
-    pub struct AddTargetInput {
-        pub combo_id: ComboId,
-        pub provider_id: ProviderId,
-        pub model_row_id: Option<ModelRowId>,
-        pub account_id: Option<AccountId>,
-        pub priority_order: i64,
-        pub sub_combo_id: Option<ComboId>,
-    }
+    use openproxy_types::error::ResultExt;
 
     pub fn create_combo(
         conn: &Connection,
@@ -23,10 +16,10 @@ pub mod combos {
             "INSERT INTO combos(name, strategy, race_size) VALUES (?1, ?2, ?3)",
             rusqlite::params![name, strategy.as_str(), i64::from(race_size)],
         )
-        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        .ctx_internal("insert combo")?;
         let id: i64 = conn
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+            .ctx_internal("query last_insert_rowid")?;
         Ok(ComboId(id))
     }
 
@@ -54,10 +47,10 @@ pub mod combos {
                 upstream_model_id,
                 input.priority_order,
             ],
-        ).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        ).ctx_internal("insert combo_target")?;
         let id: i64 = conn
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+            .ctx_internal("query last_insert_rowid")?;
         Ok(openproxy_types::ids::ComboTargetId(id))
     }
 }
@@ -395,7 +388,7 @@ pub fn seed_target_with_account(
             provider_id: ProviderId::new(provider_id),
             model_row_id: Some(model_rowid),
             account_id: Some(account_id),
-            priority_order: i64::from(priority),
+            priority_order: priority as i32,
             sub_combo_id: None,
         },
     )

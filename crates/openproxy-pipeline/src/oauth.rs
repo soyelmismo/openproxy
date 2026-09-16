@@ -2,25 +2,9 @@ use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::AccountId;
+pub use openproxy_types::oauth::TokenResponse;
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenResponse {
-    #[serde(rename = "access_token", alias = "accessToken")]
-    pub access_token: String,
-    #[serde(default, rename = "token_type", alias = "tokenType")]
-    pub token_type: String,
-    #[serde(default, rename = "expires_in", alias = "expiresIn")]
-    pub expires_in: Option<u64>,
-    #[serde(default, rename = "refresh_token", alias = "refreshToken")]
-    pub refresh_token: Option<String>,
-    #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default, rename = "id_token", alias = "idToken")]
-    pub id_token: Option<String>,
-}
 
 pub trait PipelineOAuthRegistry: Send + Sync {
     fn refresh_and_store<'a>(

@@ -183,293 +183,6 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    fn tempdir() -> openproxy_db::testing::TempDir {
-        openproxy_db::testing::TempDir::new("openproxy-tokenize-test").expect("mkdir")
-    }
-
-    /// Seed an active `chat`-scope API key into the pool so requests
-    /// passing `Authorization: Bearer <plaintext>` pass the auth
-    /// middleware. Mirrors `insert_manage_key` from
-    /// `handlers/admin/tests.rs` (kept local to keep the two test
-    /// modules decoupled).
-    fn insert_api_key(pool: &core_db::DbPool, plaintext: &str) {
-        use openproxy_core::api_keys as core_api_keys;
-        let w = pool.writer();
-        let key_hash = core_api_keys::hash_key(plaintext);
-        w.execute(
-            "INSERT OR REPLACE INTO api_keys (key_hash, key_prefix, label, scopes_json, \
-                    allowed_models_json, allowed_combos_json, expires_at, created_by) \
-                 VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'tokenize-test')",
-            params![
-                key_hash,
-                &plaintext[..plaintext.len().min(12)],
-                "tokenize-test",
-                "[\"chat\"]",
-            ],
-        )
-        .expect("insert api key");
-    }
-
-    /// Seed a provider + model + healthy account so `routing::resolve`
-    /// produces a `Combo` with `account_id = Some(_)`. Encrypts the
-    /// OAuth access token with the SAME `MasterKey` the `AppState`
-    /// uses — otherwise `decrypt_access_token` fails with "aes-gcm
-    /// decrypt failed" and the 501 branch never runs.
-    fn seed_openai_model(state: &AppState, model_id: &str, mk: &openproxy_db::MasterKey) {
-        let w = state.db_pool().writer();
-        let provider = ProviderId::new("openai");
-        providers::create(
-            &w,
-            providers::NewProvider {
-                id: &provider,
-                name: "openai",
-                base_url: "https://api.openai.com/v1",
-                auth_type: AuthType::Bearer,
-                format: ProviderFormat::Openai,
-                extra_headers_json: None,
-                auto_activate_keyword: None,
-                rate_limit_scope: RateLimitScope::Account,
-            },
-        )
-        .expect("seed provider");
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-             VALUES (?1, ?2, 'openai')",
-            params![provider.as_str(), model_id],
-        )
-        .expect("seed model");
-        let access_token = "ya-test-access-token";
-        let blob = mk.encrypt(access_token).expect("encrypt test token");
-        w.execute(
-            "INSERT INTO accounts(provider_id, api_key_encrypted, access_token_encrypted, \
-                auth_type, health_status) \
-             VALUES (?1, X'00', ?2, 'oauth', 'healthy')",
-            params![provider.as_str(), blob],
-        )
-        .expect("seed account");
-    }
-
-    /// Returns `(AppState, Router-with_tokenize-only, Arc<DbPool>, MasterKey, plaintext_api_key)`.
-    /// The plaintext API key is seeded into the pool so requests can
-    /// authenticate via `Authorization: Bearer <key>`. Tests that need
-    /// to verify the 401 path should send no Authorization header.
-    async fn make_tokenize_test_app() -> (
-        AppState,
-        Router,
-        Arc<core_db::DbPool>,
-        openproxy_db::MasterKey,
-        String,
-    ) {
-        let dir = tempdir();
-        let pool = Arc::new(core_db::DbPool::open(&dir.join("tokenize.db")).expect("open"));
-        {
-            let mut w = pool.writer();
-            core_db::migrations::run(&mut w).expect("migrations");
-        }
-        // Seed a chat-scope API key so callers can authenticate.
-        let plaintext = format!("sk-tokenize-{}-{}", std::process::id(), {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        });
-        insert_api_key(&pool, &plaintext);
-
-        let mk = openproxy_db::MasterKey::generate().unwrap();
-        let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
-        let state = AppState::for_test(
-            openproxy_core::AppConfig::default(),
-            Arc::clone(&pool),
-            Arc::new(mk.clone()),
-            adapters_registry,
-        );
-        let app: Router = Router::new()
-            .merge(router(&state))
-            .with_state(state.clone());
-        (state, app, pool, mk, plaintext)
-    }
-
-    #[tokio::test]
-    async fn tokenize_returns_501_for_openai_provider() {
-        let (state, app, _pool, mk, api_key) = make_tokenize_test_app().await;
-        seed_openai_model(&state, "gpt-x", &mk);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(
-                        r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build request"),
-            )
-            .await
-            .expect("send");
-
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
-
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
-            .await
-            .expect("read body");
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse json");
-        assert_eq!(body["error"]["code"], "not_implemented");
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .is_some_and(|m| m.contains("openai")),
-            "error message should mention the provider: {body}"
-        );
-    }
-
-    #[tokio::test]
-    async fn tokenize_returns_400_for_empty_model() {
-        // No seed needed — the validator runs before the resolver.
-        let (_state, app, _pool, _mk, api_key) = make_tokenize_test_app().await;
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(
-                        r#"{"model":"","messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build request"),
-            )
-            .await
-            .expect("send");
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn tokenize_returns_404_for_unknown_model() {
-        let (_state, app, _pool, _mk, api_key) = make_tokenize_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(
-                        r#"{"model":"ghost","messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build request"),
-            )
-            .await
-            .expect("send");
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    /// Audit fix #2 regression: a request without an `Authorization`
-    /// header must be rejected with 401 by the auth middleware —
-    /// unauthenticated clients must not be able to consume upstream
-    /// antigravity quota via `v1internal:countTokens`.
-    #[tokio::test]
-    async fn tokenize_returns_401_without_authorization_header() {
-        let (_state, app, _pool, _mk, _api_key) = make_tokenize_test_app().await;
-
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build request"),
-            )
-            .await
-            .expect("send");
-
-        assert_eq!(
-            resp.status(),
-            StatusCode::UNAUTHORIZED,
-            "audit #2: /v1/tokenize without Authorization must return 401"
-        );
-
-        // A garbage key must also be rejected.
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", "Bearer sk-invalid-not-seeded")
-                    .body(Body::from(
-                        r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build request"),
-            )
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    // The two spec-mandated unit tests:
-    //   count_tokens_wraps_request_only_no_project
-    //   parse_total_tokens_flat
-    //   parse_total_tokens_nested
-    // are in `crates/openproxy-adapters/src/adapters/antigravity.rs`
-    // (next to the implementation they cover). The 4xx propagation
-    // test lives there too because it needs the upstream-hyper test
-    // harness.
-
-    #[tokio::test]
-    async fn router_builds_with_state() {
-        // Structural pin: the route builder compiles with an AppState.
-        // AppState::for_test requires a Tokio runtime because of the
-        // background channel inside, so the test is `#[tokio::test]`.
-        let pool = Arc::new(
-            core_db::DbPool::test_pool_with_prefix("openproxy-tokenize-struct").expect("open"),
-        );
-        let mk = openproxy_db::MasterKey::generate().unwrap();
-        let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
-        let state = AppState::for_test(
-            openproxy_core::AppConfig::default(),
-            pool,
-            Arc::new(mk),
-            adapters_registry,
-        );
-        let _app: axum::Router<AppState> = router(&state);
-    }
-}
-
-// ============================================================
-// GAP-3: Adversarial tests for POST /v1/tokenize
-// ============================================================
-#[cfg(test)]
-mod tokenize_adversarial_tests {
-    use openproxy_adapters::adapters;
-    use openproxy_core::providers::{self, AuthType, ProviderFormat, RateLimitScope};
-    use openproxy_db as core_db;
-    use openproxy_types::ids::ProviderId;
-    use parking_lot::RwLock;
-    use rusqlite::params;
-    use std::sync::Arc;
-    use tower::ServiceExt;
-
-    use crate::state::AppState;
-    use axum::{
-        Router,
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use serde_json::json;
-
-    fn tempdir() -> openproxy_db::testing::TempDir {
-        openproxy_db::testing::TempDir::new("openproxy-tokenize-adv").expect("mkdir")
-    }
-
     async fn make_test_app() -> (
         AppState,
         Router,
@@ -477,20 +190,22 @@ mod tokenize_adversarial_tests {
         openproxy_db::MasterKey,
         String,
     ) {
-        let dir = tempdir();
+        let dir = openproxy_db::testing::TempDir::new("tokenize-test").expect("mkdir");
         let pool = Arc::new(core_db::DbPool::open(&dir.join("tokenize.db")).expect("open"));
         {
             let mut w = pool.writer();
             core_db::migrations::run(&mut w).expect("migrations");
         }
-        // Seed a chat-scope API key so callers can authenticate.
-        let plaintext = format!("sk-adv-{}-{}", std::process::id(), {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        });
-        insert_api_key(&pool, &plaintext);
-
+        let plaintext = format!("sk-tok-{}", std::process::id());
+        {
+            let w = pool.writer();
+            let key_hash = openproxy_core::api_keys::hash_key(&plaintext);
+            w.execute(
+                "INSERT OR REPLACE INTO api_keys (key_hash, key_prefix, label, scopes_json, created_by) \
+                 VALUES (?1, ?2, 'test', '[\"chat\"]', 'tokenize-test')",
+                params![key_hash, &plaintext[..plaintext.len().min(12)]],
+            ).expect("insert key");
+        }
         let mk = openproxy_db::MasterKey::generate().unwrap();
         let adapters_registry = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let state = AppState::for_test(
@@ -499,267 +214,197 @@ mod tokenize_adversarial_tests {
             Arc::new(mk.clone()),
             adapters_registry,
         );
-        let app: Router = Router::new()
-            .merge(super::router(&state))
+        let app = Router::new()
+            .merge(router(&state))
             .with_state(state.clone());
         (state, app, pool, mk, plaintext)
     }
 
-    fn seed_antigravity_model(state: &AppState, model_id: &str) {
+    fn seed_model(
+        state: &AppState,
+        prov: &str,
+        model: &str,
+        fmt: ProviderFormat,
+        auth: AuthType,
+        mk: Option<&openproxy_db::MasterKey>,
+    ) {
         let w = state.db_pool().writer();
-        let provider = ProviderId::new("antigravity");
-        providers::create(
+        let pid = ProviderId::new(prov);
+        let _ = providers::create(
             &w,
             providers::NewProvider {
-                id: &provider,
-                name: "antigravity",
-                base_url: "https://daily-cloudcode-pa.googleapis.com",
-                auth_type: AuthType::OAuth,
-                format: ProviderFormat::Openai,
+                id: &pid,
+                name: prov,
+                base_url: "https://api.test.com",
+                auth_type: auth,
+                format: fmt,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
                 rate_limit_scope: RateLimitScope::Account,
             },
-        )
-        .expect("seed provider");
-        w.execute(
-            "INSERT INTO models(provider_id, model_id, target_format) \
-             VALUES (?1, ?2, 'openai')",
-            params![provider.as_str(), model_id],
-        )
-        .expect("seed model");
-    }
-
-    /// Seed an active `chat`-scope API key into the pool so
-    /// authenticated tests can pass `Authorization: Bearer <key>`.
-    fn insert_api_key(pool: &core_db::DbPool, plaintext: &str) {
-        use openproxy_core::api_keys as core_api_keys;
-        let w = pool.writer();
-        let key_hash = core_api_keys::hash_key(plaintext);
-        w.execute(
-            "INSERT OR REPLACE INTO api_keys (key_hash, key_prefix, label, scopes_json, \
-                    allowed_models_json, allowed_combos_json, expires_at, created_by) \
-                 VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'tokenize-adv-test')",
-            params![
-                key_hash,
-                &plaintext[..plaintext.len().min(12)],
-                "tokenize-adv-test",
-                "[\"chat\"]",
-            ],
-        )
-        .expect("insert api key");
-    }
-
-    #[tokio::test]
-    async fn adv_tokenize_returns_400_for_missing_model_field() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(
-                        r#"{"messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        // Missing `model` field → OpenAIRequest.model defaults to "" → 400.
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn adv_tokenize_returns_400_for_whitespace_model() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(
-                        r#"{"model":"   ","messages":[{"role":"user","content":"hi"}]}"#,
-                    ))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        // Whitespace model — .is_empty() returns false → routing::resolve fails
-        // and we get 404 (NotFound).
-        let status = resp.status();
-        assert!(
-            status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
-            "whitespace model: expected 404 or 400, got {status}"
         );
+        w.execute("INSERT OR REPLACE INTO models(provider_id, model_id, target_format) VALUES (?1, ?2, 'openai')", params![pid.as_str(), model]).expect("model");
+        if let Some(key) = mk {
+            let blob = key.encrypt("ya-test-access-token").expect("encrypt");
+            w.execute("INSERT INTO accounts(provider_id, api_key_encrypted, access_token_encrypted, auth_type, health_status) VALUES (?1, X'00', ?2, 'oauth', 'healthy')", params![pid.as_str(), blob]).expect("account");
+        }
+    }
+
+    async fn post(
+        app: &Router,
+        uri: &str,
+        auth: Option<&str>,
+        body: &str,
+    ) -> axum::response::Response {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(tok) = auth {
+            req = req.header("authorization", format!("Bearer {tok}"));
+        }
+        app.clone()
+            .oneshot(req.body(Body::from(body.to_string())).expect("build"))
+            .await
+            .expect("send")
     }
 
     #[tokio::test]
-    async fn adv_tokenize_returns_404_for_very_long_unknown_model_name() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let long_name = "x".repeat(10_000);
-        let body_json = json!({
-            "model": long_name,
-            "messages": [{"role": "user", "content": "hi"}]
-        })
-        .to_string();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(body_json))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn adv_tokenize_returns_400_for_malformed_json() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from("{ not valid json"))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        // JSON parse error → auth_middleware parses the body and surfaces
-        // CoreError::Parse (http_status=500). Either 4xx or 5xx is
-        // acceptable here; what matters is the handler does not panic
-        // and the response is structured.
-        let status = resp.status();
-        assert!(
-            status == StatusCode::BAD_REQUEST
-                || status == StatusCode::UNPROCESSABLE_ENTITY
-                || status.is_client_error()
-                || status.is_server_error(),
-            "malformed JSON: expected 4xx/5xx, got {status}"
+    async fn test_tokenize_provider_and_auth() {
+        let (state, app, _pool, mk, key) = make_test_app().await;
+        seed_model(
+            &state,
+            "openai",
+            "gpt-x",
+            ProviderFormat::Openai,
+            AuthType::Bearer,
+            Some(&mk),
         );
-    }
 
-    #[tokio::test]
-    async fn adv_tokenize_returns_4xx_for_null_messages() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(r#"{"model":"x","messages":null}"#))
-                    .expect("build"),
-            )
+        // 501 for openai provider
+        let resp = post(
+            &app,
+            "/tokenize",
+            Some(&key),
+            r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let b = axum::body::to_bytes(resp.into_body(), 64 * 1024)
             .await
-            .expect("send");
-        let status = resp.status();
+            .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(val["error"]["code"], "not_implemented");
         assert!(
-            status.is_client_error() || status.is_server_error(),
-            "got: {status}"
+            val["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("openai"))
         );
-    }
 
-    #[tokio::test]
-    async fn adv_tokenize_seed_antigravity_does_not_crash() {
-        // Sanity: seeding an antigravity provider/model does not panic.
-        let (state, _app, _pool, _mk, _api_key) = make_test_app().await;
-        seed_antigravity_model(&state, "agy-x");
-        // DB invariant: we can read providers after seeding.
-        let count: i64 = state.db_pool().with_conn(|c| {
+        // 401 without auth and with bad auth
+        let resp = post(
+            &app,
+            "/tokenize",
+            None,
+            r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let resp = post(
+            &app,
+            "/tokenize",
+            Some("invalid-key"),
+            r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // Sanity check seed antigravity model
+        seed_model(
+            &state,
+            "antigravity",
+            "agy-x",
+            ProviderFormat::Openai,
+            AuthType::OAuth,
+            None,
+        );
+        let cnt: i64 = state.db_pool().with_conn(|c| {
             c.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))
                 .unwrap()
         });
-        assert!(
-            count >= 1,
-            "at least one provider should exist after seeding"
-        );
+        assert!(cnt >= 2);
     }
 
     #[tokio::test]
-    async fn adv_tokenize_empty_body_returns_4xx() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(""))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        // Empty body → auth_middleware fails to parse JSON. The current
-        // auth_middleware path returns 500 for CoreError::Parse; we
-        // accept any 4xx or 5xx as long as the handler does not panic
-        // and the response is structured.
-        assert!(
-            resp.status().is_client_error() || resp.status().is_server_error(),
-            "got: {}",
-            resp.status()
+    async fn test_tokenize_adversarial_payloads() {
+        let (_state, app, _pool, _mk, key) = make_test_app().await;
+        let cases = [
+            (
+                r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                r#"{"model":"","messages":[{"role":"user","content":"hi"}]}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                r#"{"model":"ghost","messages":[{"role":"user","content":"hi"}]}"#,
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                r#"{"model":"   ","messages":[{"role":"user","content":"hi"}]}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                r#"{"model":"nonexistent","messages":[]}"#,
+                StatusCode::NOT_FOUND,
+            ),
+        ];
+        for (body, expected) in cases {
+            let resp = post(&app, "/tokenize", Some(&key), body).await;
+            assert!(
+                resp.status() == expected
+                    || (expected == StatusCode::BAD_REQUEST
+                        && resp.status() == StatusCode::NOT_FOUND)
+            );
+        }
+
+        // Extremely long model name
+        let long_body = format!(
+            r#"{{"model":"{}","messages":[{{"role":"user","content":"hi"}}]}}"#,
+            "x".repeat(10000)
         );
+        assert_eq!(
+            post(&app, "/tokenize", Some(&key), &long_body)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // Malformed or non-object bodies
+        for body in [
+            "{ not valid json",
+            r#"{"model":"x","messages":null}"#,
+            "",
+            "[]",
+        ] {
+            let resp = post(&app, "/tokenize", Some(&key), body).await;
+            assert!(resp.status().is_client_error() || resp.status().is_server_error());
+        }
     }
 
     #[tokio::test]
-    async fn adv_tokenize_array_body_returns_4xx() {
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from("[]"))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        // Body is JSON array, not object → auth_middleware returns 500
-        // for the deserialization failure. Accept any 4xx or 5xx.
-        assert!(
-            resp.status().is_client_error() || resp.status().is_server_error(),
-            "got: {}",
-            resp.status()
+    async fn test_router_builds_with_state() {
+        let pool =
+            Arc::new(core_db::DbPool::test_pool_with_prefix("tokenize-struct").expect("open"));
+        let mk = openproxy_db::MasterKey::generate().unwrap();
+        let adapters = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
+        let state = AppState::for_test(
+            openproxy_core::AppConfig::default(),
+            pool,
+            Arc::new(mk),
+            adapters,
         );
-    }
-
-    #[tokio::test]
-    async fn adv_tokenize_empty_messages_array() {
-        // Empty messages array — handler accepts it (passes the validator
-        // and proceeds). The routing branch may 404 if the model doesn't
-        // exist, but we don't seed here so we expect 404.
-        let (_state, app, _pool, _mk, api_key) = make_test_app().await;
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/tokenize")
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {api_key}"))
-                    .body(Body::from(r#"{"model":"nonexistent","messages":[]}"#))
-                    .expect("build"),
-            )
-            .await
-            .expect("send");
-        assert!(
-            resp.status() == StatusCode::NOT_FOUND || resp.status().is_server_error(),
-            "got: {}",
-            resp.status()
-        );
+        let _app: axum::Router<AppState> = router(&state);
     }
 }

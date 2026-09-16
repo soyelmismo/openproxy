@@ -1,0 +1,59 @@
+/* ============================================
+   NOTIFICATIONS VIEW STYLES
+   ============================================ */
+
+.notifications-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.notifications-list {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+
+.notification-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0.5rem var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-size: var(--fs-xs);
+  transition: background var(--t-fast);
+}
+.notification-row:last-child {
+  border-bottom: none;
+}
+.notification-row:hover {
+  background: var(--color-surface-2);
+}
+.notification-row.unread {
+  background: var(--color-primary-soft);
+}
+
+.notif-time {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.notif-title {
+  font-weight: 600;
+  flex: 1;
+}
+
+/* Page-header title row */
+.notif-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* DnD Overlay */
+.notif-dnd-overlay {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

@@ -135,6 +135,21 @@ fn default_proxy_rotation_mode() -> Box<str> {
     "global".into()
 }
 
+pub const VIRTUAL_COMBO_PROVIDER_ID: &str = "combo";
+
+/// Inputs for creating a new provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewProvider<'a> {
+    pub id: &'a crate::ids::ProviderId,
+    pub name: &'a str,
+    pub base_url: &'a str,
+    pub auth_type: AuthType,
+    pub format: ProviderFormat,
+    pub extra_headers_json: Option<&'a str>,
+    pub auto_activate_keyword: Option<&'a str>,
+    pub rate_limit_scope: RateLimitScope,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
