@@ -114,8 +114,7 @@ unused_async = "allow"
 lto = "thin"
 opt-level = 3
 codegen-units = 16
-strip = false
-debug = 1
+strip = true
 
 # Reduce debug info y apaga incremental para evitar inflado de target/ (backtraces siguen funcionando)
 [profile.dev]
