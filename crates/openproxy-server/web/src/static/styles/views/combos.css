@@ -1,0 +1,91 @@
+/* ============================================
+   COMBOS VIEW STYLES
+   ============================================ */
+
+/* ----- Combo grid ----- */
+.combo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+/* ----- Combo settings bars (priority mode + cooldown) ----- */
+.combo-settings-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+.combo-settings-bar label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.combo-settings-bar select,
+.combo-settings-bar input {
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.4rem;
+}
+
+.combo-context-window-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.combo-target-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.4rem var(--space-2);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.combo-target-row:hover {
+  background: var(--color-surface-2);
+}
+
+/* Sub-combo indicator */
+.sub-combo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0.1rem 0.4rem;
+  background: var(--color-phase-soft);
+  color: var(--color-phase-text);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+
+/* Cooldown banner */
+.cooldown-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.4rem 0.8rem;
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border: var(--border-w) var(--border-style) var(--color-warn);
+  font-size: var(--fs-xs);
+  margin-bottom: var(--space-3);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .combo-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+  .combo-settings-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

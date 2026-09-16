@@ -1,0 +1,51 @@
+/* ============================================
+   RESPONSIVE TABLES & SHARED LAYOUT HELPERS
+   ============================================ */
+
+.card-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+th.sticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--fs-xs);
+  color: var(--color-link);
+  text-decoration: none;
+  margin-bottom: var(--space-2);
+}
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flex-spacer {
+  flex: 1;
+}
+
+@media (max-width: 768px) {
+  .hidden-mobile {
+    display: none !important;
+  }
+  .only-mobile {
+    display: block !important;
+  }
+}
+@media (min-width: 769px) {
+  .only-mobile {
+    display: none !important;
+  }
+}

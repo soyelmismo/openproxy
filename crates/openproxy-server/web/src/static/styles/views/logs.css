@@ -1,0 +1,117 @@
+/* ============================================
+   LOGS VIEW STYLES
+   ============================================ */
+
+/* Columns definitions for the logs grid */
+.log-row {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  border-bottom: 1px solid var(--color-border-soft);
+  cursor: pointer;
+  transition: background var(--t-fast);
+  padding: 0.35rem 0.5rem;
+}
+.log-row:hover { background: var(--color-surface-2); }
+.log-row.in-flight { background: var(--color-primary-soft); }
+
+.log-col-time     { width: 75px; flex-shrink: 0; color: var(--color-text-muted); }
+.log-col-phase    { width: 90px; flex-shrink: 0; text-align: center; }
+.log-col-endpoint { width: 65px; flex-shrink: 0; text-align: center; }
+.log-col-client   { width: 90px; flex-shrink: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; }
+.log-col-status   { width: 50px; flex-shrink: 0; text-align: center; font-weight: 600; }
+.log-col-provider { width: 110px; flex-shrink: 0; }
+.log-col-model    { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-col-tokens   { width: 95px; flex-shrink: 0; text-align: right; }
+.log-col-latency  { width: 70px; flex-shrink: 0; text-align: right; }
+.log-col-cost     { width: 65px; flex-shrink: 0; text-align: right; }
+.log-col-cache    { width: 55px; flex-shrink: 0; text-align: center; }
+.log-col-compress { width: 60px; flex-shrink: 0; text-align: center; }
+
+/* Log phase pill (in cell) */
+.log-phase-pill {
+  display: inline-block;
+  padding: 0.08rem 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm, 2px);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+.log-phase-pill.started    { background: #e0f2fe; color: #0369a1; }
+.log-phase-pill.connecting { background: #fef3c7; color: #b45309; }
+.log-phase-pill.waiting    { background: #fef08a; color: #854d0e; }
+.log-phase-pill.streaming  { background: #dcfce7; color: #15803d; }
+.log-phase-pill.completed  { background: var(--color-surface-2); color: var(--color-text-muted); }
+.log-phase-pill.failed     { background: #fee2e2; color: #b91c1c; }
+
+/* Filter Toolbar */
+.logs-filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+.logs-filter-toolbar input[type="text"],
+.logs-filter-toolbar select {
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.4rem;
+}
+.logs-search-box {
+  flex: 1;
+  min-width: 160px;
+}
+
+/* Columns toggle */
+.columns-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2);
+  z-index: var(--z-dropdown, 100);
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Pagination */
+.logs-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border-top: var(--border-w) var(--border-style) var(--color-border);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.logs-pagination-buttons {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* Mobile Log Card (<=768px) */
+@media (max-width: 768px) {
+  .log-row {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 8px 10px;
+    gap: 4px;
+  }
+  .log-col-time, .log-col-phase, .log-col-endpoint, .log-col-client,
+  .log-col-status, .log-col-provider, .log-col-model, .log-col-tokens,
+  .log-col-latency, .log-col-cost, .log-col-cache, .log-col-compress {
+    width: 100% !important;
+    text-align: left !important;
+  }
+}

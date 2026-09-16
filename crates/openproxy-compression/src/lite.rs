@@ -565,54 +565,41 @@ mod tests {
         assert_eq!(msgs.len(), 2);
     }
 
-    #[test]
-    fn test_compress_tool_results_truncates() {
-        let long = "x".repeat(3000);
-        let mut msgs = vec![OpenAIMessage {
+    fn tool_msg(content: impl Into<String>, call_id: Option<&str>) -> OpenAIMessage {
+        OpenAIMessage {
             role: "tool".into(),
-            content: Some(Value::String(long)),
+            content: Some(Value::String(content.into())),
             name: None,
-            tool_call_id: Some("call_1".into()),
+            tool_call_id: call_id.map(Into::into),
             tool_calls: None,
             extra: serde_json::Map::default(),
-        }];
+        }
+    }
+
+    #[test]
+    fn test_compress_tool_results_truncates() {
+        let mut msgs = vec![tool_msg("x".repeat(3000), Some("call_1"))];
         let applied = compress_tool_results(&mut msgs);
         assert!(!applied.is_empty());
         let result = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
-        assert!(result.len() < 2500);
-        assert!(result.contains("[truncated"));
+        assert!(result.len() < 2500 && result.contains("[truncated"));
     }
 
     #[test]
     fn compress_tool_results_handles_multibyte_utf8_at_boundary() {
-        let emoji = "😀"; // U+1F600, 4 bytes in UTF-8
-        let mut content = String::new();
-        content.push('a');
+        let emoji = "😀";
+        let mut content = String::from("a");
         for _ in 0..2000 {
             content.push_str(emoji);
         }
         content.push_str(" trailing text");
         assert!(content.chars().count() > MAX_TOOL_CHARS);
 
-        let mut msgs = vec![OpenAIMessage {
-            role: "tool".into(),
-            content: Some(Value::String(content)),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-            extra: serde_json::Map::default(),
-        }];
+        let mut msgs = vec![tool_msg(content, None)];
         let applied = compress_tool_results(&mut msgs);
-        assert!(
-            applied.contains(&"lite::compress_tool_results"),
-            "expected compress_tool_results to fire on >2000 char content"
-        );
-        // Verify the content was truncated and contains the marker.
+        assert!(applied.contains(&"lite::compress_tool_results"));
         if let Some(Value::String(s)) = &msgs[0].content {
-            assert!(
-                s.contains("…[truncated 15 chars]"),
-                "expected truncation marker with exact char count, got: {s}"
-            );
+            assert!(s.contains("…[truncated 15 chars]"));
         } else {
             panic!("content should still be a string after truncation");
         }
@@ -620,21 +607,13 @@ mod tests {
 
     #[test]
     fn compress_tool_results_does_not_truncate_multibyte_under_max_chars() {
-        let emoji = "😀"; // 4 bytes each
+        let emoji = "😀";
         let mut content = String::new();
         for _ in 0..600 {
-            content.push_str(emoji); // 2400 bytes, 600 chars
+            content.push_str(emoji);
         }
-        let mut msgs = vec![OpenAIMessage {
-            role: "tool".into(),
-            content: Some(Value::String(content.clone())),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-            extra: serde_json::Map::default(),
-        }];
-        let applied = compress_tool_results(&mut msgs);
-        assert!(applied.is_empty());
+        let mut msgs = vec![tool_msg(content.clone(), None)];
+        assert!(compress_tool_results(&mut msgs).is_empty());
         assert_eq!(msgs[0].content.as_ref().unwrap().as_str().unwrap(), content);
     }
 
@@ -645,8 +624,7 @@ mod tests {
             msg("assistant", "Hello!"),
             msg("user", "Hi"),
         ];
-        let applied = remove_redundant_content(&mut msgs);
-        assert!(!applied.is_empty());
+        assert!(!remove_redundant_content(&mut msgs).is_empty());
         assert_eq!(msgs.len(), 2);
     }
 
@@ -654,16 +632,15 @@ mod tests {
     fn test_replace_image_urls_replaces_data_uri() {
         let mut msgs = vec![OpenAIMessage {
             role: "user".into(),
-            content: Some(json!([
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR..."}}
-            ])),
+            content: Some(
+                json!([{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR..."}}]),
+            ),
             name: None,
             tool_call_id: None,
             tool_calls: None,
             extra: serde_json::Map::default(),
         }];
-        let applied = replace_image_urls(&mut msgs);
-        assert!(!applied.is_empty());
+        assert!(!replace_image_urls(&mut msgs).is_empty());
         let parts = msgs[0].content.as_ref().and_then(|c| c.as_array()).unwrap();
         assert!(parts[0]["text"].as_str().unwrap().contains("[image: png]"));
     }
@@ -674,20 +651,11 @@ mod tests {
             msg("system", "sys"),
             msg("system", "sys"),
             msg("user", "a\n\n\nb"),
-            OpenAIMessage {
-                role: "tool".into(),
-                content: Some(Value::String("x".repeat(3000))),
-                name: None,
-                tool_call_id: Some("c1".into()),
-                tool_calls: None,
-                extra: serde_json::Map::default(),
-            },
+            tool_msg("x".repeat(3000), Some("c1")),
         ];
         let techniques = apply_lite(&mut msgs);
         assert!(!techniques.is_empty());
-        // dedup_system: 1 removed
         assert_eq!(msgs.len(), 3);
-        // Tool result must be preserved verbatim (no truncation)
         let tool_content = msgs[2].content.as_ref().and_then(|c| c.as_str()).unwrap();
         assert_eq!(
             tool_content.len(),
@@ -697,52 +665,23 @@ mod tests {
     }
 
     #[test]
-    fn normalize_whitespace_collapses_3plus_newlines() {
-        let input = "line1\n\n\n\n\nline2";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, "line1\n\nline2");
-    }
-
-    #[test]
-    fn normalize_whitespace_keeps_double_newlines() {
-        let input = "para1\n\npara2";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, "para1\n\npara2");
-    }
-
-    #[test]
-    fn normalize_whitespace_trims_trailing_spaces() {
-        let input = "line1   \nline2\t\nline3";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, "line1\nline2\nline3");
-    }
-
-    #[test]
-    fn normalize_whitespace_trims_trailing_ws_at_eof() {
-        let input = "line1\nline2   ";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, "line1\nline2");
-    }
-
-    #[test]
-    fn normalize_whitespace_fast_path_already_normalized() {
-        let input = "line1\nline2\n\npara2";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, input);
-    }
-
-    #[test]
-    fn normalize_whitespace_preserves_multibyte_utf8() {
-        let input = "hello 世界   \nnext line";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, "hello 世界\nnext line");
-    }
-
-    #[test]
-    fn normalize_whitespace_preserves_emoji() {
-        let input = "😀😀😀\n\n\n😀😀";
-        let out = normalize_message_whitespace(input);
-        assert_eq!(out, "😀😀😀\n\n😀😀");
+    fn test_normalize_whitespace_cases() {
+        const CASES: &[(&str, &str)] = &[
+            ("line1\n\n\n\n\nline2", "line1\n\nline2"),
+            ("para1\n\npara2", "para1\n\npara2"),
+            ("line1   \nline2\t\nline3", "line1\nline2\nline3"),
+            ("line1\nline2   ", "line1\nline2"),
+            ("line1\nline2\n\npara2", "line1\nline2\n\npara2"),
+            ("hello 世界   \nnext line", "hello 世界\nnext line"),
+            ("😀😀😀\n\n\n😀😀", "😀😀😀\n\n😀😀"),
+        ];
+        for (input, expected) in CASES {
+            assert_eq!(
+                normalize_message_whitespace(input),
+                *expected,
+                "failed for input: {input:?}"
+            );
+        }
     }
 
     #[test]

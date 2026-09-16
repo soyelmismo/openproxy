@@ -3,8 +3,10 @@
 pub mod accounts;
 pub mod api_keys;
 pub mod auth;
+pub mod combo_targets;
 pub mod combos;
 pub mod debug;
+pub mod model_tester;
 pub mod models;
 pub mod notifications;
 pub mod oauth;
@@ -13,6 +15,7 @@ pub mod proxies;
 pub mod proxy_sources;
 pub mod runtime;
 pub mod usage;
+pub mod usage_ws;
 
 #[cfg(test)]
 pub mod tests;

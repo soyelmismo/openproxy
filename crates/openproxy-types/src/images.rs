@@ -149,6 +149,45 @@ pub struct ImageGenerationResponse {
     pub data: Box<[ImageData]>,
 }
 
+/// Async submit response from AI Horde `/generate/async` endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HordeAsyncSubmitResponse {
+    pub id: Option<String>,
+    pub message: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Status check response from AI Horde `/generate/check/{id}` endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HordeCheckResponse {
+    pub done: Option<bool>,
+    pub finished: Option<u32>,
+    pub faulted: Option<bool>,
+    pub wait_time: Option<u32>,
+    pub queue_position: Option<u32>,
+    pub error: Option<String>,
+}
+
+/// Generated image artifact descriptor within [`HordeStatusResponse`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HordeGenerationItem {
+    pub worker_id: Option<String>,
+    pub worker_name: Option<String>,
+    pub model: Option<String>,
+    pub state: Option<String>,
+    pub img: Option<String>,
+    pub censored: Option<bool>,
+}
+
+/// Full job status and result response from AI Horde `/generate/status/{id}` endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HordeStatusResponse {
+    pub done: Option<bool>,
+    pub faulted: Option<bool>,
+    pub generations: Option<Vec<HordeGenerationItem>>,
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,82 @@
+/* ============================================
+   LOG DETAIL MODAL VIEW STYLES
+   ============================================ */
+
+.log-detail-modal {
+  max-width: 900px;
+  width: 95vw;
+}
+
+.modal-tabs {
+  display: flex;
+  background: var(--color-surface-2);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  gap: 1px;
+}
+.modal-tab-btn {
+  background: transparent;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--t-fast);
+}
+.modal-tab-btn:hover {
+  color: var(--color-text);
+}
+.modal-tab-btn.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  background: var(--color-surface);
+  font-weight: 600;
+}
+
+.log-detail-body {
+  max-height: calc(85vh - 120px);
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.collapsible-section {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-3);
+  background: var(--color-surface);
+}
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem var(--space-3);
+  background: var(--color-surface-2);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.collapsible-content {
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.debug-bundle-view {
+  background: var(--color-bg);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 768px) {
+  .log-detail-modal {
+    width: 100vw;
+    height: 100vh;
+    max-height: 100dvh;
+  }
+}

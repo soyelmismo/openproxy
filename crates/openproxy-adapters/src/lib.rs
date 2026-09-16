@@ -25,8 +25,8 @@ pub use adapters::{
 
 pub use upstream::{
     CancellationToken, HostKey, NON_STREAMING_BODY_LIMIT_BYTES, PhasedConnector,
-    PhasedConnectorError, PhasedTimeouts, ResolvedPhaseDeadlines, ResolvedTimeouts, Scheme,
-    STREAMING_BODY_LIMIT_BYTES, TimeoutProfile, UpstreamBodyStream, UpstreamClient,
+    PhasedConnectorError, PhasedTimeouts, ResolvedPhaseDeadlines, ResolvedTimeouts,
+    STREAMING_BODY_LIMIT_BYTES, Scheme, TimeoutProfile, UpstreamBodyStream, UpstreamClient,
     UpstreamConnectionPool, UpstreamError, UpstreamPhase, UpstreamRequest, UpstreamResponse,
     UpstreamResult,
 };

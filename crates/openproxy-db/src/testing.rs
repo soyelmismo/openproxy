@@ -76,3 +76,50 @@ pub fn seed_antigravity_provider(conn: &Connection) {
     )
     .expect("seed antigravity provider");
 }
+
+/// Create a fresh isolated test pool with all migrations applied.
+/// Returns both the pool and the path to its SQLite database file.
+pub fn fresh_pool() -> (crate::conn::DbPool, PathBuf) {
+    fresh_pool_with_prefix("openproxy-test")
+}
+
+/// Create a fresh isolated test pool with a custom prefix.
+pub fn fresh_pool_with_prefix(prefix: &str) -> (crate::conn::DbPool, PathBuf) {
+    let pool = crate::conn::DbPool::test_pool_with_prefix(prefix).expect("open test db pool");
+    let path = pool.path().to_path_buf();
+    (pool, path)
+}
+
+/// Create a fresh isolated test pool and return only the [`crate::conn::DbPool`].
+pub fn fresh_pool_only() -> crate::conn::DbPool {
+    fresh_pool().0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fresh_pool_creates_isolated_db_with_migrations() {
+        let (pool, path) = fresh_pool();
+        assert!(path.exists());
+        let writer = pool.writer();
+        let count: i64 = writer
+            .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
+            .expect("query schema_migrations");
+        assert!(count > 0, "migrations should be applied");
+    }
+
+    #[test]
+    fn test_fresh_pool_with_prefix() {
+        let (_pool, path) = fresh_pool_with_prefix("custom-prefix");
+        assert!(path.exists());
+        assert!(path.to_string_lossy().contains("custom-prefix"));
+    }
+
+    #[test]
+    fn test_fresh_pool_only() {
+        let pool = fresh_pool_only();
+        assert!(pool.path().exists());
+    }
+}

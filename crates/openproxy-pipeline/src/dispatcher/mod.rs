@@ -14,6 +14,8 @@ pub(super) mod proxy;
 pub(super) mod rotation;
 pub(super) mod stream;
 #[cfg(test)]
+mod stream_tests;
+#[cfg(test)]
 mod tests;
 pub mod types;
 pub(super) mod unary;

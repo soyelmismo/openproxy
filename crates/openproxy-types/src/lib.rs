@@ -35,14 +35,17 @@ pub use usage::{
 pub mod endpoint;
 pub use endpoint::EndpointKind;
 pub mod images;
-pub use images::{ImageData, ImageEditRequest, ImageGenerationRequest, ImageGenerationResponse};
+pub use images::{
+    HordeAsyncSubmitResponse, HordeCheckResponse, HordeGenerationItem, HordeStatusResponse,
+    ImageData, ImageEditRequest, ImageGenerationRequest, ImageGenerationResponse,
+};
 pub mod embeddings;
 pub use embeddings::{
     EmbeddingInput, EmbeddingObject, EmbeddingRequest, EmbeddingResponse, EmbeddingUsage,
     EmbeddingVector,
 };
 
-pub use error::{CancelReason, CoreError, ErrorContext, Result};
+pub use error::{CancelReason, CoreError, ErrorContext, OptionExt, Result, ResultExt};
 pub use ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId, RequestId,
     TraceId, UsageId,
@@ -52,7 +55,8 @@ pub use message::{
     PromptTokensDetails, TargetFormat, extract_content_part_text, extract_content_text,
 };
 pub use providers::{
-    AuthType, DiscoveredModel, Provider, ProviderFormat, ProviderMetadata, RateLimitScope,
+    AuthType, DiscoveredModel, NewProvider, Provider, ProviderFormat, ProviderMetadata,
+    RateLimitScope,
 };
 pub mod combos;
 pub use capabilities::{
@@ -63,7 +67,8 @@ pub use capabilities::{
     resolve_effective_model_type,
 };
 pub use combos::{
-    Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH, PriorityMode, Strategy,
+    AddTargetInput, Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH, PriorityMode,
+    Strategy,
 };
 pub use config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
@@ -83,3 +88,6 @@ pub use context::{CustomProviderMeta, ResolvedTarget};
 pub mod timestamp;
 pub mod update;
 pub use update::UpdateField;
+
+pub mod oauth;
+pub use oauth::{DeviceAuthorizationResponse, TokenResponse};

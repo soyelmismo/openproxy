@@ -179,89 +179,40 @@ mod tests {
     }
 
     #[test]
-    fn strips_date_suffixes() {
-        assert_eq!(
-            normalize_model_id("anthropic/claude-3-5-sonnet-20241022"),
-            "claude-3-5-sonnet"
-        );
-        assert_eq!(
-            normalize_model_id("openai/gpt-4-turbo-2024-04-09"),
-            "gpt-4-turbo"
-        );
-        assert_eq!(
-            normalize_model_id("claude-sonnet-4-20250514"),
-            "claude-sonnet-4"
-        );
-        assert_eq!(
-            normalize_model_id("claude-3-7-sonnet-20250219"),
-            "claude-3-7-sonnet"
-        );
-    }
-
-    #[test]
-    fn strips_yyyymm_version_suffixes() {
-        assert_eq!(
-            normalize_model_id("mistral/mistral-large-2407"),
-            "mistral-large"
-        );
-    }
-
-    #[test]
-    fn strips_v_n_version_suffixes() {
-        assert_eq!(
-            normalize_model_id("deepseek/deepseek-chat-v1"),
-            "deepseek-chat"
-        );
-        assert_eq!(
-            normalize_model_id("deepseek/deepseek-chat-v2"),
-            "deepseek-chat"
-        );
-    }
-
-    #[test]
-    fn normalizes_gemini_underscores() {
-        assert_eq!(
-            normalize_model_id("google/gemini-2_5-pro"),
-            "gemini-2.5-pro"
-        );
-        assert_eq!(normalize_model_id("gemini-1_5-flash"), "gemini-1.5-flash");
-    }
-
-    #[test]
-    fn combined_variations() {
-        assert_eq!(
-            normalize_model_id("anthropic/claude-3-5-sonnet-20241022:free"),
-            "claude-3-5-sonnet"
-        );
-        assert_eq!(
-            normalize_model_id("openai/gpt-4o-2024-08-06-free"),
-            "gpt-4o"
-        );
-    }
-
-    #[test]
-    fn bare_id_unchanged() {
-        assert_eq!(normalize_model_id("gpt-4o"), "gpt-4o");
-        assert_eq!(normalize_model_id("claude-3-5-sonnet"), "claude-3-5-sonnet");
-    }
-
-    #[test]
-    fn does_not_strip_legitimate_numbers() {
-        assert_eq!(
-            normalize_model_id("meta-llama/llama-3.3-70b-instruct"),
-            "llama-3.3-70b-instruct"
-        );
-        assert_eq!(
-            normalize_model_id("qwen/qwen2.5-72b-instruct"),
-            "qwen2.5-72b-instruct"
-        );
-    }
-
-    #[test]
-    fn normalizes_colons_to_dashes() {
-        assert_eq!(normalize_model_id("gpt-oss:120b"), "gpt-oss-120b");
-        assert_eq!(normalize_model_id("gpt-oss:120b:free"), "gpt-oss-120b");
-        assert_eq!(normalize_model_id("llama3:8b"), "llama3-8b");
+    fn test_normalize_model_id_cases() {
+        const CASES: &[(&str, &str)] = &[
+            ("anthropic/claude-3-5-sonnet-20241022", "claude-3-5-sonnet"),
+            ("openai/gpt-4-turbo-2024-04-09", "gpt-4-turbo"),
+            ("claude-sonnet-4-20250514", "claude-sonnet-4"),
+            ("claude-3-7-sonnet-20250219", "claude-3-7-sonnet"),
+            ("mistral/mistral-large-2407", "mistral-large"),
+            ("deepseek/deepseek-chat-v1", "deepseek-chat"),
+            ("deepseek/deepseek-chat-v2", "deepseek-chat"),
+            ("google/gemini-2_5-pro", "gemini-2.5-pro"),
+            ("gemini-1_5-flash", "gemini-1.5-flash"),
+            (
+                "anthropic/claude-3-5-sonnet-20241022:free",
+                "claude-3-5-sonnet",
+            ),
+            ("openai/gpt-4o-2024-08-06-free", "gpt-4o"),
+            ("gpt-4o", "gpt-4o"),
+            ("claude-3-5-sonnet", "claude-3-5-sonnet"),
+            (
+                "meta-llama/llama-3.3-70b-instruct",
+                "llama-3.3-70b-instruct",
+            ),
+            ("qwen/qwen2.5-72b-instruct", "qwen2.5-72b-instruct"),
+            ("gpt-oss:120b", "gpt-oss-120b"),
+            ("gpt-oss:120b:free", "gpt-oss-120b"),
+            ("llama3:8b", "llama3-8b"),
+        ];
+        for &(input, expected) in CASES {
+            assert_eq!(
+                normalize_model_id(input),
+                expected,
+                "failed for input: {input}"
+            );
+        }
     }
 
     #[test]

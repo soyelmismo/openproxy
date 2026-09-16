@@ -1,7 +1,3 @@
-// views/notifications/list.ts — notification list with filters, card
-// rendering, and pagination. Exports the list state mutators (markAsRead,
-// markAllReadOnClose, etc.) for the DnD overlay and mount entry point.
-
 import { html, type TemplateResult, nothing } from "lit-html";
 import { api } from "../../state/api.js";
 import { requestUpdate } from "../../state/reactive.js";
@@ -9,45 +5,18 @@ import { showToast } from "../../components/toast.js";
 import { t } from "../../i18n/index.js";
 import { icons } from "../../lib/icons.js";
 import {
-  getUnreadCount,
-  setUnreadCount,
-  decrementUnread,
-  refreshUnreadCount,
-  markIdsSeen,
-  onNotificationEvent,
-  notificationBody,
-  formatRelativeAgo,
+  getUnreadCount, setUnreadCount, decrementUnread, refreshUnreadCount,
+  markIdsSeen, onNotificationEvent, notificationBody, formatRelativeAgo,
 } from "../../state/notifications-store.js";
-import type {
-  NotificationRow,
-  NotificationKind,
-} from "../../lib/types/notifications.js";
+import type { NotificationRow, NotificationKind } from "../../lib/types/notifications.js";
 import {
-  KIND_COLOR_VAR,
-  SYSTEM_CODE_CARD_COLOR,
-  SYSTEM_CODE_COLOR_VAR,
-  DRAGGABLE_KINDS,
-  DND_MIME,
-  PAGE_LIMIT,
-  isUnread,
-  payloadString,
-  payloadProviderId,
-  payloadModelId,
-  type DragPayload,
+  KIND_COLOR_VAR, SYSTEM_CODE_CARD_COLOR, SYSTEM_CODE_COLOR_VAR,
+  DRAGGABLE_KINDS, DND_MIME, PAGE_LIMIT, isUnread, payloadString,
+  payloadProviderId, payloadModelId, type DragPayload,
 } from "./shared.js";
-import {
-  openOverlay,
-  closeOverlay,
-} from "./dnd-overlay.js";
+import { openOverlay, closeOverlay } from "./dnd-overlay.js";
 
-// ==========
-// Filter options
-// ==========
-
-const FILTER_OPTIONS: ReadonlyArray<{
-  value: "all" | "unread" | NotificationKind;
-  key: string;
-}> = [
+const FILTER_OPTIONS: ReadonlyArray<{ value: "all" | "unread" | NotificationKind; key: string }> = [
   { value: "all", key: "notifications.filter.all" },
   { value: "unread", key: "notifications.filter.unread" },
   { value: "model_new", key: "notifications.filter.model_new" },
@@ -56,125 +25,65 @@ const FILTER_OPTIONS: ReadonlyArray<{
   { value: "system", key: "notifications.filter.system" },
 ];
 
-// ==========
-// Module-local state
-// ==========
-
 let rows: NotificationRow[] = [];
-let hasMore: boolean = false;
-let isLoadingMore: boolean = false;
+let hasMore = false;
+let isLoadingMore = false;
 let oldestLoadedId: number | null = null;
 let loadError: string | null = null;
 let filter: "all" | "unread" | NotificationKind = "all";
 
-// ==========
-// Filter matching
-// ==========
-
 function matchesFilter(r: NotificationRow): boolean {
   if (filter === "all") return true;
-  if (filter === "unread") return isUnread(r);
-  return r.kind === filter;
+  return filter === "unread" ? isUnread(r) : r.kind === filter;
 }
 
-// ==========
-// Icon + color resolution
-// ==========
-
-/** Resolve the card accent color for a notification row. */
 function notificationCardColor(r: NotificationRow): string {
   if (r.kind === "system") {
-    const code: string = payloadString(r.payload, "code");
-    if (code && (code in SYSTEM_CODE_CARD_COLOR)) {
-      return SYSTEM_CODE_CARD_COLOR[code] ?? "var(--color-text-muted, #6b7280)";
-    }
+    const code = payloadString(r.payload, "code");
+    if (code && code in SYSTEM_CODE_CARD_COLOR) return SYSTEM_CODE_CARD_COLOR[code] ?? "var(--color-text-muted, #6b7280)";
   }
   return KIND_COLOR_VAR[r.kind] ?? "var(--color-text-muted, #6b7280)";
 }
 
-/** Resolve the icon glyph for a row. */
 function notificationIcon(r: NotificationRow): TemplateResult {
   if (r.kind === "system") {
-    const code: string = payloadString(r.payload, "code");
-    switch (code) {
-      case "discovery_failed":
-      case "circuit_open":
-      case "account_invalid":
-        return icons.warning();
-      case "account_key_decrypt_failed":
-      case "oauth_expired":
-        return icons.key();
-      case "quota_low":
-        return icons.caretDown();
-      default:
-        return icons.tag();
-    }
+    const code = payloadString(r.payload, "code");
+    if (["discovery_failed", "circuit_open", "account_invalid"].includes(code)) return icons.warning();
+    if (["account_key_decrypt_failed", "oauth_expired"].includes(code)) return icons.key();
+    return code === "quota_low" ? icons.caretDown() : icons.tag();
   }
-  switch (r.kind) {
-    case "model_new":
-      return icons.plus();
-    case "model_gone":
-      return icons.close();
-    case "model_auto_activated":
-      return icons.lightning();
-    default:
-      return icons.tag();
-  }
+  if (r.kind === "model_new") return icons.plus();
+  if (r.kind === "model_gone") return icons.close();
+  return r.kind === "model_auto_activated" ? icons.lightning() : icons.tag();
 }
 
-/** Resolve the CSS color variable for a system notification's icon. */
 function notificationIconColorVar(r: NotificationRow): string | null {
   if (r.kind !== "system") return null;
-  const code: string = payloadString(r.payload, "code");
-  if (!code) return null;
-  if (code in SYSTEM_CODE_COLOR_VAR) {
-    return SYSTEM_CODE_COLOR_VAR[code] ?? null;
-  }
-  return null;
+  const code = payloadString(r.payload, "code");
+  return code && code in SYSTEM_CODE_COLOR_VAR ? (SYSTEM_CODE_COLOR_VAR[code] ?? null) : null;
 }
 
-/** Resolve the kind label for the card's meta row. */
 function notificationKindLabel(r: NotificationRow): string {
-  if (r.kind !== "system") {
-    return t("notifications.kind." + r.kind);
-  }
-  const code: string = payloadString(r.payload, "code");
-  if (!code) {
-    return t("notifications.kind.system");
-  }
-  const perCodeKey: string = `notifications.code.${code}`;
-  const rendered: string = t(perCodeKey);
-  if (rendered === perCodeKey) {
-    return t("notifications.kind.system");
-  }
-  return rendered;
+  if (r.kind !== "system") return t("notifications.kind." + r.kind);
+  const code = payloadString(r.payload, "code");
+  if (!code) return t("notifications.kind.system");
+  const key = `notifications.code.${code}`;
+  const rendered = t(key);
+  return rendered === key ? t("notifications.kind.system") : rendered;
 }
-
-// ==========
-// API helpers
-// ==========
 
 async function fetchInitial(): Promise<void> {
-  isLoadingMore = false;
-  oldestLoadedId = null;
-  hasMore = false;
+  isLoadingMore = false; oldestLoadedId = null; hasMore = false;
   try {
-    const raw: unknown = await api(`/notifications?limit=${PAGE_LIMIT}`);
+    const raw = await api(`/notifications?limit=${PAGE_LIMIT}`);
     if (Array.isArray(raw)) {
       rows = raw as NotificationRow[];
-      if (rows.length > 0 && rows[0]) {
-        oldestLoadedId = rows.reduce((min, r) => Math.min(min, r.id), rows[0].id);
-      }
+      if (rows.length > 0 && rows[0]) oldestLoadedId = rows.reduce((min, r) => Math.min(min, r.id), rows[0].id);
       hasMore = rows.length >= PAGE_LIMIT;
-    } else {
-      rows = [];
-      hasMore = false;
-    }
+    } else { rows = []; hasMore = false; }
     loadError = null;
   } catch (e: unknown) {
-    loadError = e instanceof Error ? e.message : String(e);
-    rows = [];
-    hasMore = false;
+    loadError = e instanceof Error ? e.message : String(e); rows = []; hasMore = false;
   }
   markIdsSeen(rows.map((r) => r.id));
   requestUpdate();
@@ -182,289 +91,111 @@ async function fetchInitial(): Promise<void> {
 
 async function loadMore(): Promise<void> {
   if (isLoadingMore || !hasMore) return;
-  isLoadingMore = true;
-  requestUpdate();
+  isLoadingMore = true; requestUpdate();
   try {
-    const query: string = oldestLoadedId !== null
-      ? `/notifications?limit=${PAGE_LIMIT}&before_id=${oldestLoadedId}`
-      : `/notifications?limit=${PAGE_LIMIT}`;
-    const raw: unknown = await api(query);
+    const q = oldestLoadedId !== null ? `/notifications?limit=${PAGE_LIMIT}&before_id=${oldestLoadedId}` : `/notifications?limit=${PAGE_LIMIT}`;
+    const raw = await api(q);
     if (Array.isArray(raw)) {
-      const nextRows: NotificationRow[] = raw as NotificationRow[];
-      if (nextRows.length > 0 && nextRows[0]) {
-        const nextMinId: number = nextRows.reduce((min, r) => Math.min(min, r.id), nextRows[0].id);
-        oldestLoadedId = oldestLoadedId !== null ? Math.min(oldestLoadedId, nextMinId) : nextMinId;
-        const existingIds: Set<number> = new Set<number>(rows.map((r) => r.id));
-        const toAdd: NotificationRow[] = nextRows.filter((r) => !existingIds.has(r.id));
+      const next = raw as NotificationRow[];
+      if (next.length > 0 && next[0]) {
+        const nextMin = next.reduce((min, r) => Math.min(min, r.id), next[0].id);
+        oldestLoadedId = oldestLoadedId !== null ? Math.min(oldestLoadedId, nextMin) : nextMin;
+        const ids = new Set(rows.map((r) => r.id));
+        const toAdd = next.filter((r) => !ids.has(r.id));
         rows = [...rows, ...toAdd];
         markIdsSeen(toAdd.map((r) => r.id));
       }
-      hasMore = nextRows.length >= PAGE_LIMIT;
-    } else {
-      hasMore = false;
-    }
-  } catch (_e: unknown) {
-    // Retain current rows on network error
-  } finally {
-    isLoadingMore = false;
-    requestUpdate();
-  }
+      hasMore = next.length >= PAGE_LIMIT;
+    } else { hasMore = false; }
+  } catch { /* retain */ } finally { isLoadingMore = false; requestUpdate(); }
 }
 
-/** Mark a single notification as read. */
 export async function markAsRead(id: number): Promise<void> {
   try {
     await api(`/notifications/${id}/read`, { method: "POST" });
-    const r: NotificationRow | undefined = rows.find((x) => x.id === id);
-    if (r && r.read_at === null) {
-      r.read_at = new Date().toISOString();
-      decrementUnread(1);
-      requestUpdate();
-    }
+    const r = rows.find((x) => x.id === id);
+    if (r && r.read_at === null) { r.read_at = new Date().toISOString(); decrementUnread(1); requestUpdate(); }
     void refreshUnreadCount();
-  } catch (e: unknown) {
-    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
-  }
+  } catch (e: unknown) { showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error"); }
 }
 
 async function markAllRead(): Promise<void> {
   try {
     await api("/notifications/read-all", { method: "POST" });
-    const nowIso: string = new Date().toISOString();
-    for (const r of rows) {
-      if (r.read_at === null) r.read_at = nowIso;
-    }
-    setUnreadCount(0);
-    requestUpdate();
-    void refreshUnreadCount();
-  } catch (e: unknown) {
-    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
-  }
+    const now = new Date().toISOString();
+    for (const r of rows) { if (r.read_at === null) r.read_at = now; }
+    setUnreadCount(0); requestUpdate(); void refreshUnreadCount();
+  } catch (e: unknown) { showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error"); }
 }
 
 async function archiveAll(): Promise<void> {
-  const snapshot: NotificationRow[] = rows;
-  const unreadBefore: number = getUnreadCount();
-  rows = [];
-  setUnreadCount(0);
-  requestUpdate();
-  try {
-    await api("/notifications/archive-all", { method: "POST" });
-    void refreshUnreadCount();
-  } catch (e: unknown) {
-    rows = snapshot;
-    setUnreadCount(unreadBefore);
-    requestUpdate();
-    void refreshUnreadCount();
-    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
-  }
+  const snapshot = rows; const unreadBefore = getUnreadCount();
+  rows = []; setUnreadCount(0); requestUpdate();
+  try { await api("/notifications/archive-all", { method: "POST" }); void refreshUnreadCount(); }
+  catch (e: unknown) { rows = snapshot; setUnreadCount(unreadBefore); requestUpdate(); void refreshUnreadCount(); showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error"); }
 }
 
 async function archive(id: number): Promise<void> {
-  const snapshot: NotificationRow[] = rows;
-  const wasUnread: boolean = rows.find((x) => x.id === id)?.read_at === null;
+  const snapshot = rows; const wasUnread = rows.find((x) => x.id === id)?.read_at === null;
   rows = rows.filter((x) => x.id !== id);
   if (wasUnread) decrementUnread(1);
   requestUpdate();
-
-  if (hasMore && !isLoadingMore && (rows.length < 10 || (filter !== "all" && rows.filter(matchesFilter).length === 0))) {
-    void loadMore();
-  }
-
-  try {
-    await api(`/notifications/${id}/archive`, { method: "POST" });
-    void refreshUnreadCount();
-  } catch (e: unknown) {
-    rows = snapshot;
-    if (wasUnread) {
-      setUnreadCount(getUnreadCount() + 1);
-    }
-    requestUpdate();
-    void refreshUnreadCount();
-    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
-  }
+  if (hasMore && !isLoadingMore && (rows.length < 10 || (filter !== "all" && rows.filter(matchesFilter).length === 0))) void loadMore();
+  try { await api(`/notifications/${id}/archive`, { method: "POST" }); void refreshUnreadCount(); }
+  catch (e: unknown) { rows = snapshot; if (wasUnread) setUnreadCount(getUnreadCount() + 1); requestUpdate(); void refreshUnreadCount(); showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error"); }
 }
 
-// ==========
-// Action handlers — view
-// ==========
-
-async function onMarkAllRead(): Promise<void> {
-  await markAllRead();
-}
-
-async function onClearAll(): Promise<void> {
-  await archiveAll();
-}
-
-function onFilterChange(e: Event): void {
-  const sel: HTMLSelectElement = e.target as HTMLSelectElement;
-  const v: string = sel.value;
-  if (v === "all" || v === "unread" || v === "model_new" || v === "model_gone" || v === "model_auto_activated" || v === "system") {
-    filter = v;
-    requestUpdate();
-    if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) {
-      void loadMore();
-    }
-  }
-}
-
-async function onViewProvider(r: NotificationRow): Promise<void> {
-  const providerId: string = payloadProviderId(r);
-  if (!providerId) {
-    showToast("Provider not found in notification payload", "error");
-    return;
-  }
-  void markAsRead(r.id);
-  location.hash = "#/providers/" + encodeURIComponent(providerId);
-}
-
-function onAddToComboClick(r: NotificationRow): void {
-  const providerId: string = payloadProviderId(r);
-  const modelId: string = payloadModelId(r);
-  if (!providerId || !modelId) {
-    showToast("Notification payload missing provider_id / model_id", "error");
-    return;
-  }
-  openOverlay(
-    { notification_id: r.id, provider_id: providerId, model_id: modelId },
-    true,
-  );
-}
-
-async function onDismiss(r: NotificationRow): Promise<void> {
-  await archive(r.id);
-}
-
-// ==========
-// DnD — deferred overlay open
-// ==========
-
-/** Pending deferred overlay open. The full-viewport overlay must NOT be
- *  appended synchronously inside `dragstart`: mounting a
- *  `position:fixed; inset:0` node in the same tick forces a reflow under
- *  the drag source and aborts the native drag in some engines. The
- *  sequence then is dragstart → openOverlay → instant abort → dragend →
- *  closeOverlay, which the user perceives as "grab cursor shows but drag
- *  never starts and the modal never opens". Deferring to a macrotask lets
- *  the browser commit the drag image first. */
 let pendingDndOpen: ReturnType<typeof setTimeout> | null = null;
-
 function scheduleDndOverlay(payload: DragPayload): void {
   if (pendingDndOpen) clearTimeout(pendingDndOpen);
-  pendingDndOpen = setTimeout(() => {
-    pendingDndOpen = null;
-    openOverlay(payload, false);
-  }, 0);
+  pendingDndOpen = setTimeout(() => { pendingDndOpen = null; openOverlay(payload, false); }, 0);
 }
-
 function cancelPendingDndOverlay(): void {
-  if (pendingDndOpen) {
-    clearTimeout(pendingDndOpen);
-    pendingDndOpen = null;
-  }
+  if (pendingDndOpen) { clearTimeout(pendingDndOpen); pendingDndOpen = null; }
 }
 
-/** Single predicate for drag affordance. The row class, the `draggable`
- *  attribute, and both drag handlers must derive from this — never show
- *  a grab cursor when the drag will no-op (e.g. backfilled rows with a
- *  matching kind but empty payload ids). */
 export function isRowDraggable(r: NotificationRow): boolean {
   return DRAGGABLE_KINDS.has(r.kind) && !!payloadModelId(r) && !!payloadProviderId(r);
 }
 
-// W3: model_* notifications inside the 30-day audit window are not
-// deletable by the server (it answers 422 validation). Hide the
-// delete button for those rows so the user can't trigger a doomed
-// request; we also guard the handler on the same condition.
 function isDeletable(r: NotificationRow): boolean {
-  if (r.kind !== "model_new" && r.kind !== "model_gone" && r.kind !== "model_auto_activated") {
-    return true; // system rows are always deletable
-  }
-  // model_* rows are only deletable once older than 30 days. We
-  // don't have the server's exact boundary on the client, so we
-  // rely on the conditional button + 422 toast fallback below.
-  return false;
+  return r.kind !== "model_new" && r.kind !== "model_gone" && r.kind !== "model_auto_activated";
 }
 
-// DELETE /notifications/{id} — W3. Behaves like archive for the badge:
-// decrement the unread count and refresh it from the server, because
-// the row leaves the active list either way.
 async function onDelete(r: NotificationRow): Promise<void> {
   if (!isDeletable(r)) return;
-  const snapshot: NotificationRow[] = rows;
-  const wasUnread: boolean = rows.find((x) => x.id === r.id)?.read_at === null;
+  const snapshot = rows; const wasUnread = rows.find((x) => x.id === r.id)?.read_at === null;
   rows = rows.filter((x) => x.id !== r.id);
   if (wasUnread) decrementUnread(1);
   requestUpdate();
-
-  if (hasMore && !isLoadingMore && (rows.length < 10 || (filter !== "all" && rows.filter(matchesFilter).length === 0))) {
-    void loadMore();
-  }
-
-  try {
-    await api(`/notifications/${r.id}`, { method: "DELETE" });
-    void refreshUnreadCount();
-  } catch (e: unknown) {
-    // The server answers 422 for model_* rows inside the audit
-    // window we couldn't predict client-side — surface it and
-    // roll the row back.
-    rows = snapshot;
-    if (wasUnread) {
-      setUnreadCount(getUnreadCount() + 1);
-    }
-    requestUpdate();
-    void refreshUnreadCount();
-    showToast(t("notifications.error.delete_failed"), "error");
-  }
+  if (hasMore && !isLoadingMore && (rows.length < 10 || (filter !== "all" && rows.filter(matchesFilter).length === 0))) void loadMore();
+  try { await api(`/notifications/${r.id}`, { method: "DELETE" }); void refreshUnreadCount(); }
+  catch { rows = snapshot; if (wasUnread) setUnreadCount(getUnreadCount() + 1); requestUpdate(); void refreshUnreadCount(); showToast(t("notifications.error.delete_failed"), "error"); }
 }
 
-// ==========
-// Row rendering (compact: one row per notification)
-// ==========
-
 function renderRow(r: NotificationRow): TemplateResult {
-  const icon: TemplateResult = notificationIcon(r);
-  const iconColorVar: string | null = notificationIconColorVar(r);
-  const cardColor: string = notificationCardColor(r);
-  const body: string = notificationBody(r);
-  const ago: string = formatRelativeAgo(r.created_at);
-  const unread: boolean = isUnread(r);
-  const draggable: boolean = isRowDraggable(r);
-  const showAddToCombo: boolean = DRAGGABLE_KINDS.has(r.kind);
-  const deletable: boolean = isDeletable(r);
-  const rowClasses: string = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
-  const rowStyle: string = `--card-accent: ${cardColor};${iconColorVar ? ` --icon-color: ${iconColorVar};` : ""}`;
-  const dragStartHandler: ((e: DragEvent) => void) | null = draggable
-    ? (e: DragEvent) => {
-        const providerId: string = payloadProviderId(r);
-        const modelId: string = payloadModelId(r);
-        if (!providerId || !modelId) return;
-        const payload: DragPayload = {
-          notification_id: r.id,
-          provider_id: providerId,
-          model_id: modelId,
-        };
-        if (e.dataTransfer) {
-          e.dataTransfer.setData(DND_MIME, JSON.stringify(payload));
-          e.dataTransfer.setData("text/plain", modelId);
-          e.dataTransfer.effectAllowed = "copy";
-        }
-        scheduleDndOverlay(payload);
-      }
-    : null;
-  const dragEndHandler: ((e: DragEvent) => void) | null = draggable
-    ? (_e: DragEvent) => {
-        cancelPendingDndOverlay();
-        closeOverlay();
-      }
-    : null;
-  return html`<div class=${rowClasses} data-id=${String(r.id)}
-      style=${rowStyle}
-      draggable=${draggable ? "true" : "false"}
-      @dragstart=${dragStartHandler}
-      @dragend=${dragEndHandler}
-    >
+  const icon = notificationIcon(r);
+  const iconColorVar = notificationIconColorVar(r);
+  const cardColor = notificationCardColor(r);
+  const body = notificationBody(r);
+  const ago = formatRelativeAgo(r.created_at);
+  const unread = isUnread(r);
+  const draggable = isRowDraggable(r);
+  const deletable = isDeletable(r);
+  const rowClasses = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
+  const rowStyle = `--card-accent: ${cardColor};${iconColorVar ? ` --icon-color: ${iconColorVar};` : ""}`;
+  const pId = payloadProviderId(r);
+  const mId = payloadModelId(r);
+
+  const dragStart = draggable ? (e: DragEvent) => {
+    if (!pId || !mId) return;
+    const payload: DragPayload = { notification_id: r.id, provider_id: pId, model_id: mId };
+    if (e.dataTransfer) { e.dataTransfer.setData(DND_MIME, JSON.stringify(payload)); e.dataTransfer.setData("text/plain", mId); e.dataTransfer.effectAllowed = "copy"; }
+    scheduleDndOverlay(payload);
+  } : null;
+
+  return html`<div class=${rowClasses} data-id=${String(r.id)} style=${rowStyle} draggable=${draggable ? "true" : "false"}
+      @dragstart=${dragStart} @dragend=${draggable ? () => { cancelPendingDndOverlay(); closeOverlay(); } : null}>
     <div class="notification-card-icon" style=${rowStyle} aria-hidden="true">${icon}</div>
     <div class="notification-card-body">
       <div class="notification-card-text">${body}</div>
@@ -474,151 +205,60 @@ function renderRow(r: NotificationRow): TemplateResult {
         ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")} aria-label=${t("common.unread")}></span>` : nothing}
       </div>
       <div class="notification-card-actions">
-        ${payloadProviderId(r)
-          ? html`<button class="small" @click=${() => { void onViewProvider(r); }}>${t("notifications.action.view_provider")}</button>`
-          : nothing}
-        ${showAddToCombo
-          ? html`<button class="small" @click=${() => onAddToComboClick(r)}>${t("notifications.action.add_to_combo")}</button>`
-          : nothing}
-        ${unread
-          ? html`<button class="small" @click=${() => { void markAsRead(r.id); }}>${t("notifications.action.mark_read")}</button>`
-          : nothing}
-        <button class="small danger" @click=${() => { void onDismiss(r); }}>${t("notifications.action.dismiss")}</button>
-        ${deletable
-          ? html`<button class="small danger" @click=${() => { void onDelete(r); }}>${t("notifications.action.delete")}</button>`
-          : nothing}
+        ${pId ? html`<button class="small" @click=${() => { void markAsRead(r.id); location.hash = "#/providers/" + encodeURIComponent(pId); }}>${t("notifications.action.view_provider")}</button>` : nothing}
+        ${DRAGGABLE_KINDS.has(r.kind) && pId && mId ? html`<button class="small" @click=${() => openOverlay({ notification_id: r.id, provider_id: pId, model_id: mId }, true)}>${t("notifications.action.add_to_combo")}</button>` : nothing}
+        ${unread ? html`<button class="small" @click=${() => { void markAsRead(r.id); }}>${t("notifications.action.mark_read")}</button>` : nothing}
+        <button class="small danger" @click=${() => { void archive(r.id); }}>${t("notifications.action.dismiss")}</button>
+        ${deletable ? html`<button class="small danger" @click=${() => { void onDelete(r); }}>${t("notifications.action.delete")}</button>` : nothing}
       </div>
     </div>
   </div>`;
 }
 
-// ==========
-// View rendering
-// ==========
-
-function renderFilterDropdown(): TemplateResult {
-  return html`<select class="notification-filter" @change=${onFilterChange}>
-    ${FILTER_OPTIONS.map((o) => html`<option value=${o.value} ?selected=${o.value === filter}>${t(o.key)}</option>`)}
-  </select>`;
-}
-
 function renderHeader(): TemplateResult {
-  const unread: number = getUnreadCount();
-  const unreadLabel: string = unread > 0
-    ? t("notifications.unread_count", { count: unread })
-    : t("notifications.no_unread");
+  const unread = getUnreadCount();
   return html`<div class="page-header">
     <div class="page-header-title">
       <h2>${t("notifications.title")}</h2>
-      <span class="badge ${unread > 0 ? "badge-error" : "badge-info"}">${unreadLabel}</span>
+      <span class="badge ${unread > 0 ? "badge-error" : "badge-info"}">${unread > 0 ? t("notifications.unread_count", { count: unread }) : t("notifications.no_unread")}</span>
     </div>
     <div class="actions">
-      ${renderFilterDropdown()}
-      <button class="small" ?disabled=${unread === 0} @click=${() => { void onMarkAllRead(); }}>${t("notifications.mark_all_read")}</button>
-      <button class="small danger" ?disabled=${rows.length === 0} @click=${() => { void onClearAll(); }}>${t("notifications.clear_all")}</button>
+      <select class="notification-filter" @change=${(e: Event) => { filter = (e.target as HTMLSelectElement).value as typeof filter; requestUpdate(); if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) void loadMore(); }}>
+        ${FILTER_OPTIONS.map((o) => html`<option value=${o.value} ?selected=${o.value === filter}>${t(o.key)}</option>`)}
+      </select>
+      <button class="small" ?disabled=${unread === 0} @click=${() => { void markAllRead(); }}>${t("notifications.mark_all_read")}</button>
+      <button class="small danger" ?disabled=${rows.length === 0} @click=${() => { void archiveAll(); }}>${t("notifications.clear_all")}</button>
     </div>
   </div>`;
 }
 
-function renderLoadMoreButton(): TemplateResult {
-  return html`<button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>
-    ${isLoadingMore ? t("common.loading") : t("notifications.load_more")}
-  </button>`;
-}
-
 function renderList(): TemplateResult {
-  if (loadError) {
-    return html`<div class="banner banner-error">${loadError}</div>`;
-  }
-  const filtered: NotificationRow[] = rows.filter(matchesFilter);
+  if (loadError) return html`<div class="banner banner-error">${loadError}</div>`;
+  const filtered = rows.filter(matchesFilter);
   if (rows.length === 0) {
-    if (isLoadingMore) {
-      return html`<div class="notification-empty">
-        <p>${t("common.loading")}</p>
-      </div>`;
-    }
-    return html`<div class="notification-empty">
-      <div class="notification-empty-icon" aria-hidden="true">🔔</div>
-      <p>${t("notifications.no_notifications")}</p>
-    </div>`;
+    return html`<div class="notification-empty"><div class="notification-empty-icon" aria-hidden="true">${isLoadingMore ? "" : "🔔"}</div><p>${isLoadingMore ? t("common.loading") : t("notifications.no_notifications")}</p></div>`;
   }
-  const anyUnread: boolean = rows.some(isUnread);
-  const noUnreadHint: TemplateResult | typeof nothing = (!anyUnread && filter !== "all")
-    ? html`<div class="notification-no-unread-hint">${t("notifications.no_unread")}</div>`
-    : nothing;
+  const anyUnread = rows.some(isUnread);
+  const noUnread = (!anyUnread && filter !== "all") ? html`<div class="notification-no-unread-hint">${t("notifications.no_unread")}</div>` : nothing;
   if (filtered.length === 0) {
-    return html`${noUnreadHint}<div class="notification-empty">
-      <div class="notification-empty-icon" aria-hidden="true">${icons.search()}</div>
-      <p>${t("common.empty")}</p>
-      ${hasMore ? renderLoadMoreButton() : nothing}
-    </div>`;
+    return html`${noUnread}<div class="notification-empty"><div class="notification-empty-icon" aria-hidden="true">${icons.search()}</div><p>${t("common.empty")}</p>${hasMore ? html`<button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>${isLoadingMore ? t("common.loading") : t("notifications.load_more")}</button>` : nothing}</div>`;
   }
-  return html`${noUnreadHint}<div class="notification-list">${filtered.map(renderRow)}</div>${hasMore ? html`
-    <div style="display:flex;justify-content:center;margin:var(--space-4, 1rem) 0;">
-      ${renderLoadMoreButton()}
-    </div>
-  ` : nothing}`;
+  return html`${noUnread}<div class="notification-list">${filtered.map(renderRow)}</div>${hasMore ? html`<div style="display:flex;justify-content:center;margin:var(--space-4, 1rem) 0;"><button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>${isLoadingMore ? t("common.loading") : t("notifications.load_more")}</button></div>` : nothing}`;
 }
 
-function renderView(): TemplateResult {
-  return html`${renderHeader()}${renderList()}`;
-}
+export function renderView(): TemplateResult { return html`${renderHeader()}${renderList()}`; }
+export function resetListState(): void { rows = []; loadError = null; filter = "all"; hasMore = false; isLoadingMore = false; oldestLoadedId = null; }
+export function hasUnread(): boolean { return rows.some((r) => r.read_at === null && r.archived_at === null); }
 
-// ==========
-// State reset (called by index.ts on mount)
-// ==========
-
-export function resetListState(): void {
-  rows = [];
-  loadError = null;
-  filter = "all";
-  hasMore = false;
-  isLoadingMore = false;
-  oldestLoadedId = null;
-}
-
-/** Check if there are unread notifications. Used by mount cleanup. */
-export function hasUnread(): boolean {
-  return rows.some((r) => r.read_at === null && r.archived_at === null);
-}
-
-/** Subscribe to live WS notification events. The store fans out the
- *  parsed `NotificationEvent` to every subscriber. We prepend the
- *  new row to the local list (the store already incremented the
- *  unread count + showed a toast). */
 export function subscribeNotificationEvents(): () => void {
   return onNotificationEvent((evt: import("../../lib/types/notifications.js").NotificationEvent) => {
-    const row: NotificationRow = {
-      id: evt.id,
-      kind: evt.kind,
-      payload: evt.payload,
-      read_at: null,
-      archived_at: null,
-      created_at: evt.created_at,
-      dedup_key: null,
-      provider_id: null,
-    };
-    if (!rows.some((r) => r.id === row.id)) {
-      rows = [row, ...rows];
-      requestUpdate();
-    }
+    const row: NotificationRow = { id: evt.id, kind: evt.kind, payload: evt.payload, read_at: null, archived_at: null, created_at: evt.created_at, dedup_key: null, provider_id: null };
+    if (!rows.some((r) => r.id === row.id)) { rows = [row, ...rows]; requestUpdate(); }
   });
 }
 
-// ==========
-// Fetch initial + renderView export
-// ==========
+export { fetchInitial };
 
-export { fetchInitial, renderView };
-
-/** NOTIF-FIX (task 4): best-effort `mark_all_read` fired from the
- *  view's cleanup path. Silent on error; skips local-row mutation. */
 export async function markAllReadOnClose(): Promise<void> {
-  try {
-    await api("/notifications/read-all", { method: "POST" });
-    setUnreadCount(0);
-    void refreshUnreadCount();
-  } catch (_e: unknown) {
-    // Swallow — best-effort sync.
-  }
+  try { await api("/notifications/read-all", { method: "POST" }); setUnreadCount(0); void refreshUnreadCount(); } catch { /* swallow */ }
 }

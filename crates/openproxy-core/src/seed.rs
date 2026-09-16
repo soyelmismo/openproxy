@@ -34,7 +34,7 @@ pub fn builtin_provider_ids() -> Vec<String> {
 /// chat call against this provider. Routing for a sub-combo target
 /// is handled by flattening the sub-combo's children into the parent
 /// combo's target list, not by hitting this id.
-pub const VIRTUAL_COMBO_PROVIDER_ID: &str = "combo";
+pub use openproxy_types::providers::VIRTUAL_COMBO_PROVIDER_ID;
 
 /// Convenience predicate: is `id` one of the built-in seeded
 /// providers? Used by the admin handlers to reject delete attempts

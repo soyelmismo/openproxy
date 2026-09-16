@@ -45,11 +45,15 @@ mod conn_pool;
 #[cfg(feature = "upstream-hyper")]
 mod connector;
 #[cfg(feature = "upstream-hyper")]
+pub(crate) mod dns;
+#[cfg(feature = "upstream-hyper")]
 mod error;
 #[cfg(feature = "upstream-hyper")]
 mod phases;
 #[cfg(feature = "upstream-hyper")]
 mod profile;
+#[cfg(feature = "upstream-hyper")]
+pub(crate) mod proxy_tunnel;
 #[cfg(feature = "upstream-hyper")]
 mod response;
 
@@ -58,7 +62,7 @@ mod tests;
 
 #[cfg(feature = "upstream-hyper")]
 #[cfg(test)]
-pub use tests::tests_helper;
+pub mod tests_helper;
 
 #[cfg(feature = "upstream-hyper")]
 pub use cancel::CancellationToken;

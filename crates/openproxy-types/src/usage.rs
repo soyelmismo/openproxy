@@ -89,147 +89,63 @@ pub struct StageEvent {
 }
 
 #[doc(hidden)]
-pub trait IntoOptionString {
-    fn into_option_string(self) -> Option<String>;
+pub trait IntoOption<T> {
+    fn into_opt(self) -> Option<T>;
 }
-
-impl IntoOptionString for String {
+impl<T> IntoOption<T> for T {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<T> {
         Some(self)
     }
 }
-impl IntoOptionString for &str {
+impl<T> IntoOption<T> for Option<T> {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<T> {
+        self
+    }
+}
+impl IntoOption<String> for &str {
+    #[inline]
+    fn into_opt(self) -> Option<String> {
         Some(self.to_string())
     }
 }
-impl IntoOptionString for Option<String> {
+impl IntoOption<String> for Option<&str> {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
-        self
-    }
-}
-impl IntoOptionString for Option<&str> {
-    #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<String> {
         self.map(ToString::to_string)
     }
 }
-
-impl IntoOptionString for crate::ids::ProviderId {
+impl IntoOption<String> for crate::ids::ProviderId {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<String> {
         Some(self.0)
     }
 }
-impl IntoOptionString for &crate::ids::ProviderId {
+impl IntoOption<String> for &crate::ids::ProviderId {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<String> {
         Some(self.0.clone())
     }
 }
-impl IntoOptionString for crate::ids::ModelId {
+impl IntoOption<String> for crate::ids::ModelId {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<String> {
         Some(self.0)
     }
 }
-impl IntoOptionString for &crate::ids::ModelId {
+impl IntoOption<String> for &crate::ids::ModelId {
     #[inline]
-    fn into_option_string(self) -> Option<String> {
+    fn into_opt(self) -> Option<String> {
         Some(self.0.clone())
-    }
-}
-
-#[doc(hidden)]
-pub trait IntoOptionU64 {
-    fn into_option_u64(self) -> Option<u64>;
-}
-
-impl IntoOptionU64 for u64 {
-    #[inline]
-    fn into_option_u64(self) -> Option<u64> {
-        Some(self)
-    }
-}
-impl IntoOptionU64 for Option<u64> {
-    #[inline]
-    fn into_option_u64(self) -> Option<u64> {
-        self
-    }
-}
-
-#[doc(hidden)]
-pub trait IntoOptionU16 {
-    fn into_option_u16(self) -> Option<u16>;
-}
-
-impl IntoOptionU16 for u16 {
-    #[inline]
-    fn into_option_u16(self) -> Option<u16> {
-        Some(self)
-    }
-}
-impl IntoOptionU16 for Option<u16> {
-    #[inline]
-    fn into_option_u16(self) -> Option<u16> {
-        self
-    }
-}
-
-#[doc(hidden)]
-pub trait IntoOptionEndpointKind {
-    fn into_option_endpoint_kind(self) -> Option<crate::endpoint::EndpointKind>;
-}
-
-impl IntoOptionEndpointKind for crate::endpoint::EndpointKind {
-    #[inline]
-    fn into_option_endpoint_kind(self) -> Option<crate::endpoint::EndpointKind> {
-        Some(self)
-    }
-}
-impl IntoOptionEndpointKind for Option<crate::endpoint::EndpointKind> {
-    #[inline]
-    fn into_option_endpoint_kind(self) -> Option<crate::endpoint::EndpointKind> {
-        self
     }
 }
 
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __set_stage_event_field {
-    ($event:ident, provider_id, $val:expr) => {
-        $event.provider_id = $crate::usage::IntoOptionString::into_option_string($val);
-    };
-    ($event:ident, upstream_model_id, $val:expr) => {
-        $event.upstream_model_id = $crate::usage::IntoOptionString::into_option_string($val);
-    };
-    ($event:ident, connect_ms, $val:expr) => {
-        $event.connect_ms = $crate::usage::IntoOptionU64::into_option_u64($val);
-    };
-    ($event:ident, ttft_ms, $val:expr) => {
-        $event.ttft_ms = $crate::usage::IntoOptionU64::into_option_u64($val);
-    };
-    ($event:ident, status_code, $val:expr) => {
-        $event.status_code = $crate::usage::IntoOptionU16::into_option_u16($val);
-    };
-    ($event:ident, error, $val:expr) => {
-        $event.error = $crate::usage::IntoOptionString::into_option_string($val);
-    };
-    ($event:ident, stop_reason, $val:expr) => {
-        $event.stop_reason = $crate::usage::IntoOptionString::into_option_string($val);
-    };
-    ($event:ident, timestamp, $val:expr) => {
-        $event.timestamp = $crate::usage::IntoOptionString::into_option_string($val);
-    };
-    ($event:ident, endpoint_kind, $val:expr) => {
-        $event.endpoint_kind =
-            $crate::usage::IntoOptionEndpointKind::into_option_endpoint_kind($val);
-    };
-    ($event:ident, pii_redacted, $val:expr) => {
-        $event.pii_redacted = $crate::usage::IntoOptionString::into_option_string($val);
+    ($event:ident, $field:ident, $val:expr) => {
+        $event.$field = $crate::usage::IntoOption::into_opt($val);
     };
 }
 
@@ -347,32 +263,32 @@ impl RecentUsageRow {
 }
 
 #[derive(Serialize, Deserialize)]
-struct RecentUsageRowSerde {
-    pub request_id: String,
-    pub trace_id: String,
+struct RecentUsageRowSerde<'a> {
+    pub request_id: std::borrow::Cow<'a, str>,
+    pub trace_id: std::borrow::Cow<'a, str>,
     pub provider_id: ProviderId,
-    pub upstream_model_id: String,
-    pub created_at: String,
+    pub upstream_model_id: std::borrow::Cow<'a, str>,
+    pub created_at: std::borrow::Cow<'a, str>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub error_message: Option<String>,
+    pub error_message: Option<std::borrow::Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub stop_reason: Option<String>,
+    pub stop_reason: Option<std::borrow::Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub compression_techniques: Option<String>,
+    pub compression_techniques: Option<std::borrow::Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub pii_redacted: Option<String>,
+    pub pii_redacted: Option<std::borrow::Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy_url: Option<String>,
+    pub proxy_url: Option<std::borrow::Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy_status: Option<String>,
+    pub proxy_status: Option<std::borrow::Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub request_body_json: Option<serde_json::Value>,
+    pub request_body_json: Option<std::borrow::Cow<'a, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub response_body_json: Option<serde_json::Value>,
+    pub response_body_json: Option<std::borrow::Cow<'a, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub request_headers: Option<std::collections::BTreeMap<String, String>>,
+    pub request_headers: Option<std::borrow::Cow<'a, std::collections::BTreeMap<String, String>>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub response_headers: Option<std::collections::BTreeMap<String, String>>,
+    pub response_headers: Option<std::borrow::Cow<'a, std::collections::BTreeMap<String, String>>>,
     pub id: crate::ids::UsageId,
     pub total_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -394,70 +310,19 @@ struct RecentUsageRowSerde {
     pub race_total: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub race_attempts: Option<u8>,
+    #[serde(default)]
     pub is_streaming: bool,
+    #[serde(default)]
     pub stream_complete: bool,
+    #[serde(default)]
     pub race_lost: bool,
+    #[serde(default)]
     pub client_response: bool,
+    #[serde(default)]
     pub prompt_tokens_estimated: bool,
+    #[serde(default)]
     pub completion_tokens_estimated: bool,
-    pub is_proxy_rotated: bool,
-    pub endpoint_kind: EndpointKind,
-}
-
-#[derive(Serialize)]
-struct RecentUsageRowSerdeRef<'a> {
-    pub request_id: &'a str,
-    pub trace_id: &'a str,
-    pub provider_id: &'a ProviderId,
-    pub upstream_model_id: &'a str,
-    pub created_at: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression_techniques: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pii_redacted: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_url: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_status: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_body_json: Option<&'a serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_body_json: Option<&'a serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_headers: Option<&'a std::collections::BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_headers: Option<&'a std::collections::BTreeMap<String, String>>,
-    pub id: crate::ids::UsageId,
-    pub total_ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub connect_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttft_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression_savings_pct: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completion_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<u32>,
-    pub status_code: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub race_total: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub race_attempts: Option<u8>,
-    pub is_streaming: bool,
-    pub stream_complete: bool,
-    pub race_lost: bool,
-    pub client_response: bool,
-    pub prompt_tokens_estimated: bool,
-    pub completion_tokens_estimated: bool,
+    #[serde(default)]
     pub is_proxy_rotated: bool,
     pub endpoint_kind: EndpointKind,
 }
@@ -467,22 +332,23 @@ impl Serialize for RecentUsageRow {
     where
         S: serde::Serializer,
     {
-        let shadow = RecentUsageRowSerdeRef {
-            request_id: &self.request_id,
-            trace_id: &self.trace_id,
-            provider_id: &self.provider_id,
-            upstream_model_id: &self.upstream_model_id,
-            created_at: &self.created_at,
-            error_message: self.error_message.as_ref(),
-            stop_reason: self.stop_reason.as_ref(),
-            compression_techniques: self.compression_techniques.as_ref(),
-            pii_redacted: self.pii_redacted.as_ref(),
-            proxy_url: self.proxy_url.as_ref(),
-            proxy_status: self.proxy_status.as_ref(),
-            request_body_json: self.request_body_json.as_ref(),
-            response_body_json: self.response_body_json.as_ref(),
-            request_headers: self.request_headers.as_ref(),
-            response_headers: self.response_headers.as_ref(),
+        use std::borrow::Cow;
+        RecentUsageRowSerde {
+            request_id: Cow::Borrowed(&self.request_id),
+            trace_id: Cow::Borrowed(&self.trace_id),
+            provider_id: self.provider_id.clone(),
+            upstream_model_id: Cow::Borrowed(&self.upstream_model_id),
+            created_at: Cow::Borrowed(&self.created_at),
+            error_message: self.error_message.as_deref().map(Cow::Borrowed),
+            stop_reason: self.stop_reason.as_deref().map(Cow::Borrowed),
+            compression_techniques: self.compression_techniques.as_deref().map(Cow::Borrowed),
+            pii_redacted: self.pii_redacted.as_deref().map(Cow::Borrowed),
+            proxy_url: self.proxy_url.as_deref().map(Cow::Borrowed),
+            proxy_status: self.proxy_status.as_deref().map(Cow::Borrowed),
+            request_body_json: self.request_body_json.as_ref().map(Cow::Borrowed),
+            response_body_json: self.response_body_json.as_ref().map(Cow::Borrowed),
+            request_headers: self.request_headers.as_ref().map(Cow::Borrowed),
+            response_headers: self.response_headers.as_ref().map(Cow::Borrowed),
             id: self.id,
             total_ms: self.total_ms,
             cost_usd: self.cost_usd,
@@ -503,8 +369,8 @@ impl Serialize for RecentUsageRow {
             completion_tokens_estimated: self.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED),
             is_proxy_rotated: self.has_flag(USAGE_FLAG_PROXY_ROTATED),
             endpoint_kind: self.endpoint_kind,
-        };
-        shadow.serialize(serializer)
+        }
+        .serialize(serializer)
     }
 }
 
@@ -513,59 +379,44 @@ impl<'de> Deserialize<'de> for RecentUsageRow {
     where
         D: serde::Deserializer<'de>,
     {
-        let shadow = RecentUsageRowSerde::deserialize(deserializer)?;
-        let mut flags = 0u8;
-        if shadow.race_lost {
-            flags |= USAGE_FLAG_RACE_LOST;
-        }
-        if shadow.is_streaming {
-            flags |= USAGE_FLAG_IS_STREAMING;
-        }
-        if shadow.stream_complete {
-            flags |= USAGE_FLAG_STREAM_COMPLETE;
-        }
-        if shadow.client_response {
-            flags |= USAGE_FLAG_CLIENT_RESPONSE;
-        }
-        if shadow.prompt_tokens_estimated {
-            flags |= USAGE_FLAG_PROMPT_ESTIMATED;
-        }
-        if shadow.completion_tokens_estimated {
-            flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
-        }
-        if shadow.is_proxy_rotated {
-            flags |= USAGE_FLAG_PROXY_ROTATED;
-        }
+        let s = RecentUsageRowSerde::deserialize(deserializer)?;
+        let flags = (s.race_lost as u8 * USAGE_FLAG_RACE_LOST)
+            | (s.is_streaming as u8 * USAGE_FLAG_IS_STREAMING)
+            | (s.stream_complete as u8 * USAGE_FLAG_STREAM_COMPLETE)
+            | (s.client_response as u8 * USAGE_FLAG_CLIENT_RESPONSE)
+            | (s.prompt_tokens_estimated as u8 * USAGE_FLAG_PROMPT_ESTIMATED)
+            | (s.completion_tokens_estimated as u8 * USAGE_FLAG_COMPLETION_ESTIMATED)
+            | (s.is_proxy_rotated as u8 * USAGE_FLAG_PROXY_ROTATED);
         Ok(RecentUsageRow {
-            request_id: shadow.request_id,
-            trace_id: shadow.trace_id,
-            provider_id: shadow.provider_id,
-            upstream_model_id: shadow.upstream_model_id,
-            created_at: shadow.created_at,
-            error_message: shadow.error_message,
-            stop_reason: shadow.stop_reason,
-            compression_techniques: shadow.compression_techniques,
-            pii_redacted: shadow.pii_redacted,
-            proxy_url: shadow.proxy_url,
-            proxy_status: shadow.proxy_status,
-            request_body_json: shadow.request_body_json,
-            response_body_json: shadow.response_body_json,
-            request_headers: shadow.request_headers,
-            response_headers: shadow.response_headers,
-            id: shadow.id,
-            total_ms: shadow.total_ms,
-            cost_usd: shadow.cost_usd,
-            connect_ms: shadow.connect_ms,
-            ttft_ms: shadow.ttft_ms,
-            compression_savings_pct: shadow.compression_savings_pct,
-            prompt_tokens: shadow.prompt_tokens,
-            completion_tokens: shadow.completion_tokens,
-            cached_tokens: shadow.cached_tokens,
-            status_code: shadow.status_code,
-            race_total: shadow.race_total,
-            race_attempts: shadow.race_attempts,
+            request_id: s.request_id.into_owned(),
+            trace_id: s.trace_id.into_owned(),
+            provider_id: s.provider_id,
+            upstream_model_id: s.upstream_model_id.into_owned(),
+            created_at: s.created_at.into_owned(),
+            error_message: s.error_message.map(std::borrow::Cow::into_owned),
+            stop_reason: s.stop_reason.map(std::borrow::Cow::into_owned),
+            compression_techniques: s.compression_techniques.map(std::borrow::Cow::into_owned),
+            pii_redacted: s.pii_redacted.map(std::borrow::Cow::into_owned),
+            proxy_url: s.proxy_url.map(std::borrow::Cow::into_owned),
+            proxy_status: s.proxy_status.map(std::borrow::Cow::into_owned),
+            request_body_json: s.request_body_json.map(std::borrow::Cow::into_owned),
+            response_body_json: s.response_body_json.map(std::borrow::Cow::into_owned),
+            request_headers: s.request_headers.map(std::borrow::Cow::into_owned),
+            response_headers: s.response_headers.map(std::borrow::Cow::into_owned),
+            id: s.id,
+            total_ms: s.total_ms,
+            cost_usd: s.cost_usd,
+            connect_ms: s.connect_ms,
+            ttft_ms: s.ttft_ms,
+            compression_savings_pct: s.compression_savings_pct,
+            prompt_tokens: s.prompt_tokens,
+            completion_tokens: s.completion_tokens,
+            cached_tokens: s.cached_tokens,
+            status_code: s.status_code,
+            race_total: s.race_total,
+            race_attempts: s.race_attempts,
             flags,
-            endpoint_kind: shadow.endpoint_kind,
+            endpoint_kind: s.endpoint_kind,
         })
     }
 }

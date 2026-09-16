@@ -227,6 +227,38 @@ impl DbPool {
         f(&guard)
     }
 
+    /// Execute a read-only closure on a background thread via `tokio::task::spawn_blocking`,
+    /// acquiring a reader guard within that thread. Prevents retaining locks across `.await` points.
+    pub async fn spawn_read<F, R>(&self, f: F) -> std::result::Result<R, CoreError>
+    where
+        F: FnOnce(&Connection) -> std::result::Result<R, CoreError> + Send + 'static,
+        R: Send + 'static,
+    {
+        let pool = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = pool.reader();
+            f(&guard)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("spawn_read join error: {e}")))?
+    }
+
+    /// Execute a write closure on a background thread via `tokio::task::spawn_blocking`,
+    /// acquiring the serialized writer guard within that thread. Prevents retaining locks across `.await` points.
+    pub async fn spawn_write<F, R>(&self, f: F) -> std::result::Result<R, CoreError>
+    where
+        F: FnOnce(&mut Connection) -> std::result::Result<R, CoreError> + Send + 'static,
+        R: Send + 'static,
+    {
+        let pool = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = pool.writer();
+            f(&mut guard)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("spawn_write join error: {e}")))?
+    }
+
     /// The filesystem path of the SQLite database file. Used by the
     /// Number of reader handles in the pool.
     pub fn reader_count(&self) -> usize {
@@ -406,5 +438,46 @@ mod tests {
 
         assert!(elapsed < std::time::Duration::from_millis(50));
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_read_and_spawn_write() {
+        let pool = DbPool::test_pool().expect("test pool");
+
+        // Write via spawn_write
+        pool.spawn_write(|conn| {
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS test_spawn (id INTEGER PRIMARY KEY, val TEXT)",
+                [],
+            )
+            .map_err(|e| CoreError::Database {
+                message: e.to_string(),
+                source: None,
+            })?;
+            conn.execute("INSERT INTO test_spawn (id, val) VALUES (1, 'hello')", [])
+                .map_err(|e| CoreError::Database {
+                    message: e.to_string(),
+                    source: None,
+                })?;
+            Ok(())
+        })
+        .await
+        .expect("spawn_write");
+
+        // Read via spawn_read
+        let val: String = pool
+            .spawn_read(|conn| {
+                conn.query_row("SELECT val FROM test_spawn WHERE id = 1", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|e| CoreError::Database {
+                    message: e.to_string(),
+                    source: None,
+                })
+            })
+            .await
+            .expect("spawn_read");
+
+        assert_eq!(val, "hello");
     }
 }

@@ -1,5 +1,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+#[macro_use]
+pub mod macros;
 pub mod app_config;
 pub mod batch;
 pub mod conn;

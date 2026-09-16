@@ -3,6 +3,7 @@ use super::{
     ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
     UpstreamClient, UpstreamRequest,
 };
+use openproxy_types::ResultExt;
 
 const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.0";
 
@@ -219,10 +220,7 @@ impl CodexAdapter {
             return Ok(build_codex_error_quota(status, &snippet));
         }
 
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("codex quota read: {e}")))?;
+        let body = response.collect().await.ctx_upstream("codex quota read")?;
         let json: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|e| CoreError::Parse(format!("codex quota parse: {e}")))?;
         parse_codex_usage_quota(&json)

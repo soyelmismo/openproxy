@@ -326,28 +326,13 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
     let cached_tokens: Option<u32> = r.get(29)?;
     let pii_redacted: Option<String> = r.get(30)?;
 
-    let mut flags = 0u8;
-    if race_lost != 0 {
-        flags |= USAGE_FLAG_RACE_LOST;
-    }
-    if is_streaming != 0 {
-        flags |= USAGE_FLAG_IS_STREAMING;
-    }
-    if stream_complete != 0 {
-        flags |= USAGE_FLAG_STREAM_COMPLETE;
-    }
-    if client_response != 0 {
-        flags |= USAGE_FLAG_CLIENT_RESPONSE;
-    }
-    if prompt_tokens_estimated != 0 {
-        flags |= USAGE_FLAG_PROMPT_ESTIMATED;
-    }
-    if completion_tokens_estimated != 0 {
-        flags |= USAGE_FLAG_COMPLETION_ESTIMATED;
-    }
-    if is_proxy_rotated != 0 {
-        flags |= USAGE_FLAG_PROXY_ROTATED;
-    }
+    let flags = ((race_lost != 0) as u8 * USAGE_FLAG_RACE_LOST)
+        | ((is_streaming != 0) as u8 * USAGE_FLAG_IS_STREAMING)
+        | ((stream_complete != 0) as u8 * USAGE_FLAG_STREAM_COMPLETE)
+        | ((client_response != 0) as u8 * USAGE_FLAG_CLIENT_RESPONSE)
+        | ((prompt_tokens_estimated != 0) as u8 * USAGE_FLAG_PROMPT_ESTIMATED)
+        | ((completion_tokens_estimated != 0) as u8 * USAGE_FLAG_COMPLETION_ESTIMATED)
+        | ((is_proxy_rotated != 0) as u8 * USAGE_FLAG_PROXY_ROTATED);
 
     Ok(RecentUsageRow {
         id: UsageId(id),
@@ -382,6 +367,13 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
     })
 }
 
+const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream_model_id, \
+    status_code, total_ms, prompt_tokens, completion_tokens, cost_usd, connect_ms, ttft_ms, \
+    error_msg, race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at, \
+    stop_reason, compression_savings_pct, compression_techniques, client_response, \
+    prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url, \
+    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted";
+
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     let affected = conn
         .execute(
@@ -391,18 +383,9 @@ pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_typ
         .map_err(crate::error::map_db_error_ctx("mark_client_response"))?;
 
     if affected > 0
-        && let Ok(mut stmt) = conn.prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at, stop_reason, \
-                    compression_savings_pct, compression_techniques, \
-                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
-             FROM usage \
-             WHERE id = ?1",
-        )
+        && let Ok(mut stmt) = conn.prepare(&format!(
+            "SELECT {RECENT_USAGE_COLS} FROM usage WHERE id = ?1"
+        ))
         && let Ok(row) = stmt.query_row(params![row_id.0], map_recent_usage_from_row)
     {
         publish_usage_row(row);
@@ -424,23 +407,10 @@ pub fn mark_winner_usage_row(
         .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
 
     if affected > 0
-        && let Ok(mut stmt) = conn.prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at, stop_reason, \
-                    compression_savings_pct, compression_techniques, \
-                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
-             FROM usage \
-             WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 \
-             ORDER BY id DESC LIMIT 1",
-        )
-        && let Ok(row) = stmt.query_row(
-            params![request_id, attempt, target_id.0],
-            map_recent_usage_from_row,
-        )
+        && let Ok(mut stmt) = conn.prepare(&format!(
+            "SELECT {RECENT_USAGE_COLS} FROM usage WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 ORDER BY id DESC LIMIT 1"
+        ))
+        && let Ok(row) = stmt.query_row(params![request_id, attempt, target_id.0], map_recent_usage_from_row)
     {
         publish_usage_row(row);
     }
@@ -473,6 +443,50 @@ mod tests {
     use openproxy_types::ids::{ProviderId, RequestId};
     use openproxy_types::usage::UsageInput;
 
+    fn test_input(
+        prompt: u32,
+        completion: u32,
+        ttft: Option<u64>,
+        total: u64,
+        flags: u8,
+    ) -> UsageInput {
+        UsageInput {
+            request_id: RequestId::new(),
+            trace_id: "trace-test".to_string(),
+            attempt: 1,
+            provider_id: ProviderId::new("test"),
+            account_id: None,
+            combo_id: None,
+            combo_target_id: None,
+            model_row_id: None,
+            upstream_model_id: "test-model".to_string(),
+            prompt_tokens: Some(prompt),
+            completion_tokens: Some(completion),
+            connect_ms: None,
+            ttft_ms: ttft,
+            total_ms: total,
+            status_code: 200,
+            error_msg: None,
+            race_total: 1,
+            api_key_id: None,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            error_message: None,
+            race_attempts: 1,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            pii_redacted: None,
+            endpoint_kind: EndpointKind::Chat,
+            proxy_url: None,
+            proxy_status: None,
+            cached_tokens: None,
+            flags,
+        }
+    }
+
     #[test]
     fn test_compute_cost_and_tps() {
         let price = crate::pricing::Price {
@@ -480,246 +494,93 @@ mod tests {
             output_per_1m: 2.0,
             kind: crate::pricing::PriceKind::Chat,
         };
-
-        let mut input = UsageInput {
-            request_id: RequestId::new(),
-            trace_id: "trace-123".to_string(),
-            attempt: 1,
-            provider_id: ProviderId::new("test-provider"),
-            account_id: None,
-            combo_id: None,
-            combo_target_id: None,
-            model_row_id: None,
-            upstream_model_id: "test-model".to_string(),
-            prompt_tokens: Some(100),
-            completion_tokens: Some(200),
-            connect_ms: None,
-            ttft_ms: Some(100),
-            total_ms: 1100,
-            status_code: 200,
-            error_msg: None,
-            race_total: 1,
-            api_key_id: None,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: None,
-            race_attempts: 1,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            pii_redacted: None,
-            endpoint_kind: EndpointKind::Chat,
-            proxy_url: None,
-            proxy_status: None,
-            cached_tokens: None,
-            flags: USAGE_FLAG_IS_STREAMING
-                | USAGE_FLAG_STREAM_COMPLETE
-                | USAGE_FLAG_CLIENT_RESPONSE,
-        };
-
+        let mut input = test_input(
+            100,
+            200,
+            Some(100),
+            1100,
+            USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
+        );
         let (cost, tps) = compute(Some(price), &input);
-        assert_eq!(cost, Some(0.0005)); // 100 * 1.0/1M + 200 * 2.0/1M = 0.0001 + 0.0004 = 0.0005
-        assert_eq!(tps, Some(200.0)); // 200 tokens / (1100ms - 100ms) * 1000 = 200.0
+        assert_eq!(cost, Some(0.0005));
+        assert_eq!(tps, Some(200.0));
 
-        // Test with None TTFT
         input.ttft_ms = None;
-        let (_, tps2) = compute(Some(crate::pricing::Price::default()), &input);
-        assert_eq!(tps2, None);
+        assert_eq!(
+            compute(Some(crate::pricing::Price::default()), &input).1,
+            None
+        );
 
-        // Test with 0 completion tokens
         input.ttft_ms = Some(100);
         input.completion_tokens = Some(0);
-        let (_, tps3) = compute(Some(crate::pricing::Price::default()), &input);
-        assert_eq!(tps3, None);
+        assert_eq!(
+            compute(Some(crate::pricing::Price::default()), &input).1,
+            None
+        );
     }
 
     #[test]
     fn test_redact_error_msg() {
         let raw_msg = "Error connecting to sk-1234567890abcdef and x-api-key: my-secret-key and Authorization: Bearer my-bearer-token.";
         let redacted = redact_error_msg(raw_msg);
-
-        assert!(!redacted.contains("sk-1234567890abcdef"));
-        assert!(redacted.contains("sk-[REDACTED]"));
-
-        assert!(!redacted.contains("my-secret-key"));
-        assert!(redacted.contains("x-api-key: [REDACTED]"));
-
-        assert!(!redacted.contains("my-bearer-token"));
-        assert!(redacted.contains("Authorization: Bearer [REDACTED]"));
-
-        // Test truncation
+        assert!(!redacted.contains("sk-1234567890abcdef") && redacted.contains("sk-[REDACTED]"));
+        assert!(!redacted.contains("my-secret-key") && redacted.contains("x-api-key: [REDACTED]"));
+        assert!(
+            !redacted.contains("my-bearer-token")
+                && redacted.contains("Authorization: Bearer [REDACTED]")
+        );
         let long_msg = "a".repeat(2100);
         let redacted2 = redact_error_msg(&long_msg);
-        assert!(redacted2.ends_with("...[truncated]"));
-        assert!(redacted2.len() <= 2048 + 14); // 2048 + length of "...[truncated]"
+        assert!(redacted2.ends_with("...[truncated]") && redacted2.len() <= 2048 + 14);
     }
 
     #[test]
     fn test_record() {
         let pool = DbPool::test_pool_with_prefix("openproxy-cost-test").expect("open pool");
         let conn = pool.writer();
-
-        let input = UsageInput {
-            request_id: RequestId::new(),
-            trace_id: "trace-123".to_string(),
-            attempt: 1,
-            provider_id: ProviderId::new("test-provider"),
-            account_id: None,
-            combo_id: None,
-            combo_target_id: None,
-            model_row_id: None,
-            upstream_model_id: "test-model".to_string(),
-            prompt_tokens: Some(100),
-            completion_tokens: Some(200),
-            connect_ms: Some(10),
-            ttft_ms: Some(100),
-            total_ms: 1100,
-            status_code: 200,
-            error_msg: Some("test error sk-1234567890abcdef".to_string()),
-            race_total: 1,
-            api_key_id: None,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: None,
-            race_attempts: 1,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            pii_redacted: None,
-            endpoint_kind: EndpointKind::Chat,
-            proxy_url: None,
-            proxy_status: None,
-            cached_tokens: None,
-            flags: USAGE_FLAG_IS_STREAMING
-                | USAGE_FLAG_STREAM_COMPLETE
-                | USAGE_FLAG_CLIENT_RESPONSE,
-        };
-
-        let result = record(&conn, &input);
-        assert!(result.is_ok(), "record failed: {:?}", result.err());
-
-        let rowid = result.unwrap();
-
+        let mut input = test_input(
+            100,
+            200,
+            Some(100),
+            1100,
+            USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
+        );
+        input.connect_ms = Some(10);
+        input.error_msg = Some("test error sk-1234567890abcdef".to_string());
+        let rowid = record(&conn, &input).expect("record failed");
         let count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM usage WHERE id = ?1",
                 rusqlite::params![rowid.0],
-                |row| row.get(0),
+                |r| r.get(0),
             )
-            .expect("query");
+            .unwrap();
         assert_eq!(count, 1);
-
         let error_msg_redacted: String = conn
             .query_row(
                 "SELECT error_msg_redacted FROM usage WHERE id = ?1",
                 rusqlite::params![rowid.0],
-                |row| row.get(0),
+                |r| r.get(0),
             )
-            .expect("query");
+            .unwrap();
         assert_eq!(error_msg_redacted, "test error sk-[REDACTED]");
     }
 
-    /// `record_with_retry` is a thin `with_busy_retry` wrapper around
-    /// `record`; on a quiescent DB it must behave identically to a
-    /// direct `record` call (no retries, no delay, success on first
-    /// attempt).
     #[test]
     fn record_with_retry_succeeds_first_attempt_on_quiescent_db() {
         let pool = DbPool::test_pool_with_prefix("openproxy-cost-retry").expect("open pool");
-
-        let input = UsageInput {
-            request_id: RequestId::new(),
-            trace_id: "trace-retry-1".to_string(),
-            attempt: 1,
-            provider_id: ProviderId::new("test"),
-            account_id: None,
-            combo_id: None,
-            model_row_id: None,
-            upstream_model_id: "test-model".to_string(),
-            combo_target_id: None,
-            prompt_tokens: Some(10),
-            completion_tokens: Some(20),
-            cached_tokens: None,
-            connect_ms: None,
-            ttft_ms: None,
-            total_ms: 100,
-            status_code: 200,
-            error_msg: None,
-            error_message: None,
-            race_total: 1,
-            race_attempts: 1,
-            api_key_id: None,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            pii_redacted: None,
-            proxy_url: None,
-            proxy_status: None,
-            flags: USAGE_FLAG_CLIENT_RESPONSE,
-            endpoint_kind: EndpointKind::Chat,
-        };
-
-        let conn = pool.writer();
-        let result = record_with_retry(&conn, &input);
-        assert!(
-            result.is_ok(),
-            "record_with_retry failed: {:?}",
-            result.err()
-        );
+        let input = test_input(10, 20, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
+        assert!(record_with_retry(&pool.writer(), &input).is_ok());
     }
 
     #[test]
     fn test_client_response_and_winner_lifecycle() {
         let pool = DbPool::test_pool_with_prefix("openproxy-cost-client-resp").expect("open pool");
         let conn = pool.writer();
-        let req_id = RequestId::new();
         let target_id = openproxy_types::ids::ComboTargetId(42);
 
-        // 1. Initial insert with USAGE_FLAG_CLIENT_RESPONSE
-        let input_winner = UsageInput {
-            request_id: req_id,
-            trace_id: "trace-win-1".to_string(),
-            attempt: 1,
-            provider_id: ProviderId::new("test"),
-            account_id: None,
-            combo_id: None,
-            model_row_id: None,
-            upstream_model_id: "test-model".to_string(),
-            combo_target_id: Some(target_id),
-            prompt_tokens: Some(10),
-            completion_tokens: Some(20),
-            cached_tokens: None,
-            connect_ms: None,
-            ttft_ms: None,
-            total_ms: 100,
-            status_code: 200,
-            error_msg: None,
-            error_message: None,
-            race_total: 1,
-            race_attempts: 1,
-            api_key_id: None,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            pii_redacted: None,
-            proxy_url: None,
-            proxy_status: None,
-            flags: USAGE_FLAG_CLIENT_RESPONSE,
-            endpoint_kind: EndpointKind::Chat,
-        };
-
+        let mut input_winner = test_input(10, 20, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
+        input_winner.combo_target_id = Some(target_id);
         let rowid1 = record(&conn, &input_winner).expect("insert winner");
         let (cr1, ww1): (i64, i64) = conn
             .query_row(
@@ -727,14 +588,12 @@ mod tests {
                 rusqlite::params![rowid1.0],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .expect("query row 1");
+            .unwrap();
         assert_eq!(cr1, 1);
         assert_eq!(ww1, 1);
 
-        // 2. Initial insert with flags: 0 (non-winner / intermediate failure)
-        let req_id_fail = RequestId::new();
         let mut input_fail = input_winner.clone();
-        input_fail.request_id = req_id_fail;
+        input_fail.request_id = RequestId::new();
         input_fail.flags = 0;
         let rowid2 = record(&conn, &input_fail).expect("insert non-winner");
         let (cr2, ww2): (i64, i64) = conn
@@ -743,12 +602,11 @@ mod tests {
                 rusqlite::params![rowid2.0],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .expect("query row 2");
+            .unwrap();
         assert_eq!(cr2, 0);
         assert_eq!(ww2, 0);
 
-        // 3. Update via mark_winner_usage_row
-        mark_winner_usage_row(&conn, &req_id_fail.to_string(), 1, target_id)
+        mark_winner_usage_row(&conn, &input_fail.request_id.to_string(), 1, target_id)
             .expect("mark_winner_usage_row");
         let (cr2_after, ww2_after): (i64, i64) = conn
             .query_row(
@@ -756,14 +614,12 @@ mod tests {
                 rusqlite::params![rowid2.0],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .expect("query row 2 after mark_winner");
+            .unwrap();
         assert_eq!(cr2_after, 1);
         assert_eq!(ww2_after, 1);
 
-        // 4. Update via mark_client_response by row ID
-        let req_id_3 = RequestId::new();
         let mut input_3 = input_winner;
-        input_3.request_id = req_id_3;
+        input_3.request_id = RequestId::new();
         input_3.flags = 0;
         let rowid3 = record(&conn, &input_3).expect("insert row 3");
         mark_client_response(&conn, rowid3).expect("mark_client_response");
@@ -773,7 +629,7 @@ mod tests {
                 rusqlite::params![rowid3.0],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .expect("query row 3 after mark_client_response");
+            .unwrap();
         assert_eq!(cr3, 1);
         assert_eq!(ww3, 1);
     }

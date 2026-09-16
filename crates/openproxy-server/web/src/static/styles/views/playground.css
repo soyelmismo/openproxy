@@ -1,0 +1,135 @@
+/* ============================================
+   PLAYGROUND VIEW STYLES
+   ============================================ */
+
+.playground-layout {
+  display: flex;
+  gap: var(--space-4);
+  height: calc(100vh - 80px);
+  position: relative;
+}
+
+.playground-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+/* System Instructions Collapsible Card */
+.system-instructions-card {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.system-instructions-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  min-height: 70px;
+  resize: vertical;
+}
+
+/* Interactive Messages Thread */
+.messages-thread {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+.message-bubble {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  max-width: 85%;
+  word-break: break-word;
+}
+.message-role-user {
+  align-self: flex-end;
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.message-role-assistant {
+  align-self: flex-start;
+  background: var(--color-surface);
+}
+
+/* Directives & Quick Chips */
+.directives-bar {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  padding: 2px 0;
+}
+.quick-chip {
+  font-size: var(--fs-xs);
+  padding: 0.15rem 0.4rem;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.quick-chip:hover {
+  background: var(--color-surface);
+}
+
+/* Modern Bottom Composer */
+.composer-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: var(--space-3);
+}
+.composer-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 60px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  resize: none;
+  border: none;
+  outline: none;
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Right Inspector Sidebar */
+.inspector-sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: var(--space-3);
+}
+
+/* Response Panel & Metrics */
+.response-metrics-bar {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 900px) {
+  .playground-layout {
+    flex-direction: column;
+    height: auto;
+  }
+  .inspector-sidebar {
+    width: 100%;
+  }
+}

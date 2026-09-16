@@ -131,6 +131,20 @@ pub struct ComboTargetWithModel {
     pub thinking_effort: Option<Box<str>>,
 }
 
+/// Input for adding a target to a combo.
+///
+/// Exactly one of `model_row_id` (a flat target) or `sub_combo_id` (a combo-in-combo
+/// target) must be provided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddTargetInput {
+    pub combo_id: ComboId,
+    pub provider_id: ProviderId,
+    pub account_id: Option<AccountId>,
+    pub model_row_id: Option<ModelRowId>,
+    pub sub_combo_id: Option<ComboId>,
+    pub priority_order: i32,
+}
+
 impl Combo {
     /// Returns `true` if cooldown is disabled at the combo level.
     #[inline]

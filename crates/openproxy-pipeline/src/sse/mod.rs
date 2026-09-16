@@ -480,30 +480,33 @@ pub fn parse_inline_sse_error<'a>(json_payload: &'a str) -> Option<ParsedInlineE
             let mut resolved = match obj.code {
                 Some(InlineErrorCodeProbe::Num(n)) if (400..=599).contains(&n) => n as u16,
                 Some(InlineErrorCodeProbe::Str(s)) => {
-                    if let Ok(n) = s.parse::<u16>() {
-                        if (400..=599).contains(&n) { n } else { 502 }
-                    } else if s.contains("rate_limit")
-                        || s.contains("quota")
-                        || s.contains("resource_exhausted")
+                    if let Ok(n) = s.parse::<u16>()
+                        && (400..=599).contains(&n)
                     {
-                        429
-                    } else if s.contains("content_filter")
-                        || s.contains("safety")
-                        || s.contains("policy")
-                        || s.contains("blocked")
-                        || s.contains("invalid")
-                        || s.contains("bad_request")
-                        || s.contains("malformed")
-                    {
-                        400
-                    } else if s.contains("auth")
-                        || s.contains("unauthorized")
-                        || s.contains("permission")
-                        || s.contains("forbidden")
-                    {
-                        403
+                        n
                     } else {
-                        502
+                        const CODE_PATTERNS: &[(&[&str], u16)] = &[
+                            (&["rate_limit", "quota", "resource_exhausted"], 429),
+                            (
+                                &[
+                                    "content_filter",
+                                    "safety",
+                                    "policy",
+                                    "blocked",
+                                    "invalid",
+                                    "bad_request",
+                                    "malformed",
+                                ],
+                                400,
+                            ),
+                            (&["auth", "unauthorized", "permission", "forbidden"], 403),
+                        ];
+                        CODE_PATTERNS
+                            .iter()
+                            .find_map(|(kws, code)| {
+                                kws.iter().any(|k| s.contains(k)).then_some(*code)
+                            })
+                            .unwrap_or(502)
                     }
                 }
                 _ => 502,
@@ -512,15 +515,16 @@ pub fn parse_inline_sse_error<'a>(json_payload: &'a str) -> Option<ParsedInlineE
             if resolved == 502
                 && let Some(t) = obj.r#type
             {
-                if t.contains("rate_limit") {
-                    resolved = 429;
-                } else if t.contains("content_filter")
-                    || t.contains("safety")
-                    || t.contains("invalid_request")
+                const TYPE_PATTERNS: &[(&[&str], u16)] = &[
+                    (&["rate_limit"], 429),
+                    (&["content_filter", "safety", "invalid_request"], 400),
+                    (&["auth"], 401),
+                ];
+                if let Some(code) = TYPE_PATTERNS
+                    .iter()
+                    .find_map(|(kws, code)| kws.iter().any(|k| t.contains(k)).then_some(*code))
                 {
-                    resolved = 400;
-                } else if t.contains("auth") {
-                    resolved = 401;
+                    resolved = code;
                 }
             }
 
