@@ -394,4 +394,12 @@ mod tests {
         assert_eq!(d.id, "generic-error");
         assert_eq!(d.confidence, 0.30);
     }
+
+    #[test]
+    fn test_detector_git_log() {
+        let text = "$ git log\ncommit 0123456789abcdef0123456789abcdef01234567\nAuthor: Scout <scout@example.com>\nDate:   Mon Jan 1 00:00:00 2024\n";
+        let d = detect(text);
+        assert_eq!(d.id, "git-log");
+        assert_eq!(d.confidence, 0.95);
+    }
 }
