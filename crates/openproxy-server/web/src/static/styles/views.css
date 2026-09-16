@@ -9,8 +9,10 @@
 @import url("./views/log_detail.css");
 @import url("./views/analytics.css");
 @import url("./views/playground.css");
+@import url("./views/playground_panels.css");
 @import url("./views/playground_markdown.css");
 @import url("./views/config.css");
 @import url("./views/notifications.css");
 @import url("./views/proxies.css");
+@import url("./views/keys.css");
 @import url("./views/responsive_tables.css");

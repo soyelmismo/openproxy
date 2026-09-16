@@ -57,3 +57,232 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* ----- Notifications view (post-refactor selectors) ----- */
+.dnd-overlay-card {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-3);
+}
+.dnd-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+.dnd-overlay-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+.dnd-combos-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: var(--color-surface);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.dnd-combo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.dnd-combo-hint {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.dnd-combo-name {
+  font-weight: 600;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+.dnd-combo-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+}
+.dnd-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 0.15rem 0.55rem;
+  font-size: var(--fs-xs);
+  cursor: grab;
+}
+.dnd-target.is-dragging {
+  opacity: 0.5;
+}
+.dnd-target.drop-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.dnd-target-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.dnd-target-provider {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+.dnd-target-pos {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.dnd-drop-indicator {
+  height: 4px;
+  background: var(--color-primary);
+  border-radius: var(--radius-pill);
+  margin: var(--space-1) 0;
+  position: relative;
+}
+.dnd-drop-indicator-line {
+  position: absolute;
+  inset: 0;
+  background: var(--color-primary);
+  border-radius: var(--radius-pill);
+  animation: pg-pulse 1s ease-in-out infinite;
+}
+.dnd-drop-indicator-hint {
+  position: absolute;
+  right: var(--space-1);
+  top: -16px;
+  font-size: 0.7em;
+  color: var(--color-primary);
+  background: var(--color-surface);
+  padding: 0 0.3rem;
+  border-radius: var(--radius-sm);
+}
+.dnd-empty {
+  padding: var(--space-3);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-size: var(--fs-sm);
+}
+.dnd-error {
+  padding: var(--space-2);
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+}
+.dnd-loading {
+  padding: var(--space-3);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+.notification-card-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+.notification-card-ago {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+.notification-card-body {
+  flex: 1;
+  min-width: 0;
+}
+.notification-card-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.notification-card-kind {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-xs);
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.muted {
+  color: var(--color-text-muted);
+}
+
+/* ----- Notifications remaining selectors ----- */
+.notification-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.notification-card-text {
+  font-size: var(--fs-sm);
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.notification-card-unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  flex-shrink: 0;
+}
+.notification-empty {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+.notification-empty-icon {
+  display: block;
+  margin: 0 auto var(--space-2);
+  color: var(--color-text-muted);
+  font-size: 2rem;
+}
+.notification-filter {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+}
+.notification-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.notification-no-unread-hint {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+.page-header-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-2xl);
+  color: var(--color-text-emphasis);
+}

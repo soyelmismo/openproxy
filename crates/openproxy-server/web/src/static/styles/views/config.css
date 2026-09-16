@@ -50,3 +50,157 @@
   gap: var(--space-2);
   font-size: var(--fs-xs);
 }
+
+/* ----- Config view (post-refactor selectors) ----- */
+.config-section {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.config-section h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  color: var(--color-text-emphasis);
+}
+.config-section h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  padding-bottom: var(--space-2);
+}
+.config-row-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.config-row-stack:last-child {
+  border-bottom: 0;
+}
+.config-input {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0.25rem 0.4rem;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.config-error-text {
+  font-size: var(--fs-xs);
+  color: var(--color-error);
+  padding: var(--space-1);
+  background: var(--color-error-soft);
+  border-radius: var(--radius-sm);
+}
+.config-success-text {
+  font-size: var(--fs-xs);
+  color: var(--color-success);
+  padding: var(--space-1);
+  background: var(--color-success-soft);
+  border-radius: var(--radius-sm);
+}
+.config-save-btn {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  font-weight: 600;
+}
+.config-save-btn:hover {
+  background: var(--color-primary-hover);
+}
+.config-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.maintenance-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.maintenance-status-text {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+.config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+/* ----- Config remaining selectors ----- */
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.config-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.config-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+.config-editable-region {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: var(--space-1) 0;
+}
+.config-help {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  margin-top: 0.25rem;
+}
+.config-static-display {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--color-surface-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-emphasis);
+}
+.config-static-region {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.label {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+.value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-emphasis);
+}
