@@ -440,15 +440,24 @@ export function showCreateAccount(providerId: string): void {
       scopes,
     };
     try {
-      await api("/accounts/bulk", {
+      const res = (await api("/accounts/bulk", {
         method: "POST",
         body: JSON.stringify(payload),
-      });
+      })) as { created: number; ids: number[] };
       state.accounts = (await api("/accounts")) as typeof state.accounts;
       close();
       requestUpdate();
-      showToast(`Created ${parsedKeys.length} accounts. Discovering models...`, "info");
-      pollForDiscoveredModels(providerId);
+      if (res.created === 0) {
+        showToast("No new accounts added (all keys already exist).", "info");
+      } else {
+        const skipped = parsedKeys.length - res.created;
+        const msg =
+          skipped > 0
+            ? `Created ${res.created} accounts (${skipped} duplicate${skipped > 1 ? "s" : ""} skipped). Discovering models...`
+            : `Created ${res.created} accounts. Discovering models...`;
+        showToast(msg, "info");
+        pollForDiscoveredModels(providerId);
+      }
     } catch (err: unknown) {
       showApiError(err, "Error");
       renderModal();

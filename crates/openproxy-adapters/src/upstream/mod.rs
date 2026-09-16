@@ -31,9 +31,10 @@
 //!   includes connect+TLS). Splitting connect from TLS in production
 //!   requires a custom DNS resolver and is a follow-up gate.
 //!
-//! - **Body limit.** A 32 MiB hard cap is applied to every body via
-//!   `http_body_util::Limited`. This is a Gate-0 safety belt; the
-//!   real limit will be a config knob in a follow-up gate.
+//! - **Body limit.** Non-streaming bodies are bounded by `NON_STREAMING_BODY_LIMIT_BYTES`
+//!   (32 MiB) to cap memory when buffering the full payload. Streaming bodies are
+//!   unbounded (`STREAMING_BODY_LIMIT_BYTES`), streaming chunks directly to the client
+//!   without accumulating memory while governed by idle-chunk and total timeouts.
 
 #[cfg(feature = "upstream-hyper")]
 mod cancel;
@@ -76,7 +77,10 @@ pub use phases::{ResolvedPhaseDeadlines, UpstreamPhase};
 #[cfg(feature = "upstream-hyper")]
 pub use profile::{ResolvedTimeouts, TimeoutProfile};
 #[cfg(feature = "upstream-hyper")]
-pub use response::{UpstreamBodyStream, UpstreamResponse};
+pub use response::{
+    NON_STREAMING_BODY_LIMIT_BYTES, STREAMING_BODY_LIMIT_BYTES, UpstreamBodyStream,
+    UpstreamResponse,
+};
 
 // -- Stubs for builds with the feature disabled -----------------------------
 //

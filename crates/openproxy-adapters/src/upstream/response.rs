@@ -31,6 +31,15 @@ impl UpstreamResponse {
     }
 }
 
+/// Default body limit for non-streaming upstream responses (32 MiB).
+/// Buffers the complete payload in memory for downstream deserialization.
+pub const NON_STREAMING_BODY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Body limit for streaming upstream responses (`u64::MAX` / unlimited).
+/// Streaming responses are piped chunk-by-chunk to the client without accumulating
+/// unbounded heap memory, and are safely governed by phase deadlines and idle-chunk timeouts.
+pub const STREAMING_BODY_LIMIT_BYTES: u64 = u64::MAX;
+
 // -----------------------------------------------------------------------
 // Body stream
 // -----------------------------------------------------------------------

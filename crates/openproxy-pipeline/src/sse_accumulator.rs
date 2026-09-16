@@ -17,10 +17,11 @@
 //! exceed this, `truncated` is set to `true` and the JSON's `extra` map
 //! carries `{"truncated": true}`. This bounds heap usage under high
 //! concurrency (50 concurrent streams × 4 MiB = 200 MiB worst case).
-//! Previously 16 MiB (800 MiB worst case at 50 streams); reduced for
-//! RAM optimization. The upstream `http_body_util::Limited` cap is the
-//! authoritative bound; this secondary cap exists to bound the
-//! per-stream heap footprint of the accumulator itself.
+//! Streaming responses are passed chunk-by-chunk to the downstream client
+//! without an artificial wire-size ceiling, while this accumulator cap
+//! bounds the per-stream heap footprint for persistence.
+//!
+//! Spec: docs/specs/gate-G1-streaming-response-body-persistence.md
 
 use serde_json::{Map, Value, json};
 
@@ -155,12 +156,12 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
 
 /// Maximum number of bytes the accumulator's text fields may collectively
 /// hold. After this is reached, additional chunks are dropped and the
-/// `truncated` flag is set. The upstream `http_body_util::Limited` cap
-/// (8 MiB in `upstream/client.rs:585`) is the authoritative bound; this
-/// 4 MiB secondary cap exists to bound the per-stream heap footprint of
-/// the accumulator itself under high concurrency. (Was 16 MiB — reduced
-/// for RAM optimization: 50 concurrent streams × 16 MiB = 800 MiB worst
-/// case; 4 MiB × 50 = 200 MiB, a 4x reduction.)
+/// `truncated` flag is set. Streaming responses are passed chunk-by-chunk to
+/// the downstream client without an artificial wire-size ceiling, while this
+/// 4 MiB cap exists to bound the per-stream heap footprint of the accumulator
+/// itself under high concurrency. (Was 16 MiB — reduced for RAM optimization:
+/// 50 concurrent streams × 16 MiB = 800 MiB worst case; 4 MiB × 50 = 200 MiB,
+/// a 4x reduction.)
 pub const MAX_ACCUMULATED_BYTES: usize = 4 * 1024 * 1024;
 
 /// Data for opening an Anthropic tool call.

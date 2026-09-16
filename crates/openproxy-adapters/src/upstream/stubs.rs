@@ -205,6 +205,9 @@ impl UpstreamResponse {
 #[derive(Debug)]
 pub struct UpstreamBodyStream;
 
+pub const NON_STREAMING_BODY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
+pub const STREAMING_BODY_LIMIT_BYTES: u64 = u64::MAX;
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct HostKey;
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]

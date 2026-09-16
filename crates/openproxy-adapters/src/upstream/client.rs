@@ -519,13 +519,18 @@ fn wrap_upstream_response(
     is_streaming: bool,
 ) -> UpstreamResponse {
     let (parts, body) = response.into_parts();
+    let limit = if is_streaming {
+        super::response::STREAMING_BODY_LIMIT_BYTES
+    } else {
+        super::response::NON_STREAMING_BODY_LIMIT_BYTES
+    };
     let body_stream = UpstreamBodyStream::from_hyper(
         body,
         cancel,
         body_chunk_ms,
         ttft_deadline,
         total_deadline,
-        8 * 1024 * 1024,
+        limit,
         is_streaming,
     );
     UpstreamResponse {

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::secrets::MasterKey;
 use openproxy_types::accounts::{Account, StoreOAuthTokensParams};
 use openproxy_types::{AccountId, CoreError, HealthStatus, ProviderId, Result};
@@ -139,6 +141,30 @@ pub fn list(
         |row| row_to_account(row, master_key),
         "list accounts"
     )
+}
+
+/// Returns all decrypted API keys currently associated with `provider_id` as a `HashSet<String>`.
+/// Accounts with NULL or un-decryptable keys are ignored.
+pub fn list_api_keys_for_provider(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    master_key: &MasterKey,
+) -> Result<HashSet<String>> {
+    let blobs: Vec<Vec<u8>> = crate::db_query_all!(
+        conn,
+        account_api_key_select!("WHERE provider_id = ?1 AND api_key_encrypted IS NOT NULL"),
+        params![provider_id.as_str()],
+        |row| row.get(0),
+        "list api key blobs for provider"
+    )?;
+
+    let mut keys = HashSet::with_capacity(blobs.len());
+    for blob in blobs {
+        if let Ok(key) = master_key.decrypt(&blob) {
+            keys.insert(key);
+        }
+    }
+    Ok(keys)
 }
 
 pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<String> {

@@ -19,7 +19,7 @@ export function renderRecordingToggle(recording?: boolean, loading?: boolean): v
     ? "Recording is ON — full bodies and headers are being saved. Click to stop."
     : "Recording is OFF — only metadata is being saved. Click to start recording full bodies and headers.";
   const label = btn.querySelector(".logs-recording-label");
-  if (label) label.innerHTML = `⏺ Record: <strong>${on ? "ON" : "OFF"}</strong>`;
+  if (label) label.innerHTML = `Record: <strong>${on ? "ON" : "OFF"}</strong>`;
 }
 
 export { fetchRecordingState, toggleRecording } from "../handlers/log-handlers.js";

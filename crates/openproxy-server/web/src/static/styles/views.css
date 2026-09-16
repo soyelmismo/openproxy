@@ -932,10 +932,10 @@ html, body {
   .logs-recording-toggle {
     font-size: 0.68rem;
     padding: 2px 6px;
-    height: 22px;
+    height: 24px;
     display: inline-flex;
     align-items: center;
-    border-radius: 0;
+    border-radius: var(--radius-sm);
   }
 
   .m-header-actions-row {
@@ -954,7 +954,7 @@ html, body {
     font-size: 0.72rem;
     padding: 4px 6px;
     height: 28px;
-    border-radius: 0;
+    border-radius: var(--radius-sm);
     width: 100%;
   }
 
@@ -970,7 +970,7 @@ html, body {
     z-index: 200;
     background: var(--color-surface-2);
     border: 1px solid var(--color-border);
-    border-radius: 0;
+    border-radius: var(--radius-sm);
     box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85);
     padding: 8px;
     display: grid;
@@ -1010,59 +1010,103 @@ html, body {
   }
 
   /* 3. Buscador y Filtros Deslizables */
+  .logs-filter-toolbar {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+    padding: 6px 12px !important;
+    margin: 0 !important;
+    background: var(--color-surface) !important;
+    border-bottom: 1px solid var(--color-border) !important;
+    border-radius: 0 !important;
+    flex-shrink: 0 !important;
+  }
+
+  .logs-search-box {
+    width: 100% !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    max-height: 32px !important;
+    flex: 0 0 32px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    position: relative !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+
   .logs-search-wrapper {
-    padding: 6px 12px 2px;
-    margin: 0;
+    padding: 0 !important;
+    margin: 0 !important;
   }
 
-  .logs-search-wrapper input {
-    font-size: 0.75rem;
-    height: 30px;
-    border-radius: 0;
+  .logs-search-input {
+    width: 100% !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    max-height: 32px !important;
+    box-sizing: border-box !important;
+    padding: 0 1.8rem 0 2rem !important;
+    font-size: 0.78rem !important;
+    font-family: var(--font-sans) !important;
+    border-radius: var(--radius-sm) !important;
+    line-height: normal !important;
   }
 
-  .logs-status-filters,
-  .filter-bar {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    gap: 5px;
-    padding: 4px 12px 6px;
-    margin: 0;
-    scrollbar-width: none;
-    width: 100%;
-    box-sizing: border-box;
+  .logs-status-filters {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    gap: 5px !important;
+    padding: 2px 0 4px !important;
+    margin: 0 !important;
+    scrollbar-width: none !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    flex: 0 0 auto !important;
   }
 
-  .logs-status-filters::-webkit-scrollbar,
-  .filter-bar::-webkit-scrollbar {
-    display: none;
+  .logs-status-filters::-webkit-scrollbar {
+    display: none !important;
   }
 
-  .logs-status-filters button,
-  .filter-bar button {
+  .logs-status-filters .logs-filter-btn {
+    flex-shrink: 0 !important;
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 4px !important;
+    padding: 0 10px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    font-size: 0.72rem !important;
+    font-family: var(--font-sans) !important;
+    font-weight: 500 !important;
+    border-radius: var(--radius-pill) !important;
+    white-space: nowrap !important;
+    border: 1px solid var(--color-border) !important;
+    background: var(--color-surface-2) !important;
+    color: var(--color-text-muted) !important;
+    cursor: pointer !important;
+    transition: all var(--t-fast) !important;
+  }
+
+  .logs-status-filters .logs-filter-btn .icon {
+    margin-top: -1px;
     flex-shrink: 0;
-    padding: 4px 10px;
-    font-size: 0.72rem;
-    font-family: var(--font-sans);
-    font-weight: 500;
-    border-radius: 0;
-    white-space: nowrap;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition: all var(--t-fast);
   }
 
-  .logs-status-filters button.active,
-  .logs-status-filters button[aria-pressed="true"] {
-    background: var(--color-primary);
-    border-color: var(--color-primary);
-    color: #fff;
-    font-weight: 600;
+  .logs-status-filters .logs-filter-btn.active {
+    background: var(--color-text) !important;
+    border-color: var(--color-text) !important;
+    color: var(--color-surface) !important;
+    font-weight: 600 !important;
   }
 
   /* 4. In-flight vacío colapsado */
@@ -1668,22 +1712,36 @@ html, body {
 .logs-columns-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.3rem 0.6rem;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  height: 28px;
+  box-sizing: border-box;
   background: var(--color-surface-2);
   border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: var(--fs-xs);
+  line-height: 1;
   color: var(--color-text);
   cursor: pointer;
   transition: background var(--t-fast);
+  white-space: nowrap;
 }
 .logs-columns-toggle:hover { background: var(--color-surface); }
 .logs-columns-toggle[aria-expanded="true"] {
   background: var(--color-surface);
   border-color: var(--color-primary);
 }
-.logs-columns-caret { font-size: 0.7em; }
+.logs-columns-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+}
+.logs-columns-caret .icon {
+  margin-top: 1px;
+}
 .columns-menu {
   position: absolute;
   top: calc(100% + 4px);
@@ -1694,6 +1752,7 @@ html, body {
   padding: var(--space-2);
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
   font-size: var(--fs-xs);
   font-family: var(--font-sans);
@@ -1734,38 +1793,79 @@ html, body {
   display: flex;
   align-items: center;
   flex: 1 1 240px;
+  min-width: 200px;
+  height: 28px;
+  box-sizing: border-box;
 }
 .logs-search-icon {
   position: absolute;
-  left: 0.6rem;
+  left: 0.65rem;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 0.8rem;
   color: var(--color-text-muted);
   pointer-events: none;
+  z-index: 1;
+}
+.logs-search-icon .icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
 }
 .logs-search-input {
   width: 100%;
-  padding: 0.35rem 1.8rem 0.35rem 2rem;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 1.8rem 0 2rem;
   font-size: var(--fs-xs);
   font-family: var(--font-sans);
   background: var(--color-bg);
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm);
   color: var(--color-text);
+  line-height: normal;
 }
 .logs-search-input:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px var(--color-primary-soft);
 }
+.logs-search-input::-webkit-search-decoration,
+.logs-search-input::-webkit-search-cancel-button,
+.logs-search-input::-webkit-search-results-button,
+.logs-search-input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
 .logs-search-clear {
   position: absolute;
-  right: 0.4rem;
+  right: 0.45rem;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   color: var(--color-text-muted);
   cursor: pointer;
-  padding: 0 0.25rem;
+  padding: 0;
+  width: 18px;
+  height: 100%;
   font-size: 0.75rem;
+  z-index: 1;
+}
+.logs-search-clear:hover {
+  color: var(--color-text);
+}
+.logs-search-clear .icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
 }
 .logs-status-filters {
   display: flex;
@@ -1774,15 +1874,29 @@ html, body {
   flex-wrap: wrap;
 }
 .logs-filter-btn {
-  padding: 0.25rem 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 0.65rem;
   font-size: var(--fs-xs);
   font-family: var(--font-sans);
+  line-height: 1;
+  white-space: nowrap;
   background: var(--color-surface-2);
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-pill);
   color: var(--color-text-muted);
   cursor: pointer;
   transition: all var(--t-fast);
+  user-select: none;
+}
+.logs-filter-btn .icon {
+  vertical-align: middle;
+  margin-top: -1px;
+  flex-shrink: 0;
 }
 .logs-filter-btn:hover {
   color: var(--color-text);

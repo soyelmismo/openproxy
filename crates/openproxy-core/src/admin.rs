@@ -340,6 +340,19 @@ pub fn create_account(
     input: CreateAccountInput,
 ) -> Result<AccountId> {
     let provider = ProviderId::new(input.provider_id);
+    if let Some(key) = input
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        let existing_keys = accounts::list_api_keys_for_provider(conn, &provider, master_key)?;
+        if existing_keys.contains(key) {
+            return Err(CoreError::Validation(
+                "an account with this API key already exists for this provider".into(),
+            ));
+        }
+    }
     let priority = input.priority.unwrap_or(100);
     let effective_label = match input.label.as_deref().map(str::trim) {
         Some(s) if !s.is_empty() => Some(s.to_string()),
@@ -352,7 +365,7 @@ pub fn create_account(
     accounts::create(
         conn,
         &provider,
-        input.api_key.as_deref(),
+        input.api_key.as_deref().map(str::trim),
         master_key,
         effective_label.as_deref(),
         priority,
@@ -385,18 +398,32 @@ pub struct BulkCreateAccountsResponse {
 }
 
 /// Insert multiple accounts in batch.
+///
+/// Deduplication (3 phases):
+/// 1. Queries and decrypts all existing API keys for `provider_id` in the database.
+/// 2. Tracks seen keys in-memory across the incoming batch.
+/// 3. Silently discards duplicate keys (already in DB or duplicated within the batch),
+///    making bulk creation idempotent and duplicate-free.
 pub fn bulk_create_accounts(
     conn: &Connection,
     master_key: &MasterKey,
     input: BulkCreateAccountsInput,
 ) -> Result<Vec<AccountId>> {
     let provider = ProviderId::new(input.provider_id);
+    let mut existing_keys = accounts::list_api_keys_for_provider(conn, &provider, master_key)?;
     let mut ids = Vec::with_capacity(input.items.len());
+
     for item in input.items {
         let trimmed = item.api_key.trim();
         if trimmed.is_empty() {
             continue;
         }
+
+        // Deduplication: skip if already in DB for this provider or previously seen in this batch
+        if !existing_keys.insert(trimmed.to_string()) {
+            continue;
+        }
+
         let priority = item.priority.unwrap_or(100);
         let effective_label = match item.label.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => Some(s.to_string()),
@@ -1329,6 +1356,57 @@ mod tests {
             .expect("found a2");
         assert_eq!(a2.priority, 100);
         assert!(a2.label.is_some());
+
+        // 2nd batch: includes duplicates from DB, duplicate in the same batch, and 1 new key
+        let second_batch = vec![
+            BulkCreateAccountItem {
+                api_key: "sk-ant-key1-secret123456789".into(), // duplicate from DB
+                label: None,
+                priority: None,
+                extra_config_json: None,
+            },
+            BulkCreateAccountItem {
+                api_key: "sk-ant-key3-secret333333333".into(), // new
+                label: Some("key3".into()),
+                priority: None,
+                extra_config_json: None,
+            },
+            BulkCreateAccountItem {
+                api_key: "sk-ant-key3-secret333333333".into(), // duplicate in this batch!
+                label: Some("key3-dup".into()),
+                priority: None,
+                extra_config_json: None,
+            },
+        ];
+        let second_ids = bulk_create_accounts(
+            &conn,
+            &mk,
+            BulkCreateAccountsInput {
+                provider_id: "anthropic".into(),
+                items: second_batch,
+            },
+        )
+        .expect("bulk create 2nd batch");
+
+        // Only the 1 new key should have been created
+        assert_eq!(second_ids.len(), 1);
+        let list2 = list_accounts(&conn, Some(&ProviderId::new("anthropic")), &mk).expect("list2");
+        assert_eq!(list2.len(), 3);
+
+        // Single create_account with existing key should fail with validation error
+        let err = create_account(
+            &conn,
+            &mk,
+            CreateAccountInput {
+                provider_id: "anthropic".into(),
+                api_key: Some("sk-ant-key1-secret123456789".into()),
+                label: None,
+                priority: None,
+                extra_config_json: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Validation(_)));
     }
 
     #[test]

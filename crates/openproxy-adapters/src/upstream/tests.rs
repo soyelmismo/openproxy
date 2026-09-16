@@ -1228,6 +1228,109 @@ async fn headers_timeout_fires_on_silent_http_server() {
     );
 }
 
+#[tokio::test]
+async fn streaming_body_exceeding_8_mib_succeeds() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut tcp, _peer)) = listener.accept().await {
+            let mut buf = vec![0u8; 4096];
+            let _ = tcp.read(&mut buf).await;
+
+            let header = "HTTP/1.1 200 OK\r\n\
+                          content-type: text/event-stream\r\n\
+                          transfer-encoding: chunked\r\n\r\n";
+            let _ = tcp.write_all(header.as_bytes()).await;
+
+            // Send 10 chunks of 1 MiB each = 10 MiB total (> 8 MiB previous hard limit)
+            let one_mib = vec![b'x'; 1024 * 1024];
+            let chunk_header = format!("{:x}\r\n", one_mib.len());
+            for _ in 0..10 {
+                let _ = tcp.write_all(chunk_header.as_bytes()).await;
+                let _ = tcp.write_all(&one_mib).await;
+                let _ = tcp.write_all(b"\r\n").await;
+            }
+            let _ = tcp.write_all(b"0\r\n\r\n").await;
+            let _ = tcp.flush().await;
+        }
+    });
+
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let profile = TimeoutProfile::OAuth;
+    let mut resp = client
+        .call(
+            UpstreamRequest::get(format!("http://{addr}/")),
+            profile,
+            cancel,
+        )
+        .await
+        .expect("request should connect and return 200");
+
+    let mut total_bytes = 0;
+    while let Some(chunk) = resp
+        .body
+        .next_chunk()
+        .await
+        .expect("streaming chunks should not hit length limit")
+    {
+        total_bytes += chunk.len();
+    }
+    assert_eq!(total_bytes, 10 * 1024 * 1024);
+}
+
+#[tokio::test]
+async fn non_streaming_body_exceeding_limit_fails() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut tcp, _peer)) = listener.accept().await {
+            let mut buf = vec![0u8; 4096];
+            let _ = tcp.read(&mut buf).await;
+
+            let header = "HTTP/1.1 200 OK\r\n\
+                          content-type: application/json\r\n\
+                          transfer-encoding: chunked\r\n\r\n";
+            let _ = tcp.write_all(header.as_bytes()).await;
+
+            // Send 33 chunks of 1 MiB each = 33 MiB (> 32 MiB NON_STREAMING_BODY_LIMIT_BYTES)
+            let one_mib = vec![b'a'; 1024 * 1024];
+            let chunk_header = format!("{:x}\r\n", one_mib.len());
+            for _ in 0..33 {
+                if tcp.write_all(chunk_header.as_bytes()).await.is_err() {
+                    break;
+                }
+                if tcp.write_all(&one_mib).await.is_err() {
+                    break;
+                }
+                if tcp.write_all(b"\r\n").await.is_err() {
+                    break;
+                }
+            }
+            let _ = tcp.write_all(b"0\r\n\r\n").await;
+            let _ = tcp.flush().await;
+        }
+    });
+
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let profile = TimeoutProfile::OAuth;
+    let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+    req.is_streaming = false;
+    let resp = client
+        .call(req, profile, cancel)
+        .await
+        .expect("request connects");
+
+    let res = resp.body.collect_all().await;
+    assert!(res.is_err(), "non-streaming >32 MiB must fail with limit error");
+    let err_str = res.unwrap_err().to_string();
+    assert!(
+        err_str.contains("length limit exceeded"),
+        "expected length limit exceeded, got: {err_str}"
+    );
+}
+
 // ----------
 // Reusable mock helpers
 //

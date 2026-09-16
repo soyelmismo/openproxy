@@ -220,7 +220,7 @@ function renderLogsView(): TemplateResult {
         <div class="m-header-status-badges">
           <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
           <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${onRecordingToggleClick}>
-            <span class="logs-recording-dot" aria-hidden="true">${icons.record()}</span>
+            <span class="logs-recording-dot" aria-hidden="true"></span>
             <span class="logs-recording-label">Record: <strong>OFF</strong></span>
           </button>
         </div>
@@ -244,7 +244,7 @@ function renderLogsView(): TemplateResult {
 
     <!-- Live Logs Filter Toolbar -->
     <div class="logs-filter-toolbar">
-      <div class="logs-search-box logs-search-wrapper">
+      <div class="logs-search-box">
         <span class="logs-search-icon" aria-hidden="true">${icons.search()}</span>
         <input
           type="search"
@@ -255,7 +255,7 @@ function renderLogsView(): TemplateResult {
         />
         ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${onClearSearch} aria-label="Clear filter">${icons.close()}</button>` : null}
       </div>
-      <div class="logs-status-filters filter-bar" role="group" aria-label="Status filter">
+      <div class="logs-status-filters" role="group" aria-label="Status filter">
         <button type="button" class="logs-filter-btn ${filterStatus === "all" ? "active" : ""}" @click=${() => onSetStatusFilter("all")}>All</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "inflight" ? "active" : ""}" @click=${() => onSetStatusFilter("inflight")}>${icons.lightning()} In-flight</button>
         <button type="button" class="logs-filter-btn ${filterStatus === "2xx" ? "active" : ""}" @click=${() => onSetStatusFilter("2xx")}>2xx OK</button>
