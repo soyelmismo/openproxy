@@ -65,6 +65,12 @@ pub fn extract_content_part_text(part: &serde_json::Value) -> String {
     if let Some(content) = part.get("content").and_then(|v| v.as_str()) {
         return content.to_string();
     }
+    if let Some(thinking) = part.get("thinking").and_then(|v| v.as_str()) {
+        return thinking.to_string();
+    }
+    if let Some(reasoning) = part.get("reasoning").and_then(|v| v.as_str()) {
+        return reasoning.to_string();
+    }
     match part {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
@@ -389,6 +395,14 @@ mod tests {
     fn test_extract_content_part_text() {
         assert_eq!(extract_content_part_text(&json!({"text": "abc"})), "abc");
         assert_eq!(extract_content_part_text(&json!({"content": "xyz"})), "xyz");
+        assert_eq!(
+            extract_content_part_text(&json!({"type": "thinking", "thinking": "step1"})),
+            "step1"
+        );
+        assert_eq!(
+            extract_content_part_text(&json!({"type": "reasoning", "reasoning": "step2"})),
+            "step2"
+        );
         assert_eq!(extract_content_part_text(&json!("str")), "str");
         assert_eq!(extract_content_part_text(&json!(null)), "");
         assert_eq!(extract_content_part_text(&json!(123)), "123");

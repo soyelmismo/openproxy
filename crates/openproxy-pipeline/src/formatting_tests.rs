@@ -174,10 +174,13 @@ fn normalize_effort_returns_expected() {
 }
 
 #[test]
-fn test_openai_formatter_strips_disabled() {
+fn test_openai_formatter_strips_disabled_and_responses_keys() {
     let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
     let mut extra = serde_json::Map::new();
     extra.insert("disabled".into(), json!(true));
+    extra.insert("prompt_cache_key".into(), json!("pck_12345"));
+    extra.insert("prompt_cache_retention".into(), json!("24h"));
+    extra.insert("instructions".into(), json!("system instructions"));
     extra.insert("custom_val".into(), json!("ok"));
 
     let openai_req = OpenAIRequest {
@@ -199,6 +202,9 @@ fn test_openai_formatter_strips_disabled() {
         .expect("ok");
     let val: Value = serde_json::from_slice(&formatted).unwrap();
     assert!(val.get("disabled").is_none());
+    assert!(val.get("prompt_cache_key").is_none());
+    assert!(val.get("prompt_cache_retention").is_none());
+    assert!(val.get("instructions").is_none());
     assert_eq!(val.get("custom_val"), Some(&json!("ok")));
 }
 
@@ -247,4 +253,123 @@ fn test_openai_formatter_sanitizes_message_names() {
     assert!(msgs[1].get("name").is_none());
     assert_eq!(msgs[2].get("role").unwrap(), "user");
     assert!(msgs[2].get("name").is_none());
+}
+
+#[test]
+fn test_openai_formatter_flattens_assistant_array_content() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let messages = vec![
+        OpenAIMessage {
+            role: "assistant".into(),
+            content: Some(json!([
+                {
+                    "type": "output_text",
+                    "text": "Voy a empezar cargando las skills necesarias.",
+                    "annotations": []
+                }
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        },
+        OpenAIMessage {
+            role: "assistant".into(),
+            content: Some(json!([
+                {
+                    "type": "thinking",
+                    "thinking": "Paso 1: Analizar.\n"
+                },
+                {
+                    "type": "text",
+                    "text": "Respuesta final."
+                }
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        },
+    ];
+    let req = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: messages.clone(),
+        ..Default::default()
+    });
+    let formatted = OpenaiFormatter
+        .format_request(&req, &test_model(), &messages, false, &adapter)
+        .expect("ok");
+    let val: Value = serde_json::from_slice(&formatted).unwrap();
+    let msgs = val.get("messages").unwrap().as_array().unwrap();
+
+    assert_eq!(msgs[0].get("role").unwrap(), "assistant");
+    assert_eq!(
+        msgs[0].get("content").unwrap(),
+        "Voy a empezar cargando las skills necesarias."
+    );
+
+    assert_eq!(msgs[1].get("role").unwrap(), "assistant");
+    assert_eq!(
+        msgs[1].get("content").unwrap(),
+        "Paso 1: Analizar.\nRespuesta final."
+    );
+}
+
+#[test]
+fn test_openai_formatter_sanitizes_user_output_text_and_media() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let messages = vec![
+        OpenAIMessage {
+            role: "user".into(),
+            content: Some(json!([
+                {
+                    "type": "output_text",
+                    "text": "Plain text prompt.",
+                    "annotations": []
+                }
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        },
+        OpenAIMessage {
+            role: "user".into(),
+            content: Some(json!([
+                {
+                    "type": "output_text",
+                    "text": "Image description.",
+                    "annotations": []
+                },
+                {
+                    "type": "image_url",
+                    "image_url": { "url": "https://example.com/img.png" }
+                }
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        },
+    ];
+    let req = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: messages.clone(),
+        ..Default::default()
+    });
+    let formatted = OpenaiFormatter
+        .format_request(&req, &test_model(), &messages, false, &adapter)
+        .expect("ok");
+    let val: Value = serde_json::from_slice(&formatted).unwrap();
+    let msgs = val.get("messages").unwrap().as_array().unwrap();
+
+    // Pure text user message gets flattened to plain string
+    assert_eq!(msgs[0].get("content").unwrap(), "Plain text prompt.");
+
+    // Multimodal user message keeps array, converts output_text -> text, strips annotations
+    let parts = msgs[1].get("content").unwrap().as_array().unwrap();
+    assert_eq!(parts[0].get("type").unwrap(), "text");
+    assert_eq!(parts[0].get("text").unwrap(), "Image description.");
+    assert!(parts[0].get("annotations").is_none());
+    assert_eq!(parts[1].get("type").unwrap(), "image_url");
 }
