@@ -117,6 +117,21 @@ openproxy/
 - **Canales con Backpressure:** No usar `unbounded_channel` para colas de proxies, bufferings SSE o ingestiones masivas. Usar `channel(N)` con límite explícito.
 - **Ciclo de Vida de Tareas en Fondo:** Todo `tokio::spawn` de larga duración o bucle `loop {}` debe escuchar un canal de shutdown (`broadcast::Receiver<()>` / `CancellationToken`).
 
+### 4.4 Manejo Seguro de Strings y Fronteras UTF-8
+- **Prohibición de Slicing Crudo:** Queda terminantemente prohibido rebanar `&str` o indexar bytes (`&s[..n]` o `&s[start..end]`) sin validación explícita de frontera de caracteres. En cadenas multibyte (emojis, tildes, caracteres CJK), el slicing directo sobre un límite no alineado causará un `panic` irrecuperable.
+- **Validación con `is_char_boundary`:** Validar siempre con `s.is_char_boundary(n)`. Si no es límite válido, retroceder de forma iterativa hasta el límite UTF-8 anterior o avanzar usando `.char_indices()`.
+
+### 4.5 Protocolos Streaming (SSE) y Contabilidad de Tokens
+- **Terminadores de Protocolo Obligatorios:** En flujos SSE (tanto `/v1/chat/completions` como `/v1/responses`), el stream DEBE concluir siempre con el evento terminal canónico (`data: [DONE]` para Chat Completions; eventos terminales como `response.completed` o `response.done` para Responses API). Omitir el terminador provoca desconexiones abruptas o errores de timeout en clientes y arneses (ej. DeepSeek Harness, SDKs oficiales).
+- **Preservación Acumulativa de Uso:** Durante la agregación de fragmentos de uso de proveedores upstream (ej. deltas de Anthropic/OpenAI), preservar el conteo acumulativo de `prompt_tokens` y `completion_tokens` en vez de sobreescribir con ceros o deltas vacíos en chunks intermedios.
+
+### 4.6 Normalización de Payloads y Resiliencia de Upstreams LLM (Serde Strictness)
+- **Incompatibilidad de Esquemas en Serde Nativo:** Múltiples upstreams compatibles con OpenAI (como NVIDIA NIM, Fireworks, Kilocode, Bai, vLLM) están construidos en Rust con Serde estricto (`async-openai`). No toleran extensiones no estándar:
+  - **Mensajes `assistant`, `system` y `tool`:** No admiten arrays de partes estructuradas (`output_text`, `annotations`, `thinking`, `reasoning`). Deben aplanarse a un string plano (`Value::String(m.extract_text())`) antes de serializar hacia el upstream.
+  - **Mensajes `user`:** Arrays de texto puro deben aplanarse a string plano; arrays multimodales (imágenes/audio) deben normalizarse convirtiendo `output_text`/`input_text` a `"text"` y eliminando campos propietarios (`annotations`).
+  - **Parámetros no Estándar de Responses:** Parámetros como `prompt_cache_key`, `prompt_cache_retention`, `instructions`, `input`, `previous_response_id`, `store`, `background`, `truncation`, `disabled` son rechazados con `400 Bad Request` por upstreams estrictos. Deben depurarse en `OpenaiFormatter` antes de la serialización hacia upstreams OpenAI.
+  - **Frontera de Sanitización:** Esta normalización debe residir exclusivamente en la capa de serialización hacia el upstream (`TargetFormatter` / adapters), NUNCA recortando campos de los modelos internos del dominio o middleware que rompan contratos entre módulos o tests internos.
+
 ---
 
 ## 5. Corrección de Patrones No Permitidos
@@ -125,7 +140,7 @@ openproxy/
 | :--- | :--- |
 | **`.unwrap()` / `.expect()` en producción** | Propagar con `?`, usar `.ok_or_else()`, `.unwrap_or()` o fallbacks defensivos. |
 | **`for i in 0..len` / `arr[i]`** | Iteración directa (`.iter()`, `.into_iter()`, `.enumerate()`, `.windows()`, `.zip()`). |
-| **Indexación de `&str[..n]` sin char boundary** | Validar con `s.is_char_boundary(n)` retrocediendo hasta el límite válido antes de cortar. |
+| **Indexación de `&str[..n]` sin char boundary** | Validar con `s.is_char_boundary(n)` retrocediendo hasta el límite válido antes de cortar o usar `.char_indices()`. |
 | **`static mut`** | Prohibido. Usar `Atomic*`, `OnceLock` o structs de estado sincronizados. |
 | **Supresión de advertencias (`#[allow(clippy::...)]`)** | Prohibido silenciar linters. Corregir la causa raíz. |
 | **Placeholders SQL dinámicos manuales** | Usar helpers de batch (`batch_insert!`, `query_in_chunks`). |
@@ -136,7 +151,13 @@ openproxy/
 | **Publicar eventos o broadcasts con lock activo** | Llamar a `drop(conn)` antes de `publish_notification` o buses de eventos. |
 | **Podar CSS, tooltips o features para bajar LOC** | Prohibido. Descomponer el archivo en submódulos cohesivos (<500-800 LOC) preservando el 100% de la funcionalidad y fidelidad visual. |
 | **Borrar selectores CSS asumiendo desuso vía grep** | Prohibido. Lit-HTML interpola clases en runtime. Preservar y particionar por vista (`views/<vista>.css`). |
-| **Sobrescribir selectores globales en hojas de vista** | Acotar selectores al contenedor de la vista (`.page-header` vs `#main .view-specific`) para evitar roturas de cascade leak o responsive. |
+| **Sobrescribir selectores globales en hojas de vista** | Acotar selectores al contenedor de la vista (`#main .view-specific`). Las reglas de componentes (`button.*`, `.actions`, `.responsive-card-table`, `.slider`, `.chip`) pertenecen a `components/`. |
+| **Borrar selectores o reglas móviles (`.mobile-*-cell`)** | Prohibido. Preservar intactos los estilos de tarjetas móviles y `@media` blocks. |
+| **Arrays estructurados en mensajes assistant/system/tool hacia upstreams OpenAI** | Aplanar a string canónico en `OpenaiFormatter`. |
+| **Enviar parámetros de Responses (`prompt_cache_key`, etc.) a `/v1/chat/completions`** | Depurar en `OpenaiFormatter` antes de serializar hacia el upstream. |
+| **Cerrar streaming SSE sin frame terminal** | Emitir siempre `[DONE]` (Chat) o evento terminal canónico (Responses). |
+| **Sobrescribir `prompt_tokens` con deltas vacíos en streaming** | Acumular tokens preservando valores previos no nulos. |
+| **Modificar firmas de arneses de test sin sincronizar E2E** | Actualizar llamadores y mocks en el mismo commit para no quebrar CI. |
 
 ---
 
@@ -170,6 +191,15 @@ openproxy/
    - Entradas numéricas con sliders en el playground deben usar `@change` en el campo de texto para no bloquear la edición de decimales (`0.`).
 5. **Compilación Web:**
    - Ejecutar `pnpm --dir crates/openproxy-server/web run build` tras modificar `crates/openproxy-server/web/src/` antes de compilar el binario Rust para incrustar los assets actualizados.
+6. **Aislamiento de Cascada y Jerarquía de Reglas CSS:**
+   - La propiedad de los componentes pertenece estrictamente a `styles/components/`:
+     - `components/forms.css`: posee las variantes de botones (`button.primary`, `button.small`, `button.danger`, `button.secondary`, `button.success`) y `.actions` genéricas.
+     - `components/tables.css`: posee `.responsive-card-table` y los bloques `@media` responsive compartidos.
+     - `components/badges.css`: posee `.chip`, `.status-pill` y variantes de color.
+   - Queda prohibido declarar reglas de componentes con alcance global en hojas de vista (`views/*.css`).
+   - Todo selector en hojas de vista debe acotarse al contenedor de la vista (ej. `#main .view-specific` o `.view-proxies .actions:has(button)`).
+7. **Preservación Móvil y Responsive:**
+   - Queda prohibido eliminar selectores de elementos móviles (ej. `.mobile-proxy-source-card-cell { display: none }`), ya que causan filtración de columnas móviles al layout de escritorio y rompen la renderización en tarjetas móviles.
 
 ---
 
@@ -178,8 +208,12 @@ openproxy/
 ### 8.1 Auditoría Lógica y Visual
 - ¿Algún `let-else` alteró el tipo o mensaje de error original?
 - ¿Algún `split_once` asumió separadores inexistentes rompiendo casos borde?
+- ¿Alguna indexación o rebanado de `&str` corta bytes sin validar `is_char_boundary` o usar `.char_indices()`?
+- ¿Se verificó que `OpenaiFormatter` aplane mensajes estructurados y purgue parámetros de Responses (`prompt_cache_key`, etc.) para evitar errores 400 en upstreams Serde estrictos?
+- ¿Se verificó que todo flujo SSE emita su terminador canónico de protocolo (`[DONE]` / `response.completed`)?
 - ¿Se agregaron tests unitarios para toda función extraída de $>20$ líneas?
 - ¿Se verificó que ningún selector CSS, tooltip o feature de interfaz fue eliminado en el refactor?
+- ¿Se verificó que no existan cascade leaks globales en archivos CSS particionados?
 - ¿Se verificó que 0 archivos superan 800 LOC en `crates/` y `web/`?
 
 ### 8.2 Comandos de Verificación
