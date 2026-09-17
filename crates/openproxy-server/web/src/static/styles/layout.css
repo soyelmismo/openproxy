@@ -163,6 +163,9 @@ main {
   overflow-x: auto;
   overflow-y: auto;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
   background: var(--color-bg);
 }
 

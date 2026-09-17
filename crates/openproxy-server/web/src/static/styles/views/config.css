@@ -1,52 +1,122 @@
-/* ============================================
-   CONFIG VIEW STYLES
-   ============================================ */
-
+/* ----- Config grid ----- */
 .config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.config-field { display: flex; flex-direction: column; gap: 0.25rem; }
+.config-field input[type="number"] {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.config-field input[type="number"]:disabled { cursor: not-allowed; opacity: 0.85; }
+.config-label { font-size: var(--fs-xs); font-weight: 600; color: var(--color-text-muted); letter-spacing: 0.02em; }
+.config-help  { font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.3; }
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+  flex-wrap: wrap;
+}
+.config-details {
+  margin: var(--space-3) 0 var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+.config-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  user-select: none;
+}
+.config-details summary:hover { color: var(--color-text); }
+.config-details > *:not(summary) { margin-top: var(--space-2); line-height: 1.5; }
+.config-details ol, .config-details p { color: var(--color-text-muted); font-size: var(--fs-sm); }
+
+
+/* ----- Config refactor: editable vs static regions ----- */
+.config-editable-region {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
-
-.config-card {
-  background: var(--color-surface);
+.config-static-region {
+  margin-top: var(--space-4);
+}
+.config-static-region summary {
+  cursor: pointer;
+  font-weight: bold;
+  padding: var(--space-2);
+  background: var(--color-surface-2);
   border: var(--border-w) var(--border-style) var(--color-border);
-  padding: var(--space-3);
+}
+.config-static-region[open] summary {
+  margin-bottom: var(--space-3);
+}
+.config-static-display {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+.config-static-display .field {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
 }
-
-.config-card h3 {
-  margin: 0;
-  font-size: var(--fs-md);
-  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
-  padding-bottom: var(--space-2);
-}
-
-.config-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: 0.35rem 0;
-}
-.config-key {
+.config-static-display .field .label {
   font-size: var(--fs-xs);
+  text-transform: uppercase;
   color: var(--color-text-muted);
+  font-family: var(--font-display);
 }
-.config-val {
+.config-static-display .field .value {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-md);
+}
+.config-dirty-indicator {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warn);
+  margin-left: var(--space-1);
+  vertical-align: middle;
+}
+.config-actions-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w-2) var(--border-style) var(--color-border);
+  margin-top: var(--space-4);
+}
+.config-actions-bar .dirty-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  margin-left: auto;
 }
 
-/* Maintenance section */
-.maintenance-card {
-  border-left: 3px solid var(--color-warn);
+
+@media (max-width: 768px) {
+  /* 5. Configuration */
+  .config-grid { grid-template-columns: 1fr; gap: var(--space-4); }
+  .config-field input[type="number"], .config-field select, .config-field button { width: 100%; min-height: 44px; }
+  .config-field { gap: 0.5rem; }
+  .config-actions button { width: 100%; min-height: 44px; }
 }
-.vacuum-status-box {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-xs);
+
+
+
+
 }

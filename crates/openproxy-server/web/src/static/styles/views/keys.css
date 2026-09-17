@@ -1,0 +1,190 @@
+/* ==========
+   API KEYS & KEY USAGE VIEW STYLES
+   ========== */
+
+.keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.key-card {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.key-card.is-revoked {
+  opacity: 0.55;
+  border-color: var(--color-error);
+}
+
+.key-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.key-name {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--color-text);
+}
+
+.key-label-wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.key-prefix-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--color-surface-2);
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-emphasis);
+}
+
+.key-meta-time {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.key-created-by {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.key-restriction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--fs-xs);
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+.key-scopes-text {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.key-actions-wrap {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* ----- Key usage view (post-refactor selectors) ----- */
+.key-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+.key-usage-table th,
+.key-usage-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.home-kpi-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+.section-header h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  color: var(--color-text-emphasis);
+}
+.card-title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--color-text);
+  margin-bottom: var(--space-1);
+}
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+}
+.responsive-kv-table {
+  width: 100%;
+  font-size: var(--fs-xs);
+}
+.table-wrap {
+  overflow-x: auto;
+}
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 18px;
+  cursor: pointer;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+  transition: background var(--t-fast);
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--color-surface);
+  border-radius: 50%;
+  transition: transform var(--t-fast);
+}
+.switch input:checked + ::before,
+.switch.is-on::before {
+  background: var(--color-primary);
+}
+.switch.is-on::after {
+  transform: translateX(18px);
+}
+ .round {
+  border-radius: var(--radius-pill);
+}
+/* Note: button sizing/colour variants (button.primary, button.small,
+   button.danger, button.secondary, button.success) live in
+   components/forms.css. The .responsive-card-table mobile card-mode
+   is owned by components/tables.css inside @media (max-width:768px).
+   Don't redefine them here — it would override the desktop table
+   layout in proxies, debug-logs, combos, providers models, etc. */
+.banner-warning {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border: var(--border-w) var(--border-style) var(--color-warn);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}

@@ -217,6 +217,27 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+/* ----- Shared .actions button-bar (used by providers/list.ts, keys,
+   proxies etc. as a horizontal row of action buttons). The mobile
+   grid override (.actions:has(button)) lives in the view that owns
+   the specific button bar layout. ----- */
+.actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+/* ----- Variant buttons missing from the historical forms.css ----- */
+button.secondary {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+button.success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
 .sr-only {
   position: absolute;
   width: 1px;

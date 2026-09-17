@@ -1,89 +1,598 @@
+/* ----- Analytics metrics ----- */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+.metrics > div {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.metrics > div label {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.metrics > div value,
+.metrics > div .value {
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  color: var(--color-text);
+}
+
+/* ----- Cooldown banner variant ----- */
+.banner-error {
+  background: var(--color-error-soft);
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+/* ----- Analytics: null-pricing warning banner ----- */
+/* Yellow/orange variant for the "N rows had no pricing data" alert
+   surfaced by the analytics view when summary.rows_with_null_pricing
+   > 0. Reuses the warn token pair so it matches the existing
+   banner-info palette without introducing a new color. */
+.banner-warning {
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+}
+
+/* ----- Analytics: time-range preset selector ----- */
+.preset-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+}
+.preset-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: var(--fs-xs);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  color: var(--color-text-muted);
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.preset-btn:hover:not(.active) {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+.preset-btn.active {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* ----- Analytics: monthly providers × months cost matrix ----- */
+/* Compact table with monospace, right-aligned numeric cells so the
+   cost columns line up. The first column (provider id) stays left-
+   aligned; the Total column and totals row are bolded. */
+table.monthly-matrix {
+  font-size: var(--fs-xs);
+  table-layout: auto;
+}
+.monthly-matrix th,
+.monthly-matrix td {
+  padding: 0.3rem 0.5rem;
+  white-space: nowrap;
+}
+.monthly-matrix th.num,
+.monthly-matrix td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+.monthly-matrix td.total,
+.monthly-matrix tfoot th {
+  font-weight: 600;
+}
+.monthly-matrix tfoot th {
+  border-top: var(--border-w-2) var(--border-style) var(--color-border);
+}
+.monthly-matrix tbody tr:hover { background: var(--color-surface-2); }
+
+
 /* ============================================
-   ANALYTICS VIEW STYLES
+   CHARTS — SVG chart components, KPI tiles,
+   filter dropdowns, analytics layout
    ============================================ */
 
-.analytics-grid {
+/* ----- Chart SVG ----- */
+.chart-svg {
+  display: block;
+  width: 100%;
+  font-family: var(--font-mono);
+}
+.chart-svg text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.chart-axis-label {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.chart-empty {
+  padding: var(--space-8);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+/* ----- KPI tiles ----- */
+.kpi-tile {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.kpi-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+}
+.kpi-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.kpi-sub {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.kpi-trend-up { color: var(--color-success); }
+.kpi-trend-down { color: var(--color-error); }
+
+/* KPI grid layout */
+.kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
 
-.analytics-card {
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  padding: var(--space-3);
+/* ----- Analytics filters ----- */
+.analytics-filters {
   display: flex;
-  flex-direction: column;
   gap: var(--space-2);
-}
-
-/* Time range preset selector */
-.preset-selector {
-  display: inline-flex;
-  gap: 2px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
   background: var(--color-surface-2);
   border: var(--border-w) var(--border-style) var(--color-border);
-  padding: 2px;
+  margin-bottom: var(--space-3);
 }
-.preset-btn {
-  background: transparent;
-  border: none;
-  font-size: var(--fs-xs);
-  padding: 0.2rem 0.5rem;
-  cursor: pointer;
-  color: var(--color-text-muted);
-}
-.preset-btn.active {
+.filter-dropdown {
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
   background: var(--color-surface);
-  color: var(--color-text);
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  min-width: 140px;
+}
+.filter-dropdown:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
 }
 
-/* uPlot overrides */
-.uplot-container {
-  width: 100%;
-  min-height: 200px;
+
+/* ----- uPlot overrides — match the dashboard's design tokens ----- */
+
+/* GLOBAL `.uplot` SIZE OVERRIDE — fixes the resize feedback loop.
+   uPlot's own CSS (injected at runtime by `injectUplotCss()` in
+   components/uplot-chart.ts) sets:
+     .uplot         { width: min-content; }
+     .uplot canvas  { width: 100%; height: 100%; }
+   The `min-content` on `.uplot` is the root cause of the chart-grows-
+   without-bound bug: the `.uplot` div shrinks to its canvas's inline
+   width, the canvas's CSS `width: 100%` then resolves against that
+   same size, and any drift between what `setSize()` set and what
+   `clientWidth` reports next frame is amplified by the grid cell's
+   own min-content sizing — pushing the cell wider on each observer
+   fire until the layout overflows.
+
+   The fix: pin `.uplot` to its parent's content box (`width: 100%`;
+   `height: 100%`) with `!important` so it beats uPlot's own
+   `min-content` rule (same specificity, but `!important` wins).
+   We do NOT touch `.uplot canvas` — uPlot's `setSize()` writes
+   inline `width`/`height` on the canvas, and inline styles (without
+   `!important`) override CSS rules (without `!important`). So the
+   canvas still uses uPlot's pixel dimensions; the `.uplot` div just
+   stops feeding back off them.
+
+   Why `!important` is safe here: the only other rule that sets
+   `.uplot` width/height is uPlot's own `min-content` (no `!important`).
+   No code in this project writes inline `width`/`height` on the
+   `.uplot` div itself (uPlot only writes them on the canvas). */
+.uplot {
+  width: 100% !important; /* !important needed: beats uPlot's own .uplot { min-content } of equal specificity */
+  height: 100% !important; /* !important needed: beats uPlot's own .uplot { min-content } of equal specificity */
   position: relative;
-}
-.u-legend {
-  font-size: var(--fs-xs) !important;
-  font-family: var(--font-sans) !important;
+  /* `overflow: hidden` prevents a transient canvas overflow (before
+     resizeChart() runs on the next frame) from pushing the layout
+     wider. Without this, a canvas created at 600px default width
+     inside a 400px container would overflow, the parent grid cell
+     would grow, ResizeObserver would fire with the new (larger)
+     width, and the chart would drift wider. Clipping at the .uplot
+     level contains the overflow so the parent layout is stable. */
+  overflow: hidden !important; /* !important needed: matches uPlot's own .uplot selector with same specificity; uPlot's runtime CSS sets min-content */
 }
 
-/* Race stat blocks */
-.race-stat-block {
+/* uPlot's default CSS sets a transparent background and gray grid. We
+   override to use the project's border/text tokens so the charts blend
+   with the rest of the UI. These rules are scoped to .home-chart-container
+   so they don't affect other uPlot instances that might be added later.
+   They set ONLY colors/fonts — sizing is handled by the global `.uplot`
+   rule above + uPlot's inline canvas styles. */
+.home-chart-container .uplot {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+.home-kpi-spark .uplot {
+  /* No width/height here — the global `.uplot` rule above sets them. */
+}
+.home-chart-container .u-axis,
+.home-kpi-spark .u-axis {
+  stroke: var(--color-border);
+}
+.home-chart-container .u-label {
+  fill: var(--color-text-muted);
+}
+
+/* ----- Analytics view (B3): uPlot chart grid + race stat blocks -----
+   Mirrors the home dashboard's chart-card styling so the two views
+   look consistent. The grid is 2 columns on desktop, 1 on mobile;
+   `.analytics-chart-span-2` makes a card span both columns (used for
+   the daily-usage time-series and the race-outcomes row). */
+.analytics-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.analytics-chart-span-2 {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.analytics-chart-card {
+  padding: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--color-border-soft);
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.analytics-chart-card > .card-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.analytics-chart-card > .card-subtitle {
+  padding: var(--space-1) var(--space-3);
   font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
 }
-.race-winner-badge {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  color: var(--color-success);
-}
-
-/* Monthly cost matrix */
-.cost-matrix-table {
+.analytics-chart-container {
+  height: 220px;
   width: 100%;
-  font-size: var(--fs-xs);
-  font-family: var(--font-mono);
-}
-.cost-matrix-table th,
-.cost-matrix-table td {
-  text-align: right;
-  padding: 0.35rem 0.5rem;
-}
-.cost-matrix-table th:first-child,
-.cost-matrix-table td:first-child {
-  text-align: left;
+  padding: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  /* The uPlot instance is mounted inside this div. `width: 100%` +
+     `min-width: 0` + `overflow: hidden` give the global `.uplot`
+     rule (above) a real reference width to fill, and clip any
+     transient canvas overflow before `resizeChart()` corrects the
+     canvas size on the next frame. */
 }
 
-@media (max-width: 768px) {
-  .analytics-grid {
+/* uPlot token overrides — same as .home-chart-container above, scoped
+   to the analytics container so both views share the same look.
+   Sizing is handled by the global `.uplot { width: 100%;
+   height: 100% }` rule above — DO NOT re-add width/height
+   here. uPlot's `setSize()` writes inline styles on the canvas, which
+   beat the canvas's CSS `width: 100%; height: 100%` (inline > CSS,
+   no `` on either side). */
+.analytics-chart-container .uplot {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+.analytics-chart-container .u-axis {
+  stroke: var(--color-border);
+}
+.analytics-chart-container .u-label {
+  fill: var(--color-text-muted);
+}
+
+.home-chart-container .u-legend,
+.analytics-chart-container .u-legend {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  left: 50%;
+  width: auto;
+  max-width: calc(100% - 88px);
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  transform: translateX(-50%);
+  overflow: hidden;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-muted);
+  font: var(--fs-xs) var(--font-mono);
+  white-space: nowrap;
+}
+.home-chart-container .u-legend tr,
+.analytics-chart-container .u-legend tr { margin-right: var(--space-2); }
+.home-chart-container .u-legend tr:last-child,
+.analytics-chart-container .u-legend tr:last-child { margin-right: 0; }
+.home-chart-container .u-legend .u-series:first-child,
+.analytics-chart-container .u-legend .u-series:first-child { display: none; }
+.home-chart-container .u-legend th,
+.home-chart-container .u-legend td,
+.analytics-chart-container .u-legend th,
+.analytics-chart-container .u-legend td {
+  padding: 0.1rem 0.15rem;
+  border: 0;
+  background: transparent;
+  font-size: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.home-chart-container .u-legend .u-value,
+.analytics-chart-container .u-legend .u-value { color: var(--color-text); font-weight: 700; }
+.home-chart-container .u-legend .u-marker,
+.analytics-chart-container .u-legend .u-marker { border-radius: var(--radius-pill); }
+
+/* ----- Analytics race-outcomes stat blocks (mirrors home-race-stat) ----- */
+.analytics-race-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  flex: 1;
+}
+.analytics-race-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  background: var(--color-surface-2);
+}
+.analytics-race-stat-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.analytics-race-stat-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  text-align: center;
+}
+.analytics-race-stat-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+.analytics-race-stat-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ----- Responsive: tablet (≤1024px) — analytics grid collapses to 1 col ----- */
+@media (max-width: 1024px) {
+  .analytics-charts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .analytics-chart-span-2 {
+    grid-column: 1;
+  }
+  .analytics-chart-container {
+    height: 200px;
+  }
+}
+
+/* ----- Responsive: mobile (<640px) — shorter charts, stacked race stats ----- */
+@media (max-width: 640px) {
+  .analytics-race-stats {
     grid-template-columns: 1fr;
   }
+  .analytics-chart-container {
+    height: 180px;
+  }
+}
+
+/* ----- Analytics operational workspace ----- */
+.analytics-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: var(--layout-max-w);
+  margin: 0 auto;
+  padding-bottom: var(--space-6);
+}
+.analytics-header { margin: 0; padding: var(--space-2) 0 var(--space-1); }
+.analytics-header h2 { margin-top: 0.15rem; }
+.analytics-header p { margin: var(--space-1) 0 0; color: var(--color-text-muted); font-size: var(--fs-sm); }
+.analytics-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+.analytics-filter-row { display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap; }
+.analytics-filter-field { display: flex; min-width: 190px; flex: 0 1 250px; flex-direction: column; gap: var(--space-1); }
+.analytics-filter-field > span,
+.analytics-range-label { color: var(--color-text-muted); font-size: var(--fs-xs); font-weight: 700; }
+.analytics-filter-field .filter-dropdown { width: 100%; min-width: 0; padding: 0.48rem 0.65rem; border-color: var(--color-border-soft); }
+.analytics-clear-btn { margin-left: auto; color: var(--color-error); border-color: transparent; background: transparent; }
+.analytics-clear-btn:hover { border-color: var(--color-error); background: var(--color-error-soft); }
+.analytics-range-row { display: flex; align-items: center; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border-soft); }
+.analytics-range-label { flex: none; }
+.analytics-range-row .preset-selector { display: flex; flex-wrap: nowrap; gap: var(--space-1); min-width: 0; margin: 0; overflow-x: auto; scrollbar-width: thin; }
+.analytics-range-row .preset-btn { flex: none; border-color: transparent; border-radius: var(--radius-pill); background: transparent; }
+.analytics-range-row .preset-btn.active { background: var(--color-text); color: var(--color-surface); border-color: var(--color-text); }
+
+.analytics-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.analytics-metric {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  overflow: hidden;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+.analytics-metric-label { color: var(--color-text-muted); font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.analytics-metric-value { overflow: hidden; color: var(--color-text); font: 700 var(--fs-2xl) var(--font-mono); line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-metric-meta { overflow: hidden; color: var(--color-text-muted); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+
+.analytics-primary-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(270px, 0.9fr); gap: var(--space-4); }
+.analytics-insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.analytics-primary-grid > .card,
+.analytics-insight-grid > .card { margin: 0; }
+.analytics-trend-card,
+.analytics-status-card,
+.analytics-ranking-card,
+.analytics-latency-card,
+.analytics-race-card { min-width: 0; padding: 0; overflow: hidden; }
+.analytics-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); padding: var(--space-4) var(--space-4) var(--space-2); }
+.analytics-card-heading h3 { margin: 0; font-size: var(--fs-md); }
+.analytics-card-heading p { margin: 0.2rem 0 0; color: var(--color-text-muted); font-size: var(--fs-xs); }
+.analytics-chart-container { height: 310px; padding: 0; }
+
+.analytics-health-label { flex: none; padding: 0.2rem 0.5rem; border-radius: var(--radius-pill); background: var(--color-success-soft); color: var(--color-success); font-size: var(--fs-xs); font-weight: 700; }
+.analytics-health-label.warn { background: var(--color-warn-soft); color: var(--color-warn); }
+.analytics-health-label.bad { background: var(--color-error-soft); color: var(--color-error); }
+.analytics-health-label.neutral { background: var(--color-surface-2); color: var(--color-text-muted); }
+.analytics-status-hero { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); }
+.analytics-status-hero strong { font: 700 var(--fs-3xl) var(--font-mono); }
+.analytics-status-hero span { color: var(--color-text-muted); font-size: var(--fs-xs); }
+.analytics-status-track { display: flex; height: 10px; margin: var(--space-2) var(--space-4) var(--space-4); overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
+.analytics-status-track span { display: block; height: 100%; }
+.analytics-status-track .ok,
+.analytics-status-dot.ok { background: var(--color-status-ok-bright); }
+.analytics-status-track .warn,
+.analytics-status-dot.warn { background: var(--color-status-warn-bright); }
+.analytics-status-track .err,
+.analytics-status-dot.err { background: var(--color-status-err-bright); }
+.analytics-status-track .other,
+.analytics-status-dot.other { background: var(--color-status-other-bright); }
+.analytics-status-legend { display: flex; flex-direction: column; padding: 0 var(--space-4) var(--space-4); }
+.analytics-status-legend > div { display: grid; grid-template-columns: 10px 1fr auto 44px; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-soft); font-size: var(--fs-xs); }
+.analytics-status-legend strong { font-family: var(--font-mono); }
+.analytics-status-legend small { color: var(--color-text-muted); text-align: right; }
+.analytics-status-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.analytics-ranking-list { display: flex; flex-direction: column; padding: var(--space-1) var(--space-4) var(--space-4); }
+.analytics-ranking-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-soft); }
+.analytics-rank { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--color-surface-2); color: var(--color-text-muted); font: var(--fs-xs) var(--font-mono); }
+.analytics-ranking-main { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); }
+.analytics-ranking-copy { display: flex; min-width: 0; flex-direction: column; }
+.analytics-ranking-name { overflow: hidden; font-size: var(--fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-ranking-context { overflow: hidden; color: var(--color-text-muted); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.analytics-ranking-value { display: flex; align-items: flex-end; flex-direction: column; font-family: var(--font-mono); }
+.analytics-ranking-value strong { font-size: var(--fs-sm); }
+.analytics-ranking-value span { color: var(--color-text-muted); font-size: var(--fs-xs); }
+.analytics-ranking-track { grid-column: 1 / -1; height: 5px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
+.analytics-ranking-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--chart-blue), var(--chart-violet)); }
+
+.analytics-latency-key { display: flex; justify-content: flex-end; gap: var(--space-3); padding: 0 var(--space-4); color: var(--color-text-muted); font-size: var(--fs-xs); }
+.analytics-latency-key span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: var(--space-1); border-radius: 50%; }
+.analytics-latency-key .p50::before { background: var(--chart-blue-mid); }
+.analytics-latency-key .p95::before { background: var(--chart-blue); }
+.analytics-latency-list { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-3) var(--space-4) var(--space-4); }
+.analytics-latency-row-head { display: flex; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); font-size: var(--fs-xs); }
+.analytics-latency-row-head > span { display: flex; gap: var(--space-3); font-family: var(--font-mono); }
+.analytics-latency-row-head small { color: var(--color-text-muted); }
+.analytics-latency-track { position: relative; height: 8px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
+.analytics-latency-track span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; }
+.analytics-latency-track .p95 { background: var(--chart-blue); }
+.analytics-latency-track .p50 { height: 4px; margin-top: 2px; background: var(--chart-blue-xlight); }
+.analytics-throughput-foot { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border-soft); color: var(--color-text-muted); font-size: var(--fs-xs); }
+.analytics-throughput-foot span { margin-right: auto; }
+.analytics-throughput-foot strong { color: var(--color-text); font-family: var(--font-mono); }
+
+.analytics-race-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: var(--space-3) var(--space-4); overflow: hidden; border: 1px solid var(--color-border-soft); border-radius: var(--radius-md); background: var(--color-border-soft); }
+.analytics-race-grid > div { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); background: var(--color-surface); }
+.analytics-race-grid span { color: var(--color-text-muted); font-size: var(--fs-xs); }
+.analytics-race-grid strong { font: 700 var(--fs-xl) var(--font-mono); }
+.analytics-race-progress { height: 8px; margin: var(--space-4); overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
+.analytics-race-progress span { display: block; height: 100%; border-radius: inherit; background: var(--color-success); }
+.analytics-race-note { margin: 0; padding: 0 var(--space-4) var(--space-4); color: var(--color-text-muted); font-size: var(--fs-xs); }
+
+.analytics-details { overflow: hidden; border: 1px solid var(--color-border-soft); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-sm); }
+.analytics-details > summary { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4); cursor: pointer; list-style: none; }
+.analytics-details > summary::-webkit-details-marker { display: none; }
+.analytics-details > summary::after { content: "+"; margin-left: auto; color: var(--color-text-muted); font: var(--fs-xl) var(--font-mono); }
+.analytics-details[open] > summary::after { content: "−"; }
+.analytics-details > summary span { font-weight: 700; }
+.analytics-details > summary small { color: var(--color-text-muted); }
+.analytics-details-body { padding: 0 var(--space-4) var(--space-1); border-top: 1px solid var(--color-border-soft); }
+.analytics-data-card { min-width: 0; padding: 0; overflow: hidden; }
+.analytics-details-body .analytics-data-card { margin-top: var(--space-4); border-color: var(--color-border-soft); box-shadow: none; }
+.analytics-table-wrap { max-width: 100%; overflow-x: auto; }
+.analytics-data-card > .analytics-table-wrap { padding: 0 var(--space-4) var(--space-4); }
+.analytics-data-card > .empty { padding: 0 var(--space-4) var(--space-4); }
+.analytics-table-wrap th,
+.analytics-table-wrap td { white-space: nowrap; }
+.analytics-table-wrap td.num,
+.analytics-table-wrap th.num { text-align: right; font-family: var(--font-mono); }
+.analytics-model-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.analytics-errors-table time { color: var(--color-text-muted); white-space: nowrap; }
+.analytics-error-link { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--color-border-soft); border-radius: 50%; font-weight: 700; }
+
+@media (max-width: 1024px) {
+  .analytics-primary-grid { grid-template-columns: minmax(0, 1fr); }
+  .analytics-status-legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 var(--space-4); }
+}
+@media (max-width: 768px) {
+  .analytics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-insight-grid { grid-template-columns: minmax(0, 1fr); }
+  .analytics-filter-field { flex: 1 1 190px; }
+  .analytics-range-row { align-items: flex-start; flex-direction: column; }
+  .analytics-range-row .preset-selector { width: 100%; }
+  .analytics-chart-container { height: 280px; }
+}
+@media (max-width: 640px) {
+  .analytics-dashboard { gap: var(--space-4); }
+  .analytics-metrics { grid-template-columns: 1fr; gap: var(--space-2); }
+  .analytics-metric-card { padding: var(--space-2); }
+  .analytics-clear-btn { width: 100%; margin-left: 0; }
+  .analytics-status-legend { display: flex; }
+  .analytics-throughput-foot { align-items: flex-start; flex-wrap: wrap; }
+  .analytics-throughput-foot span { width: 100%; }
+  .analytics-chart-container { height: 250px; }
+  .analytics-details > summary { align-items: flex-start; flex-direction: column; }
+  .analytics-details > summary::after { position: absolute; right: var(--space-4); }
 }

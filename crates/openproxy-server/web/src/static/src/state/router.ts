@@ -195,6 +195,7 @@ export function navigate(): void {
   // screen). See styles/layout.css for the `body.on-login-page`
   // rule.
   document.body.classList.toggle("on-login-page", r.name === "login");
+  document.body.dataset["view"] = r.name;
   state.currentView = { name: r.name, context: r.context };
   // Re-render the sidebar on every route change. This is critical
   // for the post-login flow: the sidebar was first rendered at boot

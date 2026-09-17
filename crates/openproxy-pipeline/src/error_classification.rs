@@ -24,7 +24,8 @@ pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
                 || body.contains("invalid_request_error")
                 || body.contains("INVALID_ARGUMENT")
                 || body.contains("malformed")
-                || body.contains("decoding failed"))
+                || body.contains("decoding failed")
+                || body.contains("Input required"))
         {
             return UpstreamErrorClass::InvalidPayload;
         }
@@ -134,6 +135,13 @@ mod tests {
             classify_upstream_error(
                 400,
                 r#"{"error":{"code":400,"message":"Invalid value at 'contents[0].parts[1].inline_data.data' (TYPE_BYTES), Base64 decoding failed"}}"#,
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                r#"{"error":{"message":"Input required: specify \"prompt\" or \"messages\"","code":400},"user_id":"org_123"}"#,
             ),
             UpstreamErrorClass::InvalidPayload
         );

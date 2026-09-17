@@ -371,6 +371,95 @@ fn inject_deepseek_reasoning_if_needed(parsed: &mut openproxy_types::OpenAIReque
     }
 }
 
+pub(crate) fn normalize_responses_content_parts(
+    parts: &[serde_json::Value],
+) -> Option<serde_json::Value> {
+    if parts.is_empty() {
+        return None;
+    }
+    if parts.len() == 1 {
+        let first = &parts[0];
+        if let Some(text) = first.get("text").and_then(|t| t.as_str()) {
+            let part_type = first.get("type").and_then(|t| t.as_str()).unwrap_or("text");
+            if part_type == "text" || part_type == "input_text" {
+                return Some(serde_json::Value::String(text.to_string()));
+            }
+        }
+    }
+    let normalized: Vec<serde_json::Value> = parts
+        .iter()
+        .map(|p| {
+            if let serde_json::Value::Object(mut map) = p.clone() {
+                if let Some(t) = map.get("type").and_then(|v| v.as_str()) {
+                    if t == "input_text" {
+                        map.insert(
+                            "type".to_string(),
+                            serde_json::Value::String("text".to_string()),
+                        );
+                    } else if t == "input_image" {
+                        map.insert(
+                            "type".to_string(),
+                            serde_json::Value::String("image_url".to_string()),
+                        );
+                    }
+                }
+                serde_json::Value::Object(map)
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
+    Some(serde_json::Value::Array(normalized))
+}
+
+pub(crate) fn normalize_responses_tools(
+    tools: Option<Vec<serde_json::Value>>,
+) -> Option<Vec<serde_json::Value>> {
+    let tools = tools?;
+    let normalized: Vec<serde_json::Value> = tools
+        .into_iter()
+        .map(|tool| {
+            if let serde_json::Value::Object(mut map) = tool {
+                if map.contains_key("function") {
+                    return serde_json::Value::Object(map);
+                }
+                let is_function = map
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_none_or(|t| t == "function");
+                if is_function
+                    && (map.contains_key("name")
+                        || map.contains_key("parameters")
+                        || map.contains_key("description"))
+                {
+                    let mut fn_obj = serde_json::Map::new();
+                    if let Some(name) = map.remove("name") {
+                        fn_obj.insert("name".to_string(), name);
+                    }
+                    if let Some(desc) = map.remove("description") {
+                        fn_obj.insert("description".to_string(), desc);
+                    }
+                    if let Some(params) = map.remove("parameters") {
+                        fn_obj.insert("parameters".to_string(), params);
+                    }
+                    if let Some(strict) = map.remove("strict") {
+                        fn_obj.insert("strict".to_string(), strict);
+                    }
+                    map.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("function".to_string()),
+                    );
+                    map.insert("function".to_string(), serde_json::Value::Object(fn_obj));
+                }
+                serde_json::Value::Object(map)
+            } else {
+                tool
+            }
+        })
+        .collect();
+    Some(normalized)
+}
+
 /// Translate a Responses-protocol request body into the internal
 /// OpenAIRequest shape the pipeline consumes. Mirrors the logic in
 /// `handlers::responses::translate_responses_to_openai` but is
@@ -404,7 +493,7 @@ pub(crate) fn translate_responses_to_openai(
                         Some(serde_json::Value::String(s.clone()))
                     }
                     openproxy_types::ResponsesContent::Parts(parts) => {
-                        Some(serde_json::Value::Array(parts.clone()))
+                        normalize_responses_content_parts(parts)
                     }
                 };
                 messages.push(OpenAIMessage {
@@ -451,16 +540,27 @@ pub(crate) fn translate_responses_to_openai(
         }
     }
 
+    let max_tokens = req.max_output_tokens.or_else(|| {
+        req.extra
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+    });
+
+    let mut extra = req.extra.clone();
+    extra.remove("input");
+    extra.remove("max_output_tokens");
+
     openproxy_types::OpenAIRequest {
         model: req.model.clone(),
         messages,
-        tools: req.tools.clone(),
+        tools: normalize_responses_tools(req.tools.clone()),
         tool_choice: req.tool_choice.clone(),
         user: None,
-        extra: req.extra.clone(),
-        temperature: None,
-        max_tokens: None,
-        top_p: None,
+        extra,
+        temperature: req.temperature,
+        max_tokens,
+        top_p: req.top_p,
         top_k: None,
         stream: req.stream,
         stop: None,
@@ -494,8 +594,12 @@ pub async fn auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, crate::error::ApiError> {
     let (mut parts, body) = req.into_parts();
-    let is_responses =
-        parts.uri.path() == "/v1/responses" || parts.uri.path().starts_with("/v1/responses?");
+    let path = parts.uri.path();
+    let is_responses = path == "/v1/responses"
+        || path == "/responses"
+        || path.starts_with("/v1/responses?")
+        || path.starts_with("/responses?")
+        || path.ends_with("/responses");
 
     let auth_result = authenticate(&state, &parts.headers)?;
 
@@ -516,8 +620,47 @@ pub async fn auth_middleware(
         }
         translate_responses_to_openai(&responses_req)
     } else {
-        serde_json::from_slice(&bytes)
-            .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?
+        let mut req: openproxy_types::OpenAIRequest =
+            serde_json::from_slice(&bytes).map_err(|e| {
+                crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string()))
+            })?;
+
+        if req.messages.is_empty()
+            && let Some(input_val) = req.extra.remove("input")
+            && let Ok(input_items) = serde_json::from_value::<
+                Vec<openproxy_types::ResponsesInputItem>,
+            >(input_val.clone())
+            .or_else(|_| {
+                serde_json::from_value::<String>(input_val).map(|s| {
+                    vec![openproxy_types::ResponsesInputItem::Message {
+                        role: "user".to_string(),
+                        content: openproxy_types::ResponsesContent::Plain(s),
+                    }]
+                })
+            })
+        {
+            let max_output = req
+                .extra
+                .remove("max_output_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let synthetic_req = openproxy_types::ResponsesRequest {
+                model: req.model.clone(),
+                instructions: None,
+                input: input_items,
+                tools: req.tools.clone(),
+                tool_choice: req.tool_choice.clone(),
+                stream: req.stream,
+                max_output_tokens: max_output,
+                temperature: req.temperature,
+                top_p: req.top_p,
+                previous_response_id: None,
+                extra: req.extra.clone(),
+            };
+            req = translate_responses_to_openai(&synthetic_req);
+        }
+        req.tools = normalize_responses_tools(req.tools);
+        req
     };
 
     sanitize_tool_calls(&mut parsed.messages);

@@ -1,82 +1,462 @@
-/* ============================================
-   LOG DETAIL MODAL VIEW STYLES
-   ============================================ */
+/* ==========================================================================
+   Log Detail Modal — Universal Specification (Desktop & Mobile)
+   ========================================================================== */
 
-.log-detail-modal {
-  max-width: 900px;
-  width: 95vw;
-}
-
-.modal-tabs {
-  display: flex;
-  background: var(--color-surface-2);
-  border-bottom: var(--border-w) var(--border-style) var(--color-border);
-  gap: 1px;
-}
-.modal-tab-btn {
-  background: transparent;
-  border: none;
-  font-family: var(--font-sans);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  color: var(--color-text-muted);
-  padding: 0.5rem 1rem;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: all var(--t-fast);
-}
-.modal-tab-btn:hover {
+/* Reglas Generales / Esquinas Rectas Dell 1996 */
+.log-detail-modal-wrapper .modal,
+.log-detail-modal .modal {
+  background: var(--color-bg);
+  border: var(--border-w-2, 2px) var(--border-style) var(--color-border);
+  border-radius: 0;
   color: var(--color-text);
-}
-.modal-tab-btn.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
-  background: var(--color-surface);
-  font-weight: 600;
-}
-
-.log-detail-body {
-  max-height: calc(85vh - 120px);
-  overflow-y: auto;
-  padding: var(--space-4);
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
 }
 
-.collapsible-section {
-  border: var(--border-w) var(--border-style) var(--color-border);
-  margin-bottom: var(--space-3);
-  background: var(--color-surface);
-}
-.collapsible-header {
+.log-detail-modal .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.4rem var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--color-surface-2);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+}
+
+.log-detail-modal .modal-header h2,
+.log-detail-modal .modal-header h3 {
+  font-size: var(--fs-md, 1rem);
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-text);
+}
+
+/* Toolbar de Pestañas y Botón Copiar */
+.tabs-toolbar,
+.tabs-and-actions-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 4px;
+  margin-bottom: 3px;
+  border-bottom: none;
+}
+
+.tabs-group,
+.log-detail-tabs-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+
+.detail-tab {
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: none;
+  border-bottom: none;
+  box-shadow: none;
+  outline: none;
   cursor: pointer;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  border-radius: 0;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.detail-tab:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.detail-tab.active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-bottom: none;
   font-weight: 600;
 }
-.collapsible-content {
-  padding: var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
 
-.debug-bundle-view {
-  background: var(--color-bg);
+.btn-copy-tab,
+.btn-copy-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0.25rem 0.6rem;
+  font-size: var(--fs-xs, 0.75rem);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  color: var(--color-text);
+  background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
-  padding: var(--space-3);
+  border-radius: 0;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+
+.btn-copy-tab:hover,
+.btn-copy-action:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-text-muted);
+}
+
+/* Ocultar encabezados redundantes dentro del contenido de pestañas */
+.log-detail-section h4 {
+  display: none;
+}
+
+/* ==========================================================================
+   DESKTOP ONLY (min-width: 768px)
+   ========================================================================== */
+@media (min-width: 768px) {
+  .log-detail-modal-wrapper .modal,
+  .log-detail-modal .modal {
+    max-width: 860px;
+    width: 90vw;
+    max-height: 88vh;
+  }
+
+  .mobile-modal-kpi-grid {
+    display: none;
+  }
+
+  .log-detail-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-3);
+    background: var(--color-surface-2);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: 0;
+    margin-bottom: var(--space-2);
+  }
+
+  .log-detail-summary > div {
+    font-size: var(--fs-xs, 0.75rem);
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log-detail-summary strong {
+    display: block;
+    color: var(--color-text-muted);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+    font-weight: 600;
+  }
+
+  .log-detail-summary .mono-val {
+    font-family: var(--font-mono);
+  }
+
+  .json-viewer {
+    background: var(--color-surface-2);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: 0;
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    color: var(--color-text);
+    max-height: 380px;
+    overflow: auto;
+    margin-top: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  /* ===== Desktop log-detail modal: single-Y-scroll layout =====
+     AC1: .modal-body absorbe todo el scroll vertical del contenido.
+     AC5: header/summary/tabs nunca se comprimen (flex-shrink: 0).
+     B1:  .json-viewer conserva overflow-x: auto como red de seguridad
+          contra tokens sin breakpoint (base64, URLs, hashes hex).
+          overflow-y: hidden cede el scroll vertical al .modal-body. */
+
+  .log-detail-modal .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .log-detail-modal .modal-header,
+  .log-detail-modal .log-detail-summary,
+  .log-detail-modal .tabs-toolbar {
+    flex-shrink: 0;
+  }
+
+  .log-detail-modal .log-detail-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    /* overflow intencionalmente NO definido (default: visible)
+       para que los <details> expandidos fluyan sin recorte. */
+  }
+
+  .log-detail-modal .json-viewer {
+    max-height: none;
+    overflow-y: hidden;
+    overflow-x: auto;
+  }
+}
+
+/* ==========================================================================
+   MOBILE ONLY (max-width: 768px)
+   ========================================================================== */
+@media (max-width: 768px) {
+  .log-detail-modal-wrapper .modal,
+  .log-detail-modal .modal {
+    width: 96vw;
+    max-width: 96vw;
+    height: 92vh;
+    max-height: 92vh;
+  }
+
+  .log-detail-summary.desktop-summary {
+    display: none;
+  }
+
+  .log-detail-modal .modal-header {
+    padding: 6px 10px;
+  }
+
+  .log-detail-modal .modal-header h2,
+  .log-detail-modal .modal-header h3 {
+    font-size: 0.8rem;
+    max-width: 170px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log-detail-modal .modal-body {
+    padding: 8px 10px;
+    flex: 1 1 0%;
+    min-height: 0;
+    gap: 6px;
+  }
+
+  /* 4 Mini-Cards KPI en Móvil */
+  .mobile-modal-kpi-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 6px;
+    margin-bottom: 2px;
+  }
+
+  .m-kpi-card {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: 4px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.7rem;
+    overflow: hidden;
+  }
+
+  .m-kpi-card .kpi-label {
+    font-size: 0.62rem;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+
+  .m-kpi-card .kpi-val {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 600;
+  }
+
+  .m-kpi-card .kpi-sub {
+    font-size: 0.65rem;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Visor JSON Maximizado en Móvil */
+  .log-detail-content {
+    flex: 1 1 0%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .log-detail-section {
+    flex: 1 1 0%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .json-viewer {
+    flex: 1 1 0%;
+    min-height: 0;
+    height: 100%;
+    max-height: none;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1.4;
+    overflow: auto;
+    color: var(--color-text);
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+}
+
+.streaming-token {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
 
-@media (max-width: 768px) {
-  .log-detail-modal {
-    width: 100vw;
-    height: 100vh;
-    max-height: 100dvh;
-  }
+
+.log-detail-section { margin-bottom: var(--space-3); }
+.log-detail-collapsible {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.log-detail-collapsible > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  user-select: none;
+}
+.log-detail-collapsible[open] > summary {
+  color: var(--color-primary);
+  margin-bottom: var(--space-2);
+}
+.log-detail-collapsible-body {
+  margin: 0;
+  border: none;
+  background: var(--color-surface);
+  font-size: var(--fs-xs);
+}
+.log-detail-key { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.log-detail-key-pinned { color: var(--color-primary); font-weight: 600; }
+.log-detail-key-meta {
+  margin-left: var(--space-2);
+  color: var(--color-text-muted);
+  font-weight: 400;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.log-detail-tool-call {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.log-detail-tool-call:last-child { margin-bottom: 0; }
+.log-detail-tool-call-header {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--fs-sm);
+  margin-bottom: var(--space-2);
+}
+.log-detail-tool-call-name { font-weight: 600; color: var(--color-text); }
+.log-detail-tool-call-id {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.log-detail-tool-call-args { margin-top: var(--space-2); }
+.log-detail-messages { display: flex; flex-direction: column; gap: var(--space-1); }
+.log-detail-messages > .log-detail-collapsible { margin-bottom: var(--space-1); }
+.log-detail-role {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-right: var(--space-1);
+}
+.log-detail-role-system  { background: var(--chart-tint-lavender); color: var(--chart-purple-dark); }
+.log-detail-role-assistant { background: var(--chart-tint-blue); color: #2a6496; }
+.log-detail-role-user    { background: var(--chart-tint-green); color: var(--chart-green-dark); }
+.log-detail-role-tool    { background: var(--chart-tint-gold); color: var(--chart-warn); }
+.log-detail-msg-preview {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+.log-detail-tool-calls { display: flex; flex-direction: column; gap: var(--space-1); }
+.log-detail-tool-calls > .log-detail-collapsible { margin-bottom: var(--space-1); }
+.log-detail-tool-call-name {
+  font-weight: 600;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+.log-detail-placeholder {
+  padding: var(--space-2) var(--space-3);
+  border-left: var(--border-w-2) solid var(--color-primary);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+.log-detail-partial-banner {
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  border-left: var(--border-w-2) solid var(--color-warning, #f59e0b);
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 12%, var(--color-surface-2));
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+}
+.log-detail-copy-bundle-btn {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.log-detail-copy-bundle-btn:hover {
+  background: var(--color-surface-3, var(--color-surface-2));
+  color: var(--color-text);
 }

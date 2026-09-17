@@ -256,9 +256,9 @@ const CHAT_GUARDS = ['gemini', 'gpt-', 'claude', 'qwen', 'llama', 'mistral', 'mi
 const AUDIO_EXPLICIT = ['whisper', 'tts', '-asr', '_asr', '/asr', 'deepgram', 'speechmatics', 'elevenlabs', 'fish-audio'];
 const IMAGE_EXPLICIT = ['dall-e', 'imagen', 'flux', 'midjourney', 'sdxl', 'seedream', 'nano-banana', 'lucid-origin', 'grok-imagine'];
 const CHAT_EXCEPTIONS = ['gpt-4o-audio', 'gpt-4-audio', 'qwen-audio-chat', 'qwen2-audio-instruct', 'stepaudio-2.5-chat', 'stepaudio-2.5-realtime', 'diffusiongemma', 'sdft'];
-const AUDIO_KEYWORDS = ['whisper', 'speechify', 'melotts', 'melo-tts', 'kokoro', 'fish-audio', 'fish-speech', 'chattts', 'cosyvoice', 'openvoice', 'parler-tts', 'speechmatics', 'tts-1', 'inworld-tts', 'elevenlabs', 'eleven-labs', 'eleven_multilingual', 'stable-audio', 'musicgen', 'audioldm', 'seamless-m4t', 'sensevoice', 'voxtral-mini-tts', 'xai-tts', '-tts', '_tts', '/tts', 'preview-tts', '-asr'];
+const AUDIO_KEYWORDS = ['whisper', 'speechify', 'melotts', 'melo-tts', 'kokoro', 'fish-audio', 'fish-speech', 'chattts', 'cosyvoice', 'openvoice', 'parler-tts', 'speechmatics', 'tts-1', 'inworld-tts', 'elevenlabs', 'eleven-labs', 'eleven_multilingual', 'stable-audio', 'musicgen', 'audioldm', 'seamless-m4t', 'sensevoice', 'voxtral-mini-tts', 'xai-tts', '-tts', '_tts', '/tts', '-tts-', '_tts_', '/tts-', 'preview-tts', '-tts-preview', '-asr', '-asr-'];
 const EMBED_KEYWORDS = ['text-embedding', 'embedding', 'embeddings', 'embedder', 'model2vec', 'bge-', '/bge-', 'bge_', 'bge.', 'embed-qa', 'embedcode', 'pplx-embed', 'mistral-embed', 'codestral-embed', 'arctic-embed', 'nomic-embed', 'voyage-embed', 'nv-embed', 'gte-', 'e5-', 'embed-v'];
-const IMAGE_KEYWORDS = ['dall-e', 'dalle', 'midjourney', 'ideogram', 'recraft', 'flux', 'sdxl', 'stable-diffusion', 'stable_diffusion', 'stablediffusion', 'stable-image', 'sd-turbo', 'sdxl-turbo', 'sd-1.5', 'sd-2.1', 'sd-3', 'sd-3.5', 'sd3', 'sd3.5', 'imagen', 'dreamshaper', 'pony', 'animagine', 'zavychroma', 'novafast', 'albedobase', 'edge of realism', 'zeipher female', 'mhxl', 'rag illustrious', 'mistoon anime', 'bb95 furry', 'camelliamix', 'anything v3', 'anything v5', 'perfect world', 'abyss orangemix', 'stable cascade', 'playbookxl', 'rundiffusion', 'playground-v2', 'kandinsky', 'kolors', 'auraflow', 'lumina-image', 'hunyuan-dit', 'pixart', 'cogview', 'gameart', 'art of mtg', 'duchaiten', 'duc haiten', 'nai-diffusion', 'diffusion'];
+const IMAGE_KEYWORDS = ['dall-e', 'dalle', 'midjourney', 'ideogram', 'recraft', 'flux', 'sdxl', 'stable-diffusion', 'stable_diffusion', 'stablediffusion', 'stable-image', 'sd-turbo', 'sdxl-turbo', 'sd-1.5', 'sd-2.1', 'sd-3', 'sd-3.5', 'sd3', 'sd3.5', 'imagen', 'imagen-', 'imagen/', 'dreamshaper', 'pony', 'animagine', 'zavychroma', 'novafast', 'albedobase', 'edge of realism', 'zeipher female', 'mhxl', 'rag illustrious', 'mistoon anime', 'bb95 furry', 'camelliamix', 'anything v3', 'anything v5', 'perfect world', 'abyss orangemix', 'stable cascade', 'playbookxl', 'rundiffusion', 'playground-v2', 'kandinsky', 'kolors', 'auraflow', 'lumina-image', 'hunyuan-dit', 'pixart', 'cogview', 'gameart', 'art of mtg', 'duchaiten', 'duc haiten', 'nai-diffusion', 'diffusion'];
 
 export function inferModelTypeFrontend(
   modelId: string,
@@ -270,7 +270,7 @@ export function inferModelTypeFrontend(
   if (t === 'image' || t === 'embedding' || t === 'audio' || t === 'rerank') return t as ModalityType | 'rerank';
   if (s.includes('deepgram')) return 'audio';
   if (CHAT_EXCEPTIONS.some((k) => s.includes(k))) return 'chat';
-  if (AUDIO_KEYWORDS.some((k) => s.includes(k))) return 'audio';
+  if ((s.includes('telnyx-') && s.includes('tts')) || AUDIO_KEYWORDS.some((k) => s.includes(k))) return 'audio';
   if (s.includes('rerank')) return 'rerank';
   if (EMBED_KEYWORDS.some((k) => s.includes(k)) || (s.includes('embed') && !s.includes('embedded-') && !s.includes('embed_chat') && !s.includes('embeddable'))) return 'embedding';
   if (IMAGE_KEYWORDS.some((k) => s.includes(k))) return 'image';

@@ -243,3 +243,82 @@ async fn test_tier4_scenario_full_admin_lifecycle() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn test_tier4_scenario_responses_api_streaming_and_non_streaming() {
+    let harness = TestHarness::new().await;
+
+    // 1. Streaming Responses request
+    let stream_payload = json!({
+        "model": "mock-gpt-4",
+        "input": [
+            {"role": "user", "content": "Hello via Responses API stream"}
+        ],
+        "stream": true
+    });
+    let stream_req = harness.client_request(
+        Method::POST,
+        "/v1/responses",
+        Body::from(stream_payload.to_string()),
+    );
+    let (status, headers, body_bytes) = harness.oneshot(stream_req).await;
+    assert_eq!(status, StatusCode::OK);
+    let ct = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(ct.contains("text/event-stream"));
+
+    let body_str = String::from_utf8_lossy(&body_bytes);
+    assert!(
+        body_str.contains("event: response.created"),
+        "missing response.created in:\n{body_str}"
+    );
+    assert!(
+        body_str.contains("event: response.output_item.added"),
+        "missing output_item.added in:\n{body_str}"
+    );
+    assert!(
+        body_str.contains("event: response.output_text.delta"),
+        "missing output_text.delta in:\n{body_str}"
+    );
+    assert!(
+        body_str.contains("event: response.output_item.done"),
+        "missing output_item.done in:\n{body_str}"
+    );
+    assert!(
+        body_str.contains("event: response.completed"),
+        "missing response.completed in:\n{body_str}"
+    );
+    assert!(
+        body_str.contains("\"status\":\"completed\""),
+        "missing status completed in:\n{body_str}"
+    );
+    assert!(
+        body_str.contains("data: [DONE]"),
+        "missing [DONE] in:\n{body_str}"
+    );
+
+    // 2. Non-streaming Responses request
+    let sync_payload = json!({
+        "model": "mock-gpt-4",
+        "input": [
+            {"role": "user", "content": "Hello via Responses API sync"}
+        ],
+        "stream": false
+    });
+    let sync_req = harness.client_request(
+        Method::POST,
+        "/v1/responses",
+        Body::from(sync_payload.to_string()),
+    );
+    let (sync_status, sync_val) = harness.oneshot_json(sync_req).await;
+    assert_eq!(sync_status, StatusCode::OK);
+    assert_eq!(sync_val["object"], "response");
+    assert_eq!(sync_val["status"], "completed");
+    assert!(sync_val["output"].is_array());
+    assert_eq!(sync_val["output"][0]["type"], "message");
+    assert_eq!(sync_val["output"][0]["content"][0]["type"], "output_text");
+    assert!(sync_val["usage"]["input_tokens"].is_number());
+    assert!(sync_val["usage"]["output_tokens"].is_number());
+}

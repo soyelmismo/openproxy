@@ -1,117 +1,664 @@
-/* ============================================
-   LOGS VIEW STYLES
-   ============================================ */
+/* ==========================================================================
+   1. BLOQUEO VERTICAL DE VIEWPORT Y SCROLL INTERNO (Full Height Table)
+   ========================================================================== */
+#main:has(#logs),
+#main:has(.logs),
+body[data-view="logs"] #main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-bottom: 0.5rem;
+}
 
-/* Columns definitions for the logs grid */
-.log-row {
+.logs-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-shrink: 0;
+}
+.logs-header h2 { margin: 0; }
+.m-header-top-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.m-header-status-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.logs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.logs-filter-toolbar {
+  flex-shrink: 0;
+}
+
+#logs, .logs {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  overflow: hidden;
+}
+
+.logs-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.logs-section:last-child {
+  border-bottom: none;
+  flex: 1;
+}
+
+.logs-section-inflight {
+  flex-shrink: 0;
+  max-height: 240px;
+}
+
+.logs-section-finished {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.logs-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: 0.8rem;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.logs-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-main, inherit);
+}
+
+.logs-inflight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  display: inline-block;
+  animation: logs-recording-pulse 1.5s ease-out infinite;
+}
+
+.logs-section-count {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.logs-scroll-area {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.logs-pagination {
+  flex-shrink: 0;
+  margin-top: auto;
+}
+
+/* ==========================================================================
+   2. ANCHOS Y ALINEACIONES DE COLUMNAS (DESKTOP)
+   ========================================================================== */
+.log-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 0;
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  padding: 0.4rem var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  border-bottom: 1px solid var(--color-border-soft);
   cursor: pointer;
   transition: background var(--t-fast);
-  padding: 0.35rem 0.5rem;
 }
+
+.logs-scroll-area [data-key] {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+}
+
 .log-row:hover { background: var(--color-surface-2); }
-.log-row.in-flight { background: var(--color-primary-soft); }
+.log-row:active { transform: translateY(1px); }
+.log-row.streaming { animation: pulse 2s infinite; }
+.log-row.error { background: var(--color-error-soft); }
+.log-row.error:hover { background: var(--color-error-soft); }
+.log-row.processing { background: var(--color-warn-soft); }
+.log-row.processing:hover { background: var(--color-warn-soft); }
+.log-row.loser { opacity: 0.65; }
+.log-row.predict-skipped { opacity: 0.55; background: var(--color-surface-2); }
+.log-row.predict-skipped:hover { opacity: 0.85; background: var(--color-surface-2); }
+.log-status--skipped { color: var(--color-text-muted); font-weight: 500; text-transform: uppercase; font-size: 0.75rem; }
 
-.log-col-time     { width: 75px; flex-shrink: 0; color: var(--color-text-muted); }
-.log-col-phase    { width: 90px; flex-shrink: 0; text-align: center; }
-.log-col-endpoint { width: 65px; flex-shrink: 0; text-align: center; }
-.log-col-client   { width: 90px; flex-shrink: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; }
-.log-col-status   { width: 50px; flex-shrink: 0; text-align: center; font-weight: 600; }
-.log-col-provider { width: 110px; flex-shrink: 0; }
-.log-col-model    { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.log-col-tokens   { width: 95px; flex-shrink: 0; text-align: right; }
-.log-col-latency  { width: 70px; flex-shrink: 0; text-align: right; }
-.log-col-cost     { width: 65px; flex-shrink: 0; text-align: right; }
-.log-col-cache    { width: 55px; flex-shrink: 0; text-align: center; }
-.log-col-compress { width: 60px; flex-shrink: 0; text-align: center; }
-
-/* Log phase pill (in cell) */
-.log-phase-pill {
-  display: inline-block;
-  padding: 0.08rem 0.4rem;
-  font-size: 0.68rem;
-  font-weight: 600;
-  border-radius: var(--radius-sm, 2px);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  line-height: 1.2;
+.log-row > span {
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.log-phase-pill.started    { background: #e0f2fe; color: #0369a1; }
-.log-phase-pill.connecting { background: #fef3c7; color: #b45309; }
-.log-phase-pill.waiting    { background: #fef08a; color: #854d0e; }
-.log-phase-pill.streaming  { background: #dcfce7; color: #15803d; }
-.log-phase-pill.completed  { background: var(--color-surface-2); color: var(--color-text-muted); }
-.log-phase-pill.failed     { background: #fee2e2; color: #b91c1c; }
 
-/* Filter Toolbar */
+/* 1. TIME: Estático (Izquierda) */
+.log-row .log-time {
+  flex: 0 0 170px;
+  width: 170px;
+  min-width: 170px;
+  max-width: 170px;
+  color: var(--color-text-muted);
+}
+
+/* 2. PHASE: Estático (Centrado) */
+.log-row .log-phase {
+  flex: 0 0 155px;
+  width: 155px;
+  min-width: 155px;
+  max-width: 155px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.log-row .log-phase .log-phase-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 3. ENDPOINT: Estático (Centrado) */
+.log-row .log-type {
+  flex: 0 0 78px;
+  width: 78px;
+  min-width: 78px;
+  max-width: 78px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+}
+
+/* 4. CLIENT: Estático (Centrado) */
+.log-row .log-client {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* 5. STATUS: Estático (Centrado) */
+.log-row .log-status {
+  flex: 0 0 58px;
+  width: 58px;
+  min-width: 58px;
+  max-width: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 600;
+}
+
+/* 6. PROVIDER: Dinámico (Izquierda) */
+.log-row .log-provider {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 110px;
+  max-width: 170px;
+}
+
+/* 7. MODEL: Dinámico Principal (Izquierda) */
+.log-row .log-model {
+  flex: 2.5 1 200px;
+  width: auto;
+  min-width: 180px;
+  max-width: none;
+}
+
+/* 8. TOKENS: Estático (Izquierda) */
+.log-row .log-tokens {
+  flex: 0 0 115px;
+  width: 115px;
+  min-width: 115px;
+  max-width: 115px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+/* 9. LATENCY: Estático (Centrado) */
+.log-row .log-latency {
+  flex: 0 0 75px;
+  width: 75px;
+  min-width: 75px;
+  max-width: 75px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+/* 10. COST: Estático (Centrado) */
+.log-row .log-cost {
+  flex: 0 0 70px;
+  width: 70px;
+  min-width: 70px;
+  max-width: 70px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-primary);
+}
+
+/* 11. API CACHE: Estático (Centrado) */
+.log-row .log-cache {
+  flex: 0 0 82px;
+  width: 82px;
+  min-width: 82px;
+  max-width: 82px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* 12. COMPRESS: Estático (Centrado) */
+.log-row .log-compression {
+  flex: 0 0 80px;
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-success, #22c55e);
+  font-size: 0.85em;
+}
+.log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
+
+.log-type-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-type-tag--chat {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--chart-blue-light);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+.log-type-tag--audio {
+  background: rgba(234, 179, 8, 0.12);
+  color: var(--chart-yellow);
+  border-color: rgba(234, 179, 8, 0.3);
+}
+.log-type-tag--image {
+  background: rgba(236, 72, 153, 0.12);
+  color: var(--chart-pink);
+  border-color: rgba(236, 72, 153, 0.3);
+}
+.log-type-tag--embedding {
+  background: rgba(168, 85, 247, 0.12);
+  color: var(--chart-purple-light);
+  border-color: rgba(168, 85, 247, 0.3);
+}
+.log-type-tag--video {
+  background: rgba(249, 115, 22, 0.12);
+  color: var(--chart-orange);
+  border-color: rgba(249, 115, 22, 0.3);
+}
+.log-type-tag--pii {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+/* Client response indicator: checkmark (winner) vs dashed circle (internal) */
+.log-client--winner   { color: var(--color-success, #22c55e); }
+.log-client--internal { color: var(--color-text-muted); opacity: 0.6; }
+.log-client svg { display: block; }
+
+.desktop-cells {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  gap: var(--space-2);
+}
+.m-card-view {
+  display: none;
+}
+
+
+/* ----- Log phase pill (in cell) ----- */
+.log-phase {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.1rem 0.4rem;
+  background: var(--color-phase-soft);
+  color: var(--color-phase-text);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.log-phase-sub {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-phase-sub--ticking { color: var(--color-primary); }
+.log-phase--started      { background: var(--color-surface-2); }
+.log-phase--connecting   { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); animation: phasePulse 1.4s ease-in-out infinite; }
+.log-phase--waiting_ttft { background: var(--color-warn-soft); color: var(--color-warn); border-color: var(--color-warn); animation: phaseBlink 1.2s ease-in-out infinite; }
+.log-phase--streaming    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); animation: phasePulse 2s ease-in-out infinite; }
+.log-phase--completed    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.log-phase--failed       { background: var(--color-error-soft); color: var(--color-error); border-color: var(--color-error); }
+.log-phase--cancelled    { background: var(--chart-tint-purple); color: var(--chart-purple-darker); border-color: var(--chart-purple-darker); }
+.log-phase--predict_skipped { background: var(--color-surface-2); color: var(--color-text-muted); border-color: var(--color-border); }
+.status-pill.skipped     { background: var(--color-surface-2); color: var(--color-text-muted); border: 1px solid var(--color-border); }
+
+/* ----- Columns toggle (logs view) ----- */
+/* The "Columns ▾" button lives in the logs header and opens a
+ * popover with one checkbox per column. The wrapper establishes
+ * the positioning context (so the menu can `position: absolute`
+ * under the button), the menu itself is hidden by default and
+ * revealed with `.open` (toggled by the toggleColumnsMenu handler
+ * in views/logs.js). */
+.columns-menu-wrapper {
+  position: relative;
+  display: inline-block;
+  z-index: 100;
+}
+.logs-columns-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  height: 28px;
+  box-sizing: border-box;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--t-fast);
+  white-space: nowrap;
+}
+.logs-columns-toggle:hover { background: var(--color-surface); }
+.logs-columns-toggle[aria-expanded="true"] {
+  background: var(--color-surface);
+  border-color: var(--color-primary);
+}
+.logs-columns-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+}
+.logs-columns-caret .icon {
+  margin-top: 1px;
+}
+.columns-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  display: none;
+  min-width: 160px;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+}
+.columns-menu.open { display: block; }
+.columns-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.3rem;
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text);
+}
+.columns-menu-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+.log-phase--idle         { background: var(--color-surface-2); color: var(--color-text-muted); }
+
+/* ----- Live Logs Filter Toolbar ----- */
 .logs-filter-toolbar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  margin-bottom: var(--space-2);
   flex-wrap: wrap;
-}
-.logs-filter-toolbar input[type="text"],
-.logs-filter-toolbar select {
-  font-size: var(--fs-xs);
-  padding: 0.2rem 0.4rem;
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-md);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header, 10);
 }
 .logs-search-box {
-  flex: 1;
-  min-width: 160px;
-}
-
-/* Columns toggle */
-.columns-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  box-shadow: var(--shadow-md);
-  padding: var(--space-2);
-  z-index: var(--z-dropdown, 100);
-  min-width: 180px;
+  position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  flex: 1 1 240px;
+  min-width: 200px;
+  height: 28px;
+  box-sizing: border-box;
+}
+.logs-search-icon {
+  position: absolute;
+  left: 0.65rem;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  pointer-events: none;
+  z-index: 1;
+}
+.logs-search-icon .icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+}
+.logs-search-input {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 1.8rem 0 2rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  line-height: normal;
+}
+.logs-search-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+.logs-search-input::-webkit-search-decoration,
+.logs-search-input::-webkit-search-cancel-button,
+.logs-search-input::-webkit-search-results-button,
+.logs-search-input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+.logs-search-clear {
+  position: absolute;
+  right: 0.45rem;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+  width: 18px;
+  height: 100%;
+  font-size: 0.75rem;
+  z-index: 1;
+}
+.logs-search-clear:hover {
+  color: var(--color-text);
+}
+.logs-search-clear .icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+}
+.logs-status-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.logs-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 0.65rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--t-fast);
+  user-select: none;
+}
+.logs-filter-btn .icon {
+  vertical-align: middle;
+  margin-top: -1px;
+  flex-shrink: 0;
+}
+.logs-filter-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+.logs-filter-btn.active {
+  background: var(--color-text);
+  color: var(--color-surface);
+  border-color: var(--color-text);
+  font-weight: 600;
 }
 
-/* Pagination */
+
+/* ----- Logs pagination ----- */
 .logs-pagination {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface-2);
   border-top: var(--border-w) var(--border-style) var(--color-border);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  flex-wrap: wrap;
+}
+.logs-pagination .rows-info { color: var(--color-text-muted); }
+.logs-pagination .page-info { color: var(--color-text-muted); font-family: var(--font-mono); }
+.logs-pagination .logs-follow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
   color: var(--color-text-muted);
-}
-.logs-pagination-buttons {
-  display: flex;
-  gap: var(--space-1);
-}
-
-/* Mobile Log Card (<=768px) */
-@media (max-width: 768px) {
-  .log-row {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 8px 10px;
-    gap: 4px;
-  }
-  .log-col-time, .log-col-phase, .log-col-endpoint, .log-col-client,
-  .log-col-status, .log-col-provider, .log-col-model, .log-col-tokens,
-  .log-col-latency, .log-col-cost, .log-col-cache, .log-col-compress {
-    width: 100% !important;
-    text-align: left !important;
-  }
+  font-size: var(--fs-xs);
 }

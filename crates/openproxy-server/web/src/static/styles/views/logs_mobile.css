@@ -1,0 +1,479 @@
+/* ==========================================================================
+   Live Logs — Mobile Responsive Complete Specification (<= 768px)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .logs {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 56px);
+    max-height: calc(100vh - 56px);
+    overflow: hidden;
+    padding: 0;
+  }
+
+  /* 1. Header Compacto en 2 Filas */
+  .logs-header {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 12px 6px;
+    margin: 0;
+    gap: 6px;
+    background: var(--color-surface-2);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .m-header-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .m-header-top-row h2 {
+    font-size: var(--fs-lg);
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .m-header-status-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .logs-connection-badge,
+  .logs-recording-toggle {
+    font-size: 0.68rem;
+    padding: 2px 6px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius-sm);
+  }
+
+  .m-header-actions-row {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr 1fr;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .m-header-actions-row .btn,
+  .m-header-actions-row button,
+  .m-header-actions-row .logs-columns-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    padding: 4px 6px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    width: 100%;
+  }
+
+  /* 2. Menú de Columnas en 2 Columnas */
+  .columns-menu-wrapper {
+    position: relative;
+  }
+
+  .columns-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 200;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85);
+    padding: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+    width: 260px;
+    box-sizing: border-box;
+  }
+
+  .columns-menu:not(.open) {
+    display: none;
+  }
+
+  .columns-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    cursor: pointer;
+    padding: 3px 4px;
+    transition: background var(--t-fast);
+    user-select: none;
+  }
+
+  .columns-menu-item:hover {
+    background: var(--color-surface);
+  }
+
+  .columns-menu-item input[type="checkbox"] {
+    accent-color: var(--color-primary);
+    cursor: pointer;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+  }
+
+  /* 3. Buscador y Filtros Deslizables */
+  .logs-filter-toolbar {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+    padding: 6px 12px !important;
+    margin: 0 !important;
+    background: var(--color-surface) !important;
+    border-bottom: 1px solid var(--color-border) !important;
+    border-radius: 0 !important;
+    flex-shrink: 0 !important;
+  }
+
+  .logs-search-box {
+    width: 100% !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    max-height: 32px !important;
+    flex: 0 0 32px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    position: relative !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+
+  .logs-search-wrapper {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .logs-search-input {
+    width: 100% !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    max-height: 32px !important;
+    box-sizing: border-box !important;
+    padding: 0 1.8rem 0 2rem !important;
+    font-size: 0.78rem !important;
+    font-family: var(--font-sans) !important;
+    border-radius: var(--radius-sm) !important;
+    line-height: normal !important;
+  }
+
+  .logs-status-filters {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    gap: 5px !important;
+    padding: 2px 0 4px !important;
+    margin: 0 !important;
+    scrollbar-width: none !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    flex: 0 0 auto !important;
+  }
+
+  .logs-status-filters::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  .logs-status-filters .logs-filter-btn {
+    flex-shrink: 0 !important;
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 4px !important;
+    padding: 0 10px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    font-size: 0.72rem !important;
+    font-family: var(--font-sans) !important;
+    font-weight: 500 !important;
+    border-radius: var(--radius-pill) !important;
+    white-space: nowrap !important;
+    border: 1px solid var(--color-border) !important;
+    background: var(--color-surface-2) !important;
+    color: var(--color-text-muted) !important;
+    cursor: pointer !important;
+    transition: all var(--t-fast) !important;
+  }
+
+  .logs-status-filters .logs-filter-btn .icon {
+    margin-top: -1px;
+    flex-shrink: 0;
+  }
+
+  .logs-status-filters .logs-filter-btn.active {
+    background: var(--color-text) !important;
+    border-color: var(--color-text) !important;
+    color: var(--color-surface) !important;
+    font-weight: 600 !important;
+  }
+
+  /* 4. In-flight vacío colapsado */
+  .logs-section-inflight.empty .empty-inflight,
+  .logs-section-inflight.empty .logs-empty-placeholder,
+  .logs-section-inflight.empty .logs-scroll-area {
+    display: none;
+  }
+
+  .logs-section-inflight .logs-section-header {
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  /* 5. Lista de Logs */
+  .logs-section-finished {
+    flex: 1 1 0%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .logs-section-finished .logs-section-header {
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    background: var(--color-surface-2);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .logs-scroll-area-finished {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .desktop-table-header,
+  .logs-scroll-area > .log-row:first-child:not(button) {
+    display: none;
+  }
+
+  .desktop-cells {
+    display: none;
+  }
+
+  /* 6. Tarjeta de Log Móvil */
+  .m-card-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 3px;
+  }
+
+  .logs-scroll-area button.log-row {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg);
+    box-sizing: border-box;
+    text-align: left;
+    border-left: 3px solid transparent;
+    gap: 3px;
+    overflow: hidden;
+  }
+
+  .logs-scroll-area button.log-row.ok { border-left-color: var(--color-success); }
+  .logs-scroll-area button.log-row.error { border-left-color: var(--color-error); background: rgba(178, 31, 31, 0.05); }
+
+  .m-line-1,
+  .m-line-2 {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    gap: 4px;
+  }
+
+  .m-line-left {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  .m-line-right {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
+    justify-content: flex-end;
+  }
+
+  .log-status-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    padding: 1px 4px;
+    border-radius: 3px;
+    min-width: 2.2rem;
+    text-align: center;
+  }
+
+  .log-type-tag {
+    font-size: 0.68rem;
+    padding: 1px 4px;
+    min-width: auto;
+    text-align: center;
+  }
+
+  .log-time-short {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+    min-width: 4.2rem;
+  }
+
+  .log-tokens-tag {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+    min-width: 5.4rem;
+    text-align: right;
+  }
+
+  .log-latency-tag {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--color-text);
+    min-width: 3.8rem;
+    text-align: right;
+  }
+
+  .log-model-prov {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    width: 100%;
+    flex: 1 1 0%;
+  }
+
+  /* 7. Paginación Móvil */
+  .logs-pagination {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 12px;
+    background: var(--color-surface-2);
+    border-top: 1px solid var(--color-border);
+    box-sizing: border-box;
+  }
+
+  .mobile-pag-row-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .mobile-pag-row-controls button {
+    min-width: 34px;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 0.74rem;
+    border-radius: 0;
+  }
+
+  .mobile-pag-row-controls .page-info {
+    font-size: 0.74rem;
+    font-family: var(--font-mono);
+    margin: 0 6px;
+  }
+
+  .mobile-pag-row-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+  }
+}
+
+.log-detail-modal { z-index: var(--z-modal); }
+.log-detail-modal-card { min-width: min(500px, 95vw); max-width: 800px; width: 90vw; max-height: 90vh; }
+
+
+@media (max-width: 768px) {
+  /* ----- Debug Log Cards on Mobile ----- */
+  .debug-log-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .debug-log-card-row td {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    width: 100%;
+  }
+  .debug-log-card-row .col-debug-time,
+  .debug-log-card-row .col-debug-level,
+  .debug-log-card-row .col-debug-target {
+    display: inline-flex;
+    width: auto;
+    margin-right: var(--space-2);
+  }
+  .debug-log-card-row .col-debug-rid,
+  .debug-log-card-row .col-debug-tid {
+    display: inline-flex;
+    width: auto;
+    margin-right: var(--space-2);
+  }
+  .debug-log-card-row .col-debug-rid::before { content: "Req: "; font-weight: 500; font-size: var(--fs-xs); color: var(--color-text-muted); margin-right: 3px; }
+  .debug-log-card-row .col-debug-tid::before { content: "Trace: "; font-weight: 500; font-size: var(--fs-xs); color: var(--color-text-muted); margin-right: 3px; }
+  .debug-log-card-row .col-debug-message {
+    padding-top: var(--space-1);
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+  }
+
+}

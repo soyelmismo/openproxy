@@ -1,0 +1,697 @@
+/* ======================================================================
+   Providers & Models & Accounts — Mobile Responsive (<= 768px)
+   ====================================================================== */
+@media (max-width: 768px) {
+  /* Cabecera del Proveedor */
+  .provider-detail-header {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+    background: var(--color-surface-2);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: 0;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .provider-detail-main {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  .provider-detail-title-row {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .provider-detail-title-row h2 {
+    font-size: var(--fs-lg);
+  }
+  .provider-detail-meta {
+    gap: var(--space-1);
+    min-width: 0;
+    width: 100%;
+  }
+  .provider-detail-meta .meta-link {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
+  }
+
+  .actions.provider-detail-actions,
+  .provider-detail-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+    width: 100%;
+    margin-top: 4px;
+  }
+
+  .actions.provider-detail-actions button,
+  .provider-detail-actions button {
+    height: 28px;
+    font-size: 0.72rem;
+    padding: 0 6px;
+    border-radius: 0;
+  }
+
+  .actions.provider-detail-actions button:nth-child(3),
+  .provider-detail-actions button:nth-child(3) {
+    grid-column: 1 / -1;
+    background: var(--color-surface);
+    font-weight: 600;
+  }
+
+  /* Toolbar de Modelos */
+  .section-header > div:last-child {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.25fr;
+    gap: 4px;
+    width: 100%;
+  }
+
+  /* Tarjeta Nativa de Modelo */
+  table.models-table,
+  .models-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .models-table thead {
+    display: none;
+  }
+
+  tr.model-card-row {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg);
+    border: var(--border-w, 1px) var(--border-style, solid) var(--color-border);
+    border-left: 3px solid var(--color-border);
+    border-radius: 0;
+    padding: 8px 10px;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    transition: background var(--t-fast);
+  }
+
+  tr.model-card-row.is-active,
+  tr.model-card-row.active {
+    border-left-color: var(--color-success);
+  }
+
+  tr.model-card-row > td:not(.mobile-model-card-cell) {
+    display: none;
+  }
+
+  tr.model-card-row > td.mobile-model-card-cell {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  /* 1. Header de Tarjeta */
+  .card-top-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .card-title-area {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .card-title-area input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--color-primary);
+    flex-shrink: 0;
+  }
+
+  .card-model-title {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: all;
+    transition: color var(--t-fast);
+  }
+
+  .card-model-title:hover {
+    color: var(--color-primary);
+  }
+
+  .card-status-pill {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .card-status-pill.active {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  .card-status-pill.inactive {
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+  }
+
+  /* 2. Fila de Badges & Metadatos */
+  .card-meta-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    font-size: 0.68rem;
+  }
+
+  .meta-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 4px;
+    border-radius: 0;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    font-size: 0.64rem;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .meta-chip.accent {
+    background: var(--color-surface);
+    color: var(--color-primary);
+    border-color: var(--color-primary-soft);
+    font-weight: 600;
+  }
+
+  .capability-badge {
+    font-size: 0.62rem;
+    padding: 1px 4px;
+    border-radius: 0;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  /* 3. Fila de Configuración (Sin etiqueta 'Upstream') */
+  .card-config-box {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: 5px 8px;
+  }
+
+  .config-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 0.68rem;
+  }
+
+  .config-val-upstream {
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+    width: 100%;
+    font-size: 0.68rem;
+  }
+
+  .config-label {
+    color: var(--color-text-muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .config-val {
+    font-family: var(--font-mono);
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  /* 4. Selectores de Enrutamiento */
+  .card-routes-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .custom-mobile-select {
+    width: 100%;
+    height: 26px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    color: var(--color-text);
+    font-size: 0.7rem;
+    padding: 0 4px;
+  }
+
+  /* 5. Barra de Acciones */
+  .card-actions-bar {
+    display: grid;
+    grid-template-columns: 1.2fr 1.2fr 34px;
+    gap: 4px;
+    width: 100%;
+    padding-top: 2px;
+  }
+
+  .btn-card {
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border-radius: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--t-fast);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .btn-card:hover {
+    background: var(--color-surface-2);
+  }
+
+  .btn-card.primary {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: #fff;
+  }
+
+  .btn-card.danger {
+    color: var(--color-error, #f87171);
+    border-color: var(--color-border);
+  }
+
+  .btn-card.danger:hover {
+    background: rgba(178, 31, 31, 0.15);
+  }
+
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  .filter-bar input[type="search"],
+  .filter-bar input[type="text"],
+  .filter-bar select {
+    width: 100%;
+  }
+
+  .playground-workspace {
+    flex-direction: column;
+  }
+  .playground-left,
+  .playground-right {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .playground-studio-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  .playground-studio-title-area {
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .playground-segmented-control {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+  }
+  .segmented-item {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 6px 8px;
+    font-size: 0.75rem;
+  }
+  .playground-studio-actions {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .playground-run-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .key-display {
+    max-width: 100%;
+    overflow-x: auto;
+    word-break: break-all;
+  }
+
+  .columns-menu {
+    max-width: calc(100vw - 2rem);
+    right: 0;
+    left: auto;
+  }
+
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ==========================================================================
+     Responsive Card Tables (Accounts & Models Mobile Card Mode)
+     ========================================================================== */
+
+  .responsive-card-table {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    background: transparent;
+    border: none;
+    min-width: 0;
+    width: 100%;
+  }
+  .responsive-card-table thead {
+    display: none;
+  }
+  .responsive-card-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
+  }
+  .responsive-card-table tbody tr.empty-row,
+  .responsive-card-table tbody td.empty-row {
+    display: block;
+    text-align: center;
+    padding: var(--space-4);
+  }
+
+  /* ----- Account Cards on Mobile ----- */
+  .account-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .account-card-row td {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    width: 100%;
+  }
+  .account-card-row .col-account-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .account-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-md);
+    font-weight: 600;
+    width: 100%;
+    min-width: 0;
+  }
+  .account-name {
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: calc(100% - 24px);
+  }
+  .account-edit-icon {
+    color: var(--color-text-muted);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .account-card-row .col-account-priority {
+    display: inline-flex;
+    align-items: center;
+  }
+  .account-priority-badge {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    padding: 2px 8px;
+    background: var(--color-surface-2);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+  }
+  .account-card-row .col-account-health {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .account-card-row .col-account-health::before {
+    content: "Health:";
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .account-card-row .col-account-health select {
+    width: auto;
+    min-height: 32px;
+    font-size: var(--fs-xs);
+    padding: 0 24px 0 8px;
+  }
+  .account-card-row .col-account-quota {
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-2);
+    border-top: 1px solid var(--color-border-soft);
+    border-bottom: 1px solid var(--color-border-soft);
+    margin: var(--space-1) 0;
+  }
+  .account-card-row .col-account-created {
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .account-actions-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .account-actions-wrap button {
+    flex: 1 1 auto;
+    min-height: 38px;
+    justify-content: center;
+    font-size: var(--fs-xs);
+  }
+
+  /* ----- Model Cards on Mobile ----- */
+  .model-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box;
+    width: 100%;
+    position: relative;
+  }
+  .model-card-row.inactive {
+    opacity: 0.75;
+    background: var(--color-surface-soft);
+  }
+  .model-card-row.selected {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-soft);
+  }
+  .model-card-row td {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    width: 100%;
+  }
+  
+  /* Model Card Top Header: Select checkbox + Name + Status */
+  .model-card-row .col-model-select {
+    position: absolute;
+    top: var(--space-3);
+    left: var(--space-3);
+    width: auto;
+    z-index: 2;
+  }
+  .model-card-row .col-model-select input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+  }
+  .model-card-row .col-model-name {
+    padding-left: 2.2rem;
+    padding-right: 0;
+    min-height: 24px;
+  }
+  .model-name-wrapper {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    padding-right: 4.5rem;
+  }
+  .model-usage-code {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    word-break: break-all;
+    cursor: pointer;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border-soft);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+  }
+  .model-card-row .col-model-status {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+  }
+
+  /* Specs & Format Row */
+  .model-card-row .col-model-format,
+  .model-card-row .col-model-context,
+  .model-card-row .col-model-max-output {
+    display: inline-flex;
+    width: auto;
+    margin-right: var(--space-2);
+  }
+  .format-chip {
+    font-size: 0.7rem;
+    padding: 1px 6px;
+  }
+  .model-spec-val {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    background: var(--color-surface-2);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Modality & Capabilities */
+  .model-modality-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+  }
+  .model-type-select {
+    width: 100%;
+    min-height: 36px;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    padding: 0.35rem 0.5rem;
+    border-radius: var(--radius-sm);
+  }
+  .model-caps-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .model-family-tag {
+    font-size: 0.7rem;
+  }
+
+  /* Test Status */
+  .model-card-row .col-model-test-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    padding: var(--space-1) 0;
+  }
+
+  /* Actions Block */
+  .model-actions-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border-soft);
+    margin-top: var(--space-1);
+  }
+  .model-test-selectors {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+  .model-account-select,
+  .model-proxy-select {
+    width: 100%;
+    max-width: 100%;
+    min-height: 36px;
+    font-size: 11px;
+    padding: 0 4px;
+    text-overflow: ellipsis;
+  }
+  .model-btn-group {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .model-btn-group button {
+    flex: 1 1 auto;
+    min-height: 38px;
+    justify-content: center;
+  }
+  .model-btn-group button.danger {
+    flex: 0 0 44px;
+  }
+
+}

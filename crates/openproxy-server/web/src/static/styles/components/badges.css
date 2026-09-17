@@ -26,6 +26,7 @@
   border: var(--border-w) var(--border-style) var(--color-border);
   font-size: var(--fs-xs);
   font-family: var(--font-mono);
+  border-radius: var(--radius-pill);
 }
 .chip.combo-chip { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); }
 .virtual-provider { font-style: italic; color: var(--color-text-muted); }

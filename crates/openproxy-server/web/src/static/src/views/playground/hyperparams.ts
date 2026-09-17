@@ -9,7 +9,7 @@ function slider(label: string, val: number, min: number, max: number, step: numb
       <div class="field-header-row">
         <label class="field-label">${label}</label>
         <input type="number" class="compact-number-input" min="${min}" max="${max}" step="${step}" .value=${String(val)}
-          @input=${(e: Event) => { onInput(parseFloat((e.target as HTMLInputElement).value) || 0); requestUpdate(); }} />
+          @change=${(e: Event) => { onInput(parseFloat((e.target as HTMLInputElement).value) || 0); requestUpdate(); }} />
       </div>
       <input type="range" min="${min}" max="${max}" step="${step}" .value=${String(val)}
         @input=${(e: Event) => { onInput(parseFloat((e.target as HTMLInputElement).value)); requestUpdate(); }} />
