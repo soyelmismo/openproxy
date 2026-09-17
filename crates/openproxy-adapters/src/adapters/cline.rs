@@ -272,4 +272,21 @@ mod tests {
         );
         assert!(wrapped_json.get("stream").unwrap().as_bool().unwrap());
     }
+
+    #[test]
+    fn test_cline_build_auth_header() {
+        let adapter = ClineAdapter::new();
+
+        let (key, val) = adapter
+            .build_auth_header("plain_token")
+            .expect("auth header expected");
+        assert_eq!(key, "Authorization");
+        assert_eq!(val, "Bearer workos:plain_token");
+
+        let (key2, val2) = adapter
+            .build_auth_header("workos:prefixed_token")
+            .expect("auth header expected");
+        assert_eq!(key2, "Authorization");
+        assert_eq!(val2, "Bearer workos:prefixed_token");
+    }
 }
