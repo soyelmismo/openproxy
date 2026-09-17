@@ -13,19 +13,6 @@ th.sticky {
   z-index: 1;
 }
 
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: var(--fs-xs);
-  color: var(--color-link);
-  text-decoration: none;
-  margin-bottom: var(--space-2);
-}
-.back-link:hover {
-  text-decoration: underline;
-}
-
 .ellipsis {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -42,6 +29,32 @@ th.sticky {
   }
   .only-mobile {
     display: block !important;
+  }
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+  .page-header > div:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    width: 100%;
+  }
+  .page-header button,
+  .page-header a.btn {
+    min-height: 38px;
+  }
+  .provider-grid,
+  .combo-grid,
+  .account-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: var(--space-2);
+  }
+  .provider-card,
+  .combo-card {
+    padding: var(--space-2) var(--space-3);
   }
 }
 @media (min-width: 769px) {

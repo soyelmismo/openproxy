@@ -1,206 +1,122 @@
-/* ============================================
-   CONFIG VIEW STYLES
-   ============================================ */
-
+/* ----- Config grid ----- */
 .config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.config-field { display: flex; flex-direction: column; gap: 0.25rem; }
+.config-field input[type="number"] {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.config-field input[type="number"]:disabled { cursor: not-allowed; opacity: 0.85; }
+.config-label { font-size: var(--fs-xs); font-weight: 600; color: var(--color-text-muted); letter-spacing: 0.02em; }
+.config-help  { font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.3; }
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+  flex-wrap: wrap;
+}
+.config-details {
+  margin: var(--space-3) 0 var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+.config-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  user-select: none;
+}
+.config-details summary:hover { color: var(--color-text); }
+.config-details > *:not(summary) { margin-top: var(--space-2); line-height: 1.5; }
+.config-details ol, .config-details p { color: var(--color-text-muted); font-size: var(--fs-sm); }
+
+
+/* ----- Config refactor: editable vs static regions ----- */
+.config-editable-region {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-4);
-}
-
-.config-card {
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.config-card h3 {
-  margin: 0;
-  font-size: var(--fs-md);
-  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
-  padding-bottom: var(--space-2);
-}
-
-.config-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: 0.35rem 0;
-}
-.config-key {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.config-val {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
-/* Maintenance section */
-.maintenance-card {
-  border-left: 3px solid var(--color-warn);
-}
-.vacuum-status-box {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-xs);
-}
-
-/* ----- Config view (post-refactor selectors) ----- */
-.config-section {
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  margin-bottom: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.config-section h2 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--fs-xl);
-  color: var(--color-text-emphasis);
-}
-.config-section h3 {
-  margin: 0;
-  font-size: var(--fs-md);
-  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
-  padding-bottom: var(--space-2);
-}
-.config-row-stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: 0.35rem 0;
-  border-bottom: 1px solid var(--color-border-soft);
-}
-.config-row-stack:last-child {
-  border-bottom: 0;
-}
-.config-input {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  padding: 0.25rem 0.4rem;
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
-}
-.config-error-text {
-  font-size: var(--fs-xs);
-  color: var(--color-error);
-  padding: var(--space-1);
-  background: var(--color-error-soft);
-  border-radius: var(--radius-sm);
-}
-.config-success-text {
-  font-size: var(--fs-xs);
-  color: var(--color-success);
-  padding: var(--space-1);
-  background: var(--color-success-soft);
-  border-radius: var(--radius-sm);
-}
-.config-save-btn {
-  background: var(--color-primary);
-  color: var(--color-primary-fg);
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0.35rem 0.75rem;
-  font-size: var(--fs-xs);
-  cursor: pointer;
-  font-weight: 600;
-}
-.config-save-btn:hover {
-  background: var(--color-primary-hover);
-}
-.config-save-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.maintenance-actions {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-.maintenance-status-text {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  margin-top: var(--space-1);
-}
-.config-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-}
-
-/* ----- Config remaining selectors ----- */
-.checkbox-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-}
-.config-actions {
-  display: flex;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
-.config-details {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2);
-  background: var(--color-surface-2);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
-  font-family: var(--font-mono);
-}
-.config-editable-region {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.config-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: var(--space-1) 0;
-}
-.config-help {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  margin-top: 0.25rem;
-}
-.config-static-display {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  background: var(--color-surface-2);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-emphasis);
+  margin-bottom: var(--space-4);
 }
 .config-static-region {
+  margin-top: var(--space-4);
+}
+.config-static-region summary {
+  cursor: pointer;
+  font-weight: bold;
+  padding: var(--space-2);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.config-static-region[open] summary {
+  margin-bottom: var(--space-3);
+}
+.config-static-display {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+.config-static-display .field {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
 }
-.label {
+.config-static-display .field .label {
   font-size: var(--fs-xs);
+  text-transform: uppercase;
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-family: var(--font-display);
 }
-.value {
+.config-static-display .field .value {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-emphasis);
+  font-size: var(--fs-md);
+}
+.config-dirty-indicator {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warn);
+  margin-left: var(--space-1);
+  vertical-align: middle;
+}
+.config-actions-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w-2) var(--border-style) var(--color-border);
+  margin-top: var(--space-4);
+}
+.config-actions-bar .dirty-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+
+@media (max-width: 768px) {
+  /* 5. Configuration */
+  .config-grid { grid-template-columns: 1fr; gap: var(--space-4); }
+  .config-field input[type="number"], .config-field select, .config-field button { width: 100%; min-height: 44px; }
+  .config-field { gap: 0.5rem; }
+  .config-actions button { width: 100%; min-height: 44px; }
+}
+
+
+
+
 }

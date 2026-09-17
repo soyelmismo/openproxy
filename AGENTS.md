@@ -6,12 +6,14 @@ Reglas de arquitectura, calidad y flujo de trabajo para agentes y desarrolladore
 
 ## 1. Filosofía de Trabajo y Comunicación
 
-1. **Zero-Chat & Máximo SNR:** Emitir solo código limpio, parches exactos y respuestas técnicas de alta densidad. Cero texto de relleno o explicaciones redundantes.
+1. **Zero-Chat & Máximo SNR:** Emitir solo código limpio, parches exactos y respuestas técnicas de alta densidad. Cero texto de relleno o explicaciones redundantes en las respuestas. (Nota: Esto aplica a la comunicación del asistente, NUNCA a podar strings descriptivos de UI, tooltips, hints de usuario o documentación del código fuente).
 2. **Jerarquía Lazy de Implementación:**
    $$\text{Stdlib robusta} > \text{Reusar código/traits locales} > \text{API nativa} > \text{Dependencia actual} > \text{Código mínimo}$$
 3. **Causa Raíz:** Corregir la función base o el diseño de tipos. No parchar síntomas locales.
 4. **Cero Dependencias Inútiles:** No añadir dependencias a `Cargo.toml` o `package.json` sin justificación crítica.
 5. **Formato de Salida:** Bloques `SEARCH/REPLACE` con anclas exactas (mínimo 2 líneas antes y después). No generar archivos completos.
+6. **Invariante de Paridad Funcional y Visual 1:1:** Todo refactor debe preservar el 100% de la funcionalidad, vistas, layouts, media queries, tooltips, hints y compatibilidad con modelos. Un refactor NUNCA es una excusa para podar código útil o estilos.
+7. **Límite Absoluto de Tamaño de Archivo (<800 LOC):** Hard invariant de 0 archivos > 800 LOC en todo el monorepo (Rust, TypeScript, CSS). Cuando un archivo supera este límite, la ÚNICA solución permitida es su **descomposición modular** en submódulos cohesivos (<500-800 líneas), NUNCA el borrado o recorte de funcionalidad.
 
 ---
 
@@ -132,6 +134,9 @@ openproxy/
 | **Retener `MutexGuard` a través de `.await`** | Liberar o hacer `drop(guard)` antes de cualquier punto de suspensión `.await`. |
 | **Llamar a `repo.*` con lock `conn` activo (Deadlock)** | Pasar `&conn` a funciones `openproxy_db::*` directamente en vez de llamar a métodos de `repo`. |
 | **Publicar eventos o broadcasts con lock activo** | Llamar a `drop(conn)` antes de `publish_notification` o buses de eventos. |
+| **Podar CSS, tooltips o features para bajar LOC** | Prohibido. Descomponer el archivo en submódulos cohesivos (<500-800 LOC) preservando el 100% de la funcionalidad y fidelidad visual. |
+| **Borrar selectores CSS asumiendo desuso vía grep** | Prohibido. Lit-HTML interpola clases en runtime. Preservar y particionar por vista (`views/<vista>.css`). |
+| **Sobrescribir selectores globales en hojas de vista** | Acotar selectores al contenedor de la vista (`.page-header` vs `#main .view-specific`) para evitar roturas de cascade leak o responsive. |
 
 ---
 
@@ -153,33 +158,48 @@ openproxy/
 ## 7. Directivas del Frontend Web (Dashboard SPA)
 
 1. **Stack:** TypeScript + Lit-HTML + Vanilla CSS (usando design tokens de `tokens.css` y `themes.css`). Gráficas en tiempo real con **`uPlot`**.
-2. **Contraste y Temas:**
+2. **Modularidad y Límite de Estilos (<800 LOC):**
+   - Cada vista tiene su hoja de estilos modular en `styles/views/<vista>.css` (y `<vista>_mobile.css` si el bloque responsive es extenso). Todas se importan en `views.css`.
+   - Ningún archivo CSS puede superar 800 LOC. Si crece, particionarlo por responsabilidades de UI, nunca borrar selectores existentes.
+   - Prohibido inventar clases sintéticas en lugar de reutilizar o modularizar los estilos existentes del diseño base.
+3. **Contraste y Temas:**
    - Verificar legibilidad en tema oscuro (`:root[data-theme="dark"]`).
    - Evitar azules o colores oscuros con bajo contraste sobre fondos oscuros (usar `CHART_COLORS.blue = "#38bdf8"`).
-3. **Compilación Web:**
+4. **Preservación de Tooltips e Interactividad:**
+   - Mantener siempre tooltips (`abbr[title]`), badges de estado dinámicos, hints y feedback visual.
+   - Entradas numéricas con sliders en el playground deben usar `@change` en el campo de texto para no bloquear la edición de decimales (`0.`).
+5. **Compilación Web:**
    - Ejecutar `pnpm --dir crates/openproxy-server/web run build` tras modificar `crates/openproxy-server/web/src/` antes de compilar el binario Rust para incrustar los assets actualizados.
 
 ---
 
 ## 8. Verificación Pre-Commit
 
-### 8.1 Auditoría Lógica
+### 8.1 Auditoría Lógica y Visual
 - ¿Algún `let-else` alteró el tipo o mensaje de error original?
 - ¿Algún `split_once` asumió separadores inexistentes rompiendo casos borde?
 - ¿Se agregaron tests unitarios para toda función extraída de $>20$ líneas?
+- ¿Se verificó que ningún selector CSS, tooltip o feature de interfaz fue eliminado en el refactor?
+- ¿Se verificó que 0 archivos superan 800 LOC en `crates/` y `web/`?
 
 ### 8.2 Comandos de Verificación
-1. **Linter:**
+1. **Linter Rust:**
    ```bash
    cargo clippy --workspace --all-targets -- -D warnings
    ```
-2. **Pruebas:**
+2. **Pruebas Rust:**
    ```bash
    cargo test --workspace
    ```
-3. **Frontend (si aplica):**
+3. **Frontend:**
    ```bash
-   pnpm --dir crates/openproxy-server/web run typecheck
+   pnpm --dir crates/openproxy-server/web run typecheck:all
+   pnpm --dir crates/openproxy-server/web run test
+   pnpm --dir crates/openproxy-server/web run test:e2e
    pnpm --dir crates/openproxy-server/web run build
    ```
-4. **Commits:** Formato Conventional Commits (`feat(...)`, `fix(...)`, `refactor(...)`, `docs(...)`, `perf(...)`).
+4. **Auditoría de Tamaño (<800 LOC):**
+   ```bash
+   python3 -c "import os; [print(f'{len(open(os.path.join(r,f)).readlines()):4} {os.path.join(r,f)}') for r,_,fs in os.walk('crates') if 'node_modules' not in r and 'target' not in r and 'dist' not in r for f in fs if f.endswith(('.rs','.ts','.css')) and len(open(os.path.join(r,f)).readlines()) > 800]"
+   ```
+5. **Commits:** Formato Conventional Commits (`feat(...)`, `fix(...)`, `refactor(...)`, `docs(...)`, `perf(...)`).

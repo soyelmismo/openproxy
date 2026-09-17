@@ -22,30 +22,90 @@ pub trait ResponseExt {
 
 impl ResponseExt for OpenAIResponse {
     fn to_responses_envelope(&self) -> Value {
-        let output: Vec<Value> = self
-            .choices
-            .iter()
-            .map(|c| {
+        let mut output: Vec<Value> = Vec::new();
+
+        for c in &self.choices {
+            let has_content = match &c.message.content {
+                Some(Value::String(s)) => !s.is_empty(),
+                Some(Value::Array(a)) => !a.is_empty(),
+                Some(_) => true,
+                None => false,
+            };
+            let has_tool_calls = c.message.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+
+            if has_content || !has_tool_calls {
                 let content_val = match &c.message.content {
                     Some(Value::String(s)) => json!([{ "type": "output_text", "text": s }]),
                     Some(v) => json!([v.clone()]),
                     None => json!([]),
                 };
-                json!({
+                output.push(json!({
+                    "id": format!("msg_{}", self.id),
                     "type": "message",
+                    "status": "completed",
                     "role": c.message.role,
                     "content": content_val,
-                })
+                }));
+            }
+
+            if let Some(tool_calls) = &c.message.tool_calls {
+                for tc in tool_calls {
+                    let call_id = tc
+                        .get("id")
+                        .or_else(|| tc.get("call_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let name = tc
+                        .pointer("/function/name")
+                        .or_else(|| tc.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let arguments = tc
+                        .pointer("/function/arguments")
+                        .or_else(|| tc.get("arguments"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("{}");
+                    output.push(json!({
+                        "id": call_id,
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments,
+                    }));
+                }
+            }
+        }
+
+        let usage_val = self.usage.as_ref().map(|u| {
+            let cached = u
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+                .unwrap_or(0);
+            json!({
+                "input_tokens": u.prompt_tokens,
+                "output_tokens": u.completion_tokens,
+                "total_tokens": u.total_tokens,
+                "prompt_tokens": u.prompt_tokens,
+                "completion_tokens": u.completion_tokens,
+                "input_tokens_details": {
+                    "cached_tokens": cached,
+                },
+                "output_tokens_details": {
+                    "reasoning_tokens": 0,
+                },
             })
-            .collect();
+        });
 
         json!({
-            "object": "response",
             "id": self.id,
+            "object": "response",
+            "status": "completed",
             "created": self.created,
             "model": self.model,
             "output": output,
-            "usage": self.usage,
+            "usage": usage_val,
         })
     }
 }
@@ -114,5 +174,26 @@ mod tests {
         let v = resp.to_responses_envelope();
         let content = v["output"][0]["content"].as_array().expect("content[]");
         assert!(content.is_empty());
+    }
+
+    #[test]
+    fn envelope_handles_tool_calls() {
+        let mut resp = sample_response();
+        resp.choices[0].message.content = None;
+        resp.choices[0].message.tool_calls = Some(vec![serde_json::json!({
+            "id": "call_999",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\":\"Madrid\"}"
+            }
+        })]);
+        let v = resp.to_responses_envelope();
+        let output = v["output"].as_array().expect("output[]");
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0]["type"], "function_call");
+        assert_eq!(output[0]["call_id"], "call_999");
+        assert_eq!(output[0]["name"], "get_weather");
+        assert_eq!(output[0]["arguments"], "{\"city\":\"Madrid\"}");
     }
 }

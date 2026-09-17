@@ -65,9 +65,23 @@ impl ApiError {
                     r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()
                 })
             }
+            openproxy_types::TargetFormat::Responses => {
+                let error_json = serde_json::json!({
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "code": self.0.code(),
+                            "message": message,
+                        }
+                    }
+                });
+                serde_json::to_string(&error_json).unwrap_or_else(|_| {
+                    r#"{"type":"response.failed","response":{"status":"failed","error":{"code":"internal_error","message":"Internal server error"}}}"#.to_string()
+                })
+            }
             openproxy_types::TargetFormat::Openai
             | openproxy_types::TargetFormat::Gemini
-            | openproxy_types::TargetFormat::Responses
             | openproxy_types::TargetFormat::Atomesus
             | openproxy_types::TargetFormat::CommandCodeGo => {
                 let error_json = serde_json::json!({
@@ -83,14 +97,16 @@ impl ApiError {
             }
         };
 
-        let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
+        let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 32);
         match format {
             openproxy_types::TargetFormat::Anthropic => {
                 frame.extend_from_slice(b"event: error\ndata: ");
             }
+            openproxy_types::TargetFormat::Responses => {
+                frame.extend_from_slice(b"event: response.failed\ndata: ");
+            }
             openproxy_types::TargetFormat::Openai
             | openproxy_types::TargetFormat::Gemini
-            | openproxy_types::TargetFormat::Responses
             | openproxy_types::TargetFormat::Atomesus
             | openproxy_types::TargetFormat::CommandCodeGo => {
                 frame.extend_from_slice(b"data: ");

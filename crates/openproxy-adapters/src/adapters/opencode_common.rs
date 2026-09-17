@@ -34,8 +34,8 @@ pub fn classify_go_target_format(id: &str) -> TargetFormat {
 /// Per OpenCode Console routing:
 /// - Anthropic (/messages): claude, minimax, qwen, union-alpha
 /// - Gemini (/models/{model}:streamGenerateContent?alt=sse): gemini
-/// - Responses (/responses): muse-spark, gpt-5, gpt-6, grok
-/// - OpenAI (/chat/completions): deepseek, glm, kimi, mimo, ling, nemotron, big-pickle, etc.
+/// - Responses (/responses): gpt-5, gpt-6, grok
+/// - OpenAI (/chat/completions): deepseek, glm, kimi, mimo, ling, nemotron, big-pickle, muse-spark, etc.
 ///
 /// Zen and Go expose different backends under the same alias, and the catalogue
 /// mixes wire formats *inside* a family (Zen answers `minimax-m3` on
@@ -67,8 +67,7 @@ fn family_target_format(lower: &str) -> TargetFormat {
         TargetFormat::Anthropic
     } else if lower.contains("gemini") {
         TargetFormat::Gemini
-    } else if lower.contains("muse-spark")
-        || lower.contains("gpt-5")
+    } else if lower.contains("gpt-5")
         || lower.contains("gpt-6")
         || lower.contains("grok")
     {
@@ -318,7 +317,7 @@ mod tests {
         );
         assert_eq!(
             classify_opencode_target_format(ZEN, "muse-spark-1.3-contributor-free"),
-            TargetFormat::Responses
+            TargetFormat::Openai
         );
         assert_eq!(
             classify_opencode_target_format(ZEN, "gpt-5.6-terra"),

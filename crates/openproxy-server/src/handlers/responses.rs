@@ -11,7 +11,7 @@
 //!
 //! See `docs/specs/antigravity-gaps-p2.md` §3 (GAP-2) for full spec.
 
-use axum::{Router, extract::State, http::HeaderMap, routing::post};
+use axum::{Router, extract::State, http::HeaderMap, response::IntoResponse, routing::post};
 
 use crate::{
     disconnect::CancelWatch, error::ApiError, extractors::ValidatedToken,
@@ -83,12 +83,31 @@ pub async fn responses_completions(
     // `handle_sync_response_responses` (not `handle_sync_response`)
     // to emit the Responses-shaped envelope.
     if is_stream {
-        return Ok(crate::handlers::chat::handle_streaming_response(
+        let model = prepared.req.openai_request.model.clone();
+        let request_id = prepared.req.request_id;
+        let merged = PipelineRunner::spawn_streaming_bridge(
             pipeline,
             prepared.req,
             prepared.done_tx,
             prepared.stream_rx,
-        ));
+            openproxy_types::TargetFormat::Responses,
+        );
+
+        let sse_stream = openproxy_pipeline::translation::OpenAIToResponsesSseStream::new(
+            merged,
+            format!("resp_{request_id}"),
+            model,
+        );
+
+        let body = axum::body::Body::from_stream(sse_stream);
+        return Ok((
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/event-stream; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response());
     }
     crate::handlers::chat::handle_sync_response_responses(pipeline, prepared.req, prepared.done_tx)
         .await
@@ -107,6 +126,9 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: false,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
             previous_response_id: None,
             extra: serde_json::Map::new(),
         }
@@ -322,5 +344,58 @@ mod tests {
                 .len(),
             1000
         );
+    }
+
+    #[test]
+    fn test_deepseek_harness_translation_and_tool_normalization() {
+        let p = json!({
+            "model": "nerd",
+            "input": [
+                {
+                    "role": "system",
+                    "content": "Create a concise title."
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello world"}]
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "exec_cmd",
+                    "description": "run a shell command",
+                    "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}}
+                }
+            ],
+            "stream": true,
+            "max_output_tokens": 128,
+            "prompt_cache_key": "sess-xyz"
+        });
+
+        let req: ResponsesRequest = serde_json::from_value(p).unwrap();
+        let openai_req = crate::middleware::auth::translate_responses_to_openai(&req);
+
+        assert_eq!(openai_req.model, "nerd");
+        assert_eq!(openai_req.max_tokens, Some(128));
+        assert!(openai_req.stream);
+        assert_eq!(openai_req.messages.len(), 2);
+        assert_eq!(openai_req.messages[0].role, "system");
+        assert_eq!(openai_req.messages[0].content, Some(json!("Create a concise title.")));
+        assert_eq!(openai_req.messages[1].role, "user");
+        assert_eq!(openai_req.messages[1].content, Some(json!("hello world")));
+
+        // Verify tools normalized to nested function
+        let tools = openai_req.tools.expect("tools present");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "exec_cmd");
+        assert_eq!(tools[0]["function"]["description"], "run a shell command");
+        assert!(tools[0]["function"]["parameters"].is_object());
+
+        // Verify extra fields cleaned
+        assert!(!openai_req.extra.contains_key("input"));
+        assert!(!openai_req.extra.contains_key("max_output_tokens"));
+        assert_eq!(openai_req.extra.get("prompt_cache_key"), Some(&json!("sess-xyz")));
     }
 }

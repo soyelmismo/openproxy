@@ -14,7 +14,7 @@ import { statusPillClass, PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS, COOLDOWN
 import type { Combo, ComboTargetWithModel, PriorityMode, CooldownMode } from "../lib/types/api.js";
 
 const PARAM_TOOLTIPS = {
-  exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration.",
+  exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo are more likely to be explored. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
   base_secs: "Initial cooldown duration in seconds. For exponential mode, this is multiplied by factor^(failures-1).",
   factor: "Multiplier applied to the cooldown after each failure. 2 = doubling.",
   max_secs: "Maximum cooldown duration in seconds. The exponential growth is capped at this value.",
@@ -231,7 +231,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     const val = parseInt((e.target as HTMLInputElement).value, 10) || 1;
     await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ weight: val }) });
     target.weight = val; requestUpdate();
-  }} class="cw-input weight-input"></td>`) : html``;
+  }} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
 
   const thinkingCell = isSub ? html`<td class="col-target-thinking"><em>${t("combos.target.na")}</em></td>` : html`<td class="col-target-thinking">
     <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:110px" .value=${target.thinking_effort ?? ""} @change=${async (e: Event) => {
@@ -301,7 +301,10 @@ function renderComboDetail(): TemplateResult {
   const autoCw = knownCtx.length > 0 ? Math.min(...knownCtx) : null;
   const autoCwLabel = autoCw != null ? formatTokens(autoCw) : "—";
   const overrideCw = combo.context_window ?? null;
+  const effectiveCw = overrideCw ?? autoCw;
+  const effectiveCwLabel = effectiveCw != null ? formatTokens(effectiveCw) : "—";
   const cds = targets.filter((t) => t.in_cooldown);
+  const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>${t("combos.detail.col.weight")}</abbr></th>` : html``;
 
   return html`
     <div class="page-header"><a href="#/combos" class="back-link">${icons.arrowLeft()} ${t("combos.detail.back")}</a><h2>${combo.name}</h2>
@@ -313,7 +316,7 @@ function renderComboDetail(): TemplateResult {
           </select>
         </label>
         <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
-        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title=${t("combos.detail.predictive_rl_hint")}>
           <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${(e: Event) => patchCombo(detailComboId!, { preventive_rate_limit: (e.target as HTMLInputElement).checked })}>
           ${icons.lightning()} ${t("combos.detail.predictive_rl")}
         </label>
@@ -323,14 +326,14 @@ function renderComboDetail(): TemplateResult {
         }} class="race-input"></label>
         <button class="danger" @click=${onDeleteCombo}>${t("combos.detail.delete")}</button></div></div>
     <div class="combo-context-window-bar"><label>${t("combos.detail.context_window")}
-      <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input"></label>
-      <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })}</span></div>
+      <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
+      <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })} · ${t("combos.detail.effective", { value: effectiveCwLabel })}</span></div>
     ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
     ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${(e: Event) => detailComboId && testAllTargets(detailComboId, e)}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">${t("combos.detail.targets_empty")}</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
-        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${showWeight ? html`<th>${t("combos.detail.col.weight")}</th>` : html``}<th>${t("combos.detail.col.thinking")}</th><th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
+        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.thinking")}</th><th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;
 }

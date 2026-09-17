@@ -1,93 +1,42 @@
-/* ==========
-   FREE PROXIES & PROXY SOURCES VIEW STYLES
-   ========== */
-
-.free-proxies-grid {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+/* ----- Free Proxies view ----- */
+.latency-low {
+  color: var(--color-success);
+  font-weight: bold;
 }
-
-.proxy-status-pill {
-  display: inline-block;
-  padding: 0.1rem 0.4rem;
-  font-size: var(--fs-xs);
-  font-family: var(--font-mono);
-  border-radius: var(--radius-sm);
+.latency-medium {
+  color: var(--color-warning);
 }
-.proxy-status-pill.active {
-  background: var(--color-success-soft);
+.latency-high {
+  color: var(--color-error);
+}
+.glow-green {
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.4);
   color: var(--color-success);
 }
-.proxy-status-pill.error {
-  background: var(--color-error-soft);
-  color: var(--color-error);
-}
-
-.proxy-latency {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-
-/* ----- Proxies view (post-refactor selectors) ----- */
-.proxy-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--space-3);
-}
-.proxy-card {
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.proxy-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-.proxy-card-host {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: var(--fs-sm);
+.chip-protocol {
+  background: var(--color-border);
   color: var(--color-text);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
 }
-.proxy-card-meta {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spin 1s ease-in-out infinite;
+  margin-right: 6px;
 }
-.proxy-card-stats {
-  display: flex;
-  gap: var(--space-3);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.proxy-actions {
-  display: flex;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
-}
-.proxy-test-status {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-}
-.proxy-error-text {
-  font-size: var(--fs-xs);
-  color: var(--color-error);
-  font-family: var(--font-mono);
-  padding: var(--space-1);
-  background: var(--color-error-soft);
-  border-radius: var(--radius-sm);
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-/* ----- Proxy sources view ----- */
+
+/* Proxy sources view */
 .proxy-source-list {
   display: flex;
   flex-direction: column;
@@ -109,58 +58,6 @@
 .proxy-source-card.is-disabled {
   opacity: 0.5;
 }
-.proxy-source-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-.proxy-source-name {
-  font-weight: 600;
-  font-size: var(--fs-sm);
-  color: var(--color-text);
-}
-.proxy-source-url {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  word-break: break-all;
-}
-.proxy-source-stats {
-  display: flex;
-  gap: var(--space-3);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.proxy-source-actions {
-  display: flex;
-  gap: var(--space-1);
-}
-.proxy-source-toggle {
-  background: transparent;
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-pill);
-  padding: 0.15rem 0.55rem;
-  cursor: pointer;
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.proxy-source-toggle.is-on {
-  background: var(--color-success);
-  color: var(--color-primary-fg);
-  border-color: var(--color-success);
-}
-.proxy-source-interval-input {
-  width: 70px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  padding: 0.15rem 0.35rem;
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-}
-
-/* ----- Proxy sources view (post-refactor selectors) ----- */
 .proxy-sources-table {
   width: 100%;
   border-collapse: collapse;
@@ -172,245 +69,22 @@
   text-align: left;
   border-bottom: 1px solid var(--color-border-soft);
 }
-.col-source-actions,
-.col-source-active,
-.col-source-drag,
-.col-source-name,
-.col-source-priority,
-.col-source-stats,
-.col-source-updated,
-.col-source-url {
-  font-size: var(--fs-xs);
-}
-.col-source-actions {
-  text-align: right;
-}
-.source-actions-wrap {
-  display: flex;
-  gap: var(--space-1);
-  justify-content: flex-end;
-}
-.code-link {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-link);
-  cursor: pointer;
-}
-.code-link:hover {
-  color: var(--color-link-hover);
-}
-.error-card {
-  background: var(--color-error-soft);
-  color: var(--color-error);
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
-  margin-bottom: var(--space-2);
-}
-.table-card {
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-}
-.s-card-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
-}
-.s-card-drag-icon {
-  cursor: grab;
-  color: var(--color-text-muted);
-  user-select: none;
-}
-.s-card-line-1 {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.s-card-line-2 {
-  font-size: var(--fs-xs);
-  color: var(--color-text-emphasis);
-  font-weight: 600;
-}
-.s-card-line-3 {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-}
-.s-card-line-4 {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.s-card-name {
-  font-weight: 600;
-  color: var(--color-text);
-}
-.s-card-priority {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  color: var(--color-primary);
-}
-.s-card-reorder-btn {
-  background: transparent;
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 0.15rem 0.4rem;
-  font-size: var(--fs-xs);
-  cursor: pointer;
-  color: var(--color-text-muted);
-}
-.s-card-reorder-btn:hover {
-  color: var(--color-text);
-}
-.s-card-stat-pill {
-  display: inline-flex;
-  align-items: center;
-  font-size: var(--fs-xs);
-  background: var(--color-surface-2);
-  padding: 0.05rem 0.4rem;
-  border-radius: var(--radius-pill);
-  color: var(--color-text-muted);
-  margin-right: 0.25rem;
-}
-.s-card-stats-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-.s-card-title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-.s-card-updated {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-}
-.s-card-url {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  word-break: break-all;
-}
-.subtitle {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-/* `.mobile-proxy-source-card-cell` is hidden by default (desktop)
-   and revealed by the mobile @media block below. */
 .mobile-proxy-source-card-cell {
   display: none;
 }
 
-/* ----- Proxies remaining selectors ----- */
-.chip-protocol {
-  display: inline-flex;
-  align-items: center;
-  font-size: var(--fs-xs);
-  padding: 0.05rem 0.4rem;
-  border-radius: var(--radius-pill);
-  background: var(--color-info-soft);
-  color: var(--color-info);
-  font-family: var(--font-mono);
-}
-.filter-search {
-  flex: 1;
-  min-width: 200px;
-  padding: 0.25rem 0.5rem;
-  font-size: var(--fs-xs);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-}
-.filter-selects {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-.glow-green {
-  box-shadow: 0 0 0 2px var(--color-success-soft);
-  border-color: var(--color-success);
-}
-.kpi-card {
-  background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.kpi-title {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-weight: 600;
-  color: var(--color-text-muted);
-}
-.kpi-error {
-  color: var(--color-error);
-}
-.kpi-latency {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.kpi-success {
-  color: var(--color-success);
-}
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface-2);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.proxy-actions-wrap {
-  display: flex;
-  gap: var(--space-1);
-  justify-content: flex-end;
-}
-.proxy-country-code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  background: var(--color-surface-2);
-  padding: 0.05rem 0.4rem;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-muted);
-}
-.proxy-port-code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-.proxy-time-text {
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-}
-.spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: pg-spin 0.8s linear infinite;
-}
-@keyframes pg-spin {
-  to { transform: rotate(360deg); }
-}
-/* Note: the toggle switch uses .slider as the inner thumb (component
-   in components/forms.css). Don't redefine it globally here. */
 
-/* ----- Mobile responsive (≤768px): actions with buttons render as
-   3-column grid (historical views.css:6171). Without this, the
-   inline-flex .actions from other views collapses the button bar. ----- */
 @media (max-width: 768px) {
+  /* ==========================================================================
+     Free Proxies — Dell 1996 Native Mobile Specification (<= 768px)
+     ========================================================================== */
+
+  /* 1. Header y Controles de Sincronización */
+  .page-header {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+
   .actions:has(button) {
     display: grid;
     grid-template-columns: 1.2fr 1fr 1.1fr;
@@ -418,6 +92,7 @@
     width: 100%;
     margin-bottom: 6px;
   }
+
   .actions:has(button) button {
     height: 28px;
     font-size: 0.7rem;
@@ -429,12 +104,157 @@
     gap: 3px;
     white-space: nowrap;
   }
-  /* Mobile card view for proxy sources (mirrors historical
-     views.css:6337-6346). Shared `.responsive-card-table` mobile
-     card mode is owned by components/tables.css. */
+
+  /* 2. KPIs 2x2 Mini-Card Grid */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    width: 100%;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+  }
+
+  .kpi-card {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 48px;
+    box-sizing: border-box;
+  }
+
+  .kpi-card .kpi-title {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .kpi-card .kpi-value {
+    font-family: var(--font-mono);
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-top: 2px;
+    color: var(--color-text);
+  }
+
+  .kpi-card.kpi-success .kpi-value,
+  .kpi-card .glow-green {
+    color: var(--color-success);
+  }
+
+  .kpi-card.kpi-error .kpi-value {
+    color: var(--color-error, #f87171);
+  }
+
+  /* 3. Filtros y Búsqueda */
+  .filter-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+  }
+
+  .filter-search input {
+    height: 28px;
+    font-size: 0.72rem;
+    padding: 0 6px;
+    border-radius: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .filter-selects {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .filter-selects select {
+    height: 26px;
+    font-size: 0.68rem;
+    padding: 0 4px;
+    border-radius: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* 5. Paginación en 1 Línea */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    margin-top: 8px;
+    background: var(--color-surface-2);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .pagination button {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 0.72rem;
+    border-radius: 0;
+  }
+
+  /* ==========================================================================
+     Proxy Sources — Dell 1996 Native Mobile Specification (<= 768px)
+     ========================================================================== */
+
+  /* Contenedor de Tarjetas */
+  table.proxy-sources-table,
+  .proxy-sources-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    box-sizing: border-box;
+  }
+
+  .proxy-sources-table thead {
+    display: none;
+  }
+
+  /* Tarjeta de Proxy Source */
+  tr.proxy-source-card-row {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg);
+    border: var(--border-w, 1px) var(--border-style, solid) var(--color-border);
+    border-left: 3px solid var(--color-success);
+    border-radius: 0;
+    padding: 8px 10px;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    transition: background var(--t-fast);
+  }
+
+  tr.proxy-source-card-row.inactive {
+    border-left-color: var(--color-border);
+    opacity: 0.8;
+  }
+
   tr.proxy-source-card-row > td:not(.mobile-proxy-source-card-cell) {
     display: none;
   }
+
   tr.proxy-source-card-row > td.mobile-proxy-source-card-cell {
     display: flex;
     flex-direction: column;
@@ -444,4 +264,169 @@
     border: 0;
     background: transparent;
   }
+
+  /* Línea 1: Drag + Nombre + Prioridad + Reordenación + Switch */
+  .s-card-line-1 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .s-card-title-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .s-card-drag-icon {
+    color: var(--color-text-muted);
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    font-size: 0.8rem;
+  }
+
+  .s-card-name {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .s-card-priority {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    padding: 1px 4px;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+
+  .s-card-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .s-card-reorder-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  /* Línea 2: URL truncada limpia */
+  .s-card-line-2 {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: 3px 6px;
+    box-sizing: border-box;
+  }
+
+  .s-card-url {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    color: var(--color-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: none;
+    width: 100%;
+  }
+
+  /* Línea 3: Stats Badges & Timestamp */
+  .s-card-line-3 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    font-size: 0.66rem;
+    color: var(--color-text-muted);
+  }
+
+  .s-card-stats-badges {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .s-card-stat-pill {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    padding: 1px 5px;
+    border-radius: 0;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+  }
+
+  .s-card-stat-pill.success {
+    color: var(--color-success);
+    border-color: rgba(34, 197, 94, 0.3);
+  }
+
+  .s-card-stat-pill.danger {
+    color: var(--color-error, #f87171);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+
+  .s-card-updated {
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+  }
+
+  /* Línea 4: Acciones */
+  .s-card-line-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 34px;
+    gap: 4px;
+    width: 100%;
+    margin-top: 2px;
+    padding-top: 4px;
+    border-top: 1px dashed var(--color-border);
+  }
+
+  .s-card-line-4 button {
+    height: 26px;
+    font-size: 0.7rem;
+    padding: 0 6px;
+    border-radius: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+  }
+
+  .s-card-line-4 button.danger {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    color: var(--color-error, #f87171);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+
 }
