@@ -174,10 +174,13 @@ fn normalize_effort_returns_expected() {
 }
 
 #[test]
-fn test_openai_formatter_strips_disabled() {
+fn test_openai_formatter_strips_disabled_and_responses_keys() {
     let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
     let mut extra = serde_json::Map::new();
     extra.insert("disabled".into(), json!(true));
+    extra.insert("prompt_cache_key".into(), json!("pck_12345"));
+    extra.insert("prompt_cache_retention".into(), json!("24h"));
+    extra.insert("instructions".into(), json!("system instructions"));
     extra.insert("custom_val".into(), json!("ok"));
 
     let openai_req = OpenAIRequest {
@@ -199,6 +202,9 @@ fn test_openai_formatter_strips_disabled() {
         .expect("ok");
     let val: Value = serde_json::from_slice(&formatted).unwrap();
     assert!(val.get("disabled").is_none());
+    assert!(val.get("prompt_cache_key").is_none());
+    assert!(val.get("prompt_cache_retention").is_none());
+    assert!(val.get("instructions").is_none());
     assert_eq!(val.get("custom_val"), Some(&json!("ok")));
 }
 

@@ -37,8 +37,21 @@ impl TargetFormatter for OpenaiFormatter {
                 view.messages.iter().map(normalize_openai_message).collect(),
             );
         }
-        if view.extra.contains_key("disabled") {
-            view.extra.to_mut().remove("disabled");
+        const OPENAI_CHAT_DISALLOWED_EXTRA: &[&str] = &[
+            "disabled",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "instructions",
+            "input",
+            "previous_response_id",
+            "store",
+            "background",
+            "truncation",
+        ];
+        for key in OPENAI_CHAT_DISALLOWED_EXTRA {
+            if view.extra.contains_key(*key) {
+                view.extra.to_mut().remove(*key);
+            }
         }
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
