@@ -620,18 +620,30 @@ pub async fn auth_middleware(
         }
         translate_responses_to_openai(&responses_req)
     } else {
-        let mut req: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?;
+        let mut req: openproxy_types::OpenAIRequest =
+            serde_json::from_slice(&bytes).map_err(|e| {
+                crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string()))
+            })?;
 
         if req.messages.is_empty()
             && let Some(input_val) = req.extra.remove("input")
-            && let Ok(input_items) = serde_json::from_value::<Vec<openproxy_types::ResponsesInputItem>>(input_val.clone())
-                .or_else(|_| serde_json::from_value::<String>(input_val).map(|s| vec![openproxy_types::ResponsesInputItem::Message {
-                    role: "user".to_string(),
-                    content: openproxy_types::ResponsesContent::Plain(s),
-                }]))
+            && let Ok(input_items) = serde_json::from_value::<
+                Vec<openproxy_types::ResponsesInputItem>,
+            >(input_val.clone())
+            .or_else(|_| {
+                serde_json::from_value::<String>(input_val).map(|s| {
+                    vec![openproxy_types::ResponsesInputItem::Message {
+                        role: "user".to_string(),
+                        content: openproxy_types::ResponsesContent::Plain(s),
+                    }]
+                })
+            })
         {
-            let max_output = req.extra.remove("max_output_tokens").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let max_output = req
+                .extra
+                .remove("max_output_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             let synthetic_req = openproxy_types::ResponsesRequest {
                 model: req.model.clone(),
                 instructions: None,

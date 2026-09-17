@@ -31,7 +31,11 @@ impl ResponseExt for OpenAIResponse {
                 Some(_) => true,
                 None => false,
             };
-            let has_tool_calls = c.message.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+            let has_tool_calls = c
+                .message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tc| !tc.is_empty());
 
             if has_content || !has_tool_calls {
                 let content_val = match &c.message.content {

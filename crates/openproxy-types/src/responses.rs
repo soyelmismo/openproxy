@@ -82,7 +82,10 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
                 content: ResponsesContent::Plain(s),
             },
             Value::Object(mut map) => {
-                let type_tag = map.get("type").and_then(|v| v.as_str()).map(str::to_lowercase);
+                let type_tag = map
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_lowercase);
                 match type_tag.as_deref() {
                     Some("message") => {
                         let role = map
@@ -162,12 +165,12 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
                             let output = map
                                 .get("output")
                                 .map(|v| {
-                                if let Some(s) = v.as_str() {
-                                    s.to_string()
-                                } else {
-                                    v.to_string()
-                                }
-                            })
+                                    if let Some(s) = v.as_str() {
+                                        s.to_string()
+                                    } else {
+                                        v.to_string()
+                                    }
+                                })
                                 .unwrap_or_default();
                             ResponsesInputItem::FunctionCallOutput { call_id, output }
                         } else if (map.contains_key("call_id") || map.contains_key("id"))
@@ -339,4 +342,3 @@ mod tests {
         }
     }
 }
-

@@ -1,7 +1,7 @@
 use crate::translation::*;
 use openproxy_adapters::adapters::gemini::*;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn openai_req_with(messages: Vec<(&str, &str)>) -> OpenAIRequest {
     OpenAIRequest {
@@ -276,12 +276,7 @@ fn minimax_tool_result_then_user_merges_into_single_user_message() {
                 json!({"id":"call_A","type":"function","function":{"name":"tool_a","arguments":"{}"}}),
             ]),
         ),
-        make_msg(
-            "tool",
-            Some(json!("result A")),
-            Some("call_A"),
-            None,
-        ),
+        make_msg("tool", Some(json!("result A")), Some("call_A"), None),
         make_msg(
             "assistant",
             Some(Value::Null),
@@ -290,12 +285,7 @@ fn minimax_tool_result_then_user_merges_into_single_user_message() {
                 json!({"id":"call_B","type":"function","function":{"name":"tool_b","arguments":"{}"}}),
             ]),
         ),
-        make_msg(
-            "tool",
-            Some(json!("result B")),
-            Some("call_B"),
-            None,
-        ),
+        make_msg("tool", Some(json!("result B")), Some("call_B"), None),
         make_msg(
             "assistant",
             Some(Value::Null),
@@ -304,18 +294,8 @@ fn minimax_tool_result_then_user_merges_into_single_user_message() {
                 json!({"id":"call_C","type":"function","function":{"name":"tool_c","arguments":"{}"}}),
             ]),
         ),
-        make_msg(
-            "tool",
-            Some(json!("result C")),
-            Some("call_C"),
-            None,
-        ),
-        make_msg(
-            "user",
-            Some(json!("no se que mecanismo es...")),
-            None,
-            None,
-        ),
+        make_msg("tool", Some(json!("result C")), Some("call_C"), None),
+        make_msg("user", Some(json!("no se que mecanismo es...")), None, None),
     ];
     let out = openai_to_anthropic(&req, "c", &req.messages, false);
     for (i, w) in out.messages.windows(2).enumerate() {

@@ -67,10 +67,7 @@ fn family_target_format(lower: &str) -> TargetFormat {
         TargetFormat::Anthropic
     } else if lower.contains("gemini") {
         TargetFormat::Gemini
-    } else if lower.contains("gpt-5")
-        || lower.contains("gpt-6")
-        || lower.contains("grok")
-    {
+    } else if lower.contains("gpt-5") || lower.contains("gpt-6") || lower.contains("grok") {
         TargetFormat::Responses
     } else {
         TargetFormat::Openai

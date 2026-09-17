@@ -11,11 +11,16 @@
 //! - `response.completed`
 //! - `data: [DONE]\n\n`
 
+mod types;
+pub use types::*;
+
+#[cfg(test)]
+mod tests;
+
+use crate::sse::{MAX_SSE_LINE_BYTES, SseParser, parse_sse_data_line};
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::stream::Stream;
 use openproxy_types::OpenAIUsage;
-use crate::sse::{SseParser, parse_sse_data_line, MAX_SSE_LINE_BYTES};
-use serde::Deserialize;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -31,99 +36,6 @@ fn append_sse_event(out: &mut BytesMut, event_name: &str, payload: &serde_json::
         );
     }
     out.extend_from_slice(b"\n\n");
-}
-
-#[derive(Debug, Clone)]
-struct StreamToolCall {
-    tool_index: usize,
-    output_index: usize,
-    call_id: String,
-    name: String,
-    arguments: String,
-    done_emitted: bool,
-}
-
-#[derive(Deserialize)]
-struct ErrorProbe<'a> {
-    error: Option<serde_json::Value>,
-    #[serde(borrow)]
-    r#type: Option<std::borrow::Cow<'a, str>>,
-    #[serde(borrow)]
-    message: Option<std::borrow::Cow<'a, str>>,
-    code: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponsesSseProbe<'a> {
-    #[serde(borrow)]
-    pub id: Option<std::borrow::Cow<'a, str>>,
-    #[serde(borrow)]
-    pub choices: Option<Vec<ResponsesChoiceProbe<'a>>>,
-    pub usage: Option<ResponsesUsageProbe>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponsesChoiceProbe<'a> {
-    #[serde(borrow)]
-    pub delta: Option<ResponsesDeltaProbe<'a>>,
-    #[serde(borrow)]
-    pub finish_reason: Option<std::borrow::Cow<'a, str>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponsesDeltaProbe<'a> {
-    #[serde(borrow)]
-    pub content: Option<std::borrow::Cow<'a, str>>,
-    #[serde(borrow)]
-    pub reasoning_content: Option<std::borrow::Cow<'a, str>>,
-    #[serde(borrow)]
-    pub tool_calls: Option<Vec<ResponsesToolCallProbe<'a>>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponsesToolCallProbe<'a> {
-    pub index: Option<usize>,
-    #[serde(borrow)]
-    pub id: Option<std::borrow::Cow<'a, str>>,
-    #[serde(borrow)]
-    pub function: Option<ResponsesFunctionCallProbe<'a>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponsesFunctionCallProbe<'a> {
-    #[serde(borrow)]
-    pub name: Option<std::borrow::Cow<'a, str>>,
-    #[serde(borrow)]
-    pub arguments: Option<std::borrow::Cow<'a, str>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponsesUsageProbe {
-    pub prompt_tokens: Option<u32>,
-    pub completion_tokens: Option<u32>,
-    pub total_tokens: Option<u32>,
-    pub input_tokens: Option<u32>,
-    pub output_tokens: Option<u32>,
-    pub prompt_tokens_details: Option<openproxy_types::PromptTokensDetails>,
-    pub input_tokens_details: Option<openproxy_types::PromptTokensDetails>,
-}
-
-impl ResponsesUsageProbe {
-    pub fn to_openai_usage(&self) -> OpenAIUsage {
-        let pt = self.prompt_tokens.or(self.input_tokens).unwrap_or(0);
-        let ct = self.completion_tokens.or(self.output_tokens).unwrap_or(0);
-        let tt = self.total_tokens.unwrap_or_else(|| pt.saturating_add(ct));
-        let details = self
-            .prompt_tokens_details
-            .clone()
-            .or_else(|| self.input_tokens_details.clone());
-        OpenAIUsage {
-            prompt_tokens: pt,
-            completion_tokens: ct,
-            total_tokens: tt,
-            prompt_tokens_details: details,
-        }
-    }
 }
 
 pub struct OpenAIToResponsesSseStream<S> {
@@ -477,7 +389,11 @@ impl<S> OpenAIToResponsesSseStream<S> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("internal_error")
                         .to_string();
-                    let m = err_probe.message.as_deref().unwrap_or("upstream error").to_string();
+                    let m = err_probe
+                        .message
+                        .as_deref()
+                        .unwrap_or("upstream error")
+                        .to_string();
                     (c, m)
                 }
             };
@@ -522,7 +438,9 @@ impl<S> OpenAIToResponsesSseStream<S> {
         for c in choices {
             if let Some(delta) = c.delta {
                 // Reasoning
-                if let Some(reasoning) = delta.reasoning_content.as_deref().filter(|s| !s.is_empty()) {
+                if let Some(reasoning) =
+                    delta.reasoning_content.as_deref().filter(|s| !s.is_empty())
+                {
                     let r_idx = match self.reasoning_output_index {
                         Some(idx) => idx,
                         None => {
@@ -601,7 +519,10 @@ impl<S> OpenAIToResponsesSseStream<S> {
                         let tc_idx = tc.index.unwrap_or(0);
                         let pos = self.tool_calls.iter().position(|t| t.tool_index == tc_idx);
                         let (out_idx, call_id) = match pos {
-                            Some(p) => (self.tool_calls[p].output_index, self.tool_calls[p].call_id.clone()),
+                            Some(p) => (
+                                self.tool_calls[p].output_index,
+                                self.tool_calls[p].call_id.clone(),
+                            ),
                             None => {
                                 let out_idx = self.next_output_index;
                                 self.next_output_index += 1;
@@ -649,7 +570,9 @@ impl<S> OpenAIToResponsesSseStream<S> {
                         if let Some(func) = tc.function
                             && let Some(args) = func.arguments.as_deref().filter(|s| !s.is_empty())
                         {
-                            if let Some(t) = self.tool_calls.iter_mut().find(|t| t.tool_index == tc_idx) {
+                            if let Some(t) =
+                                self.tool_calls.iter_mut().find(|t| t.tool_index == tc_idx)
+                            {
                                 t.arguments.push_str(args);
                             }
                             let delta_event = json!({
@@ -659,7 +582,11 @@ impl<S> OpenAIToResponsesSseStream<S> {
                                 "delta": args,
                             });
                             let mut b = BytesMut::with_capacity(256);
-                            append_sse_event(&mut b, "response.function_call_arguments.delta", &delta_event);
+                            append_sse_event(
+                                &mut b,
+                                "response.function_call_arguments.delta",
+                                &delta_event,
+                            );
                             self.out_queue.push_back(b.freeze());
                         }
                     }
@@ -702,72 +629,5 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToResponsesSseStream<S> {
                 Poll::Pending => return Poll::Pending,
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures_util::StreamExt;
-
-    #[tokio::test]
-    async fn test_responses_stream_text_and_completion() {
-        let incoming = vec![
-            Bytes::from("data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n"),
-            Bytes::from("data: {\"choices\":[{\"delta\":{\"content\":\"world!\"}}]}\n\n"),
-            Bytes::from("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n"),
-            Bytes::from("data: [DONE]\n\n"),
-        ];
-        let stream = futures_util::stream::iter(incoming);
-        let responses_stream = OpenAIToResponsesSseStream::new(stream, "resp_123".into(), "gpt-4o".into());
-        let items: Vec<Bytes> = responses_stream.map(|r| r.unwrap()).collect().await;
-
-        let combined = items.iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<String>();
-        assert!(combined.contains("event: response.created"));
-        assert!(combined.contains("event: response.output_item.added"));
-        assert!(combined.contains("event: response.output_text.delta"));
-        assert!(combined.contains("event: response.output_item.done"));
-        assert!(combined.contains("event: response.completed"));
-        assert!(combined.contains("\"status\":\"completed\""));
-        assert!(combined.contains("\"input_tokens\":10"));
-        assert!(combined.contains("\"output_tokens\":2"));
-        assert!(combined.contains("data: [DONE]"));
-    }
-
-    #[tokio::test]
-    async fn test_responses_stream_tool_calls() {
-        let incoming = vec![
-            Bytes::from("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"function\":{\"name\":\"test_fn\",\"arguments\":\"{\\\"x\\\":\"}}]}}]}\n\n"),
-            Bytes::from("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]}}]}\n\n"),
-            Bytes::from("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"),
-            Bytes::from("data: [DONE]\n\n"),
-        ];
-        let stream = futures_util::stream::iter(incoming);
-        let responses_stream = OpenAIToResponsesSseStream::new(stream, "resp_456".into(), "gpt-4o".into());
-        let items: Vec<Bytes> = responses_stream.map(|r| r.unwrap()).collect().await;
-
-        let combined = items.iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<String>();
-        assert!(combined.contains("event: response.created"));
-        assert!(combined.contains("event: response.output_item.added"));
-        assert!(combined.contains("\"function_call\""));
-        assert!(combined.contains("event: response.function_call_arguments.delta"));
-        assert!(combined.contains("event: response.function_call_arguments.done"));
-        assert!(combined.contains("event: response.output_item.done"));
-        assert!(combined.contains("event: response.completed"));
-        assert!(combined.contains("data: [DONE]"));
-    }
-
-    #[tokio::test]
-    async fn test_responses_stream_error_frame() {
-        let incoming = vec![
-            Bytes::from("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"unauthorized\",\"message\":\"invalid key\"}}}\n\n"),
-        ];
-        let stream = futures_util::stream::iter(incoming);
-        let responses_stream = OpenAIToResponsesSseStream::new(stream, "resp_err".into(), "gpt-4o".into());
-        let items: Vec<Bytes> = responses_stream.map(|r| r.unwrap()).collect().await;
-
-        let combined = items.iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<String>();
-        assert!(combined.contains("event: response.failed"));
-        assert!(combined.contains("\"status\":\"failed\""));
     }
 }

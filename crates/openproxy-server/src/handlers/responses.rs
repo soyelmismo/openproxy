@@ -381,7 +381,10 @@ mod tests {
         assert!(openai_req.stream);
         assert_eq!(openai_req.messages.len(), 2);
         assert_eq!(openai_req.messages[0].role, "system");
-        assert_eq!(openai_req.messages[0].content, Some(json!("Create a concise title.")));
+        assert_eq!(
+            openai_req.messages[0].content,
+            Some(json!("Create a concise title."))
+        );
         assert_eq!(openai_req.messages[1].role, "user");
         assert_eq!(openai_req.messages[1].content, Some(json!("hello world")));
 
@@ -396,6 +399,9 @@ mod tests {
         // Verify extra fields cleaned
         assert!(!openai_req.extra.contains_key("input"));
         assert!(!openai_req.extra.contains_key("max_output_tokens"));
-        assert_eq!(openai_req.extra.get("prompt_cache_key"), Some(&json!("sess-xyz")));
+        assert_eq!(
+            openai_req.extra.get("prompt_cache_key"),
+            Some(&json!("sess-xyz"))
+        );
     }
 }
