@@ -31,33 +31,10 @@ impl TargetFormatter for OpenaiFormatter {
             messages_ref,
             stream,
         );
-        // Normalize messages for OpenAI-compatible targets:
-        // - "developer" role is only valid for native OpenAI; normalize to "system".
-        // - Enforce valid `name` field: strip from "tool" role messages, sanitize to ^[a-zA-Z0-9_-]{1,64}$.
-        let needs_normalization = view.messages.iter().any(|m| {
-            m.role == "developer"
-                || (m.role == "tool" && m.name.is_some())
-                || m.name.as_deref().is_some_and(|n| {
-                    n.is_empty()
-                        || n.len() > 64
-                        || !n
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                })
-        });
+        let needs_normalization = view.messages.iter().any(message_needs_openai_normalization);
         if needs_normalization {
             view.messages = std::borrow::Cow::Owned(
-                view.messages
-                    .iter()
-                    .map(|m| {
-                        let mut patched = m.clone();
-                        if patched.role == "developer" {
-                            patched.role = "system".to_string();
-                        }
-                        patched.sanitize_name();
-                        patched
-                    })
-                    .collect(),
+                view.messages.iter().map(normalize_openai_message).collect(),
             );
         }
         if view.extra.contains_key("disabled") {
@@ -69,6 +46,99 @@ impl TargetFormatter for OpenaiFormatter {
             Err(e) => Err(CoreError::Parse(format!("serialize openai request: {e}"))),
         }
     }
+}
+
+fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
+    if m.role == "developer" {
+        return true;
+    }
+    if m.role == "tool" && m.name.is_some() {
+        return true;
+    }
+    if m.name.as_deref().is_some_and(|n| {
+        n.is_empty()
+            || n.len() > 64
+            || !n
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    }) {
+        return true;
+    }
+    if matches!(m.role.as_str(), "assistant" | "system" | "tool")
+        && matches!(&m.content, Some(Value::Array(_) | Value::Object(_)))
+    {
+        return true;
+    }
+    if let Some(Value::Array(parts)) = &m.content {
+        let mut has_media = false;
+        for p in parts {
+            if let Some(obj) = p.as_object() {
+                if obj.contains_key("annotations") {
+                    return true;
+                }
+                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                    if t == "output_text" || t == "input_text" {
+                        return true;
+                    }
+                    if t == "image_url" || t == "input_audio" || t == "image" {
+                        has_media = true;
+                    }
+                }
+            }
+        }
+        if !has_media {
+            return true;
+        }
+    }
+    false
+}
+
+fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
+    let mut patched = m.clone();
+    if patched.role == "developer" {
+        patched.role = "system".to_string();
+    }
+    patched.sanitize_name();
+
+    if matches!(patched.role.as_str(), "assistant" | "system" | "tool")
+        && matches!(&patched.content, Some(Value::Array(_) | Value::Object(_)))
+    {
+        patched.content = Some(Value::String(patched.extract_text()));
+    } else if let Some(Value::Array(parts)) = &patched.content {
+        let has_media = parts.iter().any(|p| {
+            p.get("type")
+                .and_then(|v| v.as_str())
+                .is_some_and(|t| t == "image_url" || t == "input_audio" || t == "image")
+        });
+        if !has_media {
+            patched.content = Some(Value::String(patched.extract_text()));
+        } else {
+            let sanitized_parts = parts
+                .iter()
+                .map(|p| {
+                    if let Some(obj) = p.as_object() {
+                        let mut new_obj = obj.clone();
+                        new_obj.remove("annotations");
+                        if let Some(t) = new_obj.get("type").and_then(|v| v.as_str())
+                            && (t == "output_text" || t == "input_text")
+                        {
+                            new_obj.insert("type".to_string(), Value::String("text".to_string()));
+                        }
+                        if !new_obj.contains_key("text")
+                            && let Some(cnt) = new_obj.remove("content")
+                        {
+                            new_obj.insert("text".to_string(), cnt);
+                        }
+                        Value::Object(new_obj)
+                    } else {
+                        p.clone()
+                    }
+                })
+                .collect();
+            patched.content = Some(Value::Array(sanitized_parts));
+        }
+    }
+    patched
 }
 
 pub struct AnthropicFormatter;
