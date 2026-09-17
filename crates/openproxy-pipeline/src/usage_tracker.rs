@@ -1,10 +1,9 @@
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use rusqlite::Connection;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{FailureContext, PipelineRequest, PipelineResult, is_upstream_health_issue};
-use openproxy_compression::stats::CompressionStats;
 use openproxy_types::SelectionRegistry;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
@@ -20,7 +19,6 @@ pub struct UsageTracker {
     pub conn: Arc<Mutex<Connection>>,
     pub background_tx: tokio::sync::mpsc::Sender<crate::worker::BackgroundJob>,
     pub record_bodies_and_headers: Arc<AtomicBool>,
-    pub compression_stats_cell: Arc<RwLock<Option<CompressionStats>>>,
     pub selection_registry: Arc<SelectionRegistry>,
     pub cooldown_secs: u64,
     pub cooldown_max_secs: u64,
@@ -723,7 +721,7 @@ impl UsageRecordBuilder<'_> {
         )>,
     > {
         let (compression_savings_pct, compression_techniques) = {
-            let guard = self.tracker.compression_stats_cell.read();
+            let guard = self.req.compression_stats.lock();
             (
                 guard
                     .as_ref()

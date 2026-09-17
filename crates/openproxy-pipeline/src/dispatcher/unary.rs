@@ -477,54 +477,77 @@ impl UpstreamDispatcher {
                 .await;
         }
 
-        let response_body_raw: serde_json::Value = match serde_json::from_slice(&body_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                if params.target_format == openproxy_types::TargetFormat::CommandCodeGo
-                    && let Ok(body_str) = std::str::from_utf8(&body_bytes)
-                    && let Ok(val) = crate::sse::parse_commandcode_sse_to_value(
-                        body_str,
-                        &params.req.openai_request.model,
-                    )
-                {
-                    val
-                } else {
-                    let err = CoreError::Parse(format!("invalid json in upstream response: {e}"));
-                    return self.record_and_fail(
-                        params.req,
-                        params.combo,
-                        params.target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            Some(ttft_ms),
-                            err.http_status(),
-                        ),
-                    );
+        let (response_body_raw, mut openai_response) =
+            match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                Ok(raw) => {
+                    let resp =
+                        match translate_non_streaming_body(params.target_format, &raw, &params.req)
+                        {
+                            Ok(r) => extract_think_from_response(r),
+                            Err(err) => {
+                                return self.record_and_fail(
+                                    params.req,
+                                    params.combo,
+                                    params.target,
+                                    dctx.fail_ctx_code(
+                                        &err,
+                                        Some(connect_and_send_ms),
+                                        Some(ttft_ms),
+                                        err.http_status(),
+                                    ),
+                                );
+                            }
+                        };
+                    (raw, resp)
                 }
-            }
-        };
+                Err(e) => {
+                    if let Ok(body_str) = std::str::from_utf8(&body_bytes)
+                        && (body_str.starts_with("data:")
+                            || body_str.starts_with("event:")
+                            || body_str.contains("\ndata:")
+                            || body_str.contains("\nevent:"))
+                    {
+                        match crate::sse::parse_sse_stream_to_openai_response(
+                            params.target_format,
+                            body_str,
+                            &params.req.openai_request.model,
+                        ) {
+                            Ok(resp) => {
+                                let raw = serde_json::to_value(&resp).unwrap_or_default();
+                                (raw, extract_think_from_response(resp))
+                            }
+                            Err(err) => {
+                                return self.record_and_fail(
+                                    params.req,
+                                    params.combo,
+                                    params.target,
+                                    dctx.fail_ctx_code(
+                                        &err,
+                                        Some(connect_and_send_ms),
+                                        Some(ttft_ms),
+                                        err.http_status(),
+                                    ),
+                                );
+                            }
+                        }
+                    } else {
+                        let err =
+                            CoreError::Parse(format!("invalid json in upstream response: {e}"));
+                        return self.record_and_fail(
+                            params.req,
+                            params.combo,
+                            params.target,
+                            dctx.fail_ctx_code(
+                                &err,
+                                Some(connect_and_send_ms),
+                                Some(ttft_ms),
+                                err.http_status(),
+                            ),
+                        );
+                    }
+                }
+            };
 
-        let mut openai_response = match translate_non_streaming_body(
-            params.target_format,
-            &response_body_raw,
-            &params.req,
-        ) {
-            Ok(r) => extract_think_from_response(r),
-            Err(err) => {
-                return self.record_and_fail(
-                    params.req,
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                );
-            }
-        };
 
         for choice in &mut openai_response.choices {
             choice.message.extra.remove("raw_response_body");

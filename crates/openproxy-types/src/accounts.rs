@@ -1,4 +1,5 @@
 use crate::ids::{AccountId, ProviderId};
+use crate::quota::ModelQuotaDetail;
 use serde::{Deserialize, Serialize};
 
 impl_string_enum! {
@@ -31,7 +32,7 @@ pub struct Account {
     pub quota_last_fetched_at: Option<Box<str>>,
     pub quota_fetch_error: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quota_model_details: Option<serde_json::Value>,
+    pub quota_model_details: Option<Box<[ModelQuotaDetail]>>,
     pub auth_type: Box<str>,
     pub email: Option<Box<str>>,
     pub oauth_scope: Option<Box<str>>,

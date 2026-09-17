@@ -80,13 +80,16 @@ fn append_format_auth_headers(
     api_key: &str,
     target_format: TargetFormat,
 ) {
+    let effective_key = if api_key.is_empty() { "public" } else { api_key };
     if target_format == TargetFormat::Anthropic {
-        headers.push(("x-api-key".into(), api_key.to_string()));
+        headers.push(("x-api-key".into(), effective_key.to_string()));
         headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
     } else if target_format == TargetFormat::Gemini {
-        headers.push(("x-goog-api-key".into(), api_key.to_string()));
-    } else if let Some(auth) = adapter.build_auth_header(api_key) {
+        headers.push(("x-goog-api-key".into(), effective_key.to_string()));
+    } else if let Some(auth) = adapter.build_auth_header(effective_key) {
         headers.push(auth);
+    } else {
+        headers.push(("Authorization".into(), format!("Bearer {effective_key}")));
     }
 }
 
@@ -98,10 +101,7 @@ pub fn build_opencode_headers(
 ) -> Vec<(String, String)> {
     let mut headers = vec![("Content-Type".into(), "application/json".into())];
 
-    // Only add auth headers if we have an API key.
-    if !api_key.is_empty() {
-        append_format_auth_headers(&mut headers, adapter, api_key, target_format);
-    }
+    append_format_auth_headers(&mut headers, adapter, api_key, target_format);
 
     headers.extend(OpenCodeSpoofer.headers());
     headers
@@ -118,10 +118,18 @@ pub async fn fetch_opencode_models(
         .models_url()
         .ok_or_else(|| CoreError::Validation(format!("{}: models_url is None", adapter.id())))?;
 
-    let auth = format!("Bearer {api_key}");
-    let body = upstream_get_json(upstream_client, &url, &[("Authorization", &auth)])
-        .await
-        .ctx_upstream(format!("{} /models", adapter.id()))?;
+    let effective_key = if api_key.is_empty() { "public" } else { api_key };
+    let auth = format!("Bearer {effective_key}");
+    let body = upstream_get_json(
+        upstream_client,
+        &url,
+        &[
+            ("Authorization", &auth),
+            ("User-Agent", crate::spoofer::OPENCODE_UA),
+        ],
+    )
+    .await
+    .ctx_upstream(format!("{} /models", adapter.id()))?;
 
     let payload: OpenAIModelsResponse =
         <OpenAIModelsResponse as serde::Deserialize>::deserialize(&body)
@@ -169,6 +177,235 @@ impl OpenCodeAdapter {
             },
         }
     }
+    pub fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: TargetFormat,
+        model: &openproxy_types::ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> Result<bytes::Bytes> {
+        let api_key = resolved_target
+            .custom_meta
+            .as_ref()
+            .map_or(resolved_target.api_key.as_str(), |m| m.access_token.as_str());
+
+        if !is_free_opencode_tier(self.flavor, api_key, model) {
+            return Ok(body);
+        }
+
+        if body.is_empty() {
+            return Ok(body);
+        }
+
+        let mut val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+            CoreError::Parse(format!("failed to parse request body for opencode wrapping: {e}"))
+        })?;
+
+        if let Some(obj) = val.as_object_mut() {
+            if target_format != TargetFormat::Gemini {
+                obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+            }
+            inject_opencode_agent_quartet_tools(obj, target_format);
+        }
+
+        let updated_bytes = serde_json::to_vec(&val).map_err(|e| {
+            CoreError::Parse(format!("failed to re-serialize wrapped opencode body: {e}"))
+        })?;
+        Ok(bytes::Bytes::from(updated_bytes))
+    }
+}
+
+/// Upstream OpenCode Console enforces a mandatory agent quartet (`bash`, `glob`, `grep`, `read`)
+/// and `stream: true` on free tier requests (Bearer public, keyless, or free models) on both Zen and Go.
+pub fn is_free_opencode_tier(
+    _flavor: OpenCodeFlavor,
+    api_key: &str,
+    model_id: &openproxy_types::ModelId,
+) -> bool {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("public") {
+        return true;
+    }
+    let m = model_id.as_str().to_ascii_lowercase();
+    m.ends_with("-free")
+        || m == "big-pickle"
+        || m == "union-alpha"
+        || m.contains("contributor-free")
+}
+
+pub fn inject_opencode_agent_quartet_tools(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    target_format: TargetFormat,
+) {
+    let mut tools_arr = match obj.remove("tools") {
+        Some(serde_json::Value::Array(arr)) => arr,
+        _ => Vec::new(),
+    };
+
+    let mut existing_names = std::collections::HashSet::new();
+    for t in &tools_arr {
+        if let Some(name) = t
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .or_else(|| t.get("name"))
+            .and_then(|n| n.as_str())
+        {
+            existing_names.insert(name.to_ascii_lowercase());
+        } else if let Some(decls) = t.get("functionDeclarations").and_then(|d| d.as_array()) {
+            for decl in decls {
+                if let Some(name) = decl.get("name").and_then(|n| n.as_str()) {
+                    existing_names.insert(name.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+
+    struct QuartetParam {
+        name: &'static str,
+        r#type: &'static str,
+        desc: &'static str,
+    }
+
+    struct QuartetTool {
+        name: &'static str,
+        desc: &'static str,
+        params: &'static [QuartetParam],
+        required: &'static [&'static str],
+    }
+
+    const QUARTET: &[QuartetTool] = &[
+        QuartetTool {
+            name: "bash",
+            desc: "Execute a shell command in the active workspace",
+            params: &[
+                QuartetParam { name: "command", r#type: "string", desc: "Shell command string to execute" },
+                QuartetParam { name: "workdir", r#type: "string", desc: "Working directory" },
+                QuartetParam { name: "timeout", r#type: "integer", desc: "Timeout in milliseconds" },
+            ],
+            required: &["command"],
+        },
+        QuartetTool {
+            name: "glob",
+            desc: "Find files matching a glob pattern",
+            params: &[
+                QuartetParam { name: "pattern", r#type: "string", desc: "Glob pattern to match files against" },
+                QuartetParam { name: "path", r#type: "string", desc: "Relative directory to search" },
+                QuartetParam { name: "limit", r#type: "integer", desc: "Maximum results to return" },
+            ],
+            required: &["pattern"],
+        },
+        QuartetTool {
+            name: "grep",
+            desc: "Search for regex matches in file contents",
+            params: &[
+                QuartetParam { name: "pattern", r#type: "string", desc: "Regex pattern to search for in file contents" },
+                QuartetParam { name: "path", r#type: "string", desc: "Relative directory to search" },
+                QuartetParam { name: "include", r#type: "string", desc: "File glob to include in the search" },
+                QuartetParam { name: "limit", r#type: "integer", desc: "Maximum matches to return" },
+            ],
+            required: &["pattern"],
+        },
+        QuartetTool {
+            name: "read",
+            desc: "Read a text file or directory",
+            params: &[
+                QuartetParam { name: "path", r#type: "string", desc: "Path to file or directory" },
+                QuartetParam { name: "offset", r#type: "integer", desc: "1-based line offset to start reading from" },
+                QuartetParam { name: "limit", r#type: "integer", desc: "Maximum entries or lines to read" },
+            ],
+            required: &["path"],
+        },
+    ];
+
+    if target_format == TargetFormat::Gemini {
+        let mut gemini_decls = Vec::new();
+        for tool in QUARTET {
+            if existing_names.contains(tool.name) {
+                continue;
+            }
+            let mut properties = serde_json::Map::new();
+            for p in tool.params {
+                properties.insert(
+                    p.name.to_string(),
+                    serde_json::json!({
+                        "type": p.r#type,
+                        "description": p.desc,
+                    }),
+                );
+            }
+            let parameters = serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": tool.required,
+            });
+            gemini_decls.push(serde_json::json!({
+                "name": tool.name,
+                "description": tool.desc,
+                "parameters": parameters,
+            }));
+        }
+
+        if !gemini_decls.is_empty() {
+            if let Some(first_tool) = tools_arr.iter_mut().find_map(|t| {
+                t.as_object_mut()
+                    .and_then(|obj| obj.get_mut("functionDeclarations"))
+                    .and_then(|fd| fd.as_array_mut())
+            }) {
+                first_tool.extend(gemini_decls);
+            } else {
+                tools_arr.push(serde_json::json!({
+                    "functionDeclarations": gemini_decls,
+                }));
+            }
+        }
+    } else {
+        for tool in QUARTET {
+            if existing_names.contains(tool.name) {
+                continue;
+            }
+
+            let mut properties = serde_json::Map::new();
+            for p in tool.params {
+                properties.insert(
+                    p.name.to_string(),
+                    serde_json::json!({
+                        "type": p.r#type,
+                        "description": p.desc,
+                    }),
+                );
+            }
+            let parameters = serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": tool.required,
+            });
+
+            let tool_val = match target_format {
+                TargetFormat::Anthropic => serde_json::json!({
+                    "name": tool.name,
+                    "description": tool.desc,
+                    "input_schema": parameters,
+                }),
+                TargetFormat::Responses => serde_json::json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.desc,
+                    "parameters": parameters,
+                }),
+                _ => serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.desc,
+                        "parameters": parameters,
+                    }
+                }),
+            };
+            tools_arr.push(tool_val);
+        }
+    }
+
+    obj.insert("tools".to_string(), serde_json::Value::Array(tools_arr));
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -199,12 +436,28 @@ impl crate::adapters::ProviderAdapter for OpenCodeGoAdapter {
     ) -> Vec<(String, String)> {
         self.0.build_headers(api_key, target_format, model)
     }
+    fn build_chat_url(
+        &self,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+    ) -> String {
+        self.0.build_chat_url(target_format, model)
+    }
     async fn fetch_models(
         &self,
         upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
         api_key: &str,
     ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
         self.0.fetch_models(upstream_client, api_key).await
+    }
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        self.0.wrap_request_body(body, target_format, model, resolved_target)
     }
 }
 
@@ -236,12 +489,28 @@ impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
     ) -> Vec<(String, String)> {
         self.0.build_headers(api_key, target_format, model)
     }
+    fn build_chat_url(
+        &self,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+    ) -> String {
+        self.0.build_chat_url(target_format, model)
+    }
     async fn fetch_models(
         &self,
         upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
         api_key: &str,
     ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
         self.0.fetch_models(upstream_client, api_key).await
+    }
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        self.0.wrap_request_body(body, target_format, model, resolved_target)
     }
 }
 
@@ -270,6 +539,23 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
         build_opencode_headers(self, api_key, target_format)
     }
 
+    fn build_chat_url(
+        &self,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+    ) -> String {
+        let base_url = &self.config.base_url;
+        if target_format == openproxy_types::TargetFormat::Gemini {
+            format!(
+                "{base_url}/models/{}:streamGenerateContent?alt=sse",
+                model.as_str()
+            )
+        } else {
+            let eff_format = crate::adapters::traits::resolve_target_format(self.config.format, target_format);
+            format!("{base_url}{}", crate::adapters::traits::target_format_path(eff_format))
+        }
+    }
+
     async fn fetch_models(
         &self,
         upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
@@ -277,130 +563,15 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
     ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
         fetch_opencode_models(self, self.flavor, upstream_client, api_key).await
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ZEN: OpenCodeFlavor = OpenCodeFlavor::Zen;
-    const GO: OpenCodeFlavor = OpenCodeFlavor::Go;
-
-    #[test]
-    fn test_classify_opencode_target_format() {
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "claude-3-opus"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "minimax-abab6"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "CLAUDE-3-SONNET"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "gpt-4-turbo"),
-            TargetFormat::Openai
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "gemini-3-flash"),
-            TargetFormat::Gemini
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "qwen3.6-plus"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "muse-spark-1.3-contributor-free"),
-            TargetFormat::Openai
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "gpt-5.6-terra"),
-            TargetFormat::Responses
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "grok-4.6"),
-            TargetFormat::Responses
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "mimo-v2.5-free"),
-            TargetFormat::Openai
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "unknown-model"),
-            TargetFormat::Openai
-        );
-    }
-
-    /// `union-alpha` is only served by `/zen/v1/messages` on both flavors; the
-    /// family heuristic has no substring to key on and used to route it to
-    /// `/chat/completions`, which answers 500 from upstream.
-    #[test]
-    fn union_alpha_uses_anthropic_messages_on_both_flavors() {
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "union-alpha"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(GO, "union-alpha"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "UNION-ALPHA"),
-            TargetFormat::Anthropic
-        );
-    }
-
-    /// Zen answers the paid MiniMax variants and the `-coder`/`-code` extras on
-    /// OpenAI-compatible `/chat/completions`; Go keeps them on `/messages`.
-    #[test]
-    fn zen_openai_compatible_exceptions() {
-        for id in [
-            "minimax-m3",
-            "minimax-m2.7",
-            "minimax-m2.5",
-            "minimax-m2.1",
-            "qwen3-coder",
-            "grok-code",
-        ] {
-            assert_eq!(
-                classify_opencode_target_format(ZEN, id),
-                TargetFormat::Openai,
-                "{id}"
-            );
-        }
-
-        // Free MiniMax tiers stay on the Anthropic Messages API.
-        assert_eq!(
-            classify_opencode_target_format(ZEN, "minimax-m3-free"),
-            TargetFormat::Anthropic
-        );
-        // Go routes the same aliases through `/messages`.
-        assert_eq!(
-            classify_opencode_target_format(GO, "minimax-m3"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_opencode_target_format(GO, "qwen3.7-max"),
-            TargetFormat::Anthropic
-        );
-    }
-
-    #[test]
-    fn flavor_aliases_match_core_classifier() {
-        assert_eq!(
-            classify_zen_target_format("minimax-m3"),
-            TargetFormat::Openai
-        );
-        assert_eq!(
-            classify_go_target_format("minimax-m3"),
-            TargetFormat::Anthropic
-        );
-        assert_eq!(
-            classify_zen_target_format("union-alpha"),
-            TargetFormat::Anthropic
-        );
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: openproxy_types::TargetFormat,
+        model: &openproxy_types::ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        self.wrap_request_body(body, target_format, model, resolved_target)
     }
 }
+

@@ -204,3 +204,73 @@ fn hard_skip_400_2013_marker_only() {
     assert!(err.is_hard_skip());
     assert!(!RetryPolicy::is_retryable(&err, false));
 }
+
+#[test]
+fn test_propagate_opencode_headers_preserves_valid_session() {
+    let mut headers = vec![
+        ("User-Agent".into(), "opencode/1.18.31".into()),
+        ("x-opencode-client".into(), "cli".into()),
+        ("x-opencode-project".into(), "global".into()),
+        ("x-opencode-session".into(), "ses_default".into()),
+    ];
+    let valid_session = "ses_f534dfae8ffeCy4Ee4tLWNygDc";
+    let mut req_headers = std::collections::BTreeMap::new();
+    req_headers.insert("x-opencode-session".into(), valid_session.into());
+    req_headers.insert("x-opencode-client".into(), "desktop".into());
+    req_headers.insert("x-opencode-project".into(), "project-42".into());
+    let openai_req = openproxy_types::OpenAIRequest::default();
+
+    propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
+
+    let session = headers.iter().find(|(k, _)| k == "x-opencode-session").unwrap();
+    assert_eq!(session.1, valid_session);
+    let client = headers.iter().find(|(k, _)| k == "x-opencode-client").unwrap();
+    assert_eq!(client.1, "desktop");
+    let project = headers.iter().find(|(k, _)| k == "x-opencode-project").unwrap();
+    assert_eq!(project.1, "project-42");
+}
+
+#[test]
+fn test_propagate_opencode_headers_translates_candidate_session() {
+    let mut headers = vec![
+        ("User-Agent".into(), "opencode/1.18.31".into()),
+        ("x-opencode-session".into(), "ses_default".into()),
+    ];
+    let mut req_headers = std::collections::BTreeMap::new();
+    req_headers.insert("x-session-id".into(), "cursor:uuid-9876".into());
+    req_headers.insert("user-agent".into(), "opencode/1.20.0".into());
+    let openai_req = openproxy_types::OpenAIRequest::default();
+
+    propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
+
+    let session = headers.iter().find(|(k, _)| k == "x-opencode-session").unwrap();
+    assert!(openproxy_adapters::spoofer::is_valid_opencode_session_id(&session.1));
+    assert_ne!(session.1, "ses_default");
+
+    let ua = headers.iter().find(|(k, _)| k == "User-Agent").unwrap();
+    assert_eq!(ua.1, "opencode/1.20.0");
+}
+
+#[test]
+fn test_propagate_opencode_headers_from_body_user_field() {
+    let mut headers = vec![
+        ("User-Agent".into(), "opencode/1.18.31".into()),
+        ("x-opencode-session".into(), "ses_default".into()),
+    ];
+    let req_headers = std::collections::BTreeMap::new();
+    let openai_req = openproxy_types::OpenAIRequest {
+        user: Some("chat-session-user-123".into()),
+        ..Default::default()
+    };
+
+    propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
+
+    let session = headers.iter().find(|(k, _)| k == "x-opencode-session").unwrap();
+    assert!(openproxy_adapters::spoofer::is_valid_opencode_session_id(&session.1));
+    assert_ne!(session.1, "ses_default");
+    assert_eq!(
+        session.1,
+        openproxy_adapters::spoofer::translate_session_id("chat-session-user-123", None)
+    );
+}
+

@@ -101,11 +101,104 @@ pub fn scan_antigravity_cli() -> Option<DiscoveredAccount> {
     })
 }
 
-/// Punto de entrada del endpoint. Hoy solo escanea el agy-cli; el follow-up
-/// multi-provider iterará sobre un registry (ver docs/specs/antigravity-gaps-p3.md
-/// §Out of scope).
+/// Scan el archivo de credenciales `~/.gemini/oauth_creds.json` sincronizado por
+/// herramientas como Antigravity-Manager y CLI en sesiones SSH/contenedores.
+pub fn scan_antigravity_oauth_creds() -> Option<DiscoveredAccount> {
+    let home = home_dir()?;
+    let path = home.join(".gemini").join("oauth_creds.json");
+
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e,
+                "account_scanner: cannot read oauth_creds.json file");
+            return None;
+        }
+    };
+
+    let v: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e,
+                "account_scanner: oauth_creds.json JSON parse failed");
+            return None;
+        }
+    };
+
+    let Some(access_token) = v
+        .get("access_token")
+        .and_then(|a| a.as_str())
+        .map(str::to_string)
+    else {
+        tracing::warn!(path = %path.display(),
+            "account_scanner: oauth_creds.json missing access_token");
+        return None;
+    };
+
+    let refresh_token = v
+        .get("refresh_token")
+        .and_then(|s| s.as_str())
+        .map(str::to_string);
+
+    // Intentar leer el email activo de ~/.gemini/google_accounts.json
+    let mut email = None;
+    let accounts_path = home.join(".gemini").join("google_accounts.json");
+    if let Ok(acc_bytes) = std::fs::read(&accounts_path)
+        && let Ok(acc_v) = serde_json::from_slice::<serde_json::Value>(&acc_bytes)
+    {
+        email = acc_v
+            .get("active")
+            .and_then(|e| e.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string);
+    }
+
+    // Fallback: extraer email de claims del JWT id_token si existe
+    if email.is_none()
+        && let Some(id_tok) = v.get("id_token").and_then(|s| s.as_str())
+        && let Some(claims) = crate::oauth::decode_jwt_payload(id_tok)
+    {
+        email = claims
+            .get("email")
+            .and_then(|e| e.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string);
+    }
+
+    let label = match email.as_deref() {
+        Some(e) => format!("antigravity@{e}"),
+        None => "antigravity-oauth".to_string(),
+    };
+
+    Some(DiscoveredAccount {
+        provider_id: "antigravity".to_string(),
+        label,
+        access_token,
+        refresh_token,
+        email,
+        source_path: path,
+    })
+}
+
+/// Punto de entrada del endpoint. Escanea tanto el token file de agy-cli como
+/// el archivo oauth_creds.json compartido con Antigravity-Manager.
 pub fn scan_external_accounts() -> Vec<DiscoveredAccount> {
-    scan_antigravity_cli().into_iter().collect()
+    let mut accounts = Vec::new();
+    if let Some(cli_acc) = scan_antigravity_cli() {
+        accounts.push(cli_acc);
+    }
+    if let Some(creds_acc) = scan_antigravity_oauth_creds() {
+        let duplicate = accounts.iter().any(|a| {
+            (a.email.is_some() && a.email == creds_acc.email)
+                || a.access_token == creds_acc.access_token
+                || (a.refresh_token.is_some() && a.refresh_token == creds_acc.refresh_token)
+        });
+        if !duplicate {
+            accounts.push(creds_acc);
+        }
+    }
+    accounts
 }
 
 #[cfg(test)]
@@ -232,6 +325,123 @@ mod tests {
                 "missing access_token must not surface as entry"
             );
         }
+    }
+
+    #[test]
+    fn test_scanner_finds_antigravity_oauth_creds_file() {
+        let tmp = tempdir();
+        let gemini = tmp.path().join(".gemini");
+        std::fs::create_dir_all(&gemini).expect("mkdir");
+
+        let creds_target = gemini.join("oauth_creds.json");
+        let accounts_target = gemini.join("google_accounts.json");
+
+        let creds_body = serde_json::json!({
+            "access_token": "ya-test-creds-access",
+            "refresh_token": "1//test-creds-refresh",
+            "token_type": "Bearer",
+            "expiry_date": 1740000000000i64,
+            "scope": "openid email"
+        });
+        std::fs::write(&creds_target, serde_json::to_vec(&creds_body).expect("ser")).expect("write");
+
+        let accounts_body = serde_json::json!({
+            "active": "bob@example.com",
+            "old": []
+        });
+        std::fs::write(&accounts_target, serde_json::to_vec(&accounts_body).expect("ser")).expect("write");
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+
+        let found = scan_external_accounts();
+        let agy: Vec<_> = found
+            .iter()
+            .filter(|a| a.provider_id == "antigravity")
+            .collect();
+        assert_eq!(agy.len(), 1, "expected exactly one antigravity entry from oauth_creds");
+        assert_eq!(agy[0].label, "antigravity@bob@example.com");
+        assert_eq!(agy[0].access_token, "ya-test-creds-access");
+        assert_eq!(agy[0].refresh_token.as_deref(), Some("1//test-creds-refresh"));
+        assert_eq!(agy[0].email.as_deref(), Some("bob@example.com"));
+        assert_eq!(agy[0].source_path, creds_target);
+    }
+
+    #[test]
+    fn test_scanner_deduplicates_by_refresh_token() {
+        let tmp = tempdir();
+        let gemini = tmp.path().join(".gemini");
+        let cli_dir = gemini.join("antigravity-cli");
+        std::fs::create_dir_all(&cli_dir).expect("mkdir");
+
+        let cli_token = cli_dir.join("antigravity-oauth-token");
+        let creds_target = gemini.join("oauth_creds.json");
+
+        // CLI token has rotated access token "ya-new-access", but same refresh token
+        let cli_body = serde_json::json!({
+            "token": {
+                "access_token": "ya-new-access",
+                "refresh_token": "shared-refresh-token",
+                "token_type": "Bearer"
+            }
+        });
+        std::fs::write(&cli_token, serde_json::to_vec(&cli_body).unwrap()).unwrap();
+
+        let creds_body = serde_json::json!({
+            "access_token": "ya-old-access",
+            "refresh_token": "shared-refresh-token",
+            "token_type": "Bearer",
+            "expiry_date": 1740000000000i64
+        });
+        std::fs::write(&creds_target, serde_json::to_vec(&creds_body).unwrap()).unwrap();
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+
+        let found = scan_external_accounts();
+        let agy: Vec<_> = found
+            .iter()
+            .filter(|a| a.provider_id == "antigravity")
+            .collect();
+        assert_eq!(agy.len(), 1, "expected deduplication by shared refresh_token");
+        assert_eq!(agy[0].access_token, "ya-new-access");
+    }
+
+    #[test]
+    fn test_scanner_handles_empty_email_in_google_accounts() {
+        let tmp = tempdir();
+        let gemini = tmp.path().join(".gemini");
+        std::fs::create_dir_all(&gemini).expect("mkdir");
+
+        let creds_target = gemini.join("oauth_creds.json");
+        let accounts_target = gemini.join("google_accounts.json");
+
+        let creds_body = serde_json::json!({
+            "access_token": "ya-test-creds-access",
+            "refresh_token": "1//test-creds-refresh",
+            "token_type": "Bearer",
+            "expiry_date": 1740000000000i64
+        });
+        std::fs::write(&creds_target, serde_json::to_vec(&creds_body).unwrap()).unwrap();
+
+        // active email is whitespace-only
+        let accounts_body = serde_json::json!({
+            "active": "   ",
+            "old": []
+        });
+        std::fs::write(&accounts_target, serde_json::to_vec(&accounts_body).unwrap()).unwrap();
+
+        let _guard = lock();
+        let _home = HomeGuard::set(tmp.path());
+
+        let found = scan_external_accounts();
+        let agy: Vec<_> = found
+            .iter()
+            .filter(|a| a.provider_id == "antigravity")
+            .collect();
+        assert_eq!(agy.len(), 1);
+        assert_eq!(agy[0].label, "antigravity-oauth");
+        assert!(agy[0].email.is_none());
     }
 }
 

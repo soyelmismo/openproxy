@@ -158,6 +158,11 @@ openproxy/
 | **Cerrar streaming SSE sin frame terminal** | Emitir siempre `[DONE]` (Chat) o evento terminal canónico (Responses). |
 | **Sobrescribir `prompt_tokens` con deltas vacíos en streaming** | Acumular tokens preservando valores previos no nulos. |
 | **Modificar firmas de arneses de test sin sincronizar E2E** | Actualizar llamadores y mocks en el mismo commit para no quebrar CI. |
+| **Múltiples `cargo test` concurrentes sobre el mismo `target/`** | Ejecutar un único `cargo test --workspace` o aislar por crate disjunto. |
+| **Volcar logs crudos de tests/build en el chat entre agentes** | Escribir a archivos de artefacto (`.agents/.../handoff.md`) y referenciar la ruta. |
+| **Workers concurrentes modificando el mismo crate** | Particionar tareas por crates disjuntos con contratos de interfaz predefinidos. |
+| **Generación continua sin checkpoints (>10 min)** | Time-box estricto: emitir diffs y checkpoints modulares cada <10 min. |
+| **Orquestador re-generando contexto mientras espera workers** | Espera reactiva pasiva sin llamadas superfluas ni pre-fills de chat. |
 
 ---
 
@@ -237,3 +242,23 @@ openproxy/
    python3 -c "import os; [print(f'{len(open(os.path.join(r,f)).readlines()):4} {os.path.join(r,f)}') for r,_,fs in os.walk('crates') if 'node_modules' not in r and 'target' not in r and 'dist' not in r for f in fs if f.endswith(('.rs','.ts','.css')) and len(open(os.path.join(r,f)).readlines()) > 800]"
    ```
 5. **Commits:** Formato Conventional Commits (`feat(...)`, `fix(...)`, `refactor(...)`, `docs(...)`, `perf(...)`).
+
+---
+
+## 9. Gobernanza de Orquestación Multi-Agente y Eficiencia de Tokens
+
+Para prevenir cuellos de botella de compilación, sobreconsumo desmedido de tokens (KV-cache blowup) y contención en el sistema de archivos:
+
+1. **Compilación y Test Centralizado (Un Solo `cargo test --workspace`):**
+   - Prohibido lanzar múltiples ejecuciones concurrentes de `cargo test` (ej. un runner para "otros crates", otro para "workspace" y otro para "submódulo"). Al compartir `target/` o locks del sistema de archivos, Cargo serializa la compilación triplicando el tiempo de CPU y quemando tokens innecesarios.
+   - Ejecutar **una sola pasada integral** (`cargo test --workspace`) por compuerta de validación o tras finalizar la integración.
+2. **Particionamiento Disjunto por Crate (No por Herramienta):**
+   - Si se requiere paralelismo real, asignar a cada subagente un conjunto de crates estrictamente disjunto (`openproxy-pipeline`, `openproxy-adapters`, `openproxy-db`, `openproxy-server`). Prohibido solapar workers concurrentes sobre el mismo crate sin contratos de interfaz congelados previamente.
+3. **Comunicación Vía Artefactos en Disco (Cero Logs Masivos en Chat):**
+   - Prohibido volcar salidas completas de compilación, trazas o logs masivos de tests en los mensajes entre agentes.
+   - Todo worker debe escribir sus hallazgos, diffs y reportes en un archivo de artefacto en disco (`.agents/<subagent>/handoff.md`). El agente sucesor o revisor debe leer el archivo mediante herramientas de lectura (`view_file`), nunca arrastrar el transcript completo en su ventana de contexto.
+4. **Time-Boxing y Checkpoints Obligatorios (<10 Minutos):**
+   - Toda tarea de generación de un agente debe producir un checkpoint verificable en menos de 10 minutos. Tareas en estado "Generating" más allá de 10 minutos constituyen un fallo de diseño y deben ser canceladas o reestructuradas.
+5. **Silencio del Orquestador durante Esperas (Sin Re-Prefills):**
+   - El orquestador debe suspender su ejecución (`idle` / reactivo) mientras los subagentes trabajan. Queda prohibido que el orquestador genere reflexiones o encadenamientos de pensamientos mientras espera, evitando re-prefills masivos que agotan la cuota global.
+

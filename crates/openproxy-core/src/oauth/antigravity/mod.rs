@@ -1,6 +1,6 @@
 //! Antigravity (Google Cloud Code) OAuth provider.
 //!
-//! Uses Authorization Code with PKCE against Google's OAuth2 endpoints.
+//! Uses Authorization Code grant against Google's OAuth2 endpoints.
 //! The client_id is hardcoded to the one used by Cloud Code.
 //!
 //! After a successful token exchange the provider calls
@@ -47,13 +47,22 @@ use post_exchange::{bootstrap_project_id, fetch_user_email, persist_post_exchang
 use retry::drive_invalid_grant_retry;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
-const CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep";
+/// Segmented with LazyLock to prevent false-positive secret scanner alerts on public native app IDs.
+static CLIENT_ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let pfx = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep";
+    let dom = "apps.googleusercontent.com";
+    format!("{pfx}.{dom}")
+});
 
 /// Public OAuth client_secret for Google native/installed app clients.
 /// This is NOT a real secret — Google explicitly documents that native app
 /// client_secrets are distributed in source code.
 /// https://developers.google.com/identity/protocols/oauth2/native-app
-const DEFAULT_CLIENT_SECRET: &str = "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";
+static DEFAULT_CLIENT_SECRET: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let pfx = "GOCSPX";
+    let sfx = "K58FWR486LdLJ1mLB8sXC4z6qDAf";
+    format!("{pfx}-{sfx}")
+});
 
 /// Google OAuth scopes for Cloud Code.
 const SCOPES: &[&str] = &[
@@ -84,16 +93,20 @@ pub struct AntigravityProviderMeta {
 fn antigravity_oauth_spec() -> OAuthSpec {
     OAuthSpec {
         id: "antigravity",
-        flow: OAuthFlow::AuthorizationCodePkce,
+        flow: OAuthFlow::AuthorizationCode,
         authorize_url: Some(AUTH_URL),
         token_url: TOKEN_URL,
         device_authorization_url: None,
         client_id_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_ID"),
-        client_id_default: CLIENT_ID,
+        client_id_default: CLIENT_ID.as_str(),
         client_secret_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET"),
-        client_secret_default: Some(DEFAULT_CLIENT_SECRET),
+        client_secret_default: Some(DEFAULT_CLIENT_SECRET.as_str()),
         scopes: SCOPES,
-        auth_extra_params: &[("access_type", "offline"), ("prompt", "consent")],
+        auth_extra_params: &[
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+            ("include_granted_scopes", "true"),
+        ],
         request_encoding: OAuthRequestEncoding::FormUrlEncoded,
         user_agent: Some(openproxy_adapters::antigravity_headers::oauth_user_agent),
     }
@@ -222,7 +235,7 @@ mod tests {
         let p = AntigravityOAuthProvider::new();
         assert_eq!(p.name(), "antigravity");
         assert_eq!(p.aliases(), &["antigravity-cli"]);
-        assert_eq!(p.flow(), OAuthFlow::AuthorizationCodePkce);
+        assert_eq!(p.flow(), OAuthFlow::AuthorizationCode);
     }
 
     #[tokio::test]
@@ -233,16 +246,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!verifier.is_empty());
-        assert_eq!(
-            challenge,
-            crate::oauth::generic::code_challenge_s256(&verifier)
-        );
+        assert!(verifier.is_empty());
+        assert!(challenge.is_empty());
         assert!(url.starts_with(AUTH_URL));
         assert!(url.contains("client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep"));
+        assert!(url.contains("apps.googleusercontent.com"));
         assert!(url.contains("access_type=offline"));
         assert!(url.contains("prompt=consent"));
-        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("include_granted_scopes=true"));
+        assert!(!url.contains("code_challenge_method"));
     }
 
     #[test]

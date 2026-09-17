@@ -1,8 +1,16 @@
 use crate::{PipelineRequest, PipelineResult};
 use openproxy_types::combos::Combo;
 use openproxy_types::error::CoreError;
-use openproxy_types::ids::TraceId;
+use openproxy_types::ids::{ComboTargetId, ModelRowId, TraceId};
+use std::collections::HashSet;
 use std::sync::Arc;
+
+#[derive(Debug)]
+pub(crate) struct RaceOutcome {
+    pub result: PipelineResult,
+    pub failed_targets: HashSet<ComboTargetId>,
+    pub failed_models: HashSet<ModelRowId>,
+}
 
 macro_rules! notify_worker_done {
     ($running:expr, $all_done:expr) => {
@@ -58,6 +66,8 @@ struct RaceContext {
     queue: Arc<parking_lot::Mutex<std::collections::VecDeque<crate::context::ResolvedTarget>>>,
     winner: Arc<parking_lot::Mutex<Option<PipelineResult>>>,
     last_err: Arc<parking_lot::Mutex<Option<CoreError>>>,
+    failed_targets: Arc<parking_lot::Mutex<HashSet<ComboTargetId>>>,
+    failed_models: Arc<parking_lot::Mutex<HashSet<ModelRowId>>>,
     running: Arc<std::sync::atomic::AtomicUsize>,
     all_done: Arc<tokio::sync::Notify>,
     race_size: u8,
@@ -113,6 +123,10 @@ async fn execute_race_worker(mut req: PipelineRequest, ctx: RaceContext) {
 
         if let Some(e) = &result.error {
             *ctx.last_err.lock() = Some(e.clone_for_result());
+            ctx.failed_targets.lock().insert(target.target.id);
+            if let Some(m) = target.target.model_row_id {
+                ctx.failed_models.lock().insert(m);
+            }
         }
     }
 }
@@ -133,37 +147,47 @@ pub(crate) async fn run_race(
     combo: &Combo,
     to_run: Vec<crate::context::ResolvedTarget>,
     race_size: u8,
-) -> PipelineResult {
+) -> RaceOutcome {
     use std::collections::VecDeque;
     use std::sync::atomic::AtomicUsize;
     use tokio::sync::Notify;
 
     let num_workers = race_size.min(to_run.len() as u8);
     if num_workers == 0 {
-        return PipelineResult {
-            status_code: 502,
-            error: Some(CoreError::NoHealthyTargets(combo.id.0)),
-            final_response: None,
-            attempts: 0,
-            usage_tuple: None,
+        return RaceOutcome {
+            result: PipelineResult {
+                status_code: 502,
+                error: Some(CoreError::NoHealthyTargets(combo.id.0)),
+                final_response: None,
+                attempts: 0,
+                usage_tuple: None,
+            },
+            failed_targets: HashSet::new(),
+            failed_models: HashSet::new(),
         };
     }
 
     let Some(original_tx) = extract_direct_sink(&req) else {
-        return PipelineResult {
-            status_code: 502,
-            error: Some(CoreError::Internal(
-                "run_race: missing direct stream sink".into(),
-            )),
-            final_response: None,
-            attempts: 0,
-            usage_tuple: None,
+        return RaceOutcome {
+            result: PipelineResult {
+                status_code: 502,
+                error: Some(CoreError::Internal(
+                    "run_race: missing direct stream sink".into(),
+                )),
+                final_response: None,
+                attempts: 0,
+                usage_tuple: None,
+            },
+            failed_targets: HashSet::new(),
+            failed_models: HashSet::new(),
         };
     };
 
     let total_targets = to_run.len() as u8;
     let queue = Arc::new(parking_lot::Mutex::new(VecDeque::from(to_run)));
     let last_err = Arc::new(parking_lot::Mutex::new(None));
+    let failed_targets = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+    let failed_models = Arc::new(parking_lot::Mutex::new(HashSet::new()));
     let running = Arc::new(AtomicUsize::new(num_workers as usize));
     let all_done = Arc::new(Notify::new());
     let winner = Arc::new(parking_lot::Mutex::new(None));
@@ -186,6 +210,8 @@ pub(crate) async fn run_race(
             queue: Arc::clone(&queue),
             winner: Arc::clone(&winner),
             last_err: Arc::clone(&last_err),
+            failed_targets: Arc::clone(&failed_targets),
+            failed_models: Arc::clone(&failed_models),
             running: Arc::clone(&running),
             all_done: Arc::clone(&all_done),
             race_size,
@@ -197,7 +223,7 @@ pub(crate) async fn run_race(
 
     let default_err = CoreError::NoHealthyTargets(combo.id.0);
 
-    match wait_for_race_winner(
+    let (result, failed_targets, failed_models) = match wait_for_race_winner(
         winner,
         running,
         all_done,
@@ -209,13 +235,27 @@ pub(crate) async fn run_race(
     )
     .await
     {
-        Ok(result) => result,
-        Err(err) => PipelineResult {
-            status_code: err.http_status(),
-            error: Some(err),
-            final_response: None,
-            attempts: race_size,
-            usage_tuple: None,
-        },
+        Ok(result) => (result, HashSet::new(), HashSet::new()),
+        Err(err) => {
+            let targets = std::mem::take(&mut *failed_targets.lock());
+            let models = std::mem::take(&mut *failed_models.lock());
+            (
+                PipelineResult {
+                    status_code: err.http_status(),
+                    error: Some(err),
+                    final_response: None,
+                    attempts: race_size,
+                    usage_tuple: None,
+                },
+                targets,
+                models,
+            )
+        }
+    };
+
+    RaceOutcome {
+        result,
+        failed_targets,
+        failed_models,
     }
 }

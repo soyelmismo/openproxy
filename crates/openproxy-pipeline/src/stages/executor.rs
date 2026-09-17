@@ -23,18 +23,36 @@ impl PipelineStage for UpstreamExecutorStage {
         _next: crate::stage::PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
         let (combo, to_run, race_size) = extract_execution_plan(ctx)?;
-        let last_result = match evaluate_initial_race(ctx, &combo, &to_run, race_size).await {
-            InitialRaceOutcome::Success(res) => return Ok(res),
-            InitialRaceOutcome::Exhausted(res) => res,
-        };
+        let (last_result, failed_targets, failed_models) =
+            match evaluate_initial_race(ctx, &combo, &to_run, race_size).await {
+                InitialRaceOutcome::Success(res) => return Ok(res),
+                InitialRaceOutcome::Exhausted {
+                    last_result,
+                    failed_targets,
+                    failed_models,
+                } => (last_result, failed_targets, failed_models),
+            };
 
-        execute_sequential_targets(ctx, &combo, &to_run, race_size, last_result).await
+        execute_sequential_targets(
+            ctx,
+            &combo,
+            &to_run,
+            race_size,
+            last_result,
+            failed_targets,
+            failed_models,
+        )
+        .await
     }
 }
 
 enum InitialRaceOutcome {
     Success(PipelineResult),
-    Exhausted(Option<PipelineResult>),
+    Exhausted {
+        last_result: Option<PipelineResult>,
+        failed_targets: std::collections::HashSet<openproxy_types::ids::ComboTargetId>,
+        failed_models: std::collections::HashSet<openproxy_types::ids::ModelRowId>,
+    },
 }
 
 enum TargetLoopOutcome {
@@ -75,21 +93,32 @@ async fn evaluate_initial_race(
     race_size: usize,
 ) -> InitialRaceOutcome {
     match try_initial_race(ctx, combo, to_run, race_size).await {
-        Some(res) if res.error.is_none() => InitialRaceOutcome::Success(res),
-        other => InitialRaceOutcome::Exhausted(other),
+        Some(outcome) if outcome.result.error.is_none() => {
+            InitialRaceOutcome::Success(outcome.result)
+        }
+        Some(outcome) => InitialRaceOutcome::Exhausted {
+            last_result: Some(outcome.result),
+            failed_targets: outcome.failed_targets,
+            failed_models: outcome.failed_models,
+        },
+        None => InitialRaceOutcome::Exhausted {
+            last_result: None,
+            failed_targets: std::collections::HashSet::new(),
+            failed_models: std::collections::HashSet::new(),
+        },
     }
 }
 
-async fn execute_sequential_targets(
+pub(super) async fn execute_sequential_targets(
     ctx: &mut PipelineContext,
     combo: &openproxy_types::Combo,
     to_run: &[crate::context::ResolvedTarget],
     race_size: usize,
     mut last_result: Option<PipelineResult>,
+    mut failed_targets: std::collections::HashSet<openproxy_types::ids::ComboTargetId>,
+    mut failed_models: std::collections::HashSet<openproxy_types::ids::ModelRowId>,
 ) -> Result<PipelineResult, CoreError> {
-    let mut overall_attempt: u8 = 1;
-    let mut failed_targets = std::collections::HashSet::new();
-    let mut failed_models = std::collections::HashSet::new();
+    let mut overall_attempt: u8 = (failed_targets.len() as u8).saturating_add(1);
 
     for (idx, target) in to_run.iter().enumerate() {
         if failed_targets.contains(&target.target.id) {
@@ -97,7 +126,7 @@ async fn execute_sequential_targets(
                 combo_id = combo.id.0,
                 target_id = target.target.id.0,
                 provider = %target.target.provider_id,
-                "skipping remaining account for target that already failed in this request"
+                "skipping target that already failed in this request"
             );
             continue;
         }

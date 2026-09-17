@@ -129,11 +129,11 @@ fn opencode_zen_uses_bearer_for_openai() {
 }
 
 #[test]
-fn opencode_zen_skips_auth_when_key_empty() {
+fn opencode_zen_uses_public_auth_when_key_empty() {
     let a = OpenCodeZenAdapter::new();
     let headers = a.build_headers("", TargetFormat::Openai, &ModelId::new("m"));
-    // No auth headers when key is empty.
-    assert!(first_header(&headers, "Authorization").is_none());
+    // OpenCode free tier uses "Bearer public" when key is empty.
+    assert_eq!(first_header(&headers, "Authorization"), Some("Bearer public"));
     assert!(first_header(&headers, "x-api-key").is_none());
     // Content-Type and User-Agent are still present.
     assert_eq!(
@@ -142,13 +142,21 @@ fn opencode_zen_skips_auth_when_key_empty() {
     );
     assert_eq!(
         first_header(&headers, "User-Agent"),
-        Some("opencode/1.31.0")
+        Some("opencode/1.18.31")
     );
-    assert_eq!(first_header(&headers, "opencode-version"), Some("1.31.0"));
+    assert_eq!(first_header(&headers, "x-opencode-client"), Some("cli"));
+    assert_eq!(first_header(&headers, "x-opencode-project"), Some("global"));
+    assert!(first_header(&headers, "opencode-version").is_none());
+    assert!(first_header(&headers, "openai-beta").is_none());
+
+    // Anthropic format uses "x-api-key: public"
+    let anthropic_headers = a.build_headers("", TargetFormat::Anthropic, &ModelId::new("m"));
+    assert_eq!(first_header(&anthropic_headers, "x-api-key"), Some("public"));
     assert_eq!(
-        first_header(&headers, "openai-beta"),
-        Some("responses_websockets=2026-02-06")
+        first_header(&anthropic_headers, "Anthropic-Version"),
+        Some("2023-06-01")
     );
+    assert!(first_header(&anthropic_headers, "Authorization").is_none());
 }
 
 #[test]
@@ -158,13 +166,12 @@ fn opencode_zen_headers_have_user_agent_and_content_type() {
         let headers = a.build_headers("k", fmt, &ModelId::new("m"));
         assert_eq!(
             first_header(&headers, "User-Agent"),
-            Some("opencode/1.31.0")
+            Some("opencode/1.18.31")
         );
-        assert_eq!(first_header(&headers, "opencode-version"), Some("1.31.0"));
-        assert_eq!(
-            first_header(&headers, "openai-beta"),
-            Some("responses_websockets=2026-02-06")
-        );
+        assert_eq!(first_header(&headers, "x-opencode-client"), Some("cli"));
+        assert_eq!(first_header(&headers, "x-opencode-project"), Some("global"));
+        assert!(first_header(&headers, "opencode-version").is_none());
+        assert!(first_header(&headers, "openai-beta").is_none());
         assert_eq!(
             first_header(&headers, "Content-Type"),
             Some("application/json")

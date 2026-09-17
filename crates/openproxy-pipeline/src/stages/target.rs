@@ -246,7 +246,7 @@ fn resolve_target_format(
     }
 }
 
-fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::OpenAIMessage] {
+pub(crate) fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::OpenAIMessage] {
     let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
         let pii_enabled = ctx.pipeline.config.pii_config.pii_enabled;
         let compression_needed = openproxy_compression::would_compress(
@@ -255,7 +255,7 @@ fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::
         );
 
         if !pii_enabled && !compression_needed {
-            *ctx.pipeline.compression_stats_cell.write() =
+            *ctx.req.compression_stats.lock() =
                 Some(openproxy_compression::stats::CompressionStats::empty());
             return None;
         }
@@ -276,9 +276,9 @@ fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::
                 &mut msgs,
                 ctx.pipeline.config.compression_mode,
             );
-            *ctx.pipeline.compression_stats_cell.write() = Some(stats);
+            *ctx.req.compression_stats.lock() = Some(stats);
         } else {
-            *ctx.pipeline.compression_stats_cell.write() =
+            *ctx.req.compression_stats.lock() =
                 Some(openproxy_compression::stats::CompressionStats::empty());
         }
 
@@ -350,7 +350,16 @@ impl PipelineStage for DispatchStage {
         })?;
         let url =
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
-        let headers = adapter.build_headers(api_key, target_format, &model.model_id);
+        let mut headers = adapter.build_headers(api_key, target_format, &model.model_id);
+        if target.provider_id.as_str().starts_with("opencode")
+            || adapter.id().as_str().starts_with("opencode")
+        {
+            propagate_opencode_headers(
+                &mut headers,
+                &ctx.req.request_headers,
+                &ctx.req.openai_request,
+            );
+        }
 
         openproxy_types::emit_stage_event!(
             request_id: ctx.req.request_id,
@@ -678,6 +687,9 @@ impl PipelineStage for CustomAdapterStage {
         next.execute(ctx).await
     }
 }
+
+pub(crate) use super::target_headers::propagate_opencode_headers;
+
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

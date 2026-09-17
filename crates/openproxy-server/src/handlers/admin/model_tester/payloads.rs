@@ -1,6 +1,6 @@
 use super::super::{
-    AccountId, AppState, ComboId, ModelRowId, RequestId, TraceId, adapters, core_accounts,
-    core_models, core_oauth, core_providers,
+    AccountId, AppState, ModelRowId, adapters, core_accounts, core_models, core_oauth,
+    core_providers,
 };
 use super::TestResult;
 
@@ -132,60 +132,48 @@ pub async fn resolve_test_credentials(
     ),
     TestResult,
 > {
-    let (is_anonymous, accounts_list) = {
+    let (accounts_list, _provider_row) = {
         let r = s.db_pool().reader();
-        let provider_row = core_providers::get(&r, &model.provider_id).unwrap_or_default();
+        let p = core_providers::get(&r, &model.provider_id).unwrap_or_default();
         let accs = core_accounts::list(&r, Some(&model.provider_id), s.master_key().as_ref())
             .unwrap_or_default();
-        let anon = match &provider_row {
-            Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
-            _ if accs.is_empty() => true,
-            _ => false,
-        };
-        (anon, accs)
+        (accs, p)
     };
 
-    if is_anonymous {
-        return Ok((None, String::new(), String::new(), None));
-    }
-
     let resolved_aid = account_id.or_else(|| select_account_candidate(&accounts_list));
-    let raw_account = if let Some(aid) = resolved_aid {
+    if let Some(aid) = resolved_aid {
         let pool = std::sync::Arc::clone(s.db_pool());
         let master_key = std::sync::Arc::clone(s.master_key());
-        tokio::task::spawn_blocking(move || -> Option<_> {
+        let raw_account = tokio::task::spawn_blocking(move || -> Option<_> {
             let r = pool.try_reader_for(std::time::Duration::from_secs(5))?;
             core_accounts::get(&r, aid, &master_key).ok().flatten()
         })
         .await
         .ok()
-        .flatten()
+        .flatten();
+
+        let api_key = decrypt_test_account_key(
+            s,
+            model_row_id,
+            aid,
+            raw_account.as_ref(),
+            model.provider_id.as_str(),
+            start,
+        )
+        .await?;
+
+        let account_label = raw_account
+            .as_ref()
+            .and_then(|a| a.label.as_deref())
+            .unwrap_or_default()
+            .to_string();
+
+        Ok((Some(aid), account_label, api_key, raw_account))
     } else {
-        None
-    };
-
-    let api_key = match resolved_aid {
-        Some(aid) => {
-            decrypt_test_account_key(
-                s,
-                model_row_id,
-                aid,
-                raw_account.as_ref(),
-                model.provider_id.as_str(),
-                start,
-            )
-            .await?
-        }
-        None => String::new(),
-    };
-
-    let account_label = raw_account
-        .as_ref()
-        .and_then(|a| a.label.as_deref())
-        .unwrap_or_default()
-        .to_string();
-
-    Ok((resolved_aid, account_label, api_key, raw_account))
+        // No manual account selected, and no accounts exist in DB.
+        // Fall back to keyless/anonymous request.
+        Ok((None, String::new(), String::new(), None))
+    }
 }
 
 pub fn build_stt_test_payload(
@@ -264,90 +252,6 @@ pub fn build_audio_or_specialized_payload(
     }
 }
 
-pub fn build_chat_format_test_payload(
-    adapter: &adapters::ProviderAdapterEnum,
-    model: &core_models::Model,
-    openai_req: &openproxy_types::OpenAIRequest,
-    account_label: &str,
-    effective_target_format: openproxy_core::models::TargetFormat,
-    model_row_id: i64,
-) -> Result<(String, serde_json::Value), TestResult> {
-    use openproxy_adapters::adapters::gemini::openai_to_gemini;
-    use openproxy_pipeline::translation::openai_to_anthropic;
-
-    let url =
-        adapter.build_chat_url_for_account(effective_target_format, &model.model_id, account_label);
-
-    match effective_target_format {
-        openproxy_core::models::TargetFormat::Anthropic => {
-            let anthropic_req = openai_to_anthropic(
-                openai_req,
-                model.model_id.as_str(),
-                &openai_req.messages,
-                openai_req.stream,
-            );
-            serde_json::to_value(&anthropic_req)
-                .map(|v| (url, v))
-                .map_err(|e| {
-                    test_error_result(model_row_id, 500, &format!("serialize anthropic req: {e}"))
-                })
-        }
-        openproxy_core::models::TargetFormat::Gemini => {
-            let gemini_req = openai_to_gemini(openai_req, &openai_req.messages);
-            serde_json::to_value(&gemini_req)
-                .map(|v| (url, v))
-                .map_err(|e| {
-                    test_error_result(model_row_id, 500, &format!("serialize gemini req: {e}"))
-                })
-        }
-        openproxy_core::models::TargetFormat::Responses => {
-            let mut responses_req = openai_req.clone();
-            responses_req.max_tokens = None;
-            let (_cancel_tx, client_disconnected) =
-                tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
-            let pipeline_req = openproxy_pipeline::PipelineRequest {
-                request_id: RequestId::new(),
-                trace_id: TraceId::new(),
-                combo_id: ComboId(0),
-                openai_request: std::sync::Arc::new(responses_req),
-                client_disconnected,
-                stream_sink: None,
-                api_key_id: None,
-                race_cancel: None,
-                combo_override: None,
-                targets_override: None,
-                request_headers: std::collections::BTreeMap::new(),
-                request_body_json: None,
-                race_cancelled: false,
-                endpoint_kind: openproxy_types::EndpointKind::Chat,
-                compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
-                pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-                proxy_override: None,
-            };
-            let formatter = openproxy_pipeline::formatting::get_formatter(
-                openproxy_core::models::TargetFormat::Responses,
-            );
-            let req_bytes = formatter
-                .format_request(
-                    &pipeline_req,
-                    model,
-                    &pipeline_req.openai_request.messages,
-                    true,
-                    adapter,
-                )
-                .map_err(|err| test_error_result(model_row_id, 500, &err.to_string()))?;
-            let v = serde_json::from_slice::<serde_json::Value>(&req_bytes).map_err(|e| {
-                test_error_result(model_row_id, 500, &format!("serialize responses req: {e}"))
-            })?;
-            Ok((url, v))
-        }
-        _ => serde_json::to_value(openai_req)
-            .map(|v| (url, v))
-            .map_err(|e| {
-                test_error_result(model_row_id, 500, &format!("serialize openai req: {e}"))
-            }),
-    }
-}
 
 pub fn extract_kiro_meta(
     raw_account: Option<&core_accounts::Account>,

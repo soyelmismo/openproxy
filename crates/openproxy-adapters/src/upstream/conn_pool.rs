@@ -24,12 +24,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-/// `scheme://host:port` tuple that keys a pooled connection.
+/// `scheme://host:port` tuple (with optional proxy) that keys a pooled connection.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct HostKey {
     pub scheme: Scheme,
     pub host: String,
     pub port: u16,
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -54,6 +55,21 @@ impl HostKey {
             scheme,
             host: host.into(),
             port,
+            proxy: None,
+        }
+    }
+
+    pub fn with_proxy(
+        scheme: Scheme,
+        host: impl Into<String>,
+        port: u16,
+        proxy: Option<String>,
+    ) -> Self {
+        Self {
+            scheme,
+            host: host.into(),
+            port,
+            proxy,
         }
     }
 }
@@ -170,6 +186,11 @@ impl UpstreamConnectionPool {
         self.inner
             .get(key)
             .map_or(0, |e| e.value().reuses.load(Ordering::SeqCst))
+    }
+
+    /// Check if the pool currently tracks an entry for `key`.
+    pub fn contains_host(&self, key: &HostKey) -> bool {
+        self.inner.contains_key(key)
     }
 
     /// Record that a request to `key` just used a freshly-dialed
@@ -319,5 +340,41 @@ mod tests {
         let evicted = pool.evict_older_than(Duration::from_millis(0));
         assert_eq!(evicted, 2);
         assert_eq!(pool.host_count(), 0);
+    }
+
+    #[test]
+    fn test_pool_proxy_isolation() {
+        let pool = UpstreamConnectionPool::new();
+        let key_direct = HostKey::new(Scheme::Https, "api.openai.com", 443);
+        let key_p1 = HostKey::with_proxy(
+            Scheme::Https,
+            "api.openai.com",
+            443,
+            Some("http://proxy1.local:8080".into()),
+        );
+        let key_p2 = HostKey::with_proxy(
+            Scheme::Https,
+            "api.openai.com",
+            443,
+            Some("http://proxy2.local:8080".into()),
+        );
+
+        assert_ne!(key_direct, key_p1);
+        assert_ne!(key_p1, key_p2);
+        assert_ne!(key_direct, key_p2);
+
+        pool.record_dial(key_direct.clone());
+        pool.record_dial(key_p1.clone());
+        pool.record_dial(key_p2.clone());
+
+        assert_eq!(pool.host_count(), 3);
+        assert!(pool.contains_host(&key_direct));
+        assert!(pool.contains_host(&key_p1));
+        assert!(pool.contains_host(&key_p2));
+
+        pool.record_reuse(key_p1.clone());
+        assert_eq!(pool.reuses_for(&key_direct), 0);
+        assert_eq!(pool.reuses_for(&key_p1), 1);
+        assert_eq!(pool.reuses_for(&key_p2), 0);
     }
 }

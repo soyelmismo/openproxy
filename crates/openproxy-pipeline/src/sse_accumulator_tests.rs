@@ -206,3 +206,207 @@ fn raw_response_body_and_errors() {
     def_acc.append_raw_line(r#"data: {"error":{"message":"unknown"}}"#);
     assert_eq!(def_acc.extract_upstream_error_from_raw().unwrap().0, 502);
 }
+
+#[test]
+fn test_escape_decoding_accumulates_unescaped_newlines() {
+    let mut acc = ResponseAccumulator::new();
+    acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"Line 1\nLine 2\nLine 3"}}]}"#);
+    let v = acc.finish("chatcmpl-test", 1234, "test-model");
+    let content = v["choices"][0]["message"]["content"].as_str().unwrap();
+    assert_eq!(content, "Line 1\nLine 2\nLine 3");
+    assert_eq!(content.matches('\n').count(), 2);
+    let serialized = serde_json::to_string(&v).unwrap();
+    assert!(serialized.contains(r#""content":"Line 1\nLine 2\nLine 3""#));
+    assert!(!serialized.contains(r"\\n"));
+}
+
+#[test]
+fn test_escape_decoding_all_standard_sequences() {
+    let mut acc = ResponseAccumulator::new();
+    acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"quote:\" backslash:\\ tab:\t slash:\/ unicode:\u0026"}}]}"#);
+    let v = acc.finish("chatcmpl-test", 1234, "test-model");
+    let content = v["choices"][0]["message"]["content"].as_str().unwrap();
+    assert_eq!(content, "quote:\" backslash:\\ tab:\t slash:/ unicode:&");
+}
+
+#[test]
+fn test_tool_calls_nested_content_does_not_pollute_message_content() {
+    let mut acc = ResponseAccumulator::new();
+    let chunk = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"test.txt\",\"content\":\"file content here\"}"}}]}}]}"#;
+    acc.append_openai_raw(chunk);
+    let v = acc.finish("chatcmpl-test", 1234, "test-model");
+    assert_eq!(v["choices"][0]["message"]["content"], Value::Null);
+    let tc = &v["choices"][0]["message"]["tool_calls"];
+    assert!(tc.is_array());
+    assert_eq!(tc.as_array().unwrap().len(), 1);
+    assert_eq!(tc[0]["function"]["name"], "write_file");
+    assert_eq!(tc[0]["function"]["arguments"], "{\"path\":\"test.txt\",\"content\":\"file content here\"}");
+}
+
+#[test]
+fn test_adversarial_mixed_escapes_and_surrogate_pairs() {
+    let mut acc = ResponseAccumulator::new();
+    // \n, \", \\, \t, \r, \u0041 (A), and surrogate pair \uD83D\uDE00 (😀)
+    let payload = r#"{"choices":[{"delta":{"content":"Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:\/Hex:\u0041Emoji:\uD83D\uDE00"}}]}"#;
+    acc.append_openai_raw(payload);
+    let v = acc.finish("chatcmpl-test", 1234, "test-model");
+    let content = v["choices"][0]["message"]["content"].as_str().unwrap();
+    assert_eq!(content, "Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:/Hex:AEmoji:😀");
+
+    // Single-layer escaping in serialized output
+    let serialized = serde_json::to_string(&v).unwrap();
+    // Must NOT contain double-escaped \\n or \\" or \\\\
+    assert!(!serialized.contains(r"\\n"));
+    assert!(!serialized.contains(r"\\t"));
+    assert!(!serialized.contains(r"\\r"));
+    // Must contain single-escaped newline in JSON string representation: "Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:/Hex:AEmoji:😀"
+    let re_parsed: Value = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(
+        re_parsed["choices"][0]["message"]["content"],
+        "Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:/Hex:AEmoji:😀"
+    );
+}
+
+#[test]
+fn test_adversarial_deeply_nested_tool_call_arguments() {
+    let mut acc = ResponseAccumulator::new();
+    let chunk = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_999","type":"function","function":{"name":"write_file","arguments":"{\"options\":{\"content\":\"nested sensitive payload\",\"deep\":{\"content\":\"inner\"}}}"}}]}}]}"#;
+    acc.append_openai_raw(chunk);
+    let v = acc.finish("chatcmpl-test", 1234, "test-model");
+    assert_eq!(v["choices"][0]["message"]["content"], Value::Null);
+    let tc = &v["choices"][0]["message"]["tool_calls"];
+    assert!(tc.is_array());
+    assert_eq!(tc.as_array().unwrap()[0]["function"]["name"], "write_file");
+}
+
+#[test]
+fn test_adversarial_invalid_unicode_escape_multibyte_no_panic() {
+    let test_cases = [
+        r"\u123ñ",
+        r"test\u123ñend",
+        r"\uD800\u123ñ",
+        r"\uD800\uDC0ñ",
+        r"\uññññ",
+        r"prefix\u00e9suffix",
+        r"\u",
+        r"\u1",
+        r"\u12",
+        r"\u123",
+        r"\uD800",
+        r"\uD800\u",
+        r"\uD800\uDC",
+    ];
+
+    for case in test_cases {
+        let mut out = Vec::new();
+        decode_json_escape_into(case, &mut out);
+        // Verify output is valid UTF-8 and does not panic
+        let decoded = String::from_utf8(out).expect("decoded bytes must be valid utf8");
+        // Non-panic and progress guaranteed
+        assert!(!decoded.is_empty() || case.is_empty());
+    }
+
+    // Specific verification of r"\u123ñ"
+    let mut out_malformed = Vec::new();
+    decode_json_escape_into(r"\u123ñ", &mut out_malformed);
+    let s = String::from_utf8(out_malformed).expect("valid utf8");
+    assert_eq!(s, r"\u123ñ");
+}
+
+#[test]
+fn test_adversarial_empirical_challenger_stress_utf8() {
+    // 1. Mandatory test strings from challenger mission
+    let mandatory_cases = [
+        r"\u123ñ",
+        r"\uD800\u123ñ",
+        r"\uññññ",
+        r"\u",
+    ];
+
+    for case in &mandatory_cases {
+        let mut out = Vec::new();
+        decode_json_escape_into(case, &mut out);
+        let s = String::from_utf8(out).expect("output must be valid utf-8");
+        assert!(!s.is_empty() || case.is_empty());
+    }
+
+    // 2. Comprehensive edge case suite (surrogate pairs, 4-byte emojis, CJK, partial escapes)
+    let edge_cases = [
+        r"\uD83D\uDE00", // Valid emoji 😀
+        r"\uD83D\uDE02", // Valid emoji 😂
+        r"\uD83D\u123ñ", // High surrogate + malformed low escape with multibyte
+        r"\uD83D\uññññ", // High surrogate + 4 multibyte chars
+        r"\uD83D\u",     // High surrogate + truncated \u
+        r"\uD83D\u1",    // High surrogate + 1 hex digit
+        r"\uD83D\u12",   // High surrogate + 2 hex digits
+        r"\uD83D\u123",  // High surrogate + 3 hex digits
+        r"\u123🦀",      // 4-byte UTF-8 boundary split
+        r"\u12🦀",       // 4-byte UTF-8 character inside escape
+        r"\u🦀",         // 4-byte UTF-8 character immediately after \u
+        r"\u4e16\u754c", // CJK characters 世界
+        r"\u0000",       // Null byte
+        r"\",            // Lone trailing backslash
+        r"\\",           // Escaped backslash
+        r"\\\",          // Triple backslash
+        r"\\\\",         // Quadruple backslash
+        r"\uD800\uD800", // High surrogate followed by high surrogate
+        r"\uDC00\uDC00", // Low surrogate followed by low surrogate
+        r"\uDC00\uD800", // Inverted surrogates
+        r"\uFFFF",       // Max BMP
+        r#"\b\f\n\r\t\/\"\\"#, // Standard JSON escapes
+        r"\a\e\v\z",     // Non-standard escapes (treated as literal backslashes)
+        r"prefix\u0041middle\u123ñsuffix\uD83D\uDE00end🦀",
+    ];
+
+    for case in &edge_cases {
+        let res = std::panic::catch_unwind(|| {
+            let mut out = Vec::new();
+            decode_json_escape_into(case, &mut out);
+            String::from_utf8(out).expect("must be valid utf8")
+        });
+        assert!(res.is_ok(), "Panic on adversarial case: {case}");
+    }
+
+    // Specific check for surrogate pair decoding
+    let mut emoji_out = Vec::new();
+    decode_json_escape_into(r"\uD83D\uDE00", &mut emoji_out);
+    assert_eq!(String::from_utf8(emoji_out).unwrap(), "😀");
+
+    // 3. Fuzzing / Combinatorial stress test (2,000 combinations)
+    let fragments = [
+        r"\", r"\u", r"\u1", r"\u12", r"\u123", r"\u1234",
+        r"\uD800", r"\uD83D", r"\uDC00", r"\uDE00",
+        "ñ", "€", "中", "🦀", "🌟", "A", "0", "\"", "\n", "\r",
+        r"\uñ", r"\u1ñ", r"\u12ñ", r"\u123ñ",
+    ];
+
+    let mut state: u64 = 0xdeadbeef12345678;
+    for _ in 0..2_000 {
+        let mut test_str = String::new();
+        for _ in 0..8 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let idx = ((state >> 32) as usize) % fragments.len();
+            test_str.push_str(fragments[idx]);
+        }
+
+        let res = std::panic::catch_unwind(|| {
+            let mut out = Vec::new();
+            decode_json_escape_into(&test_str, &mut out);
+            String::from_utf8(out).expect("decoded bytes must always be valid UTF-8")
+        });
+        assert!(res.is_ok(), "decode_json_escape_into panicked on randomized string: {test_str:?}");
+    }
+
+    // 4. End-to-end integration with ResponseAccumulator
+    let mut acc = ResponseAccumulator::new();
+    let malformed_chunk = r#"{"id":"test","choices":[{"index":0,"delta":{"content":"Hello \u123ñ \uD800\u123ñ \uññññ \u \uD83D\uDE00 🦀 world"}}]}"#;
+    acc.append_openai_raw(malformed_chunk);
+    let finished = acc.finish("test-id", 100, "test-model");
+    let content = finished["choices"][0]["message"]["content"].as_str().expect("string content");
+    assert!(content.contains("Hello"));
+    assert!(content.contains("😀"));
+    assert!(content.contains("🦀"));
+    assert!(content.contains("world"));
+}
+
+

@@ -214,3 +214,87 @@ fn test_deserialize_gemini_response_happy_path() {
     assert_eq!(usage.completion_tokens, 3);
     assert_eq!(usage.total_tokens, 8);
 }
+
+#[test]
+fn test_deserialize_gemini_response_function_call() {
+    let body = json!({
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "name": "get_weather",
+                        "args": {"city": "Tokyo"}
+                    }
+                }],
+                "role": "model"
+            },
+            "finish_reason": "STOP"
+        }],
+        "usage_metadata": {
+            "prompt_token_count": 10,
+            "candidates_token_count": 8,
+            "total_token_count": 18
+        }
+    });
+    let resp = deserialize_gemini_response(&body).expect("must deserialize function call");
+    assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+    let tool_calls = resp.choices[0].message.tool_calls.as_ref().expect("tool_calls present");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0]["type"], "function");
+    assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+    assert_eq!(tool_calls[0]["function"]["arguments"], r#"{"city":"Tokyo"}"#);
+}
+
+#[test]
+fn test_serialize_gemini_request_assistant_tool_calls_and_tool_response() {
+    let req = openproxy_types::OpenAIRequest {
+        model: "gemini-pro".into(),
+        messages: vec![],
+        stream: false,
+        ..Default::default()
+    };
+    let messages = vec![
+        openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_weather_1",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Madrid\"}"
+                }
+            })]),
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(json!("{\"temp\": 25}")),
+            name: Some("get_weather".to_string()),
+            tool_call_id: Some("call_weather_1".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+    ];
+
+    let bytes = serialize_gemini_request(&req, &messages).expect("must serialize");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+
+    let contents = parsed["contents"].as_array().expect("contents is array");
+    assert_eq!(contents.len(), 2);
+
+    // First message: assistant -> model with functionCall
+    assert_eq!(contents[0]["role"], "model");
+    let fc = &contents[0]["parts"][0]["functionCall"];
+    assert_eq!(fc["name"], "get_weather");
+    assert_eq!(fc["args"]["city"], "Madrid");
+
+    // Second message: tool -> function with functionResponse
+    assert_eq!(contents[1]["role"], "function");
+    let fr = &contents[1]["parts"][0]["functionResponse"];
+    assert_eq!(fr["name"], "get_weather");
+    assert_eq!(fr["response"]["name"], "get_weather");
+    assert_eq!(fr["response"]["content"]["temp"], 25);
+}

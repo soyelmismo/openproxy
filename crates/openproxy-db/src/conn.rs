@@ -196,26 +196,83 @@ impl DbPool {
         self.writer.lock_arc()
     }
 
-    /// Acquire the serialized reader with an owned guard backed by Arc.
-    pub fn reader_guard(&self) -> ArcReaderGuard {
-        let idx = self.get_reader_idx();
-        self.readers[idx].lock_arc()
+    #[inline]
+    fn reader_backoff(spins: &mut u32, max_sleep: Option<std::time::Duration>) {
+        if *spins < 8 {
+            for _ in 0..(1 << *spins) {
+                std::hint::spin_loop();
+            }
+        } else if *spins < 16 {
+            std::thread::yield_now();
+        } else {
+            let micros = (50 * (1 << (*spins - 16).min(4))).min(500);
+            let mut dur = std::time::Duration::from_micros(micros);
+            if let Some(max) = max_sleep {
+                dur = dur.min(max);
+            }
+            std::thread::sleep(dur);
+        }
+        *spins = spins.saturating_add(1);
     }
 
-    /// Acquire the serialized reader. Blocks until the previous reader is released.
+    /// Acquire the serialized reader with an owned guard backed by Arc.
+    /// Performs an opportunistic non-blocking scan across readers with adaptive
+    /// backoff to prevent Head-of-Line blocking or deadlocks on busy readers.
+    pub fn reader_guard(&self) -> ArcReaderGuard {
+        let n = self.readers.len();
+        let mut spins = 0u32;
+        loop {
+            let start = self.get_reader_idx();
+            for offset in 0..n {
+                let idx = (start + offset) % n;
+                if let Some(guard) = self.readers[idx].try_lock_arc() {
+                    return guard;
+                }
+            }
+            Self::reader_backoff(&mut spins, None);
+        }
+    }
+
+    /// Acquire the serialized reader. Blocks until a reader is released.
+    /// Performs an opportunistic non-blocking scan across readers with adaptive
+    /// backoff to prevent Head-of-Line blocking or deadlocks on busy readers.
     pub fn reader(&self) -> ReaderGuard<'_> {
-        let idx = self.get_reader_idx();
-        self.readers[idx].lock()
+        let n = self.readers.len();
+        let mut spins = 0u32;
+        loop {
+            let start = self.get_reader_idx();
+            for offset in 0..n {
+                let idx = (start + offset) % n;
+                if let Some(guard) = self.readers[idx].try_lock() {
+                    return guard;
+                }
+            }
+            Self::reader_backoff(&mut spins, None);
+        }
     }
 
     /// Try to acquire the reader lock for at most `timeout` (blocking).
-    /// Returns `None` if the lock could not be acquired in time. Used by
-    /// analytics queries so a long-running reader doesn't block the
-    /// admin endpoint indefinitely — the caller returns 503 and the
-    /// operator can retry.
+    /// Returns `None` if the lock could not be acquired in time — the
+    /// caller decides what to do. Performs an opportunistic non-blocking
+    /// scan across all readers with adaptive backoff until acquired or timed out.
     pub fn try_reader_for(&self, timeout: std::time::Duration) -> Option<ReaderGuard<'_>> {
-        let idx = self.get_reader_idx();
-        self.readers[idx].try_lock_for(timeout)
+        let n = self.readers.len();
+        let deadline = std::time::Instant::now() + timeout;
+        let mut spins = 0u32;
+        loop {
+            let start = self.get_reader_idx();
+            for offset in 0..n {
+                let idx = (start + offset) % n;
+                if let Some(guard) = self.readers[idx].try_lock() {
+                    return Some(guard);
+                }
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            Self::reader_backoff(&mut spins, Some(deadline - now));
+        }
     }
 
     /// Run a closure against the serialized writer connection.
@@ -479,5 +536,128 @@ mod tests {
             .expect("spawn_read");
 
         assert_eq!(val, "hello");
+    }
+
+    #[test]
+    fn reader_opportunistically_bypasses_held_reader_without_blocking() {
+        let pool = DbPool::test_pool().expect("test pool");
+        assert!(pool.readers.len() >= 2, "pool must have multiple readers");
+
+        // Force next_reader to index 0
+        pool.next_reader.store(0, Ordering::Relaxed);
+
+        // Lock reader 0 directly to simulate a long-running query
+        let _held_guard = pool.readers[0].lock();
+
+        let start = std::time::Instant::now();
+        // reader() starts scanning at index 0, skips reader 0 because try_lock fails,
+        // and opportunistically acquires reader 1 without blocking.
+        let acquired = pool.reader();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "reader() took {elapsed:?}; should have bypassed reader 0 immediately"
+        );
+
+        // Verify we can execute a read query on the acquired reader
+        let val: i64 = acquired
+            .query_row("SELECT 42", [], |row| row.get(0))
+            .expect("query_row on reader");
+        assert_eq!(val, 42);
+
+        // Also test reader_guard bypasses reader 0
+        pool.next_reader.store(0, Ordering::Relaxed);
+        let guard = pool.reader_guard();
+        let val_guard: i64 = guard
+            .query_row("SELECT 84", [], |row| row.get(0))
+            .expect("query_row on reader_guard");
+        assert_eq!(val_guard, 84);
+    }
+
+    #[test]
+    fn reader_contention_with_one_held_reader() {
+        let pool = std::sync::Arc::new(DbPool::test_pool().expect("test pool"));
+        assert!(pool.readers.len() >= 2);
+        // Lock reader 0 indefinitely
+        let _held = pool.readers[0].lock();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let pool_clone = std::sync::Arc::clone(&pool);
+        std::thread::spawn(move || {
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let pool = std::sync::Arc::clone(&pool_clone);
+                handles.push(std::thread::spawn(move || {
+                    for _ in 0..50 {
+                        let guard = pool.reader();
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        let val: i64 = guard.query_row("SELECT 1", [], |r| r.get(0)).unwrap();
+                        assert_eq!(val, 1);
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+            let _ = tx.send(());
+        });
+
+        // If it deadlocks/hangs, timeout after 3 seconds
+        let res = rx.recv_timeout(std::time::Duration::from_secs(3));
+        assert!(
+            res.is_ok(),
+            "DEADLOCK DETECTED: reader acquisition blocked on locked reader 0!"
+        );
+    }
+
+    #[test]
+    fn try_reader_for_times_out_when_all_readers_locked() {
+        let pool = DbPool::test_pool().expect("test pool");
+
+        // Lock all readers
+        let _guards: Vec<_> = pool.readers.iter().map(|r| r.lock()).collect();
+
+        let start = std::time::Instant::now();
+        let result = pool.try_reader_for(std::time::Duration::from_millis(50));
+        let elapsed = start.elapsed();
+
+        assert!(result.is_none(), "try_reader_for must return None when all readers are locked");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(40),
+            "try_reader_for must wait for the specified timeout: elapsed {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn try_reader_for_acquires_freed_reader_when_other_readers_held() {
+        let pool = std::sync::Arc::new(DbPool::test_pool().expect("test pool"));
+        pool.next_reader.store(0, Ordering::Relaxed);
+
+        // Lock all readers: reader 0 held for 200ms, reader 1 released after 15ms
+        let held_0 = pool.readers[0].lock_arc();
+        let held_1 = pool.readers[1].lock_arc();
+        let held_2 = pool.readers[2].lock_arc();
+        let held_3 = pool.readers[3].lock_arc();
+
+        // Background thread releases reader 1 after 15ms
+        let release_thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            drop(held_1);
+        });
+
+        // Calling try_reader_for with timeout of 60ms starting at index 0
+        // Reader 1 becomes free at 15ms, well before 60ms timeout!
+        let acquired = pool.try_reader_for(std::time::Duration::from_millis(60));
+        release_thread.join().unwrap();
+
+        assert!(
+            acquired.is_some(),
+            "try_reader_for should acquire reader 1 once freed before timeout!"
+        );
+        drop(held_0);
+        drop(held_2);
+        drop(held_3);
     }
 }

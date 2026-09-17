@@ -27,48 +27,171 @@ use serde_json::{Map, Value, json};
 
 use crate::translation::OpenAIUsage;
 
-/// Scan `payload` for `marker` (a JSON `"field":"` literal) and return the
-/// raw substring between the opening and closing quotes, honouring `\` escapes.
-/// Zero allocation; `marker` must be a static byte slice for the hot path.
-fn extract_json_string_field<'a>(payload: &'a str, marker: &[u8]) -> Option<&'a str> {
-    let bytes = payload.as_bytes();
-    let pos = memchr::memmem::find(bytes, marker)?;
-    let value_start = pos + marker.len();
-
-    // Scan forward for the closing quote, handling JSON escape sequences.
-    let mut i = value_start;
+/// Decode standard JSON string escape sequences into the destination byte buffer.
+pub fn decode_json_escape_into(raw: &str, out: &mut Vec<u8>) {
+    let bytes = raw.as_bytes();
+    if !bytes.contains(&b'\\') {
+        out.extend_from_slice(bytes);
+        return;
+    }
+    let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i += 2; // skip escaped char and its following byte
-            continue;
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'"' => { out.push(b'"'); i += 2; }
+                b'\\' => { out.push(b'\\'); i += 2; }
+                b'/' => { out.push(b'/'); i += 2; }
+                b'b' => { out.push(0x08); i += 2; }
+                b'f' => { out.push(0x0C); i += 2; }
+                b'n' => { out.push(b'\n'); i += 2; }
+                b'r' => { out.push(b'\r'); i += 2; }
+                b't' => { out.push(b'\t'); i += 2; }
+                b'u' if i + 5 < bytes.len() => {
+                    if let Ok(hex_str) = std::str::from_utf8(&bytes[i + 2..i + 6])
+                        && let Ok(hex) = u16::from_str_radix(hex_str, 16)
+                    {
+                        if (0xD800..=0xDBFF).contains(&hex)
+                            && i + 11 < bytes.len()
+                            && &bytes[i + 6..i + 8] == b"\\u"
+                            && let Ok(low_str) = std::str::from_utf8(&bytes[i + 8..i + 12])
+                            && let Ok(low) = u16::from_str_radix(low_str, 16)
+                            && (0xDC00..=0xDFFF).contains(&low)
+                        {
+                            let cp = 0x10000 + (((hex as u32 - 0xD800) << 10) | (low as u32 - 0xDC00));
+                            if let Some(ch) = char::from_u32(cp) {
+                                let mut buf = [0u8; 4];
+                                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                                i += 12;
+                                continue;
+                            }
+                        }
+                        if let Some(ch) = char::from_u32(hex as u32) {
+                            let mut buf = [0u8; 4];
+                            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                            i += 6;
+                            continue;
+                        }
+                    }
+                    out.push(b'\\');
+                    i += 1;
+                }
+                _ => { out.push(b'\\'); i += 1; }
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
         }
-        if bytes[i] == b'"' {
-            // SAFETY: marker is ASCII; the span between quotes is valid
-            // UTF-8 because it came from a valid JSON string.
-            return Some(&payload[value_start..i]);
+    }
+}
+
+fn find_delta_object(payload: &str) -> Option<usize> {
+    let bytes = payload.as_bytes();
+    let mut offset = 0;
+    while let Some(rel) = memchr::memmem::find(&bytes[offset..], b"\"delta\"") {
+        let idx = offset + rel;
+        let mut i = idx + 7;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
         }
-        i += 1;
+        if i < bytes.len() && bytes[i] == b':' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'{' {
+                return Some(i + 1);
+            }
+        }
+        offset = idx + 7;
+    }
+    None
+}
+
+/// Extract a string field from `choices[0].delta` strictly at depth 1,
+/// ignoring nested objects and arrays (e.g. `tool_calls`).
+fn extract_delta_field<'a>(payload: &'a str, target_key: &str) -> Option<&'a str> {
+    let bytes = payload.as_bytes();
+    if !payload.contains(target_key) {
+        return None;
+    }
+    let mut i = find_delta_object(payload)?;
+    let mut depth: usize = 1;
+
+    while i < bytes.len() && depth > 0 {
+        match bytes[i] {
+            b'{' | b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'"' => {
+                let str_start = i + 1;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == b'"' {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i >= bytes.len() {
+                    return None;
+                }
+                let key_str = std::str::from_utf8(&bytes[str_start..i]).ok()?;
+                i += 1;
+
+                let mut j = i;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b':' {
+                    j += 1;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if depth == 1 && key_str == target_key {
+                        if j < bytes.len() && bytes[j] == b'"' {
+                            let val_start = j + 1;
+                            let mut k = val_start;
+                            while k < bytes.len() {
+                                if bytes[k] == b'\\' {
+                                    k += 2;
+                                    continue;
+                                }
+                                if bytes[k] == b'"' {
+                                    return Some(&payload[val_start..k]);
+                                }
+                                k += 1;
+                            }
+                        }
+                        return None;
+                    }
+                    i = j;
+                }
+            }
+            _ => {
+                i += 1;
+            }
+        }
     }
     None
 }
 
 /// Extract `delta.content` from an OpenAI streaming chunk JSON payload
-/// WITHOUT full JSON parsing. Finds `"content":"` and extracts the string
-/// value by scanning for the closing `"`, correctly handling JSON escape
-/// sequences. This is ~50-100x faster than `serde_json::from_str::<Value>`
-/// because it avoids allocating the full AST.
-///
-/// Returns `None` when the payload has no `delta.content` (empty deltas,
-/// tool-call-only chunks, role-only chunks, etc.).
+/// strictly within `choices[0].delta` object boundary, ignoring nested tool calls.
 fn extract_delta_content(payload: &str) -> Option<&str> {
-    extract_json_string_field(payload, b"\"content\":\"")
+    extract_delta_field(payload, "content")
 }
 
-/// Extract `delta.reasoning_content` from an OpenAI streaming chunk JSON
-/// payload. Uses the same lightweight string scan as `extract_delta_content`.
-/// Returns `None` when no `reasoning_content` field is present.
+/// Extract `delta.reasoning_content` strictly within `choices[0].delta`.
 pub fn extract_reasoning_content(payload: &str) -> Option<&str> {
-    extract_json_string_field(payload, b"\"reasoning_content\":\"")
+    extract_delta_field(payload, "reasoning_content")
 }
 
 /// Normalize non-standard reasoning fields in an OpenAI streaming chunk.
@@ -380,13 +503,13 @@ impl ResponseAccumulator {
         let Some(content) = extract_delta_content(payload) else {
             return;
         };
-        let additional = content.len();
-        if self.total_bytes + additional > MAX_ACCUMULATED_BYTES {
+        if self.total_bytes + content.len() > MAX_ACCUMULATED_BYTES {
             self.truncated = true;
             return;
         }
-        self.content.extend_from_slice(content.as_bytes());
-        self.total_bytes += additional;
+        let prev_len = self.content.len();
+        decode_json_escape_into(content, &mut self.content);
+        self.total_bytes += self.content.len() - prev_len;
     }
 
     fn append_delta_tool_calls_if_present(&mut self, payload: &str) {
@@ -423,15 +546,14 @@ impl ResponseAccumulator {
         if self.truncated || text.is_empty() {
             return;
         }
-        let additional = text.len();
-        if self.total_bytes + additional > MAX_ACCUMULATED_BYTES {
+        if self.total_bytes + text.len() > MAX_ACCUMULATED_BYTES {
             self.truncated = true;
             return;
         }
-        self.reasoning
-            .get_or_insert_with(Vec::new)
-            .extend_from_slice(text.as_bytes());
-        self.total_bytes += additional;
+        let r = self.reasoning.get_or_insert_with(Vec::new);
+        let prev_len = r.len();
+        decode_json_escape_into(text, r);
+        self.total_bytes += r.len() - prev_len;
     }
 
     /// Record the final usage (replaces any prior value). Usually the

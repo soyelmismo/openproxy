@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelQuotaDetail {
     pub model_id: String,
     pub session_used: i64,
@@ -9,7 +9,7 @@ pub struct ModelQuotaDetail {
     pub remaining_fraction: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountQuota {
     pub session_used: Option<i64>,
     pub session_limit: Option<i64>,

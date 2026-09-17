@@ -186,6 +186,43 @@ impl Pipeline {
         .unwrap_or_default()
     }
 
+    /// Execute a test target directly through the full pipeline stages (OAuth refresh, custom adapter,
+    /// formatting, wrap_request_body, target headers, dispatcher, retry, translation).
+    pub async fn execute_test_target(
+        &self,
+        req: PipelineRequest,
+        resolved_target: crate::context::ResolvedTarget,
+    ) -> PipelineResult {
+        let dummy_combo = openproxy_types::combos::Combo {
+            id: openproxy_types::ids::ComboId(0),
+            name: "test_model_combo".to_string(),
+            strategy: openproxy_types::combos::Strategy::Priority,
+            race_size: 1,
+            preventive_rate_limit: false,
+            created_at: String::new(),
+            context_window: None,
+            priority_mode: openproxy_types::combos::PriorityMode::Strict,
+            cooldown_mode: openproxy_types::config::CooldownMode::Flat,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: None,
+            selection_window_secs: None,
+        };
+
+        let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();
+        self.execute_single(SingleExecutionParams {
+            req,
+            combo: &dummy_combo,
+            resolved_target: &resolved_target,
+            attempt: 1,
+            race_size: 1,
+            total_targets: 1,
+            race_cancel: &cancel_tok,
+        })
+        .await
+    }
+
     pub(crate) async fn execute_single(&self, params: SingleExecutionParams<'_>) -> PipelineResult {
         let SingleExecutionParams {
             req,

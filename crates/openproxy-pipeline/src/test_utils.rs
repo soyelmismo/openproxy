@@ -226,6 +226,7 @@ pub fn make_request(
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
+        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
     };
     (req, _dis_tx)

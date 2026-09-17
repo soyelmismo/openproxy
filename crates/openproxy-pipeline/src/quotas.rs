@@ -11,28 +11,32 @@ fn find_model_quota_detail(
     account: &openproxy_types::accounts::Account,
     requested_model: &str,
 ) -> Option<openproxy_types::quota::ModelQuotaDetail> {
-    let details_val = account.quota_model_details.as_ref()?;
-    let details: Vec<openproxy_types::quota::ModelQuotaDetail> =
-        serde_json::from_value(details_val.clone()).ok()?;
+    let details = account.quota_model_details.as_deref()?;
 
+    // Pass 1: exact match (case-insensitive) with zero allocations
+    if let Some(detail) = details
+        .iter()
+        .find(|d| requested_model.eq_ignore_ascii_case(&d.model_id))
+    {
+        return Some(detail.clone());
+    }
+
+    // Pass 2: fallback normalized match
     let norm_req = openproxy_types::model_normalize::normalize_model_id(requested_model);
-    details.into_iter().find(|detail| {
-        let norm_detail = openproxy_types::model_normalize::normalize_model_id(&detail.model_id);
-        norm_req.eq_ignore_ascii_case(&norm_detail)
-            || requested_model.eq_ignore_ascii_case(&detail.model_id)
-    })
+    details
+        .iter()
+        .find(|d| {
+            let norm_detail = openproxy_types::model_normalize::normalize_model_id(&d.model_id);
+            norm_req.eq_ignore_ascii_case(&norm_detail)
+        })
+        .cloned()
 }
 
 fn is_monthly_window_exhausted(account: &openproxy_types::accounts::Account) -> bool {
-    let Some(details_val) = account.quota_model_details.as_ref() else {
+    let Some(details) = account.quota_model_details.as_deref() else {
         return false;
     };
-    let Ok(details) = serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(
-        details_val.clone(),
-    ) else {
-        return false;
-    };
-    details.into_iter().any(|d| {
+    details.iter().any(|d| {
         (d.model_id == "Monthly Limit" || d.model_id == "Monthly Window")
             && (d.remaining_fraction <= 0.0
                 || (d.session_limit > 0 && d.session_used >= d.session_limit))
@@ -97,14 +101,10 @@ pub(crate) fn get_account_remaining_fraction(
 
     let monthly = account
         .quota_model_details
-        .as_ref()
-        .and_then(|val| {
-            serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(val.clone())
-                .ok()
-        })
+        .as_deref()
         .and_then(|details| {
             details
-                .into_iter()
+                .iter()
                 .find(|d| d.model_id == "Monthly Limit" || d.model_id == "Monthly Window")
                 .map(|d| d.remaining_fraction)
         });

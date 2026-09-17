@@ -269,3 +269,253 @@ fn adv_serialized_output_omits_tools_when_none() {
         "serialized must not contain toolConfig field when None"
     );
 }
+
+// --- Adversarial: Tool calls with empty arguments ---
+
+#[test]
+fn adv_tool_calls_empty_arguments() {
+    // Case 1: args is empty object {}
+    let body_empty_obj = json!({
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "name": "no_args_func",
+                        "args": {}
+                    }
+                }],
+                "role": "model"
+            },
+            "finish_reason": "STOP"
+        }]
+    });
+    let resp = deserialize_gemini_response(&body_empty_obj).expect("deserialize empty obj");
+    let tc = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tc["function"]["name"], "no_args_func");
+    assert_eq!(tc["function"]["arguments"], "{}");
+
+    // Case 2: args omitted entirely from JSON
+    let body_missing_args = json!({
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "name": "omitted_args_func"
+                    }
+                }],
+                "role": "model"
+            },
+            "finish_reason": "STOP"
+        }]
+    });
+    let resp2 = deserialize_gemini_response(&body_missing_args).expect("deserialize missing args");
+    let tc2 = &resp2.choices[0].message.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tc2["function"]["name"], "omitted_args_func");
+    assert_eq!(tc2["function"]["arguments"], "{}");
+
+    // Case 2b: args is explicit null in JSON
+    let body_null_args = json!({
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "name": "null_args_func",
+                        "args": null
+                    }
+                }],
+                "role": "model"
+            },
+            "finish_reason": "STOP"
+        }]
+    });
+    let resp_null = deserialize_gemini_response(&body_null_args).expect("deserialize null args");
+    let tc_null = &resp_null.choices[0].message.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tc_null["function"]["name"], "null_args_func");
+    assert_eq!(tc_null["function"]["arguments"], "{}");
+
+    // Case 3: OpenAI request with assistant message having empty arguments
+    for empty_args in ["{}", "", "null"] {
+        let req = openproxy_types::OpenAIRequest::default();
+        let messages = vec![openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "test_empty",
+                    "arguments": empty_args
+                }
+            })]),
+            extra: serde_json::Map::new(),
+        }];
+        let gemini_req = openai_to_gemini(&req, &messages);
+        let part = &gemini_req.contents[0].parts[0];
+        let fc = part.function_call.as_ref().expect("function_call present");
+        assert_eq!(fc.name, "test_empty");
+        assert!(fc.args.is_object() || fc.args.is_null());
+    }
+}
+
+// --- Adversarial: Multiple tool calls ---
+
+#[test]
+fn adv_multiple_tool_calls() {
+    let body = json!({
+        "candidates": [{
+            "content": {
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {"city": "Paris"},
+                            "id": "call_paris"
+                        }
+                    },
+                    {
+                        "functionCall": {
+                            "name": "get_time",
+                            "args": {"timezone": "CET"},
+                            "id": "call_cet"
+                        }
+                    },
+                    {
+                        "functionCall": {
+                            "name": "send_notification",
+                            "args": {"user": "alice", "msg": "hi"}
+                        }
+                    }
+                ],
+                "role": "model"
+            },
+            "finish_reason": "STOP"
+        }]
+    });
+    let resp = deserialize_gemini_response(&body).expect("deserialize multiple function calls");
+    assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+    assert!(resp.choices[0].message.content.is_none());
+    let tcs = resp.choices[0].message.tool_calls.as_ref().expect("tool_calls present");
+    assert_eq!(tcs.len(), 3);
+    assert_eq!(tcs[0]["id"], "call_paris");
+    assert_eq!(tcs[0]["function"]["name"], "get_weather");
+    assert_eq!(tcs[1]["id"], "call_cet");
+    assert_eq!(tcs[1]["function"]["name"], "get_time");
+    assert_eq!(tcs[2]["function"]["name"], "send_notification");
+    assert!(tcs[2]["id"].as_str().unwrap().starts_with("call_gemini_"));
+
+    // Request with assistant message having 3 tool calls
+    let req = openproxy_types::OpenAIRequest::default();
+    let messages = vec![openproxy_types::OpenAIMessage {
+        role: "assistant".to_string(),
+        content: None,
+        name: None,
+        tool_call_id: None,
+        tool_calls: Some(vec![
+            json!({"id": "c1", "type": "function", "function": {"name": "f1", "arguments": "{\"a\": 1}"}}),
+            json!({"id": "c2", "type": "function", "function": {"name": "f2", "arguments": "{\"b\": 2}"}}),
+            json!({"id": "c3", "type": "function", "function": {"name": "f3", "arguments": "{\"c\": 3}"}}),
+        ]),
+        extra: serde_json::Map::new(),
+    }];
+    let gemini_req = openai_to_gemini(&req, &messages);
+    assert_eq!(gemini_req.contents[0].parts.len(), 3);
+    assert_eq!(gemini_req.contents[0].parts[0].function_call.as_ref().unwrap().name, "f1");
+    assert_eq!(gemini_req.contents[0].parts[1].function_call.as_ref().unwrap().name, "f2");
+    assert_eq!(gemini_req.contents[0].parts[2].function_call.as_ref().unwrap().name, "f3");
+}
+
+// --- Adversarial: Tool responses with structured JSON content ---
+
+#[test]
+fn adv_tool_responses_structured_json_content() {
+    let req = openproxy_types::OpenAIRequest::default();
+
+    // 1. Structured JSON object with nested hierarchy
+    let nested_obj = json!({
+        "status": "success",
+        "data": {
+            "temperature": 21.5,
+            "humidity": 65,
+            "forecast": ["sunny", "cloudy"],
+            "metadata": {
+                "sensor_id": 42,
+                "calibrated": true
+            }
+        }
+    });
+    let messages_obj = vec![openproxy_types::OpenAIMessage {
+        role: "tool".to_string(),
+        content: Some(nested_obj),
+        name: Some("sensor_read".to_string()),
+        tool_call_id: Some("call_sensor_1".to_string()),
+        tool_calls: None,
+        extra: serde_json::Map::new(),
+    }];
+    let gemini_req = openai_to_gemini(&req, &messages_obj);
+    let part = &gemini_req.contents[0].parts[0];
+    let fr = part.function_response.as_ref().expect("function_response present");
+    assert_eq!(fr.name, "sensor_read");
+    // Object content should be preserved directly without {"output": ...} wrapping
+    assert_eq!(fr.response["content"]["status"], "success");
+    assert_eq!(fr.response["content"]["data"]["temperature"], 21.5);
+    assert_eq!(fr.response["content"]["data"]["metadata"]["calibrated"], true);
+
+    // 2. Structured JSON array (as standard OpenAI wire-format string)
+    let array_val = json!(["item1", "item2", 123]);
+    let messages_arr = vec![openproxy_types::OpenAIMessage {
+        role: "tool".to_string(),
+        content: Some(json!(serde_json::to_string(&array_val).unwrap())),
+        name: Some("list_items".to_string()),
+        tool_call_id: Some("call_list_1".to_string()),
+        tool_calls: None,
+        extra: serde_json::Map::new(),
+    }];
+    let gemini_req_arr = openai_to_gemini(&req, &messages_arr);
+    let fr_arr = gemini_req_arr.contents[0].parts[0].function_response.as_ref().unwrap();
+    // Non-object JSON is wrapped in {"output": ...}
+    assert_eq!(fr_arr.response["content"]["output"], array_val);
+
+    // 2b. Structured JSON array directly as Value::Array in content
+    let messages_arr_direct = vec![openproxy_types::OpenAIMessage {
+        role: "tool".to_string(),
+        content: Some(array_val.clone()),
+        name: Some("list_items".to_string()),
+        tool_call_id: Some("call_list_1".to_string()),
+        tool_calls: None,
+        extra: serde_json::Map::new(),
+    }];
+    let gemini_req_arr_direct = openai_to_gemini(&req, &messages_arr_direct);
+    let fr_arr_direct = gemini_req_arr_direct.contents[0].parts[0].function_response.as_ref().unwrap();
+    assert_eq!(fr_arr_direct.response["content"]["output"], array_val);
+
+    // 3. Primitive values (number, boolean, null)
+    for (prim, exp) in [
+        (json!(42), json!(42)),
+        (json!(true), json!(true)),
+        (json!(null), json!("")),
+    ] {
+        let msgs = vec![openproxy_types::OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(prim),
+            name: Some("get_primitive".to_string()),
+            tool_call_id: Some("call_prim".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }];
+        let g_req = openai_to_gemini(&req, &msgs);
+        let fr_prim = g_req.contents[0].parts[0].function_response.as_ref().unwrap();
+        assert_eq!(fr_prim.response["content"]["output"], exp);
+    }
+
+    // 4. Verify serialized Gemini request wire format
+    let bytes = serialize_gemini_request(&req, &messages_obj).expect("serialize structured tool response");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON wire format");
+    assert_eq!(parsed["contents"][0]["role"], "function");
+    assert_eq!(
+        parsed["contents"][0]["parts"][0]["functionResponse"]["response"]["content"]["status"],
+        "success"
+    );
+}
+

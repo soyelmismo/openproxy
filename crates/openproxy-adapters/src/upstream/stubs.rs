@@ -234,6 +234,9 @@ impl UpstreamConnectionPool {
     pub fn reuses_for(&self, _key: &HostKey) -> usize {
         0
     }
+    pub fn contains_host(&self, _key: &HostKey) -> bool {
+        false
+    }
     pub fn record_dial(&self, _key: HostKey) {}
     pub fn record_reuse(&self, _key: HostKey) {}
     pub fn evict_older_than(&self, _max_age: std::time::Duration) -> usize {

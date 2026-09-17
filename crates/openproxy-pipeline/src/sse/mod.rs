@@ -12,6 +12,7 @@ pub mod commandcode;
 mod gemini;
 mod openai;
 mod responses;
+mod stream_to_value;
 
 // Re-export the Anthropic `merge_usage` helper so the streaming state
 // can call it without exposing the rest of the Anthropic submodule.
@@ -402,18 +403,58 @@ pub(crate) fn make_tool_call_delta(
 }
 
 fn check_finish_reason_non_null(payload: &str) -> bool {
-    payload.find("\"finish_reason").is_some_and(|idx| {
-        let start = idx + 14;
-        if payload.is_char_boundary(start) {
-            !payload[start..].starts_with("\":null")
-        } else {
-            false
+    let Some(idx) = payload.find("\"finish_reason\"") else {
+        return false;
+    };
+    let rest = &payload[idx + 15..];
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b':' {
+        return false;
+    }
+    i += 1;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return false;
+    }
+    if bytes[i..].starts_with(b"null") {
+        let after = i + 4;
+        if after == bytes.len()
+            || matches!(bytes[after], b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+        {
+            return false;
         }
-    })
+    }
+    true
+}
+
+fn check_usage_present(payload: &str) -> bool {
+    let Some(idx) = payload.find("\"usage\"") else {
+        return false;
+    };
+    let rest = &payload[idx + 7..];
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b':' {
+        return false;
+    }
+    i += 1;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    i < bytes.len() && bytes[i] == b'{'
 }
 
 pub fn sse_payload_needs_parse(payload: &str) -> bool {
-    payload.contains("\"usage\":{") || check_finish_reason_non_null(payload)
+    check_usage_present(payload) || check_finish_reason_non_null(payload)
 }
 
 #[derive(serde::Deserialize)]
@@ -559,6 +600,7 @@ pub use commandcode::{
 pub use gemini::parse_gemini_sse_line;
 pub use openai::parse_openai_sse_line;
 pub use responses::{ResponsesSseState, parse_responses_sse_stream_line};
+pub use stream_to_value::parse_sse_stream_to_openai_response;
 
 #[cfg(test)]
 mod tests {
@@ -658,5 +700,38 @@ mod tests {
     fn test_parse_inline_sse_error_ignores_choices() {
         let payload = r#"{"choices": [{"delta": {"content": "Hello"}}], "error": null}"#;
         assert!(parse_inline_sse_error(payload).is_none());
+    }
+
+    #[test]
+    fn test_sse_payload_needs_parse_whitespace_tolerance() {
+        assert!(!sse_payload_needs_parse(
+            r#"{"choices":[{"delta":{"content":"a"},"finish_reason":null}]}"#
+        ));
+        assert!(!sse_payload_needs_parse(
+            r#"{"choices":[{"delta":{"content":"a"},"finish_reason": null}]}"#
+        ));
+        assert!(!sse_payload_needs_parse(
+            r#"{"choices":[{"delta":{"content":"a"},"finish_reason" :  null}]}"#
+        ));
+
+        assert!(sse_payload_needs_parse(
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+        ));
+        assert!(sse_payload_needs_parse(
+            r#"{"choices":[{"delta":{},"finish_reason": "stop"}]}"#
+        ));
+        assert!(sse_payload_needs_parse(
+            r#"{"choices":[{"delta":{},"finish_reason" : "length"}]}"#
+        ));
+
+        assert!(sse_payload_needs_parse(
+            r#"{"choices":[],"usage":{"prompt_tokens":10}}"#
+        ));
+        assert!(sse_payload_needs_parse(
+            r#"{"choices":[],"usage": {"prompt_tokens":10}}"#
+        ));
+        assert!(sse_payload_needs_parse(
+            r#"{"choices":[],"usage" :  {"prompt_tokens":10}}"#
+        ));
     }
 }

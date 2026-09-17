@@ -125,7 +125,6 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         conn: std::sync::Arc::clone(&conn_arc),
         background_tx: tokio::sync::mpsc::channel(1).0,
         record_bodies_and_headers: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        compression_stats_cell: std::sync::Arc::new(parking_lot::RwLock::new(None)),
         selection_registry: std::sync::Arc::new(openproxy_types::SelectionRegistry::new()),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
@@ -209,6 +208,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+        compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
     };
 

@@ -11,4 +11,5 @@ pub(crate) fn has_header(headers: &[(String, String)], name: &str) -> bool {
 
 mod custom;
 mod general;
+mod opencode;
 mod providers;

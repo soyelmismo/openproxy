@@ -64,7 +64,7 @@
 
 use std::future::Future;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -250,19 +250,9 @@ pub enum PhasedErrorKind {
 impl std::fmt::Display for PhasedConnectorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            PhasedErrorKind::Timeout => {
-                write!(f, "phased connector: timeout in phase `{}`", self.phase)
-            }
-            PhasedErrorKind::InvalidUri(s) => write!(
-                f,
-                "phased connector: invalid URI in phase `{}`: {}",
-                self.phase, s
-            ),
-            PhasedErrorKind::Io(e) => write!(
-                f,
-                "phased connector: I/O error in phase `{}`: {}",
-                self.phase, e
-            ),
+            PhasedErrorKind::Timeout => write!(f, "phased connector: timeout in phase `{}`", self.phase),
+            PhasedErrorKind::InvalidUri(s) => write!(f, "phased connector: invalid URI in phase `{}`: {s}", self.phase),
+            PhasedErrorKind::Io(e) => write!(f, "phased connector: I/O error in phase `{}`: {e}", self.phase),
         }
     }
 }
@@ -295,9 +285,6 @@ impl std::error::Error for PhasedConnectorError {
 /// per-phase attribution. We still reuse `hyper_util::rt::TokioIo` as
 /// the `Read + Write + Connection` wrapper, which is the only piece
 /// the hyper-util `Connect` blanket impl needs from us.
-///
-/// A `tower::Service<Uri>` connector that enforces DNS, dial, and TLS
-/// timeouts independently and reports the stalled phase on error.
 ///
 /// See the `CALL_TIMEOUTS` task-local below for the per-call timeout
 /// injection mechanism (HIGH-5 fix).
@@ -473,14 +460,8 @@ async fn dns_phase(
     }
     match tokio::time::timeout(dns_timeout, resolve_host(dial_host, dial_port)).await {
         Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(PhasedConnectorError {
-            phase: UpstreamPhase::Dns,
-            kind: PhasedErrorKind::Io(e),
-        }),
-        Err(_) => Err(PhasedConnectorError {
-            phase: UpstreamPhase::Dns,
-            kind: PhasedErrorKind::Timeout,
-        }),
+        Ok(Err(e)) => Err(PhasedConnectorError { phase: UpstreamPhase::Dns, kind: PhasedErrorKind::Io(e) }),
+        Err(_) => Err(PhasedConnectorError { phase: UpstreamPhase::Dns, kind: PhasedErrorKind::Timeout }),
     }
 }
 
@@ -524,40 +505,69 @@ fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Phas
     Ok(filtered)
 }
 
-async fn dial_phase(
+pub(crate) async fn dial_phase(
     addrs: Vec<SocketAddr>,
     connect_deadline: std::time::Instant,
     dial_timeout_config: Duration,
 ) -> Result<TcpStream, PhasedConnectorError> {
+    if addrs.is_empty() {
+        return Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Io(io::Error::other("no addresses to dial")),
+        });
+    }
+
     let mut last_err: Option<io::Error> = None;
-    for addr in addrs {
+    let mut saw_timeout = false;
+    let total = addrs.len();
+
+    for (idx, addr) in addrs.into_iter().enumerate() {
         let dial_remaining = connect_deadline
             .checked_duration_since(std::time::Instant::now())
-            .unwrap_or(Duration::from_millis(0));
-        let dial_timeout = dial_timeout_config.min(dial_remaining);
-        if dial_timeout.is_zero() {
-            return Err(PhasedConnectorError {
-                phase: UpstreamPhase::Dial,
-                kind: PhasedErrorKind::Timeout,
-            });
+            .unwrap_or(Duration::ZERO);
+        if dial_remaining.is_zero() {
+            saw_timeout = true;
+            break;
         }
-        match tokio::time::timeout(dial_timeout, TcpStream::connect(addr)).await {
+
+        let remaining = (total - idx) as u32;
+        let per_limit = if remaining > 1 {
+            dial_timeout_config
+                .min(dial_remaining)
+                .min((dial_remaining / remaining).max(Duration::from_millis(1500)))
+        } else {
+            dial_timeout_config.min(dial_remaining)
+        };
+        if per_limit.is_zero() {
+            saw_timeout = true;
+            break;
+        }
+
+        match tokio::time::timeout(per_limit, TcpStream::connect(addr)).await {
             Ok(Ok(s)) => return Ok(s),
-            Ok(Err(e)) => last_err = Some(e),
+            Ok(Err(e)) => {
+                tracing::debug!(addr = %addr, error = %e, "dial attempt failed; trying next IP");
+                last_err = Some(e);
+            }
             Err(_) => {
-                return Err(PhasedConnectorError {
-                    phase: UpstreamPhase::Dial,
-                    kind: PhasedErrorKind::Timeout,
-                });
+                tracing::warn!(addr = %addr, "dial attempt timed out; trying next IP");
+                saw_timeout = true;
+                last_err = Some(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("dial timed out for {addr}"),
+                ));
             }
         }
     }
-    Err(PhasedConnectorError {
-        phase: UpstreamPhase::Dial,
-        kind: PhasedErrorKind::Io(
-            last_err.unwrap_or_else(|| io::Error::other("no addresses to dial")),
-        ),
-    })
+
+    if saw_timeout && last_err.as_ref().is_some_and(|e| e.kind() == io::ErrorKind::TimedOut) {
+        Err(PhasedConnectorError { phase: UpstreamPhase::Dial, kind: PhasedErrorKind::Timeout })
+    } else {
+        Err(PhasedConnectorError {
+            phase: UpstreamPhase::Dial,
+            kind: PhasedErrorKind::Io(last_err.unwrap_or_else(|| io::Error::other("all addresses failed to dial"))),
+        })
+    }
 }
 
 async fn proxy_tunnel_phase(
@@ -575,27 +585,16 @@ async fn proxy_tunnel_phase(
         .checked_duration_since(std::time::Instant::now())
         .unwrap_or(Duration::from_millis(0));
     if dial_remaining.is_zero() {
-        return Err(PhasedConnectorError {
-            phase: UpstreamPhase::Dial,
-            kind: PhasedErrorKind::Timeout,
-        });
+        return Err(PhasedConnectorError { phase: UpstreamPhase::Dial, kind: PhasedErrorKind::Timeout });
     }
 
-    match tokio::time::timeout(
-        dial_remaining,
-        run_proxy_tunnel(stream, proxy_config, host, port),
-    )
-    .await
-    {
+    match tokio::time::timeout(dial_remaining, run_proxy_tunnel(stream, proxy_config, host, port)).await {
         Ok(Ok(s)) => Ok(s),
         Ok(Err(e)) => Err(PhasedConnectorError {
             phase: UpstreamPhase::Dial,
             kind: PhasedErrorKind::Io(io::Error::other(format!("Proxy handshake failed: {e}"))),
         }),
-        Err(_) => Err(PhasedConnectorError {
-            phase: UpstreamPhase::Dial,
-            kind: PhasedErrorKind::Timeout,
-        }),
+        Err(_) => Err(PhasedConnectorError { phase: UpstreamPhase::Dial, kind: PhasedErrorKind::Timeout }),
     }
 }
 
@@ -638,26 +637,13 @@ async fn tls_phase(
                 negotiated_h2,
             })
         }
-        Ok(Err(e)) => Err(PhasedConnectorError {
-            phase: UpstreamPhase::Tls,
-            kind: PhasedErrorKind::Io(e),
-        }),
-        Err(_) => Err(PhasedConnectorError {
-            phase: UpstreamPhase::Tls,
-            kind: PhasedErrorKind::Timeout,
-        }),
+        Ok(Err(e)) => Err(PhasedConnectorError { phase: UpstreamPhase::Tls, kind: PhasedErrorKind::Io(e) }),
+        Err(_) => Err(PhasedConnectorError { phase: UpstreamPhase::Tls, kind: PhasedErrorKind::Timeout }),
     }
 }
 
-fn resolve_dial_target<'a>(
-    proxy: Option<&'a ProxyConfig>,
-    host: &'a str,
-    port: u16,
-) -> (&'a str, u16) {
-    match proxy {
-        Some(proxy) => (proxy.host.as_str(), proxy.port),
-        None => (host, port),
-    }
+fn resolve_dial_target<'a>(proxy: Option<&'a ProxyConfig>, host: &'a str, port: u16) -> (&'a str, u16) {
+    proxy.map_or((host, port), |p| (p.host.as_str(), p.port))
 }
 
 async fn establish_raw_tcp_stream(
@@ -731,13 +717,7 @@ fn parse_authority(uri: &Uri) -> Result<(&str, u16), String> {
 /// If `host` is an IP literal (v4 or v6), build the corresponding
 /// `SocketAddr` directly so we can skip the DNS step.
 fn parse_literal_ip(host: &str, port: u16) -> Option<SocketAddr> {
-    if let Ok(v4) = host.parse::<Ipv4Addr>() {
-        Some(SocketAddr::new(IpAddr::V4(v4), port))
-    } else if let Ok(v6) = host.parse::<Ipv6Addr>() {
-        Some(SocketAddr::new(IpAddr::V6(v6), port))
-    } else {
-        None
-    }
+    host.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, port))
 }
 
 // ---------------------------------------------------------------------

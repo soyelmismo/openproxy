@@ -52,6 +52,7 @@ fn test_gemini_to_openai_standard() {
                 parts: vec![GeminiPart {
                     text: Some("Hello from Gemini".to_string()),
                     inline_data: None,
+                    ..Default::default()
                 }],
             }),
             finish_reason: Some("STOP".to_string()),
@@ -164,10 +165,12 @@ fn test_gemini_to_openai_multipart() {
                     GeminiPart {
                         text: Some("Hello ".to_string()),
                         inline_data: None,
+                        ..Default::default()
                     },
                     GeminiPart {
                         text: Some("world!".to_string()),
                         inline_data: None,
+                        ..Default::default()
                     },
                 ],
             }),

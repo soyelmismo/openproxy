@@ -19,6 +19,8 @@ use super::profile::TimeoutProfile;
 use super::response::{UpstreamBodyStream, UpstreamResponse};
 
 #[cfg(feature = "upstream-hyper")]
+use dashmap::DashMap;
+#[cfg(feature = "upstream-hyper")]
 use super::connector::{CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts, phased_phase};
 #[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::Client as HyperClient;
@@ -173,8 +175,45 @@ pub struct UpstreamClient {
 }
 
 #[derive(Debug)]
-struct ProductionTransport {
-    hyper: HyperClient<PhasedConnector, Full<Bytes>>,
+pub(crate) struct ProductionTransport {
+    pub(crate) direct_client: HyperClient<PhasedConnector, Full<Bytes>>,
+    pub(crate) proxy_clients: Arc<DashMap<String, HyperClient<PhasedConnector, Full<Bytes>>>>,
+}
+
+impl ProductionTransport {
+    pub(crate) fn new() -> Self {
+        let connector = PhasedConnector::with_defaults();
+        let direct_client = HyperClient::builder(TaskLocalExecutor)
+            .pool_max_idle_per_host(8)
+            .pool_idle_timeout(std::time::Duration::from_secs(20))
+            .build(connector);
+        Self {
+            direct_client,
+            proxy_clients: Arc::new(DashMap::new()),
+        }
+    }
+
+    pub(crate) fn client_for_proxy(&self, proxy_url: Option<&str>) -> HyperClient<PhasedConnector, Full<Bytes>> {
+        match proxy_url {
+            None => self.direct_client.clone(),
+            Some(proxy) => {
+                if let Some(client) = self.proxy_clients.get(proxy) {
+                    client.clone()
+                } else {
+                    let connector = PhasedConnector::with_defaults();
+                    let client = HyperClient::builder(TaskLocalExecutor)
+                        .pool_max_idle_per_host(8)
+                        .pool_idle_timeout(std::time::Duration::from_secs(20))
+                        .build(connector);
+                    if self.proxy_clients.len() >= 128 {
+                        self.proxy_clients.clear();
+                    }
+                    self.proxy_clients.insert(proxy.to_string(), client.clone());
+                    client
+                }
+            }
+        }
+    }
 }
 
 impl UpstreamTransport for ProductionTransport {
@@ -191,9 +230,10 @@ impl UpstreamTransport for ProductionTransport {
                 + '_,
         >,
     > {
+        let client = self.client_for_proxy(proxy_url.as_deref());
         Box::pin(async move {
             let fut = async move {
-                self.hyper.request(req).await.map_err(|e| {
+                client.request(req).await.map_err(|e| {
                     if let Some(up_err) = hyper_source_connector_error(&e) {
                         return up_err;
                     }
@@ -298,17 +338,11 @@ impl UpstreamClient {
     pub fn new() -> Arc<Self> {
         #[cfg(feature = "upstream-hyper")]
         {
-            let connector = PhasedConnector::with_defaults();
-            let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
-                HyperClient::builder(TaskLocalExecutor)
-                    .pool_max_idle_per_host(8)
-                    .pool_idle_timeout(std::time::Duration::from_secs(20))
-                    .build(connector);
             let pool = Pool::new();
             pool.spawn_eviction_loop();
             Arc::new(Self {
                 pool,
-                transport: Arc::new(ProductionTransport { hyper }),
+                transport: Arc::new(ProductionTransport::new()),
             })
         }
         #[cfg(not(feature = "upstream-hyper"))]
@@ -395,7 +429,7 @@ impl UpstreamClient {
 
         let is_streaming = spec.is_streaming;
         let proxy_url = spec.proxy.clone();
-        let (_uri, host_key, host) = build_host_key_and_uri(&spec.url)?;
+        let (_uri, host_key, host) = build_host_key_and_uri(&spec.url, proxy_url.clone())?;
         let request = build_hyper_request(spec)?;
 
         let pool = Pool::clone(&self.pool);
@@ -427,7 +461,10 @@ impl UpstreamClient {
 }
 
 #[cfg(feature = "upstream-hyper")]
-fn build_host_key_and_uri(url: &str) -> UpstreamResult<(Uri, HostKey, String)> {
+fn build_host_key_and_uri(
+    url: &str,
+    proxy: Option<String>,
+) -> UpstreamResult<(Uri, HostKey, String)> {
     let uri: Uri = url
         .parse()
         .map_err(|e: http::uri::InvalidUri| UpstreamError::Invalid(e.to_string()))?;
@@ -440,7 +477,7 @@ fn build_host_key_and_uri(url: &str) -> UpstreamResult<(Uri, HostKey, String)> {
         } else {
             80
         });
-    let host_key = HostKey::new(scheme, &host, port);
+    let host_key = HostKey::with_proxy(scheme, &host, port, proxy);
     Ok((uri, host_key, host))
 }
 
@@ -492,7 +529,7 @@ pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Reque
 
 #[cfg(feature = "upstream-hyper")]
 fn record_pool_completion(pool: &Pool, host_key: HostKey, host: &str) {
-    if pool.total() == 0 {
+    if !pool.contains_host(&host_key) {
         pool.record_dial(host_key);
     } else {
         pool.record_reuse(host_key);

@@ -266,12 +266,19 @@ pub(crate) async fn resolve_refresh_account(
     .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
-fn write_antigravity_token_file(payload_str: &str) -> Result<std::path::PathBuf, CoreError> {
+fn write_antigravity_token_file(
+    payload_str: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at: Option<&str>,
+    email: Option<&str>,
+) -> Result<std::path::PathBuf, CoreError> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
         .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?;
-    let cli_dir = home.join(".gemini").join("antigravity-cli");
+    let gemini_dir = home.join(".gemini");
+    let cli_dir = gemini_dir.join("antigravity-cli");
 
     std::fs::create_dir_all(&cli_dir).map_err(|e| {
         CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {e}"))
@@ -299,6 +306,54 @@ fn write_antigravity_token_file(payload_str: &str) -> Result<std::path::PathBuf,
             e
         ))
     })?;
+
+    // Also sync ~/.gemini/oauth_creds.json for CLI in SSH sessions and containers
+    let creds_file = gemini_dir.join("oauth_creds.json");
+    let expiry_ms = expires_at
+        .and_then(|exp| chrono::DateTime::parse_from_rfc3339(exp).ok())
+        .map_or_else(
+            || (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp_millis(),
+            |dt| dt.timestamp_millis(),
+        );
+    let creds_payload = serde_json::json!({
+        "access_token": access_token,
+        "refresh_token": refresh_token.unwrap_or_default(),
+        "token_type": "Bearer",
+        "expiry_date": expiry_ms,
+        "scope": "https://www.googleapis.com/auth/userinfo.email openid https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.profile"
+    });
+    if let Ok(json_str) = serde_json::to_string_pretty(&creds_payload) {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        if let Ok(mut f) = opts.open(&creds_file) {
+            let _ = f.write_all(json_str.as_bytes());
+        }
+    }
+
+    if let Some(em) = email.filter(|s| !s.trim().is_empty()) {
+        let accounts_file = gemini_dir.join("google_accounts.json");
+        let accounts_payload = serde_json::json!({
+            "active": em,
+            "old": []
+        });
+        if let Ok(json_str) = serde_json::to_string_pretty(&accounts_payload) {
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            if let Ok(mut f) = opts.open(&accounts_file) {
+                let _ = f.write_all(json_str.as_bytes());
+            }
+        }
+    }
 
     Ok(token_file)
 }
@@ -329,8 +384,8 @@ pub async fn apply_account_local_cli(
         "token": {
             "access_token": access_token,
             "token_type": "Bearer",
-            "refresh_token": refresh_token.unwrap_or_default(),
-            "expiry": account.expires_at.unwrap_or_default(),
+            "refresh_token": refresh_token.as_deref().unwrap_or_default(),
+            "expiry": account.expires_at.as_deref().unwrap_or_default(),
         },
         "auth_method": "consumer"
     });
@@ -338,7 +393,13 @@ pub async fn apply_account_local_cli(
     let payload_str = serde_json::to_string(&payload)
         .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
 
-    let token_file = write_antigravity_token_file(&payload_str)?;
+    let token_file = write_antigravity_token_file(
+        &payload_str,
+        &access_token,
+        refresh_token.as_deref(),
+        account.expires_at.as_deref(),
+        account.email.as_deref(),
+    )?;
 
     Ok(Json(serde_json::json!({
         "success": true,

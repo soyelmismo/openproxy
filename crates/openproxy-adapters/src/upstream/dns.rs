@@ -17,7 +17,8 @@ fn is_v6_private_or_reserved(v6: &std::net::Ipv6Addr) -> bool {
     if let Some(v4) = v6.to_ipv4_mapped() {
         return is_v4_private_or_reserved(v4);
     }
-    v6.is_loopback()
+    v6.is_unspecified()
+        || v6.is_loopback()
         || v6.is_unique_local()
         || v6.is_unicast_link_local()
         || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 Unique Local

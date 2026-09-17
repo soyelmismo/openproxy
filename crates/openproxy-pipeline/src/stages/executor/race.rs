@@ -7,14 +7,14 @@ pub(super) async fn try_initial_race(
     combo: &openproxy_types::Combo,
     to_run: &[crate::context::ResolvedTarget],
     _race_size: usize,
-) -> Option<PipelineResult> {
+) -> Option<crate::racing::RaceOutcome> {
     if combo.race_size <= 1 || to_run.len() < 2 {
         return None;
     }
     let race_n = (combo.race_size as usize)
         .min(to_run.len())
         .min(ctx.pipeline.config.racing.max_race_size as usize);
-    let race_result = crate::racing::run_race(
+    let race_outcome = crate::racing::run_race(
         &ctx.pipeline,
         ctx.req.clone(),
         combo,
@@ -23,21 +23,22 @@ pub(super) async fn try_initial_race(
     )
     .await;
 
-    if race_result.error.is_none() {
+    if race_outcome.result.error.is_none() {
         ctx.pipeline
             .tracker
-            .mark_client_response(race_result.usage_tuple);
-        return Some(race_result);
+            .mark_client_response(race_outcome.result.usage_tuple);
+        return Some(race_outcome);
     }
 
     tracing::warn!(
         combo_id = combo.id.0,
         race_size = race_n,
         total_targets = to_run.len(),
-        last_error = ?race_result.error,
+        failed_targets_count = race_outcome.failed_targets.len(),
+        last_error = ?race_outcome.result.error,
         "race exhausted all lanes; falling through to sequential targets"
     );
-    Some(race_result)
+    Some(race_outcome)
 }
 
 pub(super) async fn try_incremental_proxy_race(

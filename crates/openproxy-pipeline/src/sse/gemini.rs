@@ -45,12 +45,24 @@ struct GeminiContentProbe {
     parts: Vec<GeminiPartProbe>,
 }
 
+#[derive(serde::Deserialize, Default, Clone)]
+struct GeminiFunctionCallProbe {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
 #[derive(serde::Deserialize, Default)]
 struct GeminiPartProbe {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
     thought: Option<bool>,
+    #[serde(default, rename = "functionCall")]
+    function_call: Option<GeminiFunctionCallProbe>,
 }
 
 #[derive(serde::Deserialize)]
@@ -101,11 +113,12 @@ fn extract_gemini_usage_metadata(probe: &GeminiSseProbe) -> Option<&GeminiUsageP
     })
 }
 
-fn extract_gemini_content_and_reasoning(
+fn extract_gemini_parts(
     candidates: &[GeminiCandidateProbe],
-) -> (String, Option<String>) {
+) -> (String, Option<String>, Vec<GeminiFunctionCallProbe>) {
     let mut content_parts = String::new();
     let mut reasoning_parts = String::new();
+    let mut function_calls = Vec::new();
     if let Some(candidate) = candidates.first()
         && let Some(content) = &candidate.content
     {
@@ -117,10 +130,13 @@ fn extract_gemini_content_and_reasoning(
                     content_parts.push_str(t);
                 }
             }
+            if let Some(fc) = &part.function_call {
+                function_calls.push(fc.clone());
+            }
         }
     }
     let dr = (!reasoning_parts.is_empty()).then_some(reasoning_parts);
-    (content_parts, dr)
+    (content_parts, dr, function_calls)
 }
 
 fn extract_gemini_usage(usage_metadata: Option<&GeminiUsageProbe>) -> Option<OpenAIUsage> {
@@ -152,18 +168,43 @@ pub fn parse_gemini_sse_line(
 
     let candidates = extract_gemini_candidates(&probe);
     let usage_metadata = extract_gemini_usage_metadata(&probe);
-    let (text, delta_reasoning) = extract_gemini_content_and_reasoning(candidates);
+    let (text, delta_reasoning, function_calls) = extract_gemini_parts(candidates);
 
-    let finish_reason = candidates
+    let mut finish_reason = candidates
         .first()
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
 
-    let delta = if text.is_empty() {
-        json!({})
-    } else {
-        json!({"content": text})
-    };
+    let mut delta_tool_calls = Vec::new();
+    for (idx, fc) in function_calls.into_iter().enumerate() {
+        let call_id = fc.id.unwrap_or_else(|| format!("call_{chunk_id}_{idx}"));
+        let args_str = fc
+            .args
+            .map_or_else(|| "{}".to_string(), |a| serde_json::to_string(&a).unwrap_or_else(|_| "{}".to_string()));
+        delta_tool_calls.push(json!({
+            "index": idx,
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": fc.name.unwrap_or_default(),
+                "arguments": args_str,
+            }
+        }));
+    }
+
+    if !delta_tool_calls.is_empty()
+        && (finish_reason.is_none() || finish_reason.as_deref() == Some("stop"))
+    {
+        finish_reason = Some("tool_calls".to_string());
+    }
+
+    let mut delta = json!({});
+    if !text.is_empty() {
+        delta["content"] = json!(text);
+    }
+    if !delta_tool_calls.is_empty() {
+        delta["tool_calls"] = json!(delta_tool_calls);
+    }
     let finish_val = finish_reason.as_ref().map_or(Value::Null, |r| json!(r));
 
     let chunk = json!({
@@ -179,6 +220,7 @@ pub fn parse_gemini_sse_line(
     });
 
     let usage = extract_gemini_usage(usage_metadata);
+    let has_content = !text.is_empty() || delta_reasoning.is_some() || !delta_tool_calls.is_empty();
 
     Ok(Some(UpstreamSseChunk {
         raw_payload: None,
@@ -187,8 +229,8 @@ pub fn parse_gemini_sse_line(
         usage,
         stop_reason: finish_reason,
         delta_reasoning,
-        delta_tool_calls: Vec::new(),
-        has_content: true,
+        delta_tool_calls,
+        has_content,
     }))
 }
 
@@ -477,4 +519,115 @@ mod tests {
             "the translated payload's delta.content must carry ONLY non-thought text"
         );
     }
+
+    #[test]
+    fn gemini_streaming_function_call_translates_to_openai_tool_calls() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"location":"Paris"}}}]},"finishReason":"STOP"}]}"#;
+        let chunk = parse_gemini_sse_line(line, "chunk_123", 1000, "gemini-1.5-pro")
+            .unwrap()
+            .unwrap();
+        assert!(!chunk.done);
+        assert!(chunk.has_content);
+        assert_eq!(chunk.stop_reason.as_deref(), Some("tool_calls"));
+
+        let choice = &chunk.payload["choices"][0];
+        assert_eq!(choice["finish_reason"].as_str().unwrap(), "tool_calls");
+        let tool_calls = &choice["delta"]["tool_calls"];
+        assert!(tool_calls.is_array());
+        let tc = &tool_calls[0];
+        assert_eq!(tc["index"].as_u64().unwrap(), 0);
+        assert_eq!(tc["type"].as_str().unwrap(), "function");
+        assert_eq!(tc["function"]["name"].as_str().unwrap(), "get_weather");
+        assert_eq!(
+            tc["function"]["arguments"].as_str().unwrap(),
+            r#"{"location":"Paris"}"#
+        );
+        assert_eq!(chunk.delta_tool_calls.len(), 1);
+        assert_eq!(chunk.delta_tool_calls[0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn gemini_streaming_function_call_empty_and_null_arguments() {
+        // Case 1: args is empty object {}
+        let line_empty_obj = r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"f_empty","args":{}}}]},"finishReason":"STOP"}]}"#;
+        let chunk1 = parse_gemini_sse_line(line_empty_obj, "c1", 1000, "gemini-1.5-flash")
+            .unwrap()
+            .unwrap();
+        let tc1 = &chunk1.payload["choices"][0]["delta"]["tool_calls"][0];
+        assert_eq!(tc1["function"]["name"], "f_empty");
+        assert_eq!(tc1["function"]["arguments"], "{}");
+
+        // Case 2: args omitted entirely
+        let line_omitted = r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"f_no_args"}}]}}]}"#;
+        let chunk2 = parse_gemini_sse_line(line_omitted, "c2", 1000, "gemini-1.5-flash")
+            .unwrap()
+            .unwrap();
+        let tc2 = &chunk2.payload["choices"][0]["delta"]["tool_calls"][0];
+        assert_eq!(tc2["function"]["name"], "f_no_args");
+        assert_eq!(tc2["function"]["arguments"], "{}");
+
+        // Case 3: args is null
+        let line_null = r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"f_null","args":null}}]}}]}"#;
+        let chunk3 = parse_gemini_sse_line(line_null, "c3", 1000, "gemini-1.5-flash")
+            .unwrap()
+            .unwrap();
+        let tc3 = &chunk3.payload["choices"][0]["delta"]["tool_calls"][0];
+        assert_eq!(tc3["function"]["name"], "f_null");
+        // Check what args_str produces when args is null
+        println!("chunk3 arguments for null args: {:?}", tc3["function"]["arguments"]);
+    }
+
+    #[test]
+    fn gemini_streaming_multiple_function_calls_in_one_chunk() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[
+            {"functionCall":{"name":"get_weather","args":{"city":"Madrid"},"id":"call_madrid"}},
+            {"functionCall":{"name":"get_time","args":{"tz":"UTC"},"id":"call_time"}},
+            {"functionCall":{"name":"calc","args":{"expr":"2+2"}}}
+        ]}}]}"#;
+        let chunk = parse_gemini_sse_line(line, "c_multi", 1000, "gemini-1.5-pro")
+            .unwrap()
+            .unwrap();
+        assert!(!chunk.done);
+        assert!(chunk.has_content);
+        assert_eq!(chunk.stop_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(chunk.delta_tool_calls.len(), 3);
+
+        let tcs = chunk.payload["choices"][0]["delta"]["tool_calls"].as_array().unwrap();
+        assert_eq!(tcs.len(), 3);
+        assert_eq!(tcs[0]["index"], 0);
+        assert_eq!(tcs[0]["id"], "call_madrid");
+        assert_eq!(tcs[0]["function"]["name"], "get_weather");
+        assert_eq!(tcs[1]["index"], 1);
+        assert_eq!(tcs[1]["id"], "call_time");
+        assert_eq!(tcs[1]["function"]["name"], "get_time");
+        assert_eq!(tcs[2]["index"], 2);
+        assert_eq!(tcs[2]["id"], "call_c_multi_2");
+        assert_eq!(tcs[2]["function"]["name"], "calc");
+    }
+
+    #[test]
+    fn gemini_streaming_thought_and_text_with_function_call() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[
+            {"text":"I should check the forecast first.","thought":true},
+            {"text":"Checking weather for you..."},
+            {"functionCall":{"name":"weather_lookup","args":{"loc":"Rome"}}}
+        ]}}]}"#;
+        let chunk = parse_gemini_sse_line(line, "c_mixed", 1000, "gemini-2.0")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chunk.delta_reasoning.as_deref(),
+            Some("I should check the forecast first.")
+        );
+        let choice = &chunk.payload["choices"][0];
+        assert_eq!(
+            choice["delta"]["content"].as_str().unwrap(),
+            "Checking weather for you..."
+        );
+        let tcs = choice["delta"]["tool_calls"].as_array().unwrap();
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0]["function"]["name"], "weather_lookup");
+        assert_eq!(chunk.stop_reason.as_deref(), Some("tool_calls"));
+    }
 }
+

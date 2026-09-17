@@ -43,12 +43,51 @@ pub struct OAuthSpec {
     pub user_agent: Option<fn() -> String>,
 }
 
+fn parse_antigravity_multi_client() -> Option<(String, String)> {
+    let clients_str = std::env::var("ANTIGRAVITY_OAUTH_CLIENTS").ok()?;
+    let active_key = std::env::var("ANTIGRAVITY_OAUTH_CLIENT_KEY")
+        .ok()
+        .map(|k| k.trim().to_ascii_lowercase())
+        .filter(|k| !k.is_empty());
+
+    let mut first_entry = None;
+    for entry in clients_str.split(';') {
+        let parts: Vec<&str> = entry.split('|').map(str::trim).collect();
+        if parts.len() >= 3 {
+            let key = parts[0].to_ascii_lowercase();
+            let cid = parts[1];
+            let csecret = parts[2];
+            if !cid.is_empty() && !csecret.is_empty() {
+                if let Some(ref active) = active_key
+                    && &key == active
+                {
+                    return Some((cid.to_string(), csecret.to_string()));
+                }
+                if first_entry.is_none() {
+                    first_entry = Some((cid.to_string(), csecret.to_string()));
+                }
+            }
+        }
+    }
+    first_entry
+}
+
 impl OAuthSpec {
     fn client_id(&self) -> Result<String> {
         let env_value = self
             .client_id_env
             .and_then(|env| std::env::var(env).ok())
-            .filter(|v| !v.is_empty());
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                if self.id == "antigravity" {
+                    std::env::var("ANTIGRAVITY_OAUTH_CLIENT_ID")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty())
+                        .or_else(|| parse_antigravity_multi_client().map(|(id, _)| id))
+                } else {
+                    None
+                }
+            });
 
         let Some(value) = env_value else {
             if !self.client_id_default.is_empty() {
@@ -68,7 +107,17 @@ impl OAuthSpec {
         let env_value = self
             .client_secret_env
             .and_then(|env| std::env::var(env).ok())
-            .filter(|v| !v.is_empty());
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                if self.id == "antigravity" {
+                    std::env::var("ANTIGRAVITY_OAUTH_CLIENT_SECRET")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty())
+                        .or_else(|| parse_antigravity_multi_client().map(|(_, secret)| secret))
+                } else {
+                    None
+                }
+            });
 
         let Some(value) = env_value else {
             return self
@@ -545,5 +594,89 @@ mod tests {
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("state="));
         assert!(!state.is_empty());
+    }
+
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, val: &str) -> Self {
+            let prev = std::env::var_os(key);
+            unsafe { std::env::set_var(key, val) };
+            Self { key, prev }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            unsafe { std::env::remove_var(key) };
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_antigravity_multi_client_matching_key() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _clients = EnvVarGuard::set(
+            "ANTIGRAVITY_OAUTH_CLIENTS",
+            "enterprise|id-ent|sec-ent;team|id-team|sec-team",
+        );
+        let _key = EnvVarGuard::set("ANTIGRAVITY_OAUTH_CLIENT_KEY", "team");
+
+        let res = parse_antigravity_multi_client();
+        assert_eq!(res, Some(("id-team".to_string(), "sec-team".to_string())));
+    }
+
+    #[test]
+    fn test_parse_antigravity_multi_client_fallback_first() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _clients = EnvVarGuard::set(
+            "ANTIGRAVITY_OAUTH_CLIENTS",
+            "custom1|id-c1|sec-c1;custom2|id-c2|sec-c2",
+        );
+        let _key = EnvVarGuard::remove("ANTIGRAVITY_OAUTH_CLIENT_KEY");
+
+        let res = parse_antigravity_multi_client();
+        assert_eq!(res, Some(("id-c1".to_string(), "sec-c1".to_string())));
+    }
+
+    #[test]
+    fn test_antigravity_client_resolution_empty_env_fallback() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _primary = EnvVarGuard::set("OPENPROXY_ANTIGRAVITY_CLIENT_ID", "  ");
+        let _secondary = EnvVarGuard::set("ANTIGRAVITY_OAUTH_CLIENT_ID", "resolved-id");
+        let _primary_sec = EnvVarGuard::set("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET", "");
+        let _secondary_sec = EnvVarGuard::set("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "resolved-sec");
+
+        let spec = OAuthSpec {
+            id: "antigravity",
+            flow: OAuthFlow::AuthorizationCode,
+            authorize_url: None,
+            token_url: "https://auth.example/token",
+            device_authorization_url: None,
+            client_id_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_ID"),
+            client_id_default: "default-id",
+            client_secret_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET"),
+            client_secret_default: Some("default-sec"),
+            scopes: &[],
+            auth_extra_params: &[],
+            request_encoding: OAuthRequestEncoding::FormUrlEncoded,
+            user_agent: None,
+        };
+
+        assert_eq!(spec.client_id().unwrap(), "resolved-id");
+        assert_eq!(spec.client_secret().unwrap(), "resolved-sec");
     }
 }

@@ -23,8 +23,7 @@ pub async fn test_proxy_connection(
     };
 
     let client = &*SHARED_PROXY_CLIENT;
-    let mut req = UpstreamRequest::get(test_url);
-    req.proxy = Some(proxy_url);
+    let req = build_probe_request(test_url, proxy_url);
 
     let profile = TimeoutProfile::Custom(ResolvedTimeouts {
         dns_ms: 3000,
@@ -293,4 +292,29 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
         drop(tx);
         let _ = writer_handle.await;
     });
+}
+
+pub(crate) fn build_probe_request(test_url: &str, proxy_url: String) -> UpstreamRequest {
+    let mut req = UpstreamRequest::get(test_url);
+    req.proxy = Some(proxy_url);
+    req.headers.insert(
+        axum::http::header::CONNECTION,
+        axum::http::HeaderValue::from_static("close"),
+    );
+    req
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_probe_request_sets_connection_close() {
+        let req = build_probe_request("http://example.com/generate_204", "http://1.2.3.4:8080".to_string());
+        assert_eq!(req.proxy.as_deref(), Some("http://1.2.3.4:8080"));
+        assert_eq!(
+            req.headers.get(axum::http::header::CONNECTION),
+            Some(&axum::http::HeaderValue::from_static("close"))
+        );
+    }
 }

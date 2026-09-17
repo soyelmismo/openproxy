@@ -42,11 +42,30 @@ pub struct GeminiInlineData {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct GeminiFunctionCall {
+    pub name: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct GeminiFunctionResponse {
+    pub name: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_data: Option<GeminiInlineData>,
+    #[serde(default, rename = "functionCall", skip_serializing_if = "Option::is_none")]
+    pub function_call: Option<GeminiFunctionCall>,
+    #[serde(default, rename = "functionResponse", skip_serializing_if = "Option::is_none")]
+    pub function_response: Option<GeminiFunctionResponse>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -10,7 +10,6 @@ use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::config::{RacingConfig, RetriesConfig};
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ApiKeyId, ComboId, RequestId, TraceId};
-use parking_lot::RwLock;
 use rusqlite::Connection;
 
 use std::sync::Arc;
@@ -56,6 +55,7 @@ pub struct PipelineRequest {
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
     pub compressed_messages: Arc<std::sync::OnceLock<Option<Vec<openproxy_types::OpenAIMessage>>>>,
     pub pii_session: Arc<parking_lot::Mutex<Option<crate::pii::PiiSession>>>,
+    pub compression_stats: Arc<parking_lot::Mutex<Option<CompressionStats>>>,
     pub proxy_override: Option<(String, String)>,
 }
 
@@ -111,7 +111,6 @@ pub struct Pipeline {
     pub(crate) rr_counters: Arc<dashmap::DashMap<ComboId, std::sync::atomic::AtomicU64>>,
     pub(crate) selection_registry: Arc<SelectionRegistry>,
     pub(crate) record_bodies_and_headers: Arc<AtomicBool>,
-    pub(crate) compression_stats_cell: Arc<RwLock<Option<CompressionStats>>>,
     pub predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
     pub tracker: crate::usage_tracker::UsageTracker,
     pub dispatcher: crate::upstream_dispatcher::UpstreamDispatcher,
@@ -153,7 +152,6 @@ impl Pipeline {
         circuit_breaker: CircuitBreakerRegistry,
         predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
     ) -> Self {
-        let compression_stats_cell = Arc::new(RwLock::new(None));
         let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
             Arc::clone(&conn),
         ));
@@ -161,7 +159,6 @@ impl Pipeline {
             conn: Arc::clone(&conn),
             background_tx: config.background_tx.clone(),
             record_bodies_and_headers: Arc::clone(&record_bodies_and_headers),
-            compression_stats_cell: Arc::clone(&compression_stats_cell),
             selection_registry: Arc::clone(&selection_registry),
             cooldown_secs: config.cooldown_secs,
             cooldown_max_secs: config.cooldown_max_secs,
@@ -181,7 +178,6 @@ impl Pipeline {
             rr_counters: Arc::new(dashmap::DashMap::new()),
             selection_registry,
             record_bodies_and_headers,
-            compression_stats_cell,
             predictive_limiter,
             tracker,
             dispatcher,

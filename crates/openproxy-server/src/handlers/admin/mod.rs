@@ -88,7 +88,7 @@ pub(crate) use openproxy_db::conn::ADMIN_LOCK_TIMEOUT;
 pub(crate) use openproxy_types::{
     CoreError,
     ids::{
-        AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
+        AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId,
     },
 };
 pub(crate) use serde::{Deserialize, Serialize};
