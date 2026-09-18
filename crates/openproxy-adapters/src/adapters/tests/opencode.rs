@@ -415,7 +415,29 @@ fn test_opencode_default_headers_contract() {
             .map(|(_, v)| v.as_str())
     };
 
-    // Strict baseline contract for OpenCode upstream (Anthropic format)
+    // Strict bijective baseline contract for OpenCode upstream (Anthropic format): exactly the expected set of keys
+    let actual_keys: std::collections::BTreeSet<String> = headers
+        .iter()
+        .map(|(k, _)| k.to_ascii_lowercase())
+        .collect();
+    let expected_keys: std::collections::BTreeSet<String> = [
+        "content-type",
+        "x-api-key",
+        "anthropic-version",
+        "user-agent",
+        "x-opencode-client",
+        "x-opencode-project",
+        "x-opencode-session",
+        "x-opencode-request",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "OpenCode contract breach: header added or removed"
+    );
+
     assert_eq!(find("Content-Type"), Some("application/json"));
     assert_eq!(find("x-api-key"), Some("opencode-token"));
     assert_eq!(find("Anthropic-Version"), Some("2023-06-01"));

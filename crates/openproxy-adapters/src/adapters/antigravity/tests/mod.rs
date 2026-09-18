@@ -323,11 +323,33 @@ fn test_antigravity_default_headers_contract() {
             .map(|(_, v)| v.as_str())
     };
 
-    // Strict baseline contract: all mandatory headers must be present with valid formats
+    // Strict bijective baseline contract: exactly the expected set of keys, no more, no less
+    let actual_keys: std::collections::BTreeSet<String> = headers
+        .iter()
+        .map(|(k, _)| k.to_ascii_lowercase())
+        .collect();
+    let expected_keys: std::collections::BTreeSet<String> = [
+        "authorization",
+        "content-type",
+        "user-agent",
+        "x-client-name",
+        "x-client-version",
+        "x-machine-id",
+        "x-vscode-sessionid",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "Antigravity contract breach: header added or removed"
+    );
+
     assert_eq!(get("authorization"), Some("Bearer token-xyz"));
     assert_eq!(get("content-type"), Some("application/json"));
     assert_eq!(get("x-client-name"), Some("antigravity"));
     assert!(get("x-client-version").is_some_and(|v| !v.is_empty()));
     assert!(get("user-agent").is_some_and(|ua| ua.starts_with("Antigravity/")));
     assert!(get("x-machine-id").is_some_and(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())));
+    assert!(get("x-vscode-sessionid").is_some_and(|s| !s.is_empty()));
 }

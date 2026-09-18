@@ -211,7 +211,28 @@ fn test_minimax_default_headers_contract() {
     let headers = adapter.build_headers("oauth-token-123", TargetFormat::Anthropic, &model);
     let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
 
-    // Strict baseline contract for MiniMax Mavis upstream
+    // Strict bijective baseline contract for MiniMax Mavis upstream: exactly the expected set of keys
+    let actual_keys: std::collections::BTreeSet<String> = headers
+        .iter()
+        .map(|(k, _)| k.to_ascii_lowercase())
+        .collect();
+    let expected_keys: std::collections::BTreeSet<String> = [
+        "authorization",
+        "content-type",
+        "user-agent",
+        "anthropic-version",
+        "x-mavis-agent-id",
+        "x-mavis-timezone-offset",
+        "x-mavis-session-id",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "MiniMax contract breach: header added or removed"
+    );
+
     assert_eq!(find("Authorization"), Some("Bearer oauth-token-123"));
     assert_eq!(find("Content-Type"), Some("application/json"));
     assert_eq!(find("User-Agent"), Some("MiniMaxAgent"));
