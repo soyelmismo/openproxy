@@ -179,6 +179,8 @@ fn assert_opencode_id(prefix: &str, id: &str) {
 
 #[test]
 fn test_opencode_spoofer() {
+    let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_opencode_overrides();
     let spoofer = OpenCodeSpoofer;
     let headers = spoofer.headers();
 
@@ -232,6 +234,8 @@ fn test_opencode_spoofer() {
 
 #[test]
 fn test_opencode_spoofer_apply_to_request() {
+    let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_opencode_overrides();
     let spoofer = OpenCodeSpoofer;
     let mut req = UpstreamRequest::get("https://dummy.url");
     spoofer.apply_to_request(&mut req);
@@ -304,6 +308,8 @@ fn test_opencode_version_validation() {
 
 #[test]
 fn test_opencode_apply_to_header_map_upgrades_and_preserves() {
+    let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_opencode_overrides();
     let spoofer = OpenCodeSpoofer;
 
     // Upgrades foreign User-Agent and translates foreign session.
