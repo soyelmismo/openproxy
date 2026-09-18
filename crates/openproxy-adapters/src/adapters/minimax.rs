@@ -17,7 +17,7 @@ use super::{
 /// of the other.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MiniMaxAdapter {
-    config: ProviderAdapterConfig,
+    pub(crate) config: ProviderAdapterConfig,
 }
 
 impl MiniMaxAdapter {
@@ -28,7 +28,7 @@ impl MiniMaxAdapter {
                 name: "MiniMax Coding".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
-                base_url: "https://api.minimax.io".into(),
+                base_url: "https://agent.minimax.io".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Anthropic,
                 extra_headers: vec![
@@ -72,6 +72,10 @@ impl ProviderAdapter for MiniMaxAdapter {
             } else {
                 format!("{base}/mavis/api/v1/llm/v1/messages")
             }
+        } else if base.ends_with("/messages") {
+            base.to_string()
+        } else if base.ends_with("/anthropic/v1") {
+            format!("{base}/messages?beta=true")
         } else {
             // Standard Anthropic Messages endpoint on api.minimax.io
             format!("{base}/anthropic/v1/messages?beta=true")
@@ -84,9 +88,16 @@ impl ProviderAdapter for MiniMaxAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(7 + self.config.extra_headers.len());
-        if let Some((name, value)) = self.build_auth_header(api_key) {
-            headers.push((name, value));
+        let mut headers: Vec<(String, String)> =
+            Vec::with_capacity(8 + self.config.extra_headers.len());
+        let trimmed = api_key.trim();
+        if trimmed.starts_with("sk-") {
+            // BYOK MiniMax API key strictly expects X-Api-Key
+            headers.push(("x-api-key".into(), trimmed.to_string()));
+            headers.push(("Authorization".into(), format!("Bearer {trimmed}")));
+        } else if !trimmed.is_empty() {
+            // OAuth access token for MiniMax Coding managed-login
+            headers.push(("Authorization".into(), format!("Bearer {trimmed}")));
         }
         headers.push(("Content-Type".into(), "application/json".into()));
         headers.push(("User-Agent".into(), "MiniMaxAgent".into()));
@@ -107,10 +118,9 @@ impl ProviderAdapter for MiniMaxAdapter {
     }
 
     fn models_url(&self) -> Option<String> {
-        // MiniMax exposes its model catalogue at /v1/models (separate from
-        // the /anthropic/v1/ chat surface). The auth scheme is the same
-        // Bearer token.
-        Some(format!("{}/v1/models", self.config.base_url))
+        // MiniMax exposes its model catalogue at /v1/models (on api.minimax.io).
+        // The auth scheme requires an API key (sk-...).
+        Some("https://api.minimax.io/v1/models".to_string())
     }
 
     async fn fetch_models(
@@ -643,23 +653,30 @@ mod tests {
         let mut adapter = MiniMaxAdapter::new();
         let model = ModelId::new("MiniMax-M3");
 
-        // Default BYOK
-        assert_eq!(
-            adapter.build_chat_url(TargetFormat::Anthropic, &model),
-            "https://api.minimax.io/anthropic/v1/messages?beta=true"
-        );
-
-        // Managed endpoint
-        adapter.config.base_url = "https://agent.minimax.io".into();
+        // Default Managed (OAuth MiniMax Coding)
         assert_eq!(
             adapter.build_chat_url(TargetFormat::Anthropic, &model),
             "https://agent.minimax.io/mavis/api/v1/llm/v1/messages"
+        );
+
+        // China Managed endpoint
+        adapter.config.base_url = "https://agent.minimax.cn".into();
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Anthropic, &model),
+            "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages"
         );
 
         adapter.config.base_url = "https://agent.minimax.cn/mavis/api/v1/llm/v1".into();
         assert_eq!(
             adapter.build_chat_url(TargetFormat::Anthropic, &model),
             "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages"
+        );
+
+        // BYOK endpoint
+        adapter.config.base_url = "https://api.minimax.io".into();
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Anthropic, &model),
+            "https://api.minimax.io/anthropic/v1/messages?beta=true"
         );
     }
 
@@ -676,17 +693,26 @@ mod tests {
     fn test_minimax_build_headers() {
         let adapter = MiniMaxAdapter::new();
         let model = ModelId::new("MiniMax-M3");
-        let headers = adapter.build_headers("test-token-123", TargetFormat::Anthropic, &model);
 
-        let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+        // 1. OAuth access token (non-sk)
+        let headers_oauth = adapter.build_headers("test-token-123", TargetFormat::Anthropic, &model);
+        let find_oauth = |key: &str| headers_oauth.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
 
-        assert_eq!(find("Authorization"), Some("Bearer test-token-123"));
-        assert_eq!(find("Content-Type"), Some("application/json"));
-        assert_eq!(find("User-Agent"), Some("MiniMaxAgent"));
-        assert_eq!(find("Anthropic-Version"), Some("2023-06-01"));
-        assert_eq!(find("X-Mavis-Agent-Id"), Some("main"));
-        assert_eq!(find("X-Mavis-Timezone-Offset"), Some("0"));
-        assert!(find("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
+        assert_eq!(find_oauth("Authorization"), Some("Bearer test-token-123"));
+        assert_eq!(find_oauth("x-api-key"), None);
+        assert_eq!(find_oauth("Content-Type"), Some("application/json"));
+        assert_eq!(find_oauth("User-Agent"), Some("MiniMaxAgent"));
+        assert_eq!(find_oauth("Anthropic-Version"), Some("2023-06-01"));
+        assert_eq!(find_oauth("X-Mavis-Agent-Id"), Some("main"));
+        assert_eq!(find_oauth("X-Mavis-Timezone-Offset"), Some("0"));
+        assert!(find_oauth("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
+
+        // 2. BYOK API key (sk-...)
+        let headers_sk = adapter.build_headers("sk-abc123456", TargetFormat::Anthropic, &model);
+        let find_sk = |key: &str| headers_sk.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+        assert_eq!(find_sk("x-api-key"), Some("sk-abc123456"));
+        assert_eq!(find_sk("Authorization"), Some("Bearer sk-abc123456"));
     }
 
     #[tokio::test]

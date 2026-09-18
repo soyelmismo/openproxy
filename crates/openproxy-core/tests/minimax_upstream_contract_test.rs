@@ -76,7 +76,21 @@ fn test_minimax_golden_contract_spec_parity() {
     assert_eq!(find_hdr("X-Mavis-Timezone-Offset"), Some("0"));
     assert!(find_hdr("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
     assert_eq!(find_hdr("Authorization"), Some("Bearer test-token-123"));
+    assert_eq!(find_hdr("x-api-key"), None);
     assert_eq!(find_hdr("Content-Type"), Some("application/json"));
+
+    // 7. Chat URL parity for managed-login preset
+    assert_eq!(
+        adapter.build_chat_url(openproxy_types::TargetFormat::Anthropic, &model),
+        "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+        "MiniMax Coding adapter must default to managed-login agent endpoint"
+    );
+
+    // 8. BYOK API key header parity (sk-... expects X-Api-Key)
+    let headers_byok = adapter.build_headers("sk-secret123", openproxy_types::TargetFormat::Anthropic, &model);
+    let find_byok = |name: &str| headers_byok.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
+    assert_eq!(find_byok("x-api-key"), Some("sk-secret123"));
+    assert_eq!(find_byok("Authorization"), Some("Bearer sk-secret123"));
 }
 
 #[tokio::test]

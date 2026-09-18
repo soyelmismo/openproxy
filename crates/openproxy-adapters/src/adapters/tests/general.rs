@@ -51,11 +51,19 @@ fn openrouter_headers_include_referer_and_content_type() {
 // ---- MiniMax -----------------------------------------------------
 
 #[test]
-fn minimax_builds_messages_url_with_beta() {
+fn minimax_builds_messages_url_managed_and_byok() {
     let a = MiniMaxAdapter::new();
     let url = a.build_chat_url(TargetFormat::Anthropic, &ModelId::new("m"));
     assert_eq!(
         url,
+        "https://agent.minimax.io/mavis/api/v1/llm/v1/messages"
+    );
+
+    let mut byok = MiniMaxAdapter::new();
+    byok.config.base_url = "https://api.minimax.io".into();
+    let byok_url = byok.build_chat_url(TargetFormat::Anthropic, &ModelId::new("m"));
+    assert_eq!(
+        byok_url,
         "https://api.minimax.io/anthropic/v1/messages?beta=true"
     );
 }
