@@ -67,12 +67,33 @@ pub fn propagate_opencode_headers(
     };
     set_header(headers, "x-opencode-session", session_val);
 
-    // 2. Request ID: ensure msg_... is present
-    if !headers
+    // 2. Request ID: downstream request or ensure msg_... is present
+    let downstream_req = get_header("x-opencode-request")
+        .or_else(|| get_header("x-request-id"))
+        .filter(|s| !s.trim().is_empty());
+    if let Some(req_id) = downstream_req {
+        if openproxy_adapters::spoofer::is_valid_opencode_request_id(req_id.trim()) {
+            set_header(headers, "x-opencode-request", req_id.trim().to_string());
+        }
+    } else if !headers
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("x-opencode-request"))
     {
         set_header(headers, "x-opencode-request", generate_request_id());
+    }
+
+    // 2b. Parent session: forward if downstream supplied it
+    if let Some(parent_session) = get_header("x-parent-session-id")
+        .filter(|s| !s.trim().is_empty())
+    {
+        set_header(headers, "x-parent-session-id", parent_session.trim().to_string());
+    }
+
+    // 2c. Anthropic beta: forward if downstream supplied it
+    if let Some(beta) = get_header("anthropic-beta")
+        .filter(|s| !s.trim().is_empty())
+    {
+        set_header(headers, "anthropic-beta", beta.trim().to_string());
     }
 
     // 3. Client: preserve downstream if non-empty, else ensure "cli"

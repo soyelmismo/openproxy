@@ -23,6 +23,7 @@ pub(crate) fn create_sync_table(conn: &Connection) {
             status            TEXT,
             fetched_at        TEXT,
             model_id_normalized TEXT,
+            routing_format    TEXT,
             PRIMARY KEY (provider_id, model_id)
         )",
     )

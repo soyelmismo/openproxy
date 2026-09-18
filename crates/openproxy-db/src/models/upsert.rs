@@ -62,6 +62,34 @@ fn upsert_discovered_models<'a>(
         )
         .map_err(map_db_error)?;
 
+    let sync_routing_overrides: std::collections::HashMap<String, openproxy_types::TargetFormat> =
+        if provider.as_str().starts_with("opencode") {
+            let mut overrides_stmt = tx
+                .prepare(
+                    "SELECT model_id, routing_format FROM model_capabilities_sync \
+                     WHERE provider_id = ?1 AND routing_format IS NOT NULL",
+                )
+                .map_err(map_db_error)?;
+            let rows = overrides_stmt
+                .query_map([provider.as_str()], |row| {
+                    let m_id: String = row.get(0)?;
+                    let fmt_str: String = row.get(1)?;
+                    Ok((m_id, fmt_str))
+                })
+                .map_err(map_db_error)?;
+            let mut map = std::collections::HashMap::new();
+            for r in rows {
+                if let Ok((m_id, fmt_str)) = r
+                    && let Ok(fmt) = fmt_str.parse::<openproxy_types::TargetFormat>()
+                {
+                    map.insert(m_id, fmt);
+                }
+            }
+            map
+        } else {
+            std::collections::HashMap::new()
+        };
+
     let mut total = 0;
     for d in discovered {
         let caps_json = d
@@ -84,13 +112,17 @@ fn upsert_discovered_models<'a>(
         }
 
         let normalized = normalize_model_id(d.model_id.as_str());
+        let target_format = sync_routing_overrides
+            .get(d.model_id.as_str())
+            .copied()
+            .unwrap_or(d.target_format);
 
         let changed = stmt
             .execute(params![
                 provider.as_str(),
                 d.model_id.as_str(),
                 d.display_name,
-                d.target_format.as_str(),
+                target_format.as_str(),
                 ttl_secs,
                 d.context_length,
                 d.max_output_tokens,

@@ -165,13 +165,35 @@ fn enrich_metadata(conn: &Connection) -> Result<usize> {
     .map_err(openproxy_db::error::map_db_error)
 }
 
+fn enrich_routing_format(conn: &Connection) -> Result<usize> {
+    conn.execute(
+        "UPDATE models SET target_format = (
+            SELECT s.routing_format FROM model_capabilities_sync s
+            WHERE s.provider_id = models.provider_id
+              AND s.model_id = models.model_id
+              AND s.routing_format IS NOT NULL
+            LIMIT 1
+         )
+         WHERE models.provider_id IN ('opencode-zen', 'opencode-go')
+           AND EXISTS (
+             SELECT 1 FROM model_capabilities_sync s
+             WHERE s.provider_id = models.provider_id
+               AND s.model_id = models.model_id
+               AND s.routing_format IS NOT NULL
+           )",
+        [],
+    )
+    .map_err(openproxy_db::error::map_db_error)
+}
+
 /// After a sync, refresh `models.context_length`, `max_output_tokens`,
-/// and `capabilities_json` from the `model_capabilities_sync` table.
+/// `capabilities_json`, and routing formats from the `model_capabilities_sync` table.
 pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
     backfill_model_id_normalized(conn)?;
     let ctx = enrich_context_length(conn)?;
     let tok = enrich_max_output_tokens(conn)?;
     let cap = enrich_capabilities(conn)?;
     let meta = enrich_metadata(conn)?;
-    Ok(ctx + tok + cap + meta)
+    let routing = enrich_routing_format(conn)?;
+    Ok(ctx + tok + cap + meta + routing)
 }

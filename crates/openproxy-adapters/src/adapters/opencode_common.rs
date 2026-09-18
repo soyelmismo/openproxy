@@ -231,6 +231,16 @@ impl OpenCodeAdapter {
                 } else if m_lower == "muse-spark-1.2" || m_lower == "muse-spark-1.2-contributor" {
                     *m_val =
                         serde_json::Value::String("muse-spark-1.2-contributor-free".to_string());
+                } else if m_lower == "mimo-v2.5" {
+                    *m_val = serde_json::Value::String("mimo-v2.5-free".to_string());
+                } else if m_lower == "deepseek-v4-flash" {
+                    *m_val = serde_json::Value::String("deepseek-v4-flash-free".to_string());
+                } else if m_lower == "nemotron-3-ultra" {
+                    *m_val = serde_json::Value::String("nemotron-3-ultra-free".to_string());
+                } else if m_lower == "nemotron-3.5-lightning" {
+                    *m_val = serde_json::Value::String("nemotron-3.5-lightning-free".to_string());
+                } else if m_lower == "ling-3.0-flash-fin" {
+                    *m_val = serde_json::Value::String("ling-3.0-flash-fin-free".to_string());
                 }
             }
             inject_opencode_agent_quartet_tools(obj, target_format);
@@ -258,6 +268,7 @@ pub fn is_free_opencode_tier(
     m.ends_with("-free")
         || m == "big-pickle"
         || m == "union-alpha"
+        || m == "grok-code"
         || m.contains("contributor-free")
 }
 
