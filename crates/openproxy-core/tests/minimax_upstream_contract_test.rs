@@ -347,7 +347,7 @@ async fn test_minimax_remote_upstream_live_contract_parity() {
         "Upstream config.ts missing China managed preset base URL"
     );
 
-    // 9. Verify agent inference headers from model-resolver-helpers.ts
+    // 9. Dynamic header scanner: verify ALL agent inference headers from model-resolver-helpers.ts
     let helpers_ts_url = format!("{raw_base}/packages/local-runtime-v2/src/service/model-system/resolution/model-resolver-helpers.ts");
     let resp = client
         .call(UpstreamRequest::get(&helpers_ts_url), TimeoutProfile::OAuth, CancellationToken::new())
@@ -356,23 +356,65 @@ async fn test_minimax_remote_upstream_live_contract_parity() {
     let helpers_bytes = resp.collect().await.expect("read model-resolver-helpers.ts body");
     let helpers_ts = String::from_utf8_lossy(&helpers_bytes);
 
-    assert!(
-        helpers_ts.contains("MANAGED_PROVIDER_USER_AGENT = 'MiniMaxAgent'"),
-        "Upstream diverged from User-Agent: MiniMaxAgent"
-    );
-    assert!(
-        helpers_ts.contains("'X-Mavis-Session-Id'"),
-        "Upstream diverged from X-Mavis-Session-Id header"
-    );
-    assert!(
-        helpers_ts.contains("'X-Mavis-Agent-Id'"),
-        "Upstream diverged from X-Mavis-Agent-Id header"
-    );
-    assert!(
-        helpers_ts.contains("'X-Mavis-Timezone-Offset'"),
-        "Upstream diverged from X-Mavis-Timezone-Offset header"
+    let start_fn = helpers_ts
+        .find("export function buildLocalProviderHeaders")
+        .expect("find buildLocalProviderHeaders in upstream model-resolver-helpers.ts");
+    let end_fn = helpers_ts[start_fn..]
+        .find("return headers;\n}")
+        .map(|rel| start_fn + rel + 17)
+        .expect("find end of buildLocalProviderHeaders");
+    let fn_body = &helpers_ts[start_fn..end_fn];
+
+    let adapter = openproxy_adapters::adapters::minimax::MiniMaxAdapter::new();
+    let model = openproxy_types::ModelId::new("MiniMax-M3");
+    let our_headers = adapter.build_headers("test-token-123", openproxy_types::TargetFormat::Anthropic, &model);
+
+    // Extract all string literal header keys from buildLocalProviderHeaders
+    let mut scanned_headers = Vec::new();
+    for line in fn_body.lines() {
+        let trimmed = line.trim();
+        for quote_char in ['\'', '"'] {
+            let mut remaining = trimmed;
+            while let Some(start_q) = remaining.find(quote_char) {
+                let after_first = &remaining[start_q + 1..];
+                if let Some(end_q) = after_first.find(quote_char) {
+                    let candidate = &after_first[..end_q];
+                    if (candidate.starts_with("X-Mavis-") || candidate == "User-Agent")
+                        && !scanned_headers.contains(&candidate.to_string())
+                    {
+                        scanned_headers.push(candidate.to_string());
+                    }
+                    remaining = &after_first[end_q + 1..];
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    assert!(scanned_headers.contains(&"X-Mavis-Session-Id".to_string()), "Scanner must find X-Mavis-Session-Id");
+    assert!(scanned_headers.contains(&"X-Mavis-Agent-Id".to_string()), "Scanner must find X-Mavis-Agent-Id");
+    assert!(scanned_headers.contains(&"X-Mavis-Timezone-Offset".to_string()), "Scanner must find X-Mavis-Timezone-Offset");
+    assert!(scanned_headers.contains(&"User-Agent".to_string()), "Scanner must find User-Agent");
+
+    // Fail if upstream ever introduces a new header in buildLocalProviderHeaders that OpenProxy lacks
+    for upstream_header in &scanned_headers {
+        assert!(
+            our_headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(upstream_header)),
+            "Upstream model-resolver-helpers.ts introduced new header '{upstream_header}' not present in OpenProxy MiniMaxAdapter!"
+        );
+    }
+
+    // 10. Verify live chat URL parity against upstream managed-login preset
+    assert_eq!(
+        adapter.build_chat_url(openproxy_types::TargetFormat::Anthropic, &model),
+        "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+        "OpenProxy MiniMaxAdapter chat URL must match upstream managed-login preset + /messages"
     );
 
-    println!("[ContractTest] 100% 1:1 Parity verified across all MiniMax subsystems (OAuth, Matrix, Quota, Check-in, LLM, Models, Headers) against live MiniMax-AI/minimax-code main branch!");
+    println!(
+        "[ContractTest] 100% 1:1 Parity verified across all MiniMax subsystems (OAuth, Matrix, Quota, Check-in, LLM, Models, {} Headers) against live MiniMax-AI/minimax-code main branch!",
+        scanned_headers.len()
+    );
 }
 
