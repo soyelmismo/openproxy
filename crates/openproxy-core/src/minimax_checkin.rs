@@ -186,23 +186,6 @@ pub async fn run_account_checkin(
         meta.email = identity.email.clone();
     }
 
-    if meta.credit_balance.is_none() || meta.op_group_id.is_none() {
-        let uid = meta.real_user_id.as_deref().unwrap_or("0");
-        if let Some((op_group_id, tier, credits)) =
-            crate::oauth::minimax::resolve_membership_info(upstream_client, &access_token, uid, region).await
-        {
-            if meta.op_group_id.is_none() {
-                meta.op_group_id = Some(op_group_id);
-            }
-            if tier.is_some() && meta.token_plan_tier.is_none() {
-                meta.token_plan_tier = tier;
-            }
-            if credits.is_some() {
-                meta.credit_balance = credits;
-            }
-        }
-    }
-
     let user_id = meta.real_user_id.as_deref().unwrap_or("0");
 
     let summary = checkin::execute_daily_checkin(upstream_client, &access_token, user_id, region).await?;
@@ -210,6 +193,20 @@ pub async fn run_account_checkin(
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     meta.last_checkin_date = Some(today);
     meta.streak_days = Some(summary.streak_days);
+
+    // Refresh membership info (op_group_id, tier, credit_balance) AFTER checkin
+    let uid = meta.real_user_id.as_deref().unwrap_or("0");
+    if let Some((op_group_id, tier, credits)) =
+        crate::oauth::minimax::resolve_membership_info(upstream_client, &access_token, uid, region).await
+    {
+        meta.op_group_id = Some(op_group_id);
+        if tier.is_some() {
+            meta.token_plan_tier = tier;
+        }
+        if credits.is_some() {
+            meta.credit_balance = credits;
+        }
+    }
 
     let meta_json = serde_json::to_string(&meta)
         .map_err(|e| CoreError::Parse(format!("serialize meta: {e}")))?;

@@ -522,20 +522,7 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             current_meta.email = Some(em.clone());
         }
 
-        // 2. Resolve op_group_id, workspace tier & credits
-        if let Some((op_group_id, tier, credits)) =
-            resolve_membership_info(upstream, &access_token, &real_user_id, region).await
-        {
-            current_meta.op_group_id = Some(op_group_id);
-            if tier.is_some() {
-                current_meta.token_plan_tier = tier;
-            }
-            if credits.is_some() {
-                current_meta.credit_balance = credits;
-            }
-        }
-
-        // 3. Perform initial checkin right upon login
+        // 2. Perform initial checkin right upon login (claims points if claimable)
         if let Ok(summary) =
             checkin::execute_daily_checkin(upstream, &access_token, &real_user_id, region).await
         {
@@ -548,6 +535,19 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             );
             current_meta.streak_days = Some(summary.streak_days);
             current_meta.last_checkin_date = Some(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        }
+
+        // 3. Resolve op_group_id, workspace tier & credits (after checkin so newly claimed points are included)
+        if let Some((op_group_id, tier, credits)) =
+            resolve_membership_info(upstream, &access_token, &real_user_id, region).await
+        {
+            current_meta.op_group_id = Some(op_group_id);
+            if tier.is_some() {
+                current_meta.token_plan_tier = tier;
+            }
+            if credits.is_some() {
+                current_meta.credit_balance = credits;
+            }
         }
 
         // 4. Save updated metadata, email, and display label to DB

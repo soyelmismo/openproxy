@@ -272,6 +272,16 @@ pub async fn refresh_single_account_quota(
     )
     .await;
 
+    if provider_id_str == "minimax" && access_token.is_some() {
+        let _ = crate::minimax_checkin::run_account_checkin(
+            db_pool,
+            upstream_client,
+            master_key,
+            account_id,
+        )
+        .await;
+    }
+
     let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some()
     {
         let refresh_result = {
