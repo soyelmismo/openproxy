@@ -13,6 +13,7 @@ use openproxy_adapters::spoofer::{
     current_codex_ua, current_codex_version, current_kilocode_ua, current_kilocode_version,
     reset_dynamic_cline_overrides, reset_dynamic_codex_overrides, reset_dynamic_kilocode_overrides,
 };
+use openproxy_adapters::load_upstream_source;
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -25,31 +26,10 @@ use openproxy_core::oauth::codex::{
     VERIFICATION_URI as CODEX_VERIFICATION_URI,
 };
 use openproxy_core::oauth::refresh::refresh_lead_seconds;
-use std::path::Path;
 
 // ============================================================================
 // 1. Upstream Repository Code Drift Parity (Remote HTTP + Local Fallback)
 // ============================================================================
-
-async fn load_upstream_source(http_url: &str, local_rel_path: &str) -> Option<String> {
-    let client = UpstreamClient::new();
-    let cancel = CancellationToken::new();
-    let req = UpstreamRequest::get(http_url);
-    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await
-        && resp.status.is_success()
-        && let Ok(body) = resp.collect().await
-    {
-        return Some(String::from_utf8_lossy(&body).into_owned());
-    }
-
-    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let path = Path::new(&base_dir).join(local_rel_path);
-    if path.exists() {
-        return std::fs::read_to_string(&path).ok();
-    }
-
-    None
-}
 
 #[tokio::test]
 async fn test_cline_upstream_code_parity() {

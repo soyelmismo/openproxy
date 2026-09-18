@@ -13,6 +13,8 @@ pub use spoofer::{
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use adapters::MockAdapter;
+#[cfg(any(test, feature = "test-utils"))]
+pub use upstream::load_upstream_source;
 pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,

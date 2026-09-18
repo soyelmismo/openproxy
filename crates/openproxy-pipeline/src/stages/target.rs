@@ -353,74 +353,18 @@ impl PipelineStage for DispatchStage {
         let url =
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let mut headers = adapter.build_headers(api_key, target_format, &model.model_id);
-        if target.provider_id.as_str().starts_with("opencode")
-            || adapter.id().as_str().starts_with("opencode")
-        {
-            propagate_opencode_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-                &ctx.req.openai_request,
-            );
-        } else if target.provider_id.as_str().starts_with("antigravity")
-            || adapter.id().as_str().starts_with("antigravity")
-            || target.provider_id.as_str() == "agy"
-            || adapter.id().as_str() == "agy"
-        {
-            propagate_antigravity_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-        } else if target.provider_id.as_str().starts_with("minimax")
-            || adapter.id().as_str().starts_with("minimax")
-        {
-            propagate_minimax_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-        } else if target.provider_id.as_str().starts_with("cline")
-            || adapter.id().as_str().starts_with("cline")
-        {
-            propagate_cline_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-        } else if target.provider_id.as_str().starts_with("kilocode")
-            || adapter.id().as_str().starts_with("kilocode")
-        {
-            propagate_kilocode_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-        } else if target.provider_id.as_str().starts_with("codex")
-            || adapter.id().as_str().starts_with("codex")
-        {
-            propagate_codex_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-            if let Some(ref meta) = current.custom_meta
-                && let Some(ref ws) = meta.codex_workspace_id
-                && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("chatgpt-account-id"))
-            {
-                headers.push(("chatgpt-account-id".to_string(), ws.clone()));
-            }
-        } else if target.provider_id.as_str().starts_with("kiro")
-            || adapter.id().as_str().starts_with("kiro")
-        {
-            propagate_kiro_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-        } else if target.provider_id.as_str().starts_with("commandcode")
-            || adapter.id().as_str().starts_with("commandcode")
-            || target.provider_id.as_str() == "cmd"
-            || adapter.id().as_str() == "cmd"
-        {
-            propagate_commandcode_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-            );
-        }
+        let codex_ws = current
+            .custom_meta
+            .as_ref()
+            .and_then(|m| m.codex_workspace_id.as_deref());
+        propagate_provider_target_headers(
+            &mut headers,
+            target.provider_id.as_str(),
+            adapter.id().as_str(),
+            &ctx.req.request_headers,
+            &ctx.req.openai_request,
+            codex_ws,
+        );
 
         openproxy_types::emit_stage_event!(
             request_id: ctx.req.request_id,
@@ -749,11 +693,7 @@ impl PipelineStage for CustomAdapterStage {
     }
 }
 
-pub(crate) use super::target_headers::{
-    propagate_antigravity_headers, propagate_cline_headers, propagate_codex_headers,
-    propagate_commandcode_headers, propagate_kilocode_headers, propagate_kiro_headers,
-    propagate_minimax_headers, propagate_opencode_headers,
-};
+use super::target_headers::propagate_provider_target_headers;
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

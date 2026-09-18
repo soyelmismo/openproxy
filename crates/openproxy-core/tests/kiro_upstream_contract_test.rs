@@ -12,10 +12,7 @@ use openproxy_adapters::spoofer::{
     ClientSpoofer, KIRO_SPOOFING_HEADERS, KIRO_TEST_LOCK, KiroSpoofer, current_kiro_ua,
     reset_dynamic_kiro_overrides, set_dynamic_kiro_extra_header, set_dynamic_kiro_ua,
 };
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
-use openproxy_adapters::{KiroAdapter, ProviderAdapter};
+use openproxy_adapters::{load_upstream_source, KiroAdapter, ProviderAdapter};
 use openproxy_core::oauth::kiro::{
     DEFAULT_REGION, DEVICE_AUTH_URL, REGISTER_URL, SCOPES, TOKEN_URL, kiro_codewhisperer_host,
     kiro_device_auth_url, kiro_oidc_base_url, kiro_register_url, kiro_social_token_url,
@@ -23,7 +20,6 @@ use openproxy_core::oauth::kiro::{
 };
 use openproxy_pipeline::stages::target_headers::propagate_kiro_headers;
 use openproxy_types::{ModelId, TargetFormat};
-use std::path::Path;
 
 // ============================================================================
 // 1. Golden Contract Spec Parity
@@ -102,26 +98,6 @@ fn test_kiro_golden_contract_spec_parity() {
 // ============================================================================
 // 2. Upstream Repository Code Drift Parity (Remote HTTP + Local Fallback)
 // ============================================================================
-
-async fn load_upstream_source(http_url: &str, local_rel_path: &str) -> Option<String> {
-    let client = UpstreamClient::new();
-    let cancel = CancellationToken::new();
-    let req = UpstreamRequest::get(http_url);
-    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await
-        && resp.status.is_success()
-        && let Ok(body) = resp.collect().await
-    {
-        return Some(String::from_utf8_lossy(&body).into_owned());
-    }
-
-    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let path = Path::new(&base_dir).join(local_rel_path);
-    if path.exists() {
-        return std::fs::read_to_string(&path).ok();
-    }
-
-    None
-}
 
 #[tokio::test]
 async fn test_kiro_remote_or_local_upstream_code_parity() {

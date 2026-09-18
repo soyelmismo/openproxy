@@ -315,7 +315,9 @@ pub fn propagate_commandcode_headers(
 
     let session_val = get_header_val(request_headers, "x-conversation-id")
         .or_else(|| get_header_val(request_headers, "x-session-id"))
-        .or_else(|| get_header_val(request_headers, "session-id"));
+        .or_else(|| get_header_val(request_headers, "session-id"))
+        .or_else(|| get_header_val(request_headers, "x-command-code-session-id"))
+        .or_else(|| get_header_val(request_headers, "x-commandcode-session-id"));
 
     if let Some(session_id) = session_val
         && !session_id.trim().is_empty()
@@ -325,6 +327,46 @@ pub fn propagate_commandcode_headers(
             "x-conversation-id",
             session_id.trim().to_string(),
         );
+    }
+}
+
+/// Dispatches downstream client header propagation to the appropriate provider adapter.
+///
+/// Centralizes all provider-specific header translation and session affinity mapping
+/// so callers do not duplicate cascading checks.
+pub fn propagate_provider_target_headers(
+    headers: &mut Vec<(String, String)>,
+    provider_id: &str,
+    adapter_id: &str,
+    req_headers: &std::collections::BTreeMap<String, String>,
+    openai_req: &openproxy_types::OpenAIRequest,
+    codex_workspace_id: Option<&str>,
+) {
+    let matches = |prefix: &str| {
+        provider_id.starts_with(prefix) || adapter_id.starts_with(prefix)
+    };
+
+    if matches("opencode") {
+        propagate_opencode_headers(headers, req_headers, openai_req);
+    } else if matches("antigravity") || provider_id == "agy" || adapter_id == "agy" {
+        propagate_antigravity_headers(headers, req_headers);
+    } else if matches("minimax") {
+        propagate_minimax_headers(headers, req_headers);
+    } else if matches("cline") {
+        propagate_cline_headers(headers, req_headers);
+    } else if matches("kilocode") {
+        propagate_kilocode_headers(headers, req_headers);
+    } else if matches("codex") {
+        propagate_codex_headers(headers, req_headers);
+        if let Some(ws) = codex_workspace_id
+            && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("chatgpt-account-id"))
+        {
+            headers.push(("chatgpt-account-id".to_string(), ws.to_string()));
+        }
+    } else if matches("kiro") {
+        propagate_kiro_headers(headers, req_headers);
+    } else if matches("commandcode") || provider_id == "cmd" || adapter_id == "cmd" {
+        propagate_commandcode_headers(headers, req_headers);
     }
 }
 
@@ -667,5 +709,58 @@ mod tests {
         assert_eq!(find("x-goog-new-feature"), Some("enabled"));
         assert_eq!(find("x-goog-api-client"), None);
         assert_eq!(find("x-client-version"), Some("4.3.0"));
+    }
+
+    #[test]
+    fn test_propagate_provider_target_headers_dispatch() {
+        let openai_req = openproxy_types::OpenAIRequest {
+            model: "test-model".into(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
+            extra: serde_json::Map::new(),
+        };
+
+        // Codex with workspace id
+        let mut headers = vec![("User-Agent".into(), "Codex/1.0".into())];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("originator".into(), "codex_cli_rs".into());
+        propagate_provider_target_headers(
+            &mut headers,
+            "codex-default",
+            "openai",
+            &req_headers,
+            &openai_req,
+            Some("ws-123"),
+        );
+        let find = |h: &[(String, String)], k: &str| {
+            h.iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+                .map(String::from)
+        };
+        assert_eq!(find(&headers, "originator"), Some("codex_cli_rs".into()));
+        assert_eq!(find(&headers, "chatgpt-account-id"), Some("ws-123".into()));
+
+        // CommandCode alias
+        let mut cmd_headers = vec![("User-Agent".into(), "CmdCode/1.0".into())];
+        let mut cmd_req_headers = std::collections::BTreeMap::new();
+        cmd_req_headers.insert("x-commandcode-session-id".into(), "cmd-sess-99".into());
+        propagate_provider_target_headers(
+            &mut cmd_headers,
+            "cmd",
+            "commandcode-adapter",
+            &cmd_req_headers,
+            &openai_req,
+            None,
+        );
+        assert_eq!(find(&cmd_headers, "x-conversation-id"), Some("cmd-sess-99".into()));
     }
 }
