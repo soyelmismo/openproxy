@@ -101,17 +101,17 @@ fn test_person_names_heuristic() {
     check_roundtrip(
         &[PiiEntity::Person],
         "Consult Dr. Gregory House or Mr. John Doe immediately.",
-        "Consult Dr. Alex Vance (P1) or Mr. David Chen (P2) immediately.",
+        "Consult Dr. Alex Vance or Mr. David Chen immediately.",
     );
     check_roundtrip(
         &[PiiEntity::Person],
         "Please contact Robert Johnson regarding the invoice.",
-        "Please contact Alex Vance (P1) regarding the invoice.",
+        "Please contact Alex Vance regarding the invoice.",
     );
     check_roundtrip(
         &[PiiEntity::Person],
         "Please check with Dr. Watson or Mr. Smith today.",
-        "Please check with Dr. Alex Vance (P1) or Mr. David Chen (P2) today.",
+        "Please check with Dr. Alex Vance or Mr. David Chen today.",
     );
     check_no_redact(
         &[PiiEntity::Person],
@@ -151,12 +151,12 @@ fn test_single_word_person_name_miguel_and_contextual_user_markers() {
     let input = "\n## Mi relación con Miguel\nExcepto cuando Miguel quiere romperme.\n**Source:** Telegram (\"DM with miguel\")\n**User:** \"miguel\"\nSOUL→wiki→internet→Miguel\n14-mayo (Miguel)\n";
     let redacted = engine.redact_text(input, &mut session);
     assert!(!redacted.contains("Miguel") && !redacted.contains("miguel"));
-    assert!(redacted.contains("## Mi relación con Alex Vance (P1)"));
-    assert!(redacted.contains("Excepto cuando Alex Vance (P1) quiere romperme."));
-    assert!(redacted.contains(r#"**Source:** Telegram ("DM with Alex Vance (P1)")"#));
-    assert!(redacted.contains(r#"**User:** "Alex Vance (P1)""#));
-    assert!(redacted.contains("SOUL→wiki→internet→Alex Vance (P1)"));
-    assert!(redacted.contains("14-mayo (Alex Vance (P1))"));
+    assert!(redacted.contains("## Mi relación con Alex Vance"));
+    assert!(redacted.contains("Excepto cuando Alex Vance quiere romperme."));
+    assert!(redacted.contains(r#"**Source:** Telegram ("DM with Alex Vance")"#));
+    assert!(redacted.contains(r#"**User:** "Alex Vance""#));
+    assert!(redacted.contains("SOUL→wiki→internet→Alex Vance"));
+    assert!(redacted.contains("14-mayo (Alex Vance)"));
     let restored = session.restore_text(&redacted);
     assert!(
         restored.contains("## Mi relación con Miguel")
@@ -190,3 +190,33 @@ fn test_system_prompt_guidelines_and_concepts_not_redacted_as_person() {
     }
     assert!(!redacted.contains("(P1)") && !redacted.contains("Alex Vance"));
 }
+
+#[test]
+fn test_person_placeholder_clean_names_and_reverse_deanonymization() {
+    let mut session = PiiSession::new(true);
+
+    // 1. First entity maps to "Alex Vance" directly without "(P1)" suffix
+    let p1 = session.get_or_create_placeholder(PiiEntity::Person, "Miguel");
+    assert_eq!(p1, "Alex Vance");
+    assert_eq!(session.forward.get("Miguel"), Some(&"Alex Vance".to_string()));
+    assert_eq!(session.reverse.get("Alex Vance"), Some(&"Miguel".to_string()));
+
+    // 2. Second entity maps to "David Chen" without "(P2)" suffix
+    let p2 = session.get_or_create_placeholder(PiiEntity::Person, "Carlos");
+    assert_eq!(p2, "David Chen");
+    assert_eq!(session.forward.get("Carlos"), Some(&"David Chen".to_string()));
+    assert_eq!(session.reverse.get("David Chen"), Some(&"Carlos".to_string()));
+
+    // 3. Bidirectional restoration: reverse de-anonymization back to original
+    let text = "Hello Alex Vance and David Chen, nice to meet you.";
+    let restored = session.restore_text(text);
+    assert_eq!(restored, "Hello Miguel and Carlos, nice to meet you.");
+
+    // 4. If original name is "Alex Vance", avoid collision and select next synthetic name
+    let mut session2 = PiiSession::new(true);
+    let p_alex = session2.get_or_create_placeholder(PiiEntity::Person, "Alex Vance");
+    assert_ne!(p_alex, "Alex Vance");
+    assert_eq!(p_alex, "David Chen");
+    assert_eq!(session2.restore_text("Hello David Chen"), "Hello Alex Vance");
+}
+
