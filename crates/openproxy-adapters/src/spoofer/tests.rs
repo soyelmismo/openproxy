@@ -92,6 +92,60 @@ fn test_kilocode_dynamic_version_and_extra_headers() {
     assert_eq!(current_kilocode_version(), "4.108.0");
 }
 
+#[test]
+fn test_codex_spoofer() {
+    let _guard = CODEX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_codex_overrides();
+    let spoofer = CodexSpoofer;
+    let mut req = UpstreamRequest::get("https://dummy.url");
+    spoofer.apply_to_request(&mut req);
+
+    for &(k, v) in CODEX_SPOOFING_HEADERS {
+        let header_val = req.headers.get(k).expect("header missing");
+        if k == "user-agent" {
+            assert_eq!(header_val, current_codex_ua().as_str());
+        } else if k == "version" {
+            assert_eq!(header_val, current_codex_version().as_str());
+        } else {
+            assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
+        }
+    }
+}
+
+#[test]
+fn test_codex_dynamic_version_and_extra_headers() {
+    let _guard = CODEX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_codex_overrides();
+
+    assert_eq!(current_codex_version(), "0.144.0");
+    assert_eq!(
+        current_codex_ua(),
+        "codex-cli/0.144.0 (Windows 10.0.26200; x64)"
+    );
+
+    set_dynamic_codex_version("0.150.0");
+    assert_eq!(current_codex_version(), "0.150.0");
+    assert_eq!(
+        current_codex_ua(),
+        "codex-cli/0.150.0 (Windows 10.0.26200; x64)"
+    );
+
+    set_dynamic_codex_extra_header("x-codex-feature", "subzero");
+
+    let headers = CodexSpoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(
+        find("user-agent"),
+        Some("codex-cli/0.150.0 (Windows 10.0.26200; x64)")
+    );
+    assert_eq!(find("version"), Some("0.150.0"));
+    assert_eq!(find("x-codex-feature"), Some("subzero"));
+
+    reset_dynamic_codex_overrides();
+    assert_eq!(current_codex_version(), "0.144.0");
+}
+
 fn assert_opencode_id(prefix: &str, id: &str) {
     assert!(id.starts_with(prefix), "expected prefix {prefix}, got {id}");
     assert_eq!(

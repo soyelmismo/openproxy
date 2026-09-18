@@ -226,6 +226,30 @@ pub fn propagate_kilocode_headers(
     }
 }
 
+/// Propagate downstream client headers for Codex.
+///
+/// Forwards `x-codex-*`, `codex-*`, and `chatgpt-account-id`
+/// while strictly preserving auth credentials and standard structure.
+pub fn propagate_codex_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    for (k, v) in request_headers {
+        let lower = k.to_ascii_lowercase();
+        let is_allowed = lower.starts_with("x-codex-")
+            || lower.starts_with("codex-")
+            || lower == "chatgpt-account-id";
+
+        if is_allowed {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +307,35 @@ mod tests {
         assert_eq!(find("x-kilocode-feature"), Some("openclaw"));
         assert_eq!(find("kilocode-org"), Some("kilo-team"));
         assert_eq!(find("Authorization"), Some("Bearer kl-secret"));
+    }
+
+    #[test]
+    fn test_propagate_codex_headers() {
+        let mut headers = vec![
+            ("User-Agent".into(), "codex-cli/0.144.0 (Windows 10.0.26200; x64)".into()),
+            ("origin".into(), "https://chatgpt.com".into()),
+            ("originator".into(), "codex_cli_rs".into()),
+            ("Authorization".into(), "Bearer codex-tok".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("x-codex-session".into(), "ses-codex-1".into());
+        req_headers.insert("chatgpt-account-id".into(), "ws-team-456".into());
+        req_headers.insert("codex-subaction".into(), "lint".into());
+        req_headers.insert("authorization".into(), "override-hack".into());
+
+        propagate_codex_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("x-codex-session"), Some("ses-codex-1"));
+        assert_eq!(find("chatgpt-account-id"), Some("ws-team-456"));
+        assert_eq!(find("codex-subaction"), Some("lint"));
+        assert_eq!(find("Authorization"), Some("Bearer codex-tok"));
     }
 
     #[test]

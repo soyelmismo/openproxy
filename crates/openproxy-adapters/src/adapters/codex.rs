@@ -5,43 +5,29 @@ use super::{
 };
 use openproxy_types::ResultExt;
 
-const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.0";
-
-fn safe_env_value(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
-}
-
-static CODEX_CLIENT_VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    safe_env_value("OPENPROXY_CODEX_CLIENT_VERSION")
-        .or_else(|| safe_env_value("CODEX_CLIENT_VERSION"))
-        .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string())
-});
-
-static CODEX_USER_AGENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    safe_env_value("OPENPROXY_CODEX_USER_AGENT")
-        .or_else(|| safe_env_value("CODEX_USER_AGENT"))
-        .unwrap_or_else(|| {
-            format!(
-                "codex-cli/{} (Windows 10.0.26200; x64)",
-                *CODEX_CLIENT_VERSION
-            )
-        })
-});
-
-pub fn codex_client_version_str() -> &'static str {
-    &CODEX_CLIENT_VERSION
-}
-
-pub fn codex_user_agent_str() -> &'static str {
-    &CODEX_USER_AGENT
-}
+pub use crate::spoofer::CODEX_SPOOFING_HEADERS;
+use crate::spoofer::{
+    current_codex_ua, current_codex_version, ClientSpoofer, CodexSpoofer,
+};
 
 pub fn codex_client_version() -> String {
-    CODEX_CLIENT_VERSION.clone()
+    current_codex_version()
 }
 
 pub fn codex_user_agent() -> String {
-    CODEX_USER_AGENT.clone()
+    current_codex_ua()
+}
+
+pub fn codex_client_version_str() -> &'static str {
+    crate::spoofer::DEFAULT_CODEX_VERSION
+}
+
+pub fn codex_user_agent_str() -> &'static str {
+    "codex-cli/0.144.0 (Windows 10.0.26200; x64)"
+}
+
+pub fn apply_codex_spoofing_headers(req: &mut UpstreamRequest) {
+    CodexSpoofer.apply_to_request(req);
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CodexAdapter {
@@ -125,6 +111,10 @@ impl ProviderAdapter for CodexAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         openproxy_types::ProviderMetadata {
             built_in: true,
@@ -142,17 +132,43 @@ impl ProviderAdapter for CodexAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = vec![
-            ("Content-Type".into(), "application/json".into()),
-            ("Origin".into(), "https://chatgpt.com".into()),
-            ("originator".into(), "codex_cli_rs".into()),
-            ("Version".into(), codex_client_version()),
-            ("User-Agent".into(), codex_user_agent()),
-        ];
+        let mut headers = Vec::with_capacity(6 + self.config.extra_headers.len());
         if let Some(auth) = self.build_auth_header(api_key) {
             headers.push(auth);
         }
+        headers.push(("Content-Type".into(), "application/json".into()));
+        headers.extend(CodexSpoofer.headers());
+
+        for (k, v) in &self.config.extra_headers {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
         headers
+    }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        if body.is_empty() {
+            return Ok(body);
+        }
+        let mut val: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+
+        if let Some(obj) = val.as_object_mut() {
+            patch_codex_request_object(obj);
+        }
+
+        let new_body = serde_json::to_vec(&val)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+        Ok(bytes::Bytes::from(new_body))
     }
 
     fn models_url(&self) -> Option<String> {
@@ -227,6 +243,11 @@ impl CodexAdapter {
     }
 }
 
+fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    // Codex backend ALWAYS requires stream: true, else it returns HTTP 400 {"detail":"Stream must be set to true"}
+    obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+}
+
 fn build_codex_quota_request(access_token: &str, workspace_id: Option<&str>) -> UpstreamRequest {
     let url = "https://chatgpt.com/backend-api/wham/usage";
     let mut req = UpstreamRequest::get(url);
@@ -243,21 +264,7 @@ fn build_codex_quota_request(access_token: &str, workspace_id: Option<&str>) -> 
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/json"),
     );
-    req.headers.insert(
-        http::header::HeaderName::from_static("origin"),
-        http::HeaderValue::from_static("https://chatgpt.com"),
-    );
-    req.headers.insert(
-        http::header::HeaderName::from_static("originator"),
-        http::HeaderValue::from_static("codex_cli_rs"),
-    );
-    if let Ok(v) = http::HeaderValue::from_str(codex_client_version_str()) {
-        req.headers
-            .insert(http::HeaderName::from_static("version"), v);
-    }
-    if let Ok(v) = http::HeaderValue::from_str(codex_user_agent_str()) {
-        req.headers.insert(http::header::USER_AGENT, v);
-    }
+    apply_codex_spoofing_headers(&mut req);
     let workspace_header = workspace_id.and_then(codex_workspace_header);
     if let Some(ws) = workspace_header.as_deref()
         && let Ok(val) = http::HeaderValue::from_str(ws)
@@ -407,4 +414,160 @@ mod tests {
         let err = parse_codex_usage_quota(&body).unwrap_err();
         assert!(err.to_string().contains("codex quota missing rate_limit"));
     }
+
+    #[test]
+    fn test_apply_codex_spoofing_headers() {
+        let mut req = UpstreamRequest::post_json("http://dummy.com", bytes::Bytes::new());
+        apply_codex_spoofing_headers(&mut req);
+
+        for &(k, v) in CODEX_SPOOFING_HEADERS {
+            let header_value = req.headers.get(k).expect("header missing");
+            if k == "user-agent" {
+                assert_eq!(header_value, current_codex_ua().as_str());
+            } else if k == "version" {
+                assert_eq!(header_value, current_codex_version().as_str());
+            } else {
+                assert_eq!(header_value, http::HeaderValue::from_str(v).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_wrap_request_body_enforces_stream_true() {
+        let adapter = CodexAdapter::new();
+        let json_body = serde_json::json!({
+            "model": "gpt-5.6-luna",
+            "input": [{"role": "user", "content": "hi"}],
+            "stream": false
+        });
+        let body_bytes = bytes::Bytes::from(serde_json::to_vec(&json_body).unwrap());
+
+        let resolved_target = openproxy_types::context::ResolvedTarget {
+            target: openproxy_types::combos::ComboTarget {
+                id: openproxy_types::ComboTargetId(1),
+                combo_id: openproxy_types::ComboId(1),
+                provider_id: openproxy_types::ProviderId::new("codex"),
+                account_id: None,
+                model_row_id: Some(openproxy_types::ModelRowId(1)),
+                sub_combo_id: None,
+                priority_order: 0,
+                weight: 100,
+                active: true,
+                rate_limit_scope: openproxy_types::RateLimitScope::Account,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                thinking_effort: None,
+            },
+            model: openproxy_types::Model {
+                row_id: openproxy_types::ModelRowId(1),
+                provider_id: openproxy_types::ProviderId::new("codex"),
+                model_id: openproxy_types::ModelId::new("gpt-5.6-luna"),
+                target_format: openproxy_types::TargetFormat::Responses,
+                discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+                context_length: Some(272_000),
+                max_output_tokens: Some(32_768),
+                model_type: "chat".into(),
+                ..Default::default()
+            },
+            api_key: "tok".to_string(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
+        let wrapped = adapter
+            .wrap_request_body(
+                body_bytes,
+                TargetFormat::Responses,
+                &ModelId::new("gpt-5.6-luna"),
+                &resolved_target,
+            )
+            .expect("wrap should succeed");
+
+        let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(
+            val.get("stream").and_then(serde_json::Value::as_bool),
+            Some(true),
+            "Codex must ALWAYS enforce stream: true on request payload"
+        );
+    }
+
+    #[test]
+    fn test_codex_build_headers_with_extra_and_dynamic_overrides() {
+        let _guard = crate::spoofer::CODEX_TEST_LOCK.lock().unwrap();
+        crate::spoofer::reset_dynamic_codex_overrides();
+
+        let mut adapter = CodexAdapter::new();
+        adapter.config_mut().unwrap().extra_headers = vec![
+            ("x-codex-workspace".to_string(), "ws-123".to_string()),
+            ("user-agent".to_string(), "CustomCodex/2.0".to_string()),
+        ];
+
+        crate::spoofer::set_dynamic_codex_extra_header("x-dynamic-header", "dynamic-val");
+
+        let headers = adapter.build_headers("my-key", TargetFormat::Responses, &ModelId::new("gpt-5.6-luna"));
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("Authorization"), Some("Bearer my-key"));
+        assert_eq!(find("Content-Type"), Some("application/json"));
+        assert_eq!(find("x-codex-workspace"), Some("ws-123"));
+        assert_eq!(find("user-agent"), Some("CustomCodex/2.0"));
+        assert_eq!(find("x-dynamic-header"), Some("dynamic-val"));
+        assert_eq!(find("origin"), Some("https://chatgpt.com"));
+        assert_eq!(find("originator"), Some("codex_cli_rs"));
+
+        crate::spoofer::reset_dynamic_codex_overrides();
+    }
+
+    #[test]
+    fn test_codex_default_headers_contract() {
+        let _guard = crate::spoofer::CODEX_TEST_LOCK.lock().unwrap();
+        crate::spoofer::reset_dynamic_codex_overrides();
+
+        let adapter = CodexAdapter::new();
+        let headers = adapter.build_headers("codex-token-xyz", TargetFormat::Responses, &ModelId::new("gpt-5.6-luna"));
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        // Strict bijective closed-world set equality contract
+        let actual_keys: std::collections::BTreeSet<String> = headers
+            .iter()
+            .map(|(k, _)| k.to_ascii_lowercase())
+            .collect();
+        let expected_keys: std::collections::BTreeSet<String> = [
+            "authorization",
+            "content-type",
+            "origin",
+            "originator",
+            "version",
+            "user-agent",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        assert_eq!(
+            actual_keys, expected_keys,
+            "Codex contract breach: header added or removed"
+        );
+
+        assert_eq!(find("authorization"), Some("Bearer codex-token-xyz"));
+        assert_eq!(find("content-type"), Some("application/json"));
+        assert_eq!(find("origin"), Some("https://chatgpt.com"));
+        assert_eq!(find("originator"), Some("codex_cli_rs"));
+        assert_eq!(find("version"), Some(current_codex_version().as_str()));
+        assert_eq!(find("user-agent"), Some(current_codex_ua().as_str()));
+    }
 }
+
