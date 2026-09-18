@@ -15,13 +15,13 @@ use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 
-const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-const DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
-const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
-const VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
-const REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
-const SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
+pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub const DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+pub const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+pub const VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
+pub const REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
+pub const SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CodexProviderMeta {
@@ -50,13 +50,44 @@ fn codex_oauth_spec() -> OAuthSpec {
 #[derive(Clone)]
 pub struct CodexOAuthProvider {
     generic: GenericOAuthProvider,
+    resolver: super::OAuthEndpointResolver,
 }
 
 impl CodexOAuthProvider {
     pub fn new() -> Self {
         Self {
             generic: GenericOAuthProvider::new(codex_oauth_spec()),
+            resolver: super::OAuthEndpointResolver::new(
+                "OPENPROXY_CODEX_AUTH_BASE_URL",
+                "https://auth.openai.com",
+            ),
         }
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>) -> Self {
+        Self {
+            generic: GenericOAuthProvider::new(codex_oauth_spec()),
+            resolver: super::OAuthEndpointResolver::new(
+                "OPENPROXY_CODEX_AUTH_BASE_URL",
+                "https://auth.openai.com",
+            )
+            .with_custom_base(base_url),
+        }
+    }
+
+    pub fn usercode_url(&self) -> String {
+        std::env::var("OPENPROXY_CODEX_DEVICE_USERCODE_URL")
+            .unwrap_or_else(|_| self.resolver.url_with_path("api/accounts/deviceauth/usercode"))
+    }
+
+    pub fn device_token_url(&self) -> String {
+        std::env::var("OPENPROXY_CODEX_DEVICE_TOKEN_URL")
+            .unwrap_or_else(|_| self.resolver.url_with_path("api/accounts/deviceauth/token"))
+    }
+
+    pub fn token_url(&self) -> String {
+        std::env::var("OPENPROXY_CODEX_TOKEN_URL")
+            .unwrap_or_else(|_| self.resolver.url_with_path("oauth/token"))
     }
 }
 
@@ -98,7 +129,7 @@ impl OAuthProvider for CodexOAuthProvider {
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req =
-            UpstreamRequest::post_json(DEVICE_USERCODE_URL, bytes::Bytes::from(body_bytes));
+            UpstreamRequest::post_json(self.usercode_url(), bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
@@ -126,15 +157,7 @@ impl OAuthProvider for CodexOAuthProvider {
             ));
         }
 
-        if !status.is_success() {
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "codex",
-                "<oauth>",
-                String::from_utf8_lossy(&body).to_string(),
-                false,
-            ));
-        }
+        super::check_oauth_status(status, "codex", &body)?;
 
         let resp: UserCodeResp = serde_json::from_slice(&body)
             .map_err(|e| CoreError::Parse(format!("codex usercode parse: {e}")))?;
@@ -186,7 +209,7 @@ impl OAuthProvider for CodexOAuthProvider {
         });
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
-        let mut req = UpstreamRequest::post_json(DEVICE_TOKEN_URL, bytes::Bytes::from(body_bytes));
+        let mut req = UpstreamRequest::post_json(self.device_token_url(), bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
@@ -212,15 +235,7 @@ impl OAuthProvider for CodexOAuthProvider {
             return Ok(None);
         }
 
-        if !status.is_success() {
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "codex",
-                "<oauth>",
-                String::from_utf8_lossy(&body).to_string(),
-                false,
-            ));
-        }
+        super::check_oauth_status(status, "codex", &body)?;
 
         let poll_resp: PollResp = serde_json::from_slice(&body)
             .map_err(|e| CoreError::Parse(format!("codex poll parse: {e}")))?;
@@ -234,7 +249,7 @@ impl OAuthProvider for CodexOAuthProvider {
         ];
 
         let token_body = crate::oauth::generic::urlencoded_body(&params);
-        let mut token_req = UpstreamRequest::post_json(TOKEN_URL, token_body);
+        let mut token_req = UpstreamRequest::post_json(self.token_url(), token_body);
         token_req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/x-www-form-urlencoded"),
@@ -251,15 +266,7 @@ impl OAuthProvider for CodexOAuthProvider {
             .await
             .map_err(|e| map_upstream_err(e, "codex exchange body"))?;
 
-        if !token_status.is_success() {
-            return Err(CoreError::upstream_error(
-                token_status.as_u16(),
-                "codex",
-                "<oauth>",
-                String::from_utf8_lossy(&token_body_bytes).to_string(),
-                false,
-            ));
-        }
+        super::check_oauth_status(token_status, "codex", &token_body_bytes)?;
 
         let token: TokenResponse = serde_json::from_slice(&token_body_bytes)
             .map_err(|e| CoreError::Parse(format!("codex token parse: {e}")))?;
@@ -267,7 +274,54 @@ impl OAuthProvider for CodexOAuthProvider {
         Ok(Some(token))
     }
 
-    crate::delegate_oauth_to_generic!(refresh_token);
+    async fn refresh_token(
+        &self,
+        refresh_token: &str,
+        upstream_client: &Arc<UpstreamClient>,
+        account_id: crate::ids::AccountId,
+        db: crate::oauth::DbRef<'_>,
+    ) -> Result<TokenResponse> {
+        if !self.resolver.has_custom_base() {
+            return self
+                .generic
+                .refresh_token(refresh_token, upstream_client, account_id, db)
+                .await;
+        }
+
+        let params = [
+            ("grant_type", "refresh_token"),
+            ("client_id", CLIENT_ID),
+            ("refresh_token", refresh_token),
+        ];
+        let body = crate::oauth::generic::urlencoded_body(&params);
+        let mut req = UpstreamRequest::post_json(self.token_url(), body);
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        req.headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_str(&openproxy_adapters::adapters::codex::codex_user_agent())
+                .unwrap_or_else(|_| http::HeaderValue::from_static("codex")),
+        );
+
+        let cancel = CancellationToken::new();
+        let resp = upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
+            .await
+            .map_err(|e| map_upstream_err(e, "codex token refresh"))?;
+
+        let status = resp.status;
+        let bytes = resp
+            .collect()
+            .await
+            .map_err(|e| map_upstream_err(e, "codex token refresh body"))?;
+
+        super::check_oauth_status(status, "codex", &bytes)?;
+
+        serde_json::from_slice(&bytes)
+            .map_err(|e| CoreError::Parse(format!("codex token refresh parse: {e}")))
+    }
 
     fn provider_specific_from_token(&self, token: &TokenResponse) -> Option<String> {
         let claims = token
@@ -282,15 +336,7 @@ impl OAuthProvider for CodexOAuthProvider {
     }
 
     fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
-        let claims = token
-            .id_token
-            .as_deref()
-            .and_then(super::decode_jwt_payload)?;
-        claims
-            .get("email")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-            .map(ToString::to_string)
+        super::extract_email_from_token(token)
     }
 }
 
@@ -332,12 +378,156 @@ fn extract_workspace_id(claims: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+
+    #[test]
+    fn test_codex_provider_metadata() {
+        let provider = CodexOAuthProvider::new();
+        assert_eq!(provider.name(), "codex");
+        assert_eq!(provider.flow(), OAuthFlow::DeviceCode);
+        assert!(provider.aliases().is_empty());
+        assert_eq!(CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
+        assert_eq!(TOKEN_URL, "https://auth.openai.com/oauth/token");
+        assert_eq!(
+            DEVICE_USERCODE_URL,
+            "https://auth.openai.com/api/accounts/deviceauth/usercode"
+        );
+        assert_eq!(
+            DEVICE_TOKEN_URL,
+            "https://auth.openai.com/api/accounts/deviceauth/token"
+        );
+        assert_eq!(VERIFICATION_URI, "https://auth.openai.com/codex/device");
+        assert_eq!(REDIRECT_URI, "https://auth.openai.com/deviceauth/callback");
+        assert_eq!(
+            SCOPES,
+            &["openid", "profile", "email", "offline_access"]
+        );
+    }
 
     #[test]
     fn extracts_workspace_id_from_claims() {
-        let claims = serde_json::json!({
+        let claims1 = serde_json::json!({
             "https://api.openai.com/auth.chatgpt_account_id/account_id": "acc_123",
         });
-        assert_eq!(extract_workspace_id(&claims).as_deref(), Some("acc_123"));
+        assert_eq!(extract_workspace_id(&claims1).as_deref(), Some("acc_123"));
+
+        let claims2 = serde_json::json!({
+            "chatgpt_account_id": "acc_456",
+        });
+        assert_eq!(extract_workspace_id(&claims2).as_deref(), Some("acc_456"));
+
+        let claims3 = serde_json::json!({
+            "account_id": "acc_789",
+        });
+        assert_eq!(extract_workspace_id(&claims3).as_deref(), Some("acc_789"));
+
+        let claims4 = serde_json::json!({
+            "https://api.openai.com/auth.chatgpt_account_id": {
+                "account_id": "acc_nested"
+            }
+        });
+        assert_eq!(extract_workspace_id(&claims4).as_deref(), Some("acc_nested"));
+
+        let empty = serde_json::json!({ "account_id": "" });
+        assert_eq!(extract_workspace_id(&empty), None);
+    }
+
+    #[test]
+    fn test_codex_provider_meta_serde() {
+        let meta = CodexProviderMeta {
+            workspace_id: Some("ws-alpha".into()),
+        };
+        let json = serde_json::to_string(&meta).expect("serialize");
+        assert_eq!(json, r#"{"workspaceId":"ws-alpha"}"#);
+        let back: CodexProviderMeta = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.workspace_id.as_deref(), Some("ws-alpha"));
+
+        let empty = CodexProviderMeta::default();
+        let json_empty = serde_json::to_string(&empty).expect("serialize empty");
+        assert_eq!(json_empty, "{}");
+    }
+
+    #[test]
+    fn test_usercode_response_deserialization() {
+        let json1 = r#"{"device_auth_id":"da_1","user_code":"UC-123","interval":10}"#;
+        let resp1: UserCodeResp = serde_json::from_str(json1).expect("parse usercode 1");
+        assert_eq!(resp1.device_auth_id, "da_1");
+        assert_eq!(resp1.user_code.as_deref(), Some("UC-123"));
+        assert_eq!(resp1.interval.and_then(|v| v.as_u64()), Some(10));
+
+        let json2 = r#"{"device_auth_id":"da_2","usercode":"UC-456","interval":"15"}"#;
+        let resp2: UserCodeResp = serde_json::from_str(json2).expect("parse usercode 2");
+        assert_eq!(resp2.device_auth_id, "da_2");
+        assert_eq!(resp2.usercode.as_deref(), Some("UC-456"));
+
+        let json_poll = r#"{"authorization_code":"ac_999","code_verifier":"cv_888"}"#;
+        let poll: PollResp = serde_json::from_str(json_poll).expect("parse poll");
+        assert_eq!(poll.authorization_code, "ac_999");
+        assert_eq!(poll.code_verifier, "cv_888");
+    }
+
+    #[test]
+    fn test_codex_claims_and_email_from_token() {
+        let provider = CodexOAuthProvider::new();
+
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            r#"{"email":"codex_user@example.com","chatgpt_account_id":"acc_chatgpt_777"}"#,
+        );
+        let id_token_jwt = format!("{header}.{payload}.sig");
+
+        let token = TokenResponse {
+            access_token: "mock-access-token".into(),
+            token_type: "Bearer".into(),
+            expires_in: Some(3600),
+            refresh_token: Some("mock-refresh-token".into()),
+            scope: None,
+            id_token: Some(id_token_jwt),
+        };
+
+        assert_eq!(
+            provider.email_from_token(&token).as_deref(),
+            Some("codex_user@example.com")
+        );
+        let meta_json = provider
+            .provider_specific_from_token(&token)
+            .expect("workspaceId meta json");
+        let meta: CodexProviderMeta = serde_json::from_str(&meta_json).expect("parse meta");
+        assert_eq!(meta.workspace_id.as_deref(), Some("acc_chatgpt_777"));
+    }
+
+    #[tokio::test]
+    async fn test_codex_unsupported_flows_and_invalid_device_code() {
+        let provider = CodexOAuthProvider::new();
+        let client = Arc::new(UpstreamClient::new());
+
+        assert!(provider.build_auth_url("http://loc/cb").await.is_err());
+        assert!(
+            provider
+                .exchange_code("code", "verifier", &client, "http://loc/cb")
+                .await
+                .is_err()
+        );
+
+        // Invalid composite device code (missing pipe)
+        let invalid_poll = provider.poll_device_token("invalid_code_no_pipe", &client).await;
+        assert!(invalid_poll.is_err());
+    }
+
+    #[test]
+    fn test_codex_custom_base_url() {
+        let provider = CodexOAuthProvider::with_base_url("http://127.0.0.1:7777");
+        assert_eq!(
+            provider.usercode_url(),
+            "http://127.0.0.1:7777/api/accounts/deviceauth/usercode"
+        );
+        assert_eq!(
+            provider.device_token_url(),
+            "http://127.0.0.1:7777/api/accounts/deviceauth/token"
+        );
+        assert_eq!(
+            provider.token_url(),
+            "http://127.0.0.1:7777/oauth/token"
+        );
     }
 }
