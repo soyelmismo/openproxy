@@ -76,9 +76,11 @@ pub(crate) async fn fetch_commandcode_quota(
     upstream_client: &Arc<UpstreamClient>,
     token: &str,
 ) -> Result<AccountQuota> {
+    let base = super::commandcode_base_url();
+
     // 1. Query /alpha/billing/credits
-    let credits_url = "https://api.commandcode.ai/alpha/billing/credits";
-    let mut credits_req = UpstreamRequest::get(credits_url);
+    let credits_url = format!("{base}/alpha/billing/credits");
+    let mut credits_req = UpstreamRequest::get(&credits_url);
     apply_commandcode_cli_headers(&mut credits_req, token);
     let cancel = CancellationToken::new();
     let credits_resp = upstream_client
@@ -116,8 +118,8 @@ pub(crate) async fn fetch_commandcode_quota(
     }
 
     // 2. Query /alpha/billing/subscriptions
-    let sub_url = "https://api.commandcode.ai/alpha/billing/subscriptions";
-    let mut sub_req = UpstreamRequest::get(sub_url);
+    let sub_url = format!("{base}/alpha/billing/subscriptions");
+    let mut sub_req = UpstreamRequest::get(&sub_url);
     apply_commandcode_cli_headers(&mut sub_req, token);
     let cancel = CancellationToken::new();
     let (plan_id, period_end) = if let Ok(sub_resp) = upstream_client
@@ -142,8 +144,8 @@ pub(crate) async fn fetch_commandcode_quota(
     };
 
     // 3. Query /alpha/usage/summary for monthly spent credits
-    let summary_url = "https://api.commandcode.ai/alpha/usage/summary";
-    let mut summary_req = UpstreamRequest::get(summary_url);
+    let summary_url = format!("{base}/alpha/usage/summary");
+    let mut summary_req = UpstreamRequest::get(&summary_url);
     apply_commandcode_cli_headers(&mut summary_req, token);
     let cancel = CancellationToken::new();
     let used_monthly = if let Ok(summary_resp) = upstream_client

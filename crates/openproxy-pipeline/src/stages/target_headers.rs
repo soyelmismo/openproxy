@@ -19,6 +19,17 @@ fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
     s.get(..prefix.len()).is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
 }
 
+#[inline]
+fn get_header_val<'a>(
+    request_headers: &'a std::collections::BTreeMap<String, String>,
+    name: &str,
+) -> Option<&'a str> {
+    request_headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
 fn propagate_matching_headers<P>(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
@@ -268,14 +279,43 @@ pub fn propagate_kiro_headers(
             || k.eq_ignore_ascii_case("x-amz-user-agent")
     });
 
-    let session_val = request_headers
-        .iter()
-        .find(|(k, _)| {
-            k.eq_ignore_ascii_case("x-conversation-id")
-                || k.eq_ignore_ascii_case("x-session-id")
-                || k.eq_ignore_ascii_case("session-id")
-        })
-        .map(|(_, v)| v.as_str());
+    let session_val = get_header_val(request_headers, "x-conversation-id")
+        .or_else(|| get_header_val(request_headers, "x-session-id"))
+        .or_else(|| get_header_val(request_headers, "session-id"));
+
+    if let Some(session_id) = session_val
+        && !session_id.trim().is_empty()
+    {
+        upsert_header(
+            headers,
+            "x-conversation-id",
+            session_id.trim().to_string(),
+        );
+    }
+}
+
+/// Propagate downstream client headers for Command Code Go.
+///
+/// Forwards `x-command-code-*`, `command-code-*`, `cmd-*`, `x-cli-environment`,
+/// `x-project-slug`, `x-taste-learning`, and `x-command-code-version`. Extracts
+/// session continuity from `x-conversation-id`, `x-session-id`, or `session-id`.
+pub fn propagate_commandcode_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    propagate_matching_headers(headers, request_headers, |k| {
+        starts_with_ignore_ascii_case(k, "x-command-code-")
+            || starts_with_ignore_ascii_case(k, "command-code-")
+            || starts_with_ignore_ascii_case(k, "cmd-")
+            || k.eq_ignore_ascii_case("x-command-code-version")
+            || k.eq_ignore_ascii_case("x-cli-environment")
+            || k.eq_ignore_ascii_case("x-project-slug")
+            || k.eq_ignore_ascii_case("x-taste-learning")
+    });
+
+    let session_val = get_header_val(request_headers, "x-conversation-id")
+        .or_else(|| get_header_val(request_headers, "x-session-id"))
+        .or_else(|| get_header_val(request_headers, "session-id"));
 
     if let Some(session_id) = session_val
         && !session_id.trim().is_empty()
@@ -451,6 +491,41 @@ mod tests {
         assert_eq!(find("anthropic-beta"), Some("prompt-caching-2024-07-31"));
         assert_eq!(find("x-amzn-bedrock-cache-control"), Some("enable"));
         assert_eq!(find("Authorization"), Some("Bearer kiro-tok"));
+    }
+
+    #[test]
+    fn test_propagate_commandcode_headers() {
+        let mut headers = vec![
+            ("Content-Type".into(), "application/json".into()),
+            ("user-agent".into(), "cli".into()),
+            ("x-command-code-version".into(), "1.54.0".into()),
+            ("Authorization".into(), "Bearer cc-tok".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("x-command-code-task".into(), "build".into());
+        req_headers.insert("x-project-slug".into(), "my-project".into());
+        req_headers.insert("x-cli-environment".into(), "staging".into());
+        req_headers.insert("x-taste-learning".into(), "false".into());
+        req_headers.insert("x-conversation-id".into(), "conv-cc-789".into());
+        req_headers.insert("x-command-code-version".into(), "1.60.0".into());
+        req_headers.insert("authorization".into(), "hack".into());
+
+        propagate_commandcode_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("x-command-code-task"), Some("build"));
+        assert_eq!(find("x-project-slug"), Some("my-project"));
+        assert_eq!(find("x-cli-environment"), Some("staging"));
+        assert_eq!(find("x-taste-learning"), Some("false"));
+        assert_eq!(find("x-conversation-id"), Some("conv-cc-789"));
+        assert_eq!(find("x-command-code-version"), Some("1.60.0"));
+        assert_eq!(find("Authorization"), Some("Bearer cc-tok"));
     }
 
     #[test]

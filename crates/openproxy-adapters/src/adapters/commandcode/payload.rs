@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-pub(crate) fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
+pub fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Value {
     let messages = val
         .get_mut("messages")
         .and_then(|m| m.as_array_mut())

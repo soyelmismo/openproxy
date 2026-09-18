@@ -567,3 +567,47 @@ fn test_kiro_dynamic_version_and_extra_headers() {
     assert_eq!(current_kiro_ua(), "aws-sdk-js/3.0.0 kiro/0.1");
 }
 
+#[test]
+fn test_commandcode_spoofer() {
+    let _guard = COMMANDCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_commandcode_overrides();
+
+    let spoofer = CommandCodeSpoofer;
+    let headers = spoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("Content-Type"), Some("application/json"));
+    assert_eq!(find("user-agent"), Some("cli"));
+    assert_eq!(find("x-command-code-version"), Some("1.54.0"));
+    assert_eq!(find("x-cli-environment"), Some("production"));
+    assert_eq!(find("x-project-slug"), Some("project"));
+    assert_eq!(find("x-taste-learning"), Some("true"));
+}
+
+#[test]
+fn test_commandcode_dynamic_version_and_extra_headers() {
+    let _guard = COMMANDCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_commandcode_overrides();
+
+    assert_eq!(current_commandcode_version(), "1.54.0");
+    assert_eq!(current_commandcode_ua(), "cli");
+
+    set_dynamic_commandcode_version("1.60.0");
+    set_dynamic_commandcode_ua("command-code-cli/1.60.0");
+    set_dynamic_commandcode_extra_header("x-custom-pipeline", "fast");
+
+    assert_eq!(current_commandcode_version(), "1.60.0");
+    assert_eq!(current_commandcode_ua(), "command-code-cli/1.60.0");
+
+    let headers = CommandCodeSpoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("x-command-code-version"), Some("1.60.0"));
+    assert_eq!(find("user-agent"), Some("command-code-cli/1.60.0"));
+    assert_eq!(find("x-custom-pipeline"), Some("fast"));
+
+    reset_dynamic_commandcode_overrides();
+    assert_eq!(current_commandcode_version(), "1.54.0");
+    assert_eq!(current_commandcode_ua(), "cli");
+}
+
