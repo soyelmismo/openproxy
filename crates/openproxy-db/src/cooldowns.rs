@@ -165,6 +165,17 @@ pub fn record_cooldown(
         return Ok(());
     }
 
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM combo_targets WHERE id = ?1",
+            rusqlite::params![target_id.0],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !exists {
+        return Ok(());
+    }
+
     let current_count: u32 = conn
         .query_row(
             target_cooldown_failure_count_select!("WHERE combo_target_id = ?1"),

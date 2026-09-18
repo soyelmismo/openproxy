@@ -231,7 +231,18 @@ pub fn is_upstream_health_issue(err: &CoreError) -> bool {
         CoreError::UpstreamTimeout { phase, .. } => phase != "idle_chunk",
         CoreError::UpstreamConnection(_) => true,
         CoreError::RateLimited { .. } => true,
-        CoreError::UpstreamError { status, .. } => *status >= 500 || *status == 429,
+        CoreError::UpstreamError { status, body, .. } => {
+            if *status >= 500 || *status == 429 {
+                true
+            } else if *status == 400 {
+                let lower = body.to_ascii_lowercase();
+                lower.contains("model is unavailable")
+                    || lower.contains("upstream request failed")
+                    || lower.contains("is not supported")
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
@@ -286,5 +297,50 @@ mod tests {
         let res = parse_retry_after_ms(&future_date).unwrap();
         // Since some time passes between now and parsing, it's roughly 10000
         assert!(res > 8000 && res <= 10000);
+    }
+
+    #[test]
+    fn test_is_upstream_health_issue() {
+        let timeout_err = CoreError::UpstreamTimeout {
+            phase: "first_byte".into(),
+            ms: 5000,
+        };
+        assert!(is_upstream_health_issue(&timeout_err));
+
+        let idle_timeout = CoreError::UpstreamTimeout {
+            phase: "idle_chunk".into(),
+            ms: 5000,
+        };
+        assert!(!is_upstream_health_issue(&idle_timeout));
+
+        let server_err = CoreError::upstream_error_classified(
+            503,
+            "opencode-zen",
+            "union-alpha",
+            "Service Unavailable",
+            false,
+            openproxy_types::UpstreamErrorClass::Generic,
+        );
+        assert!(is_upstream_health_issue(&server_err));
+
+        let client_err = CoreError::upstream_error_classified(
+            400,
+            "opencode-zen",
+            "union-alpha",
+            "invalid prompt json",
+            false,
+            openproxy_types::UpstreamErrorClass::Generic,
+        );
+        assert!(!is_upstream_health_issue(&client_err));
+
+        let masked_err = CoreError::upstream_error_classified(
+            400,
+            "opencode-zen",
+            "union-alpha",
+            r#"{"type":"error","error":{"type":"api_error","message":"Error from provider (Console): Upstream request failed: Model is unavailable."}}"#,
+            false,
+            openproxy_types::UpstreamErrorClass::ResourceExhausted,
+        );
+        assert!(is_upstream_health_issue(&masked_err));
     }
 }

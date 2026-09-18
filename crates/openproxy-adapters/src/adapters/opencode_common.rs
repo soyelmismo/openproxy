@@ -34,8 +34,8 @@ pub fn classify_go_target_format(id: &str) -> TargetFormat {
 /// Per OpenCode Console routing:
 /// - Anthropic (/messages): claude, minimax, qwen, union-alpha
 /// - Gemini (/models/{model}:streamGenerateContent?alt=sse): gemini
-/// - Responses (/responses): gpt-5, gpt-6, grok
-/// - OpenAI (/chat/completions): deepseek, glm, kimi, mimo, ling, nemotron, big-pickle, muse-spark, etc.
+/// - Responses (/responses): gpt-5, gpt-6, grok, muse-spark
+/// - OpenAI (/chat/completions): deepseek, glm, kimi, mimo, ling, nemotron, big-pickle, etc.
 ///
 /// Zen and Go expose different backends under the same alias, and the catalogue
 /// mixes wire formats *inside* a family (Zen answers `minimax-m3` on
@@ -67,7 +67,11 @@ fn family_target_format(lower: &str) -> TargetFormat {
         TargetFormat::Anthropic
     } else if lower.contains("gemini") {
         TargetFormat::Gemini
-    } else if lower.contains("gpt-5") || lower.contains("gpt-6") || lower.contains("grok") {
+    } else if lower.contains("gpt-5")
+        || lower.contains("gpt-6")
+        || lower.contains("grok")
+        || lower.contains("muse-spark")
+    {
         TargetFormat::Responses
     } else {
         TargetFormat::Openai
@@ -216,6 +220,16 @@ impl OpenCodeAdapter {
         if let Some(obj) = val.as_object_mut() {
             if target_format != TargetFormat::Gemini {
                 obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+            }
+            if let Some(m_val) = obj.get_mut("model")
+                && let Some(m_str) = m_val.as_str()
+            {
+                let m_lower = m_str.to_ascii_lowercase();
+                if m_lower == "muse-spark-1.3" || m_lower == "muse-spark-1.3-contributor" {
+                    *m_val = serde_json::Value::String("muse-spark-1.3-contributor-free".to_string());
+                } else if m_lower == "muse-spark-1.2" || m_lower == "muse-spark-1.2-contributor" {
+                    *m_val = serde_json::Value::String("muse-spark-1.2-contributor-free".to_string());
+                }
             }
             inject_opencode_agent_quartet_tools(obj, target_format);
         }

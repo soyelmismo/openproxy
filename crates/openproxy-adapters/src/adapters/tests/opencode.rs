@@ -33,7 +33,15 @@ fn test_classify_opencode_target_format() {
     );
     assert_eq!(
         classify_opencode_target_format(ZEN, "muse-spark-1.3-contributor-free"),
-        TargetFormat::Openai
+        TargetFormat::Responses
+    );
+    assert_eq!(
+        classify_opencode_target_format(ZEN, "muse-spark-1.3"),
+        TargetFormat::Responses
+    );
+    assert_eq!(
+        classify_opencode_target_format(GO, "muse-spark-1.2"),
+        TargetFormat::Responses
     );
     assert_eq!(
         classify_opencode_target_format(ZEN, "gpt-5.6-terra"),
@@ -257,4 +265,59 @@ fn test_wrap_request_body_free_tier() {
     assert_eq!(parsed["stream"], true);
     let tools = parsed["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 4);
+}
+
+#[test]
+fn test_wrap_request_body_muse_spark_responses() {
+    let adapter = OpenCodeZenAdapter::new();
+    let target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ids::ComboTargetId(0),
+            combo_id: openproxy_types::ids::ComboId(0),
+            provider_id: openproxy_types::ids::ProviderId::new("opencode-zen"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 1,
+            active: true,
+            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+        },
+        model: openproxy_types::models::Model {
+            row_id: openproxy_types::ids::ModelRowId(1),
+            provider_id: openproxy_types::ids::ProviderId::new("opencode-zen"),
+            model_id: openproxy_types::ids::ModelId::new("muse-spark-1.3"),
+            target_format: TargetFormat::Responses,
+            ..Default::default()
+        },
+        api_key: "public".into(),
+        api_key_label: None,
+        custom_meta: None,
+    };
+
+    let initial_body = bytes::Bytes::from(
+        r#"{"model":"muse-spark-1.3","input":[{"role":"user","content":"hi"}],"stream":false}"#,
+    );
+    let wrapped = adapter
+        .wrap_request_body(
+            initial_body,
+            TargetFormat::Responses,
+            &target.model.model_id,
+            &target,
+        )
+        .unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    assert_eq!(parsed["stream"], true);
+    assert_eq!(parsed["model"], "muse-spark-1.3-contributor-free");
+    let tools = parsed["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 4);
+    // Responses tools format: {"type": "function", "name": "bash", ...}
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["name"], "bash");
 }

@@ -17,6 +17,13 @@ pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
         if body.contains("2013") || body.contains("function name or parameters is empty") {
             return UpstreamErrorClass::MalformedToolCall;
         }
+        let lower = body.to_ascii_lowercase();
+        if lower.contains("model is unavailable")
+            || lower.contains("upstream request failed")
+            || lower.contains("is not supported")
+        {
+            return UpstreamErrorClass::ResourceExhausted;
+        }
         if !body.is_empty()
             && (body.contains("Base64")
                 || body.contains("base64")
@@ -144,6 +151,25 @@ mod tests {
                 r#"{"error":{"message":"Input required: specify \"prompt\" or \"messages\"","code":400},"user_id":"org_123"}"#,
             ),
             UpstreamErrorClass::InvalidPayload
+        );
+    }
+
+    #[test]
+    fn classification_400_masked_upstream_failure() {
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                r#"{"type":"error","error":{"type":"api_error","message":"Error from provider (Console): Upstream request failed: Model is unavailable."}}"#,
+            ),
+            UpstreamErrorClass::ResourceExhausted
+        );
+        assert_eq!(
+            classify_upstream_error(400, "Upstream request failed: Model is unavailable."),
+            UpstreamErrorClass::ResourceExhausted
+        );
+        assert_eq!(
+            classify_upstream_error(400, "The requested model is not supported."),
+            UpstreamErrorClass::ResourceExhausted
         );
     }
 
