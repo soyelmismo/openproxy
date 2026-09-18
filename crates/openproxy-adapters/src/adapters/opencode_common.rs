@@ -226,9 +226,11 @@ impl OpenCodeAdapter {
             {
                 let m_lower = m_str.to_ascii_lowercase();
                 if m_lower == "muse-spark-1.3" || m_lower == "muse-spark-1.3-contributor" {
-                    *m_val = serde_json::Value::String("muse-spark-1.3-contributor-free".to_string());
+                    *m_val =
+                        serde_json::Value::String("muse-spark-1.3-contributor-free".to_string());
                 } else if m_lower == "muse-spark-1.2" || m_lower == "muse-spark-1.2-contributor" {
-                    *m_val = serde_json::Value::String("muse-spark-1.2-contributor-free".to_string());
+                    *m_val =
+                        serde_json::Value::String("muse-spark-1.2-contributor-free".to_string());
                 }
             }
             inject_opencode_agent_quartet_tools(obj, target_format);
