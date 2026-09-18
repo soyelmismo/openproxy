@@ -131,6 +131,9 @@ pub fn reset_dynamic_opencode_overrides() {
     }
 }
 
+#[cfg(test)]
+pub(crate) static OPENCODE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static OPENCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
     let Ok(env_str) = std::env::var("OPENPROXY_OPENCODE_EXTRA_HEADERS") else {
         return Vec::new();

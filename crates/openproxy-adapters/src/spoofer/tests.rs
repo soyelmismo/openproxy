@@ -50,10 +50,18 @@ fn test_opencode_spoofer() {
 
     // Static headers preserved as-is.
     for &(k, v) in OPENCODE_SPOOFING_HEADERS {
-        assert!(
-            headers.iter().any(|(name, val)| name == k && val == v),
-            "missing static header {k}={v}"
-        );
+        if k == "User-Agent" {
+            let cur_ua = current_opencode_ua();
+            assert!(
+                headers.iter().any(|(name, val)| name == k && val == &cur_ua),
+                "missing dynamic header {k}={cur_ua}"
+            );
+        } else {
+            assert!(
+                headers.iter().any(|(name, val)| name == k && val == v),
+                "missing static header {k}={v}"
+            );
+        }
     }
 
     // Dynamic session/request IDs follow ses_/msg_ + 12 hex + 14 Base62 chars.
@@ -116,7 +124,7 @@ fn test_opencode_spoofer_apply_to_request() {
     );
     assert_eq!(
         req.headers.get("User-Agent").unwrap(),
-        HeaderValue::from_str(OPENCODE_UA).unwrap()
+        current_opencode_ua().as_str()
     );
     assert!(req.headers.get("opencode-version").is_none());
     assert!(req.headers.get("openai-beta").is_none());
@@ -178,7 +186,7 @@ fn test_opencode_apply_to_header_map_upgrades_and_preserves() {
 
     assert_eq!(
         req1.headers.get(http::header::USER_AGENT).unwrap(),
-        HeaderValue::from_static(OPENCODE_UA)
+        current_opencode_ua().as_str()
     );
     let session1 = req1
         .headers
@@ -230,6 +238,7 @@ fn test_opencode_apply_to_header_map_upgrades_and_preserves() {
 
 #[test]
 fn test_opencode_dynamic_version_and_extra_headers() {
+    let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
     reset_dynamic_opencode_overrides();
 
     assert_eq!(current_opencode_version(), "1.19.0");

@@ -270,3 +270,36 @@ async fn count_tokens_propagates_4xx() {
         "body should be in msg: {err}"
     );
 }
+
+#[test]
+fn test_antigravity_adapter_build_headers_with_extra_and_dynamic_overrides() {
+    use crate::adapters::ProviderAdapter;
+    use crate::antigravity_headers::{
+        reset_dynamic_overrides, set_dynamic_extra_header, set_dynamic_version,
+    };
+
+    reset_dynamic_overrides();
+    let mut a = AntigravityAdapter::new();
+    let cfg = a.config_mut().expect("config_mut");
+    cfg.extra_headers.push(("x-admin-injected".into(), "true".into()));
+    cfg.extra_headers.push(("x-goog-user-project".into(), "override-proj".into()));
+
+    set_dynamic_version("4.9.0");
+    set_dynamic_extra_header("x-antigravity-custom-edge", "edge-val");
+
+    let headers = a.build_headers("ya29.test", TargetFormat::Gemini, &ModelId::new("gemini-1.5-pro"));
+    let get = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    assert_eq!(get("authorization"), Some("Bearer ya29.test"));
+    assert_eq!(get("x-admin-injected"), Some("true"));
+    assert_eq!(get("x-goog-user-project"), Some("override-proj"));
+    assert_eq!(get("x-client-version"), Some("4.9.0"));
+    assert_eq!(get("x-antigravity-custom-edge"), Some("edge-val"));
+
+    reset_dynamic_overrides();
+}

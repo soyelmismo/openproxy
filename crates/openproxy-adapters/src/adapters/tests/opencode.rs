@@ -326,9 +326,10 @@ fn test_wrap_request_body_muse_spark_responses() {
 fn test_opencode_dynamic_headers_and_config_mut() {
     use crate::spoofer::{
         current_opencode_ua, current_opencode_version, reset_dynamic_opencode_overrides,
-        set_dynamic_opencode_extra_header, set_dynamic_opencode_version,
+        set_dynamic_opencode_extra_header, set_dynamic_opencode_version, OPENCODE_TEST_LOCK,
     };
 
+    let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
     reset_dynamic_opencode_overrides();
     assert_eq!(current_opencode_version(), "1.19.0");
 
