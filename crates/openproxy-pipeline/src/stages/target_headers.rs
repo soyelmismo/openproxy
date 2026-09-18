@@ -161,6 +161,7 @@ pub fn propagate_antigravity_headers(
 ///
 /// Forwards `anthropic-beta` (for prompt caching & extended output), `x-mavis-*`,
 /// `minimax-*`, and custom client headers while strictly preserving auth credentials.
+/// If downstream passes session or conversation IDs, formats and preserves `x-mavis-session-id`.
 pub fn propagate_minimax_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
@@ -171,25 +172,49 @@ pub fn propagate_minimax_headers(
             || starts_with_ignore_ascii_case(k, "x-minimax-")
             || starts_with_ignore_ascii_case(k, "minimax-")
     });
+
+    // Dynamic session continuity: if downstream supplies session or conversation ID, bind to x-mavis-session-id
+    if let Some((_, v)) = request_headers.iter().find(|(k, _)| {
+        k.eq_ignore_ascii_case("x-session-id")
+            || k.eq_ignore_ascii_case("session-id")
+            || k.eq_ignore_ascii_case("x-conversation-id")
+    }) && !v.trim().is_empty()
+    {
+        let clean = v.trim();
+        let session_val = if clean.starts_with("session_") {
+            clean.to_string()
+        } else {
+            format!("session_{clean}")
+        };
+        upsert_header(headers, "x-mavis-session-id", session_val);
+    }
 }
 
 /// Propagate downstream client headers for Cline.
 ///
-/// Forwards `x-cline-*`, `cline-*`, and custom client headers
-/// while strictly preserving auth credentials and standard structure.
+/// Forwards `x-cline-*`, `cline-*`, and canonical IDE context headers (`x-platform`,
+/// `x-platform-version`, `x-client-version`, `x-client-type`, `x-core-version`, `x-is-multiroot`)
+/// so live Cline extensions dynamically override defaults while strictly preserving auth credentials.
 pub fn propagate_cline_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
     propagate_matching_headers(headers, request_headers, |k| {
-        starts_with_ignore_ascii_case(k, "x-cline-") || starts_with_ignore_ascii_case(k, "cline-")
+        starts_with_ignore_ascii_case(k, "x-cline-")
+            || starts_with_ignore_ascii_case(k, "cline-")
+            || k.eq_ignore_ascii_case("x-platform")
+            || k.eq_ignore_ascii_case("x-platform-version")
+            || k.eq_ignore_ascii_case("x-client-version")
+            || k.eq_ignore_ascii_case("x-client-type")
+            || k.eq_ignore_ascii_case("x-core-version")
+            || k.eq_ignore_ascii_case("x-is-multiroot")
     });
 }
 
 /// Propagate downstream client headers for Kilocode.
 ///
-/// Forwards `x-kilocode-*`, `kilocode-*`, and custom client headers
-/// while strictly preserving auth credentials and standard structure.
+/// Forwards `x-kilocode-*`, `kilocode-*`, and client identity headers (`x-client-version`,
+/// `x-client-type`, `x-title`, `http-referer`) so live Kilocode tools dynamically override defaults.
 pub fn propagate_kilocode_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
@@ -197,13 +222,17 @@ pub fn propagate_kilocode_headers(
     propagate_matching_headers(headers, request_headers, |k| {
         starts_with_ignore_ascii_case(k, "x-kilocode-")
             || starts_with_ignore_ascii_case(k, "kilocode-")
+            || k.eq_ignore_ascii_case("x-client-version")
+            || k.eq_ignore_ascii_case("x-client-type")
+            || k.eq_ignore_ascii_case("x-title")
+            || k.eq_ignore_ascii_case("http-referer")
     });
 }
 
 /// Propagate downstream client headers for Codex.
 ///
-/// Forwards `x-codex-*`, `codex-*`, and `chatgpt-account-id`
-/// while strictly preserving auth credentials and standard structure.
+/// Forwards `x-codex-*`, `codex-*`, `chatgpt-account-id`, and CLI identity headers
+/// (`originator`, `version`, `origin`) while strictly preserving auth credentials.
 pub fn propagate_codex_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
@@ -212,6 +241,9 @@ pub fn propagate_codex_headers(
         starts_with_ignore_ascii_case(k, "x-codex-")
             || starts_with_ignore_ascii_case(k, "codex-")
             || k.eq_ignore_ascii_case("chatgpt-account-id")
+            || k.eq_ignore_ascii_case("originator")
+            || k.eq_ignore_ascii_case("version")
+            || k.eq_ignore_ascii_case("origin")
     });
 }
 
@@ -230,6 +262,9 @@ mod tests {
         let mut req_headers = std::collections::BTreeMap::new();
         req_headers.insert("x-cline-task-id".into(), "task-999".into());
         req_headers.insert("cline-mode".into(), "act".into());
+        req_headers.insert("x-platform".into(), "Visual Studio Code".into());
+        req_headers.insert("x-client-version".into(), "4.2.0".into());
+        req_headers.insert("x-is-multiroot".into(), "true".into());
         req_headers.insert("authorization".into(), "override-hack".into());
 
         propagate_cline_headers(&mut headers, &req_headers);
@@ -243,6 +278,9 @@ mod tests {
 
         assert_eq!(find("x-cline-task-id"), Some("task-999"));
         assert_eq!(find("cline-mode"), Some("act"));
+        assert_eq!(find("x-platform"), Some("Visual Studio Code"));
+        assert_eq!(find("x-client-version"), Some("4.2.0"));
+        assert_eq!(find("x-is-multiroot"), Some("true"));
         assert_eq!(find("Authorization"), Some("Bearer secret"));
     }
 
@@ -257,6 +295,7 @@ mod tests {
         req_headers.insert("x-kilocode-taskid".into(), "task-kilo-123".into());
         req_headers.insert("x-kilocode-feature".into(), "openclaw".into());
         req_headers.insert("kilocode-org".into(), "kilo-team".into());
+        req_headers.insert("x-client-version".into(), "5.0.1".into());
         req_headers.insert("authorization".into(), "override-hack".into());
 
         propagate_kilocode_headers(&mut headers, &req_headers);
@@ -271,6 +310,7 @@ mod tests {
         assert_eq!(find("x-kilocode-taskid"), Some("task-kilo-123"));
         assert_eq!(find("x-kilocode-feature"), Some("openclaw"));
         assert_eq!(find("kilocode-org"), Some("kilo-team"));
+        assert_eq!(find("x-client-version"), Some("5.0.1"));
         assert_eq!(find("Authorization"), Some("Bearer kl-secret"));
     }
 
@@ -286,6 +326,8 @@ mod tests {
         req_headers.insert("x-codex-session".into(), "ses-codex-1".into());
         req_headers.insert("chatgpt-account-id".into(), "ws-team-456".into());
         req_headers.insert("codex-subaction".into(), "lint".into());
+        req_headers.insert("originator".into(), "codex_exec".into());
+        req_headers.insert("version".into(), "0.150.0".into());
         req_headers.insert("authorization".into(), "override-hack".into());
 
         propagate_codex_headers(&mut headers, &req_headers);
@@ -300,6 +342,8 @@ mod tests {
         assert_eq!(find("x-codex-session"), Some("ses-codex-1"));
         assert_eq!(find("chatgpt-account-id"), Some("ws-team-456"));
         assert_eq!(find("codex-subaction"), Some("lint"));
+        assert_eq!(find("originator"), Some("codex_exec"));
+        assert_eq!(find("version"), Some("0.150.0"));
         assert_eq!(find("Authorization"), Some("Bearer codex-tok"));
     }
 
@@ -314,6 +358,7 @@ mod tests {
         req_headers.insert("anthropic-beta".into(), "prompt-caching-2024-07-31".into());
         req_headers.insert("x-mavis-agent-id".into(), "custom-agent".into());
         req_headers.insert("x-minimax-feature".into(), "v2".into());
+        req_headers.insert("x-conversation-id".into(), "conv-abc-789".into());
         req_headers.insert("authorization".into(), "override-hack".into());
 
         propagate_minimax_headers(&mut headers, &req_headers);
@@ -328,6 +373,8 @@ mod tests {
         assert_eq!(find("anthropic-beta"), Some("prompt-caching-2024-07-31"));
         assert_eq!(find("x-mavis-agent-id"), Some("custom-agent"));
         assert_eq!(find("x-minimax-feature"), Some("v2"));
+        assert_eq!(find("x-mavis-session-id"), Some("session_conv-abc-789"));
+        assert_eq!(find("x-api-key"), Some("secret"));
         assert_eq!(find("authorization"), None);
     }
 

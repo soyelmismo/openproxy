@@ -40,8 +40,8 @@ pub fn reset_dynamic_kilocode_overrides() {
     KILOCODE_OVERRIDES.reset();
 }
 
-#[cfg(test)]
-pub(crate) static KILOCODE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(any(test, feature = "test-utils"))]
+pub static KILOCODE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 static KILOCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
     std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_KILOCODE_EXTRA_HEADERS"));

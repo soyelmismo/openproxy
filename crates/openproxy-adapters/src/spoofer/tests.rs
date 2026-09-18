@@ -482,3 +482,47 @@ fn test_antigravity_spoofer_apply_to_request() {
     assert!(req.headers.contains_key("x-machine-id"));
     assert!(req.headers.contains_key("x-vscode-sessionid"));
 }
+
+#[test]
+fn test_minimax_spoofer() {
+    let _guard = MINIMAX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_minimax_overrides();
+
+    let spoofer = MiniMaxSpoofer;
+    let headers = spoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("User-Agent"), Some(current_minimax_ua().as_str()));
+    assert_eq!(find("Anthropic-Version"), Some(current_minimax_anthropic_version().as_str()));
+    assert_eq!(find("X-Mavis-Agent-Id"), Some("main"));
+    assert_eq!(find("X-Mavis-Timezone-Offset"), Some("0"));
+    assert!(find("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
+}
+
+#[test]
+fn test_minimax_dynamic_version_and_extra_headers() {
+    let _guard = MINIMAX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_minimax_overrides();
+
+    assert_eq!(current_minimax_ua(), "MiniMaxAgent");
+    assert_eq!(current_minimax_anthropic_version(), "2023-06-01");
+
+    set_dynamic_minimax_ua("CustomMiniMax/2.0");
+    set_dynamic_minimax_anthropic_version("2024-01-01");
+    set_dynamic_minimax_extra_header("x-custom-attr", "attr-val");
+
+    assert_eq!(current_minimax_ua(), "CustomMiniMax/2.0");
+    assert_eq!(current_minimax_anthropic_version(), "2024-01-01");
+
+    let headers = MiniMaxSpoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("User-Agent"), Some("CustomMiniMax/2.0"));
+    assert_eq!(find("Anthropic-Version"), Some("2024-01-01"));
+    assert_eq!(find("x-custom-attr"), Some("attr-val"));
+
+    reset_dynamic_minimax_overrides();
+    assert_eq!(current_minimax_ua(), "MiniMaxAgent");
+    assert_eq!(current_minimax_anthropic_version(), "2023-06-01");
+}
+

@@ -43,8 +43,8 @@ pub fn reset_dynamic_cline_overrides() {
     CLINE_OVERRIDES.reset();
 }
 
-#[cfg(test)]
-pub(crate) static CLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(any(test, feature = "test-utils"))]
+pub static CLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 static CLINE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
     std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_CLINE_EXTRA_HEADERS"));

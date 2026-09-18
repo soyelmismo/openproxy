@@ -15,6 +15,9 @@ use openproxy_core::oauth::minimax::{
 
 #[test]
 fn test_minimax_golden_contract_spec_parity() {
+    let _guard = openproxy_adapters::spoofer::MINIMAX_TEST_LOCK.lock().unwrap();
+    openproxy_adapters::spoofer::reset_dynamic_minimax_overrides();
+
     // 1. OAuth client identity
     assert_eq!(CLIENT_ID, "mcode-public");
     assert_eq!(SCOPE, "agent.default");
@@ -416,5 +419,84 @@ async fn test_minimax_remote_upstream_live_contract_parity() {
         "[ContractTest] 100% 1:1 Parity verified across all MiniMax subsystems (OAuth, Matrix, Quota, Check-in, LLM, Models, {} Headers) against live MiniMax-AI/minimax-code main branch!",
         scanned_headers.len()
     );
+}
+
+#[test]
+fn test_minimax_dynamic_spoofer_and_endpoint_resolution() {
+    use openproxy_adapters::spoofer::{
+        ClientSpoofer, MINIMAX_TEST_LOCK, MiniMaxSpoofer, reset_dynamic_minimax_overrides,
+        set_dynamic_minimax_anthropic_version, set_dynamic_minimax_extra_header,
+        set_dynamic_minimax_ua,
+    };
+
+    let _guard = MINIMAX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_minimax_overrides();
+
+    // 1. Default MiniMaxSpoofer contract verification
+    let spoofer = MiniMaxSpoofer;
+    let headers = spoofer.headers();
+    let find_hdr = |k: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    assert_eq!(find_hdr("User-Agent"), Some("MiniMaxAgent"));
+    assert_eq!(find_hdr("Anthropic-Version"), Some("2023-06-01"));
+    assert_eq!(find_hdr("X-Mavis-Agent-Id"), Some("main"));
+    assert_eq!(find_hdr("X-Mavis-Timezone-Offset"), Some("0"));
+    assert!(
+        find_hdr("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")),
+        "MiniMaxSpoofer must generate a valid session ID"
+    );
+
+    // 2. Dynamic in-memory spoofer overrides verification
+    set_dynamic_minimax_ua("MiniMaxAgent-Custom/2.5");
+    set_dynamic_minimax_anthropic_version("2024-01-01");
+    set_dynamic_minimax_extra_header("X-Mavis-Agent-Id", "openproxy-worker");
+    set_dynamic_minimax_extra_header("X-Custom-Pipeline", "turbo");
+
+    let overridden = spoofer.headers();
+    let find_ovr = |k: &str| {
+        overridden
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    assert_eq!(find_ovr("User-Agent"), Some("MiniMaxAgent-Custom/2.5"));
+    assert_eq!(find_ovr("Anthropic-Version"), Some("2024-01-01"));
+    assert_eq!(find_ovr("X-Mavis-Agent-Id"), Some("openproxy-worker"));
+    assert_eq!(find_ovr("X-Custom-Pipeline"), Some("turbo"));
+
+    reset_dynamic_minimax_overrides();
+
+    // 3. Dynamic endpoint and origin resolution verification
+    let region = MiniMaxRegion::Global;
+    assert_eq!(region.account_origin(), "https://account.minimax.io");
+    assert_eq!(region.gateway_origin(), "https://agent.minimax.io");
+
+    // Default without env vars returns canonical origins
+    assert_eq!(region.resolved_account_origin(), "https://account.minimax.io");
+    assert_eq!(region.resolved_gateway_origin(), "https://agent.minimax.io");
+
+    // With dynamic env vars set, resolved origins redirect seamlessly
+    // SAFETY: Single-threaded scope in isolated unit test
+    unsafe {
+        std::env::set_var("OPENPROXY_MINIMAX_ACCOUNT_BASE_URL", "https://mock-account.local");
+        std::env::set_var("OPENPROXY_MINIMAX_GATEWAY_BASE_URL", "https://mock-agent.local");
+    }
+
+    assert_eq!(region.resolved_account_origin(), "https://mock-account.local");
+    assert_eq!(region.resolved_gateway_origin(), "https://mock-agent.local");
+
+    unsafe {
+        std::env::remove_var("OPENPROXY_MINIMAX_ACCOUNT_BASE_URL");
+        std::env::remove_var("OPENPROXY_MINIMAX_GATEWAY_BASE_URL");
+    }
+
+    assert_eq!(region.resolved_account_origin(), "https://account.minimax.io");
+    assert_eq!(region.resolved_gateway_origin(), "https://agent.minimax.io");
 }
 

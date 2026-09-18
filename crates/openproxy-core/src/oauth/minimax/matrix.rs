@@ -31,11 +31,31 @@ impl MiniMaxRegion {
         }
     }
 
+    pub fn resolved_account_origin(self) -> String {
+        if let Ok(env_val) = std::env::var("OPENPROXY_MINIMAX_ACCOUNT_BASE_URL")
+            .or_else(|_| std::env::var("OPENPROXY_MINIMAX_ACCOUNT_ORIGIN"))
+            && !env_val.trim().is_empty()
+        {
+            return env_val.trim().trim_end_matches('/').to_string();
+        }
+        self.account_origin().to_string()
+    }
+
     pub fn gateway_origin(self) -> &'static str {
         match self {
             Self::Global => "https://agent.minimax.io",
             Self::China => "https://agent.minimax.cn",
         }
+    }
+
+    pub fn resolved_gateway_origin(self) -> String {
+        if let Ok(env_val) = std::env::var("OPENPROXY_MINIMAX_GATEWAY_BASE_URL")
+            .or_else(|_| std::env::var("OPENPROXY_MINIMAX_GATEWAY_ORIGIN"))
+            && !env_val.trim().is_empty()
+        {
+            return env_val.trim().trim_end_matches('/').to_string();
+        }
+        self.gateway_origin().to_string()
     }
 
     pub fn platform_origin(self) -> &'static str {

@@ -54,8 +54,8 @@ pub fn reset_dynamic_codex_overrides() {
     CODEX_OVERRIDES.reset();
 }
 
-#[cfg(test)]
-pub(crate) static CODEX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(any(test, feature = "test-utils"))]
+pub static CODEX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 static CODEX_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
     std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_CODEX_EXTRA_HEADERS"));

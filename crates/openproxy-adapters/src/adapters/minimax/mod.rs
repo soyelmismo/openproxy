@@ -4,81 +4,22 @@ use super::{
     UpstreamRequest, fetch_openai_models,
 };
 
-static DYNAMIC_USER_AGENT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
-static DYNAMIC_ANTHROPIC_VERSION: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
-
-/// Set dynamic User-Agent override for MiniMax in memory at runtime.
-pub fn set_dynamic_user_agent(ua: impl Into<String>) {
-    if let Ok(mut lock) = DYNAMIC_USER_AGENT.write() {
-        *lock = Some(ua.into());
-    }
-}
-
-/// Set dynamic Anthropic-Version override for MiniMax in memory at runtime.
-pub fn set_dynamic_anthropic_version(ver: impl Into<String>) {
-    if let Ok(mut lock) = DYNAMIC_ANTHROPIC_VERSION.write() {
-        *lock = Some(ver.into());
-    }
-}
-
-/// Resolve current MiniMax User-Agent string.
-pub fn current_user_agent() -> String {
-    if let Ok(lock) = DYNAMIC_USER_AGENT.read()
-        && let Some(ref ua) = *lock
-    {
-        return ua.clone();
-    }
-    if let Ok(env_ua) = std::env::var("OPENPROXY_MINIMAX_USER_AGENT")
-        && !env_ua.is_empty()
-    {
-        return env_ua;
-    }
-    "MiniMaxAgent".to_string()
-}
-
-/// Resolve current MiniMax Anthropic-Version string.
-pub fn current_anthropic_version() -> String {
-    if let Ok(lock) = DYNAMIC_ANTHROPIC_VERSION.read()
-        && let Some(ref ver) = *lock
-    {
-        return ver.clone();
-    }
-    if let Ok(env_ver) = std::env::var("OPENPROXY_MINIMAX_ANTHROPIC_VERSION")
-        && !env_ver.is_empty()
-    {
-        return env_ver;
-    }
-    "2023-06-01".to_string()
-}
-
-static DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
-    std::sync::RwLock::new(std::collections::BTreeMap::new());
-
-/// Set dynamic extra header override for MiniMax in memory at runtime without recompiling.
-pub fn set_dynamic_extra_header(key: impl Into<String>, val: impl Into<String>) {
-    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
-        lock.insert(key.into(), val.into());
-    }
-}
-
-/// Reset dynamic in-memory overrides for MiniMax (useful for tests and cleanup).
-pub fn reset_dynamic_overrides() {
-    if let Ok(mut lock) = DYNAMIC_USER_AGENT.write() {
-        *lock = None;
-    }
-    if let Ok(mut lock) = DYNAMIC_ANTHROPIC_VERSION.write() {
-        *lock = None;
-    }
-    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
-        lock.clear();
-    }
-}
+pub use crate::spoofer::{
+    MINIMAX_SPOOFING_HEADERS, MiniMaxSpoofer, current_minimax_anthropic_version as current_anthropic_version,
+    current_minimax_ua as current_user_agent, reset_dynamic_minimax_overrides as reset_dynamic_overrides,
+    set_dynamic_minimax_anthropic_version as set_dynamic_anthropic_version,
+    set_dynamic_minimax_extra_header as set_dynamic_extra_header,
+    set_dynamic_minimax_ua as set_dynamic_user_agent,
+};
 
 #[cfg(test)]
-pub(crate) static MINIMAX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) use crate::spoofer::MINIMAX_TEST_LOCK;
 
-static EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
-    std::sync::LazyLock::new(|| crate::spoofer::parse_env_extra_headers("OPENPROXY_MINIMAX_EXTRA_HEADERS"));
+/// Preset static and dynamic client spoofer for MiniMax Coding.
+pub fn apply_minimax_spoofing_headers(req: &mut UpstreamRequest) {
+    use crate::spoofer::ClientSpoofer;
+    MiniMaxSpoofer.apply_to_request(req);
+}
 
 /// Adapter for MiniMax's Anthropic-compatible coding endpoint.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -154,30 +95,14 @@ impl ProviderAdapter for MiniMaxAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers: Vec<(String, String)> =
-            Vec::with_capacity(8 + self.config.extra_headers.len());
+        use crate::spoofer::ClientSpoofer;
+        let mut headers = MiniMaxSpoofer.headers();
         let trimmed = api_key.trim();
         if trimmed.starts_with("sk-") {
-            headers.push(("x-api-key".into(), trimmed.to_string()));
-            headers.push(("Authorization".into(), format!("Bearer {trimmed}")));
+            crate::spoofer::upsert_header(&mut headers, "x-api-key", trimmed);
+            crate::spoofer::upsert_header(&mut headers, "Authorization", format!("Bearer {trimmed}"));
         } else if !trimmed.is_empty() {
-            headers.push(("Authorization".into(), format!("Bearer {trimmed}")));
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        headers.push(("User-Agent".into(), current_user_agent()));
-        headers.push(("Anthropic-Version".into(), current_anthropic_version()));
-        headers.push(("X-Mavis-Agent-Id".into(), "main".into()));
-        headers.push(("X-Mavis-Timezone-Offset".into(), "0".into()));
-        headers.push((
-            "X-Mavis-Session-Id".into(),
-            format!("session_{}", uuid::Uuid::new_v4().simple()),
-        ));
-
-        crate::spoofer::merge_header_refs(&mut headers, &*EXTRA_HEADERS);
-        if let Ok(lock) = DYNAMIC_EXTRA_HEADERS.read() {
-            for (k, v) in lock.iter() {
-                crate::spoofer::upsert_header(&mut headers, k, v.clone());
-            }
+            crate::spoofer::upsert_header(&mut headers, "Authorization", format!("Bearer {trimmed}"));
         }
         crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
         headers

@@ -114,7 +114,7 @@ impl OAuthProvider for MiniMaxOAuthProvider {
         clean_expired_pending_auth();
 
         let region = resolve_default_region();
-        let endpoint = format!("{}/oauth2/device/code", region.account_origin());
+        let endpoint = format!("{}/oauth2/device/code", region.resolved_account_origin());
 
         let verifier = generate_code_verifier();
         let challenge = code_challenge_s256(&verifier);
@@ -186,8 +186,7 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             .get("verification_uri")
             .or_else(|| json.get("verification_url"))
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_else(|| region.account_origin())
-            .to_string();
+            .map_or_else(|| region.resolved_account_origin(), std::string::ToString::to_string);
 
         let verification_uri_complete = json
             .get("verification_uri_complete")
@@ -268,7 +267,7 @@ impl OAuthProvider for MiniMaxOAuthProvider {
                 },
             );
 
-        let endpoint = format!("{}/oauth2/token", region.account_origin());
+        let endpoint = format!("{}/oauth2/token", region.resolved_account_origin());
         let code_key = if uses_user_code { "user_code" } else { "device_code" };
         let code_val = if uses_user_code && !user_code_val.is_empty() {
             user_code_val.as_str()
@@ -378,7 +377,7 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             .and_then(|meta| meta.region)
             .map_or_else(resolve_default_region, |r| MiniMaxRegion::parse_str(&r));
 
-        let endpoint = format!("{}/oauth2/token", region.account_origin());
+        let endpoint = format!("{}/oauth2/token", region.resolved_account_origin());
 
         let params = [
             ("grant_type", "refresh_token"),

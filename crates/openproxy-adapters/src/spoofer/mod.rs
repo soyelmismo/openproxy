@@ -82,6 +82,14 @@ impl DynamicHeaderOverrides {
         }
     }
 
+    pub fn current_extra_header(&self, key: &str) -> Option<String> {
+        if let Ok(guard) = self.extra_headers.read() {
+            guard.get(key).cloned()
+        } else {
+            None
+        }
+    }
+
     pub fn reset(&self) {
         if let Ok(mut guard) = self.version.write() {
             *guard = None;
@@ -136,12 +144,14 @@ pub mod antigravity;
 pub mod cline;
 pub mod codex;
 pub mod kilocode;
+pub mod minimax;
 pub mod opencode;
 
 pub use antigravity::*;
 pub use cline::*;
 pub use codex::*;
 pub use kilocode::*;
+pub use minimax::*;
 pub use opencode::*;
 
 #[cfg(test)]

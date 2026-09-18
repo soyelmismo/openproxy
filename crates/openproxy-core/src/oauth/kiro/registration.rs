@@ -12,6 +12,52 @@ pub const REGISTER_URL: &str = "https://oidc.us-east-1.amazonaws.com/client/regi
 pub const DEVICE_AUTH_URL: &str = "https://oidc.us-east-1.amazonaws.com/device_authorization";
 pub const TOKEN_URL: &str = "https://oidc.us-east-1.amazonaws.com/token";
 
+pub fn kiro_oidc_base_url(region: Option<&str>) -> String {
+    if let Ok(base) = std::env::var("OPENPROXY_KIRO_OIDC_BASE_URL")
+        && !base.trim().is_empty()
+    {
+        return base.trim().trim_end_matches('/').to_string();
+    }
+    let reg = region
+        .filter(|r| !r.is_empty())
+        .map_or_else(super::profiles::default_region, std::string::ToString::to_string);
+    format!("https://oidc.{reg}.amazonaws.com")
+}
+
+pub fn kiro_register_url(region: Option<&str>) -> String {
+    if let Ok(url) = std::env::var("OPENPROXY_KIRO_REGISTER_URL")
+        && !url.trim().is_empty()
+    {
+        return url;
+    }
+    format!("{}/client/register", kiro_oidc_base_url(region))
+}
+
+pub fn kiro_device_auth_url(region: Option<&str>) -> String {
+    if let Ok(url) = std::env::var("OPENPROXY_KIRO_DEVICE_AUTH_URL")
+        && !url.trim().is_empty()
+    {
+        return url;
+    }
+    format!("{}/device_authorization", kiro_oidc_base_url(region))
+}
+
+pub fn kiro_token_url(region: Option<&str>) -> String {
+    if let Ok(url) = std::env::var("OPENPROXY_KIRO_TOKEN_URL")
+        && !url.trim().is_empty()
+    {
+        return url;
+    }
+    format!("{}/token", kiro_oidc_base_url(region))
+}
+
+pub fn kiro_social_token_url() -> String {
+    std::env::var("OPENPROXY_KIRO_SOCIAL_TOKEN_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken".to_string())
+}
+
 pub const SCOPES: &[&str] = &[
     "codewhisperer:completions",
     "codewhisperer:analysis",
@@ -83,7 +129,7 @@ pub(crate) async fn register_oidc_client(
         ],
     })
     .map_err(|e| CoreError::Parse(format!("kiro register serialize: {e}")))?;
-    let register_url = format!("https://oidc.{region}.amazonaws.com/client/register");
+    let register_url = kiro_register_url(Some(region));
     let register_req = UpstreamRequest::post_json(&register_url, bytes::Bytes::from(register_body));
 
     let cancel = CancellationToken::new();

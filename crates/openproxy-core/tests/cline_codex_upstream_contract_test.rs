@@ -8,9 +8,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openproxy_adapters::spoofer::{
-    CLINE_SPOOFING_HEADERS, ClientSpoofer, ClineSpoofer, CodexSpoofer, KilocodeSpoofer,
-    current_cline_ua, current_cline_version, current_codex_ua, current_codex_version,
-    current_kilocode_ua, current_kilocode_version,
+    CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer, ClineSpoofer,
+    CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua, current_cline_version,
+    current_codex_ua, current_codex_version, current_kilocode_ua, current_kilocode_version,
+    reset_dynamic_cline_overrides, reset_dynamic_codex_overrides, reset_dynamic_kilocode_overrides,
 };
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
@@ -32,6 +33,8 @@ use std::path::Path;
 
 #[test]
 fn test_cline_offline_upstream_code_parity() {
+    let _guard = CLINE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_cline_overrides();
     let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
     let cline_auth_path = Path::new(&base_dir).join("../../other_projects_examples/cline/sdk/packages/core/src/auth/cline.ts");
     let cline_env_path = Path::new(&base_dir).join("../../other_projects_examples/cline/apps/vscode/src/services/EnvUtils.ts");
@@ -116,6 +119,8 @@ fn test_cline_offline_upstream_code_parity() {
 
 #[test]
 fn test_codex_offline_upstream_code_parity() {
+    let _guard = CODEX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_codex_overrides();
     let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
     let codex_auth_path = Path::new(&base_dir).join("../../other_projects_examples/cline/sdk/packages/core/src/auth/codex.ts");
 
@@ -312,6 +317,8 @@ async fn test_kilocode_remote_upstream_repo_code_drift_detection() {
     );
 
     // Verify KilocodeSpoofer outputs expected headers matching upstream
+    let _guard_k = KILOCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_kilocode_overrides();
     let headers = KilocodeSpoofer.headers();
     let find_hdr = |name: &str| {
         headers
@@ -326,4 +333,172 @@ async fn test_kilocode_remote_upstream_repo_code_drift_detection() {
     assert_eq!(find_hdr("x-kilocode-version"), Some(current_kilocode_version().as_str()));
     assert_eq!(find_hdr("x-client-version"), Some(current_kilocode_version().as_str()));
     assert_eq!(find_hdr("x-client-type"), Some("VSCode Extension"));
+    drop(_guard_k);
+}
+
+#[test]
+fn test_cline_codex_kilocode_dynamic_spoofer_overrides() {
+    use openproxy_adapters::spoofer::{
+        reset_dynamic_cline_overrides, reset_dynamic_codex_overrides,
+        reset_dynamic_kilocode_overrides, set_dynamic_cline_extra_header,
+        set_dynamic_cline_version, set_dynamic_codex_extra_header,
+        set_dynamic_codex_version, set_dynamic_kilocode_extra_header,
+        set_dynamic_kilocode_version,
+    };
+
+    let _guard_cline = CLINE_TEST_LOCK.lock().unwrap();
+    let _guard_codex = CODEX_TEST_LOCK.lock().unwrap();
+    let _guard_kilo = KILOCODE_TEST_LOCK.lock().unwrap();
+
+    // 1. Dynamic Cline spoofer
+    reset_dynamic_cline_overrides();
+    set_dynamic_cline_version("3.8.0");
+    set_dynamic_cline_extra_header("user-agent", "Cline-Bot-Runner/3.8.0");
+    set_dynamic_cline_extra_header("x-platform", "darwin");
+    set_dynamic_cline_extra_header("x-custom-engine", "fast");
+
+    let cline_headers = ClineSpoofer.headers();
+    let find_cline = |k: &str| {
+        cline_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_cline("user-agent"), Some("Cline-Bot-Runner/3.8.0"));
+    assert_eq!(find_cline("x-client-version"), Some("3.8.0"));
+    assert_eq!(find_cline("x-platform"), Some("darwin"));
+    assert_eq!(find_cline("x-custom-engine"), Some("fast"));
+    reset_dynamic_cline_overrides();
+
+    // 2. Dynamic Codex spoofer
+    reset_dynamic_codex_overrides();
+    set_dynamic_codex_version("0.160.0");
+    set_dynamic_codex_extra_header("user-agent", "Codex-CLI-Mock/0.160.0");
+    set_dynamic_codex_extra_header("chatgpt-account-id", "acc-enterprise-99");
+
+    let codex_headers = CodexSpoofer.headers();
+    let find_codex = |k: &str| {
+        codex_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_codex("user-agent"), Some("Codex-CLI-Mock/0.160.0"));
+    assert_eq!(find_codex("version"), Some("0.160.0"));
+    assert_eq!(find_codex("chatgpt-account-id"), Some("acc-enterprise-99"));
+    reset_dynamic_codex_overrides();
+
+    // 3. Dynamic Kilocode spoofer
+    reset_dynamic_kilocode_overrides();
+    set_dynamic_kilocode_version("0.18.0");
+    set_dynamic_kilocode_extra_header("user-agent", "KiloCode-Editor/0.18.0");
+    set_dynamic_kilocode_extra_header("x-kilocode-session", "sess-kilo-123");
+
+    let kilo_headers = KilocodeSpoofer.headers();
+    let find_kilo = |k: &str| {
+        kilo_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_kilo("user-agent"), Some("KiloCode-Editor/0.18.0"));
+    assert_eq!(find_kilo("x-kilocode-version"), Some("0.18.0"));
+    assert_eq!(find_kilo("x-client-version"), Some("0.18.0"));
+    assert_eq!(find_kilo("x-kilocode-session"), Some("sess-kilo-123"));
+    reset_dynamic_kilocode_overrides();
+}
+
+#[test]
+fn test_oauth_dynamic_endpoint_resolution_generic_and_kiro() {
+    use openproxy_core::oauth::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
+    use openproxy_core::oauth::kiro::{
+        kiro_device_auth_url, kiro_register_url, kiro_social_token_url, kiro_token_url,
+    };
+    use openproxy_core::oauth::OAuthFlow;
+
+    // 1. GenericOAuthProvider Antigravity resolution
+    let spec = OAuthSpec {
+        id: "antigravity",
+        flow: OAuthFlow::AuthorizationCode,
+        authorize_url: Some("https://accounts.google.com/o/oauth2/v2/auth"),
+        token_url: "https://oauth2.googleapis.com/token",
+        device_authorization_url: None,
+        client_id_env: None,
+        client_id_default: "test",
+        client_secret_env: None,
+        client_secret_default: None,
+        scopes: &["openid"],
+        auth_extra_params: &[],
+        request_encoding: OAuthRequestEncoding::FormUrlEncoded,
+        user_agent: None,
+    };
+    let ag = GenericOAuthProvider::new(spec);
+    assert_eq!(ag.spec().token_url, "https://oauth2.googleapis.com/token");
+    assert_eq!(ag.resolved_token_url(), "https://oauth2.googleapis.com/token");
+
+    // SAFETY: isolated test verification
+    unsafe {
+        std::env::set_var("OPENPROXY_ANTIGRAVITY_TOKEN_URL", "https://mock-google.local/token");
+    }
+    assert_eq!(ag.resolved_token_url(), "https://mock-google.local/token");
+    unsafe {
+        std::env::remove_var("OPENPROXY_ANTIGRAVITY_TOKEN_URL");
+    }
+    assert_eq!(ag.resolved_token_url(), "https://oauth2.googleapis.com/token");
+
+    // 2. Kiro dynamic URL resolution
+    assert_eq!(
+        kiro_register_url(None),
+        "https://oidc.us-east-1.amazonaws.com/client/register"
+    );
+    assert_eq!(
+        kiro_device_auth_url(None),
+        "https://oidc.us-east-1.amazonaws.com/device_authorization"
+    );
+    assert_eq!(
+        kiro_token_url(None),
+        "https://oidc.us-east-1.amazonaws.com/token"
+    );
+    assert_eq!(
+        kiro_social_token_url(),
+        "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"
+    );
+
+    // Dynamic OIDC base URL and social token URL overrides
+    unsafe {
+        std::env::set_var("OPENPROXY_KIRO_OIDC_BASE_URL", "https://mock-oidc.local");
+        std::env::set_var(
+            "OPENPROXY_KIRO_SOCIAL_TOKEN_URL",
+            "https://mock-social.local/refresh",
+        );
+    }
+
+    assert_eq!(
+        kiro_register_url(None),
+        "https://mock-oidc.local/client/register"
+    );
+    assert_eq!(
+        kiro_device_auth_url(None),
+        "https://mock-oidc.local/device_authorization"
+    );
+    assert_eq!(kiro_token_url(None), "https://mock-oidc.local/token");
+    assert_eq!(kiro_social_token_url(), "https://mock-social.local/refresh");
+
+    unsafe {
+        std::env::remove_var("OPENPROXY_KIRO_OIDC_BASE_URL");
+        std::env::remove_var("OPENPROXY_KIRO_SOCIAL_TOKEN_URL");
+    }
+
+    assert_eq!(
+        kiro_register_url(None),
+        "https://oidc.us-east-1.amazonaws.com/client/register"
+    );
+    assert_eq!(
+        kiro_device_auth_url(None),
+        "https://oidc.us-east-1.amazonaws.com/device_authorization"
+    );
+    assert_eq!(
+        kiro_token_url(None),
+        "https://oidc.us-east-1.amazonaws.com/token"
+    );
 }

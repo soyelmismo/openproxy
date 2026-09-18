@@ -35,7 +35,24 @@ impl Default for KiroProviderMeta {
 }
 
 pub(crate) fn default_region() -> String {
-    DEFAULT_REGION.to_string()
+    std::env::var("OPENPROXY_KIRO_REGION")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("AWS_REGION").ok().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| DEFAULT_REGION.to_string())
+}
+
+pub fn kiro_codewhisperer_host(region: &str) -> String {
+    if let Ok(host) = std::env::var("OPENPROXY_KIRO_HOST")
+        && !host.trim().is_empty()
+    {
+        return host.trim().trim_end_matches('/').to_string();
+    }
+    if region == "us-east-1" {
+        "https://codewhisperer.us-east-1.amazonaws.com".to_string()
+    } else {
+        format!("https://q.{region}.amazonaws.com")
+    }
 }
 
 pub(crate) async fn list_available_profiles(
@@ -48,11 +65,7 @@ pub(crate) async fn list_available_profiles(
     } else {
         region
     };
-    let host = if region == "us-east-1" {
-        "https://codewhisperer.us-east-1.amazonaws.com".to_string()
-    } else {
-        format!("https://q.{region}.amazonaws.com")
-    };
+    let host = kiro_codewhisperer_host(region);
     let url = format!("{host}/");
 
     let body = serde_json::json!({ "maxResults": 10 });

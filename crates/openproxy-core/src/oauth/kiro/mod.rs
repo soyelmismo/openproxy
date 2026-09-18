@@ -84,8 +84,9 @@ impl OAuthProvider for KiroOAuthProvider {
             ],
         })
         .map_err(|e| CoreError::Parse(format!("kiro register serialize: {e}")))?;
+        let register_url = kiro_register_url(None);
         let register_req =
-            UpstreamRequest::post_json(REGISTER_URL, bytes::Bytes::from(register_body));
+            UpstreamRequest::post_json(&register_url, bytes::Bytes::from(register_body));
 
         let cancel = CancellationToken::new();
         let register_response = upstream_client
@@ -119,8 +120,9 @@ impl OAuthProvider for KiroOAuthProvider {
         });
         let auth_body_bytes = serde_json::to_vec(&auth_body)
             .map_err(|e| CoreError::Parse(format!("kiro device auth serialize: {e}")))?;
+        let auth_url = kiro_device_auth_url(None);
         let device_auth_req =
-            UpstreamRequest::post_json(DEVICE_AUTH_URL, bytes::Bytes::from(auth_body_bytes));
+            UpstreamRequest::post_json(&auth_url, bytes::Bytes::from(auth_body_bytes));
 
         let device_auth_response = upstream_client
             .call(
@@ -181,7 +183,8 @@ impl OAuthProvider for KiroOAuthProvider {
         });
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| CoreError::Parse(format!("kiro device poll serialize: {e}")))?;
-        let req = UpstreamRequest::post_json(TOKEN_URL, bytes::Bytes::from(body_bytes));
+        let tok_url = kiro_token_url(None);
+        let req = UpstreamRequest::post_json(&tok_url, bytes::Bytes::from(body_bytes));
 
         let cancel = CancellationToken::new();
         let response = upstream_client
@@ -231,19 +234,19 @@ impl OAuthProvider for KiroOAuthProvider {
         } else {
             meta.region.as_str()
         };
-        let token_url = format!("https://oidc.{region}.amazonaws.com/token");
+        let token_url = kiro_token_url(Some(region));
 
         if meta.auth_method.as_deref() == Some("imported")
             || (meta.client_id.is_empty() && meta.client_secret.is_empty())
         {
-            let social_token_url = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken";
+            let social_token_url = kiro_social_token_url();
             let body = serde_json::json!({
                 "refreshToken": refresh_token,
             });
             let body_bytes = serde_json::to_vec(&body).map_err(|e| {
                 CoreError::Parse(format!("kiro social token refresh serialize: {e}"))
             })?;
-            let req = UpstreamRequest::post_json(social_token_url, bytes::Bytes::from(body_bytes));
+            let req = UpstreamRequest::post_json(&social_token_url, bytes::Bytes::from(body_bytes));
 
             let cancel = CancellationToken::new();
             let response = upstream_client
