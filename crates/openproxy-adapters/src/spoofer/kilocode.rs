@@ -1,5 +1,6 @@
-use super::ClientSpoofer;
-use http::HeaderValue;
+use super::{
+    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
+};
 
 pub const DEFAULT_KILOCODE_VERSION: &str = "4.108.0";
 
@@ -12,23 +13,11 @@ pub const KILOCODE_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("x-client-version", "4.108.0"),
 ];
 
-static KILOCODE_DYNAMIC_VERSION: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
-static KILOCODE_DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
-    std::sync::RwLock::new(std::collections::BTreeMap::new());
+static KILOCODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
 
 /// Current dynamic version of Kilocode.
 pub fn current_kilocode_version() -> String {
-    if let Ok(lock) = KILOCODE_DYNAMIC_VERSION.read()
-        && let Some(ref ver) = *lock
-    {
-        return ver.clone();
-    }
-    if let Ok(env_ver) = std::env::var("OPENPROXY_KILOCODE_VERSION")
-        && !env_ver.is_empty()
-    {
-        return env_ver;
-    }
-    DEFAULT_KILOCODE_VERSION.to_string()
+    KILOCODE_OVERRIDES.current_version("OPENPROXY_KILOCODE_VERSION", DEFAULT_KILOCODE_VERSION)
 }
 
 /// Dynamic Kilocode User-Agent.
@@ -38,40 +27,24 @@ pub fn current_kilocode_ua() -> String {
 
 /// Set dynamic version override for Kilocode in memory at runtime without recompiling.
 pub fn set_dynamic_kilocode_version(ver: impl Into<String>) {
-    if let Ok(mut lock) = KILOCODE_DYNAMIC_VERSION.write() {
-        *lock = Some(ver.into());
-    }
+    KILOCODE_OVERRIDES.set_version(ver);
 }
 
 /// Set dynamic extra header override for Kilocode in memory at runtime without recompiling.
 pub fn set_dynamic_kilocode_extra_header(key: impl Into<String>, val: impl Into<String>) {
-    if let Ok(mut lock) = KILOCODE_DYNAMIC_EXTRA_HEADERS.write() {
-        lock.insert(key.into(), val.into());
-    }
+    KILOCODE_OVERRIDES.set_extra_header(key, val);
 }
 
 /// Reset dynamic in-memory overrides for Kilocode (useful for tests and cleanup).
 pub fn reset_dynamic_kilocode_overrides() {
-    if let Ok(mut lock) = KILOCODE_DYNAMIC_VERSION.write() {
-        *lock = None;
-    }
-    if let Ok(mut lock) = KILOCODE_DYNAMIC_EXTRA_HEADERS.write() {
-        lock.clear();
-    }
+    KILOCODE_OVERRIDES.reset();
 }
 
 #[cfg(test)]
 pub(crate) static KILOCODE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-static KILOCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
-    let Ok(env_str) = std::env::var("OPENPROXY_KILOCODE_EXTRA_HEADERS") else {
-        return Vec::new();
-    };
-    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
-        return Vec::new();
-    };
-    map.into_iter().collect()
-});
+static KILOCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
+    std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_KILOCODE_EXTRA_HEADERS"));
 
 /// Preset for Kilocode client identity headers.
 #[derive(Debug, Clone, Copy, Default)]
@@ -94,34 +67,9 @@ impl ClientSpoofer for KilocodeSpoofer {
             })
             .collect();
 
-        for (k, v) in KILOCODE_EXTRA_HEADERS.iter() {
-            if let Some(pos) = list.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                list[pos].1 = v.clone();
-            } else {
-                list.push((k.clone(), v.clone()));
-            }
-        }
-
-        if let Ok(lock) = KILOCODE_DYNAMIC_EXTRA_HEADERS.read() {
-            for (k, v) in lock.iter() {
-                if let Some(pos) = list.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                    list[pos].1 = v.clone();
-                } else {
-                    list.push((k.clone(), v.clone()));
-                }
-            }
-        }
+        merge_header_refs(&mut list, &*KILOCODE_EXTRA_HEADERS);
+        KILOCODE_OVERRIDES.apply_to_list(&mut list);
 
         list
-    }
-
-    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
-        for (k, v) in self.headers() {
-            if let Ok(name) = http::header::HeaderName::try_from(k.as_str())
-                && let Ok(val) = HeaderValue::try_from(v.as_str())
-            {
-                headers.insert(name, val);
-            }
-        }
     }
 }

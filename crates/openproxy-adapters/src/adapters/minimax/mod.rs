@@ -77,15 +77,8 @@ pub fn reset_dynamic_overrides() {
 #[cfg(test)]
 pub(crate) static MINIMAX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-static EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
-    let Ok(env_str) = std::env::var("OPENPROXY_MINIMAX_EXTRA_HEADERS") else {
-        return Vec::new();
-    };
-    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
-        return Vec::new();
-    };
-    map.into_iter().collect()
-});
+static EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
+    std::sync::LazyLock::new(|| crate::spoofer::parse_env_extra_headers("OPENPROXY_MINIMAX_EXTRA_HEADERS"));
 
 /// Adapter for MiniMax's Anthropic-compatible coding endpoint.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -180,29 +173,13 @@ impl ProviderAdapter for MiniMaxAdapter {
             format!("session_{}", uuid::Uuid::new_v4().simple()),
         ));
 
-        for (k, v) in EXTRA_HEADERS.iter() {
-            if !headers.iter().any(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-
+        crate::spoofer::merge_header_refs(&mut headers, &*EXTRA_HEADERS);
         if let Ok(lock) = DYNAMIC_EXTRA_HEADERS.read() {
             for (k, v) in lock.iter() {
-                if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                    headers[pos].1 = v.clone();
-                } else {
-                    headers.push((k.clone(), v.clone()));
-                }
+                crate::spoofer::upsert_header(&mut headers, k, v.clone());
             }
         }
-
-        for (k, v) in &self.config.extra_headers {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
+        crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
         headers
     }
 

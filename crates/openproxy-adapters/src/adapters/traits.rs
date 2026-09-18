@@ -332,3 +332,20 @@ pub trait ProviderAdapter: Send + Sync {
             })
     }
 }
+
+/// Helper to construct standard headers for providers with a client spoofer,
+/// merging auth, Content-Type, spoofed identity headers, and custom extra headers.
+pub fn build_spoofer_headers(
+    auth: Option<(String, String)>,
+    spoofer: &impl crate::spoofer::ClientSpoofer,
+    extra_headers: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut headers = Vec::with_capacity(8 + extra_headers.len());
+    if let Some(auth) = auth {
+        headers.push(auth);
+    }
+    headers.push(("Content-Type".into(), "application/json".into()));
+    headers.extend(spoofer.headers());
+    crate::spoofer::merge_header_refs(&mut headers, extra_headers);
+    headers
+}

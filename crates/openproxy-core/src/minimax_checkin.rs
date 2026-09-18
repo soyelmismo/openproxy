@@ -14,7 +14,6 @@ use crate::oauth::minimax::MiniMaxAccountMeta;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
-use rusqlite::OptionalExtension;
 
 const MINIMAX_PROVIDERS: [&str; 4] = ["minimax", "minimax-coding", "minimax-managed", "minimax-cn"];
 const DEFAULT_CHECKIN_INTERVAL_SECS: u64 = 14_400; // 4 hours
@@ -57,9 +56,12 @@ pub async fn run_checkin_cycle(
     upstream_client: &Arc<UpstreamClient>,
     master_key: &Arc<MasterKey>,
 ) {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
     let accounts_to_check = {
         let pool = Arc::clone(db_pool);
         let key = Arc::clone(master_key);
+        let today_clone = today.clone();
         tokio::task::spawn_blocking(move || {
             let conn = pool.reader();
             let mut list = Vec::new();
@@ -67,9 +69,25 @@ pub async fn run_checkin_cycle(
                 let pid = ProviderId::new(*pid_str);
                 if let Ok(accs) = accounts::list(&conn, Some(&pid), &key) {
                     for acc in accs {
-                        if acc.health_status != accounts::HealthStatus::Unhealthy
-                            && acc.auth_type.as_ref() == "oauth"
+                        if acc.health_status == accounts::HealthStatus::Unhealthy
+                            || acc.auth_type.as_ref() != "oauth"
                         {
+                            continue;
+                        }
+
+                        let meta = acc
+                            .oauth_provider_specific
+                            .as_deref()
+                            .and_then(|r| serde_json::from_str::<MiniMaxAccountMeta>(r).ok())
+                            .unwrap_or_default();
+
+                        let not_checked_in_today =
+                            meta.last_checkin_date.as_deref() != Some(today_clone.as_str());
+                        let needs_enrichment = meta.credit_balance.is_none()
+                            || meta.real_user_id.is_none()
+                            || acc.label.as_deref().unwrap_or("").trim().is_empty();
+
+                        if not_checked_in_today || needs_enrichment {
                             list.push(acc.id);
                         }
                     }
@@ -81,43 +99,7 @@ pub async fn run_checkin_cycle(
         .unwrap_or_default()
     };
 
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
     for account_id in accounts_to_check {
-        let needs_checkin = {
-            let pool = Arc::clone(db_pool);
-            let today_clone = today.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = pool.reader();
-                let row = conn
-                    .query_row(
-                        "SELECT oauth_provider_specific, label FROM accounts WHERE id = ?1",
-                        rusqlite::params![account_id.0],
-                        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
-                    )
-                    .optional()
-                    .ok()
-                    .flatten();
-
-                let (meta_raw, label) = row.unwrap_or((None, None));
-                let meta = meta_raw
-                    .and_then(|r| serde_json::from_str::<MiniMaxAccountMeta>(&r).ok())
-                    .unwrap_or_default();
-
-                let not_checked_in_today = meta.last_checkin_date.as_deref() != Some(today_clone.as_str());
-                let needs_enrichment = meta.credit_balance.is_none()
-                    || meta.real_user_id.is_none()
-                    || label.as_deref().unwrap_or("").trim().is_empty();
-
-                not_checked_in_today || needs_enrichment
-            })
-            .await
-            .unwrap_or(false)
-        };
-
-        if !needs_checkin {
-            continue;
-        }
 
         match run_account_checkin(db_pool, upstream_client, master_key, account_id).await {
             Ok(summary) => {

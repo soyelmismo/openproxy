@@ -99,21 +99,11 @@ impl ProviderAdapter for ClineAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(12 + self.config.extra_headers.len());
-        if let Some(auth) = self.build_auth_header(access_token) {
-            headers.push(auth);
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        headers.extend(ClineSpoofer.headers());
-
-        for (k, v) in &self.config.extra_headers {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-        headers
+        super::build_spoofer_headers(
+            self.build_auth_header(access_token),
+            &ClineSpoofer,
+            &self.config.extra_headers,
+        )
     }
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
@@ -219,12 +209,26 @@ mod tests {
 
     #[test]
     fn test_apply_cline_spoofing_headers() {
+        use crate::spoofer::{
+            current_cline_ua, current_cline_version, reset_dynamic_cline_overrides,
+            CLINE_TEST_LOCK,
+        };
+
+        let _guard = CLINE_TEST_LOCK.lock().unwrap();
+        reset_dynamic_cline_overrides();
+
         let mut req = UpstreamRequest::post_json("http://dummy.com", bytes::Bytes::new());
         apply_cline_spoofing_headers(&mut req);
 
         for &(k, v) in CLINE_SPOOFING_HEADERS {
             let header_value = req.headers.get(k).expect("header missing");
-            assert_eq!(header_value, HeaderValue::from_str(v).unwrap());
+            if k == "user-agent" {
+                assert_eq!(header_value, current_cline_ua().as_str());
+            } else if k == "x-client-version" || k == "x-core-version" {
+                assert_eq!(header_value, current_cline_version().as_str());
+            } else {
+                assert_eq!(header_value, HeaderValue::from_str(v).unwrap());
+            }
         }
     }
 

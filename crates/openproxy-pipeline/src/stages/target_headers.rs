@@ -11,8 +11,27 @@
 
 use openproxy_adapters::spoofer::{
     generate_request_id, generate_session_id, has_valid_opencode_version,
-    translate_session_id,
+    translate_session_id, upsert_header,
 };
+
+#[inline]
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    s.get(..prefix.len()).is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
+}
+
+fn propagate_matching_headers<P>(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+    predicate: P,
+) where
+    P: Fn(&str) -> bool,
+{
+    for (k, v) in request_headers {
+        if predicate(k) {
+            upsert_header(headers, k, v.clone());
+        }
+    }
+}
 
 pub fn propagate_opencode_headers(
     headers: &mut Vec<(String, String)>,
@@ -24,17 +43,6 @@ pub fn propagate_opencode_headers(
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
-    };
-
-    let set_header = |headers: &mut Vec<(String, String)>, name: &str, val: String| {
-        if let Some(pos) = headers
-            .iter()
-            .position(|(k, _)| k.eq_ignore_ascii_case(name))
-        {
-            headers[pos].1 = val;
-        } else {
-            headers.push((name.to_string(), val));
-        }
     };
 
     // 1. Session affinity: downstream session, user, extra, or generated canonical session
@@ -65,7 +73,7 @@ pub fn propagate_opencode_headers(
     } else {
         generate_session_id()
     };
-    set_header(headers, "x-opencode-session", session_val);
+    upsert_header(headers, "x-opencode-session", session_val);
 
     // 2. Request ID: downstream request or ensure msg_... is present
     let downstream_req = get_header("x-opencode-request")
@@ -73,40 +81,40 @@ pub fn propagate_opencode_headers(
         .filter(|s| !s.trim().is_empty());
     if let Some(req_id) = downstream_req {
         if openproxy_adapters::spoofer::is_valid_opencode_request_id(req_id.trim()) {
-            set_header(headers, "x-opencode-request", req_id.trim().to_string());
+            upsert_header(headers, "x-opencode-request", req_id.trim().to_string());
         }
     } else if !headers
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("x-opencode-request"))
     {
-        set_header(headers, "x-opencode-request", generate_request_id());
+        upsert_header(headers, "x-opencode-request", generate_request_id());
     }
 
     // 2b. Parent session: forward if downstream supplied it
     if let Some(parent_session) = get_header("x-parent-session-id")
         .filter(|s| !s.trim().is_empty())
     {
-        set_header(headers, "x-parent-session-id", parent_session.trim().to_string());
+        upsert_header(headers, "x-parent-session-id", parent_session.trim().to_string());
     }
 
     // 2c. Anthropic beta: forward if downstream supplied it
     if let Some(beta) = get_header("anthropic-beta")
         .filter(|s| !s.trim().is_empty())
     {
-        set_header(headers, "anthropic-beta", beta.trim().to_string());
+        upsert_header(headers, "anthropic-beta", beta.trim().to_string());
     }
 
     // 3. Client: preserve downstream if non-empty, else ensure "cli"
     let client = get_header("x-opencode-client")
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("cli");
-    set_header(headers, "x-opencode-client", client.to_string());
+    upsert_header(headers, "x-opencode-client", client.to_string());
 
     // 4. Project: preserve downstream if non-empty, else ensure "global"
     let project = get_header("x-opencode-project")
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("global");
-    set_header(headers, "x-opencode-project", project.to_string());
+    upsert_header(headers, "x-opencode-project", project.to_string());
 
     // 5. User-Agent: preserve downstream only if valid opencode version (>= 1.17.0),
     // else ensure current dynamic OpenCode UA
@@ -114,18 +122,17 @@ pub fn propagate_opencode_headers(
     let ua = get_header("user-agent")
         .filter(|u| has_valid_opencode_version(u))
         .unwrap_or(&cur_ua);
-    set_header(headers, "User-Agent", ua.to_string());
+    upsert_header(headers, "User-Agent", ua.to_string());
 
     // 6. Forward custom x-opencode-* headers (extensions, debugging, dynamic flags)
     for (k, v) in request_headers {
-        let lower = k.to_ascii_lowercase();
-        if lower.starts_with("x-opencode-")
-            && lower != "x-opencode-session"
-            && lower != "x-opencode-request"
-            && lower != "x-opencode-client"
-            && lower != "x-opencode-project"
+        if starts_with_ignore_ascii_case(k, "x-opencode-")
+            && !k.eq_ignore_ascii_case("x-opencode-session")
+            && !k.eq_ignore_ascii_case("x-opencode-request")
+            && !k.eq_ignore_ascii_case("x-opencode-client")
+            && !k.eq_ignore_ascii_case("x-opencode-project")
         {
-            set_header(headers, k, v.clone());
+            upsert_header(headers, k, v.clone());
         }
     }
 }
@@ -138,21 +145,16 @@ pub fn propagate_antigravity_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
-    for (k, v) in request_headers {
-        let lower = k.to_ascii_lowercase();
-        let is_allowed = lower.starts_with("x-cloudaicompanion-")
-            || lower.starts_with("x-antigravity-")
-            || (lower.starts_with("x-client-") && lower != "x-client-name" && lower != "x-client-version")
-            || (lower.starts_with("x-goog-") && lower != "x-goog-api-client" && lower != "x-goog-user-project");
-
-        if is_allowed {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-    }
+    propagate_matching_headers(headers, request_headers, |k| {
+        starts_with_ignore_ascii_case(k, "x-cloudaicompanion-")
+            || starts_with_ignore_ascii_case(k, "x-antigravity-")
+            || (starts_with_ignore_ascii_case(k, "x-client-")
+                && !k.eq_ignore_ascii_case("x-client-name")
+                && !k.eq_ignore_ascii_case("x-client-version"))
+            || (starts_with_ignore_ascii_case(k, "x-goog-")
+                && !k.eq_ignore_ascii_case("x-goog-api-client")
+                && !k.eq_ignore_ascii_case("x-goog-user-project"))
+    });
 }
 
 /// Propagate downstream client headers for MiniMax Coding / Mavis.
@@ -163,21 +165,12 @@ pub fn propagate_minimax_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
-    for (k, v) in request_headers {
-        let lower = k.to_ascii_lowercase();
-        let is_allowed = lower == "anthropic-beta"
-            || lower.starts_with("x-mavis-")
-            || lower.starts_with("x-minimax-")
-            || lower.starts_with("minimax-");
-
-        if is_allowed {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-    }
+    propagate_matching_headers(headers, request_headers, |k| {
+        k.eq_ignore_ascii_case("anthropic-beta")
+            || starts_with_ignore_ascii_case(k, "x-mavis-")
+            || starts_with_ignore_ascii_case(k, "x-minimax-")
+            || starts_with_ignore_ascii_case(k, "minimax-")
+    });
 }
 
 /// Propagate downstream client headers for Cline.
@@ -188,19 +181,9 @@ pub fn propagate_cline_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
-    for (k, v) in request_headers {
-        let lower = k.to_ascii_lowercase();
-        let is_allowed = lower.starts_with("x-cline-")
-            || lower.starts_with("cline-");
-
-        if is_allowed {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-    }
+    propagate_matching_headers(headers, request_headers, |k| {
+        starts_with_ignore_ascii_case(k, "x-cline-") || starts_with_ignore_ascii_case(k, "cline-")
+    });
 }
 
 /// Propagate downstream client headers for Kilocode.
@@ -211,19 +194,10 @@ pub fn propagate_kilocode_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
-    for (k, v) in request_headers {
-        let lower = k.to_ascii_lowercase();
-        let is_allowed = lower.starts_with("x-kilocode-")
-            || lower.starts_with("kilocode-");
-
-        if is_allowed {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-    }
+    propagate_matching_headers(headers, request_headers, |k| {
+        starts_with_ignore_ascii_case(k, "x-kilocode-")
+            || starts_with_ignore_ascii_case(k, "kilocode-")
+    });
 }
 
 /// Propagate downstream client headers for Codex.
@@ -234,20 +208,11 @@ pub fn propagate_codex_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
-    for (k, v) in request_headers {
-        let lower = k.to_ascii_lowercase();
-        let is_allowed = lower.starts_with("x-codex-")
-            || lower.starts_with("codex-")
-            || lower == "chatgpt-account-id";
-
-        if is_allowed {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-    }
+    propagate_matching_headers(headers, request_headers, |k| {
+        starts_with_ignore_ascii_case(k, "x-codex-")
+            || starts_with_ignore_ascii_case(k, "codex-")
+            || k.eq_ignore_ascii_case("chatgpt-account-id")
+    });
 }
 
 #[cfg(test)]

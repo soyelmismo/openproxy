@@ -61,21 +61,11 @@ impl ProviderAdapter for KilocodeAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(8 + self.config.extra_headers.len());
-        if let Some(auth) = self.build_auth_header(access_token) {
-            headers.push(auth);
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        headers.extend(KilocodeSpoofer.headers());
-
-        for (k, v) in &self.config.extra_headers {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-        headers
+        super::build_spoofer_headers(
+            self.build_auth_header(access_token),
+            &KilocodeSpoofer,
+            &self.config.extra_headers,
+        )
     }
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {

@@ -1,5 +1,6 @@
-use super::ClientSpoofer;
-use http::HeaderValue;
+use super::{
+    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
+};
 
 pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("http-referer", "https://cline.bot"),
@@ -15,23 +16,11 @@ pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
 
 pub const DEFAULT_CLINE_VERSION: &str = "4.1.3";
 
-static CLINE_DYNAMIC_VERSION: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
-static CLINE_DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
-    std::sync::RwLock::new(std::collections::BTreeMap::new());
+static CLINE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
 
 /// Current dynamic version of Cline.
 pub fn current_cline_version() -> String {
-    if let Ok(lock) = CLINE_DYNAMIC_VERSION.read()
-        && let Some(ref ver) = *lock
-    {
-        return ver.clone();
-    }
-    if let Ok(env_ver) = std::env::var("OPENPROXY_CLINE_VERSION")
-        && !env_ver.is_empty()
-    {
-        return env_ver;
-    }
-    DEFAULT_CLINE_VERSION.to_string()
+    CLINE_OVERRIDES.current_version("OPENPROXY_CLINE_VERSION", DEFAULT_CLINE_VERSION)
 }
 
 /// Dynamic Cline User-Agent.
@@ -41,40 +30,24 @@ pub fn current_cline_ua() -> String {
 
 /// Set dynamic version override for Cline in memory at runtime without recompiling.
 pub fn set_dynamic_cline_version(ver: impl Into<String>) {
-    if let Ok(mut lock) = CLINE_DYNAMIC_VERSION.write() {
-        *lock = Some(ver.into());
-    }
+    CLINE_OVERRIDES.set_version(ver);
 }
 
 /// Set dynamic extra header override for Cline in memory at runtime without recompiling.
 pub fn set_dynamic_cline_extra_header(key: impl Into<String>, val: impl Into<String>) {
-    if let Ok(mut lock) = CLINE_DYNAMIC_EXTRA_HEADERS.write() {
-        lock.insert(key.into(), val.into());
-    }
+    CLINE_OVERRIDES.set_extra_header(key, val);
 }
 
 /// Reset dynamic in-memory overrides for Cline (useful for tests and cleanup).
 pub fn reset_dynamic_cline_overrides() {
-    if let Ok(mut lock) = CLINE_DYNAMIC_VERSION.write() {
-        *lock = None;
-    }
-    if let Ok(mut lock) = CLINE_DYNAMIC_EXTRA_HEADERS.write() {
-        lock.clear();
-    }
+    CLINE_OVERRIDES.reset();
 }
 
 #[cfg(test)]
 pub(crate) static CLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-static CLINE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
-    let Ok(env_str) = std::env::var("OPENPROXY_CLINE_EXTRA_HEADERS") else {
-        return Vec::new();
-    };
-    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
-        return Vec::new();
-    };
-    map.into_iter().collect()
-});
+static CLINE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
+    std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_CLINE_EXTRA_HEADERS"));
 
 /// Preset for Cline client identity headers.
 #[derive(Debug, Clone, Copy, Default)]
@@ -97,34 +70,9 @@ impl ClientSpoofer for ClineSpoofer {
             })
             .collect();
 
-        for (k, v) in CLINE_EXTRA_HEADERS.iter() {
-            if let Some(pos) = list.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                list[pos].1 = v.clone();
-            } else {
-                list.push((k.clone(), v.clone()));
-            }
-        }
-
-        if let Ok(lock) = CLINE_DYNAMIC_EXTRA_HEADERS.read() {
-            for (k, v) in lock.iter() {
-                if let Some(pos) = list.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                    list[pos].1 = v.clone();
-                } else {
-                    list.push((k.clone(), v.clone()));
-                }
-            }
-        }
+        merge_header_refs(&mut list, &*CLINE_EXTRA_HEADERS);
+        CLINE_OVERRIDES.apply_to_list(&mut list);
 
         list
-    }
-
-    fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
-        for (k, v) in self.headers() {
-            if let Ok(name) = http::header::HeaderName::try_from(k.as_str())
-                && let Ok(val) = HeaderValue::try_from(v.as_str())
-            {
-                headers.insert(name, val);
-            }
-        }
     }
 }

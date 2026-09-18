@@ -132,21 +132,11 @@ impl ProviderAdapter for CodexAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(6 + self.config.extra_headers.len());
-        if let Some(auth) = self.build_auth_header(api_key) {
-            headers.push(auth);
-        }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        headers.extend(CodexSpoofer.headers());
-
-        for (k, v) in &self.config.extra_headers {
-            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                headers[pos].1 = v.clone();
-            } else {
-                headers.push((k.clone(), v.clone()));
-            }
-        }
-        headers
+        super::build_spoofer_headers(
+            self.build_auth_header(api_key),
+            &CodexSpoofer,
+            &self.config.extra_headers,
+        )
     }
 
     fn wrap_request_body(

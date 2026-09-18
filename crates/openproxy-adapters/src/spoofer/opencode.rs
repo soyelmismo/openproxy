@@ -1,31 +1,21 @@
-use super::ClientSpoofer;
+use super::{
+    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
+};
 use http::HeaderValue;
 use rand::RngExt;
 
 pub const OPENCODE_UA: &str = "opencode/1.19.0";
 
-static OPENCODE_DYNAMIC_VERSION: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+static OPENCODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
 
 /// Set dynamic version override for OpenCode in memory at runtime without recompiling.
 pub fn set_dynamic_opencode_version(ver: impl Into<String>) {
-    if let Ok(mut lock) = OPENCODE_DYNAMIC_VERSION.write() {
-        *lock = Some(ver.into());
-    }
+    OPENCODE_OVERRIDES.set_version(ver);
 }
 
 /// Resolve current OpenCode version string.
 pub fn current_opencode_version() -> String {
-    if let Ok(lock) = OPENCODE_DYNAMIC_VERSION.read()
-        && let Some(ref ver) = *lock
-    {
-        return ver.clone();
-    }
-    if let Ok(env_ver) = std::env::var("OPENPROXY_OPENCODE_VERSION")
-        && !env_ver.is_empty()
-    {
-        return env_ver;
-    }
-    "1.19.0".to_string()
+    OPENCODE_OVERRIDES.current_version("OPENPROXY_OPENCODE_VERSION", "1.19.0")
 }
 
 /// Dynamic OpenCode User-Agent.
@@ -33,38 +23,21 @@ pub fn current_opencode_ua() -> String {
     format!("opencode/{}", current_opencode_version())
 }
 
-static OPENCODE_DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
-    std::sync::RwLock::new(std::collections::BTreeMap::new());
-
 /// Set dynamic extra header override for OpenCode in memory at runtime without recompiling.
 pub fn set_dynamic_opencode_extra_header(key: impl Into<String>, val: impl Into<String>) {
-    if let Ok(mut lock) = OPENCODE_DYNAMIC_EXTRA_HEADERS.write() {
-        lock.insert(key.into(), val.into());
-    }
+    OPENCODE_OVERRIDES.set_extra_header(key, val);
 }
 
 /// Reset dynamic in-memory overrides for OpenCode (useful for tests and cleanup).
 pub fn reset_dynamic_opencode_overrides() {
-    if let Ok(mut lock) = OPENCODE_DYNAMIC_VERSION.write() {
-        *lock = None;
-    }
-    if let Ok(mut lock) = OPENCODE_DYNAMIC_EXTRA_HEADERS.write() {
-        lock.clear();
-    }
+    OPENCODE_OVERRIDES.reset();
 }
 
 #[cfg(test)]
 pub(crate) static OPENCODE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-static OPENCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
-    let Ok(env_str) = std::env::var("OPENPROXY_OPENCODE_EXTRA_HEADERS") else {
-        return Vec::new();
-    };
-    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
-        return Vec::new();
-    };
-    map.into_iter().collect()
-});
+static OPENCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
+    std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_OPENCODE_EXTRA_HEADERS"));
 
 pub const OPENCODE_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("User-Agent", OPENCODE_UA),
@@ -249,21 +222,8 @@ impl ClientSpoofer for OpenCodeSpoofer {
         list.push(("x-opencode-session".into(), generate_session_id()));
         list.push(("x-opencode-request".into(), generate_request_id()));
 
-        for (k, v) in OPENCODE_EXTRA_HEADERS.iter() {
-            if !list.iter().any(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                list.push((k.clone(), v.clone()));
-            }
-        }
-
-        if let Ok(lock) = OPENCODE_DYNAMIC_EXTRA_HEADERS.read() {
-            for (k, v) in lock.iter() {
-                if let Some(pos) = list.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
-                    list[pos].1 = v.clone();
-                } else {
-                    list.push((k.clone(), v.clone()));
-                }
-            }
-        }
+        merge_header_refs(&mut list, &*OPENCODE_EXTRA_HEADERS);
+        OPENCODE_OVERRIDES.apply_to_list(&mut list);
 
         list
     }
@@ -303,15 +263,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
                 headers.insert(name, val);
             }
         }
-        if let Ok(lock) = OPENCODE_DYNAMIC_EXTRA_HEADERS.read() {
-            for (k, v) in lock.iter() {
-                if let Ok(name) = http::header::HeaderName::try_from(k.as_str())
-                    && let Ok(val) = HeaderValue::try_from(v.as_str())
-                {
-                    headers.insert(name, val);
-                }
-            }
-        }
+        OPENCODE_OVERRIDES.apply_to_header_map(headers);
 
         // 4. x-opencode-session: preserve valid, translate candidate, or generate new
         let session_header_name = http::header::HeaderName::from_static("x-opencode-session");
