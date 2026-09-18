@@ -12,6 +12,9 @@ use openproxy_adapters::spoofer::{
     ClientSpoofer, KIRO_SPOOFING_HEADERS, KIRO_TEST_LOCK, KiroSpoofer, current_kiro_ua,
     reset_dynamic_kiro_overrides, set_dynamic_kiro_extra_header, set_dynamic_kiro_ua,
 };
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use openproxy_adapters::{KiroAdapter, ProviderAdapter};
 use openproxy_core::oauth::kiro::{
     DEFAULT_REGION, DEVICE_AUTH_URL, REGISTER_URL, SCOPES, TOKEN_URL, kiro_codewhisperer_host,
@@ -97,22 +100,41 @@ fn test_kiro_golden_contract_spec_parity() {
 }
 
 // ============================================================================
-// 2. Local Upstream Code Inspection Parity
+// 2. Upstream Repository Code Drift Parity (Remote HTTP + Local Fallback)
 // ============================================================================
 
-#[test]
-fn test_kiro_offline_upstream_code_parity() {
-    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let upstream_executor_path = Path::new(&base_dir)
-        .join("../../other_projects_examples/OmniRoute/open-sse/executors/kiro.ts");
-
-    if !upstream_executor_path.exists() {
-        eprintln!("[KiroCodeTest] Skipping local upstream kiro.ts check: file not found at {upstream_executor_path:?}");
-        return;
+async fn load_upstream_source(http_url: &str, local_rel_path: &str) -> Option<String> {
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let req = UpstreamRequest::get(http_url);
+    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await
+        && resp.status.is_success()
+        && let Ok(body) = resp.collect().await
+    {
+        return Some(String::from_utf8_lossy(&body).into_owned());
     }
 
-    let executor_src =
-        std::fs::read_to_string(&upstream_executor_path).expect("read local kiro.ts");
+    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    let path = Path::new(&base_dir).join(local_rel_path);
+    if path.exists() {
+        return std::fs::read_to_string(&path).ok();
+    }
+
+    None
+}
+
+#[tokio::test]
+async fn test_kiro_remote_or_local_upstream_code_parity() {
+    let raw_url =
+        "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/executors/kiro.ts";
+    let local_path = "../../other_projects_examples/OmniRoute/open-sse/executors/kiro.ts";
+
+    let Some(executor_src) = load_upstream_source(raw_url, local_path).await else {
+        eprintln!(
+            "[KiroCodeTest] Skipping upstream kiro.ts check: unable to fetch from remote URL {raw_url} or local path {local_path}"
+        );
+        return;
+    };
 
     // 1. Verify upstream headers parity
     assert!(

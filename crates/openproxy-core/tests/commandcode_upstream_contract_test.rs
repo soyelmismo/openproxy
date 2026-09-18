@@ -124,29 +124,56 @@ fn test_commandcode_golden_contract_spec_parity() {
 }
 
 // ============================================================================
-// 2. Local Upstream Code Inspection Parity
+// 2. Upstream Repository Code Drift Parity (Remote HTTP + Local Fallback)
 // ============================================================================
 
-#[test]
-fn test_commandcode_offline_upstream_code_parity() {
-    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let upstream_executor_path = Path::new(&base_dir)
-        .join("../../other_projects_examples/OmniRoute/open-sse/executors/commandCode.ts");
-    let upstream_registry_path = Path::new(&base_dir).join(
-        "../../other_projects_examples/OmniRoute/open-sse/config/providers/registry/command-code/index.ts",
-    );
-
-    if !upstream_executor_path.exists() || !upstream_registry_path.exists() {
-        eprintln!(
-            "[CommandCodeTest] Skipping local upstream checks: files not found at {upstream_executor_path:?} / {upstream_registry_path:?}"
-        );
-        return;
+async fn load_upstream_source(http_url: &str, local_rel_path: &str) -> Option<String> {
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let req = UpstreamRequest::get(http_url);
+    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await
+        && resp.status.is_success()
+        && let Ok(body) = resp.collect().await
+    {
+        return Some(String::from_utf8_lossy(&body).into_owned());
     }
 
-    let executor_src =
-        std::fs::read_to_string(&upstream_executor_path).expect("read local commandCode.ts");
-    let registry_src =
-        std::fs::read_to_string(&upstream_registry_path).expect("read local registry index.ts");
+    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    let path = Path::new(&base_dir).join(local_rel_path);
+    if path.exists() {
+        return std::fs::read_to_string(&path).ok();
+    }
+
+    None
+}
+
+#[tokio::test]
+async fn test_commandcode_remote_or_local_upstream_code_parity() {
+    let raw_executor_url =
+        "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/executors/commandCode.ts";
+    let local_executor_path =
+        "../../other_projects_examples/OmniRoute/open-sse/executors/commandCode.ts";
+
+    let raw_registry_url =
+        "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/config/providers/registry/command-code/index.ts";
+    let local_registry_path =
+        "../../other_projects_examples/OmniRoute/open-sse/config/providers/registry/command-code/index.ts";
+
+    let Some(executor_src) = load_upstream_source(raw_executor_url, local_executor_path).await
+    else {
+        eprintln!(
+            "[CommandCodeTest] Skipping upstream commandCode.ts check: unable to fetch from remote URL {raw_executor_url} or local path {local_executor_path}"
+        );
+        return;
+    };
+
+    let Some(registry_src) = load_upstream_source(raw_registry_url, local_registry_path).await
+    else {
+        eprintln!(
+            "[CommandCodeTest] Skipping upstream registry index.ts check: unable to fetch from remote URL {raw_registry_url} or local path {local_registry_path}"
+        );
+        return;
+    };
 
     // 1. Verify upstream endpoints parity
     assert!(

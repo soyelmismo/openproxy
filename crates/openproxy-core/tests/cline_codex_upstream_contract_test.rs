@@ -28,23 +28,48 @@ use openproxy_core::oauth::refresh::refresh_lead_seconds;
 use std::path::Path;
 
 // ============================================================================
-// 1. Offline Local Upstream Code Inspection (100% offline, zero network)
+// 1. Upstream Repository Code Drift Parity (Remote HTTP + Local Fallback)
 // ============================================================================
 
-#[test]
-fn test_cline_offline_upstream_code_parity() {
-    let _guard = CLINE_TEST_LOCK.lock().unwrap();
-    reset_dynamic_cline_overrides();
-    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let cline_auth_path = Path::new(&base_dir).join("../../other_projects_examples/cline/sdk/packages/core/src/auth/cline.ts");
-    let cline_env_path = Path::new(&base_dir).join("../../other_projects_examples/cline/apps/vscode/src/services/EnvUtils.ts");
-
-    if !cline_auth_path.exists() {
-        eprintln!("[LocalCodeTest] Skipping local cline auth check: file not found at {cline_auth_path:?}");
-        return;
+async fn load_upstream_source(http_url: &str, local_rel_path: &str) -> Option<String> {
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let req = UpstreamRequest::get(http_url);
+    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await
+        && resp.status.is_success()
+        && let Ok(body) = resp.collect().await
+    {
+        return Some(String::from_utf8_lossy(&body).into_owned());
     }
 
-    let auth_src = std::fs::read_to_string(&cline_auth_path).expect("read local cline.ts");
+    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    let path = Path::new(&base_dir).join(local_rel_path);
+    if path.exists() {
+        return std::fs::read_to_string(&path).ok();
+    }
+
+    None
+}
+
+#[tokio::test]
+async fn test_cline_upstream_code_parity() {
+    let auth_url =
+        "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/cline.ts";
+    let local_auth_path = "../../other_projects_examples/cline/sdk/packages/core/src/auth/cline.ts";
+    let env_url =
+        "https://raw.githubusercontent.com/cline/cline/main/apps/vscode/src/services/EnvUtils.ts";
+    let local_env_path = "../../other_projects_examples/cline/apps/vscode/src/services/EnvUtils.ts";
+
+    let Some(auth_src) = load_upstream_source(auth_url, local_auth_path).await else {
+        eprintln!(
+            "[LocalCodeTest] Skipping cline auth check: unable to fetch from remote URL {auth_url} or local path {local_auth_path}"
+        );
+        return;
+    };
+    let env_src_opt = load_upstream_source(env_url, local_env_path).await;
+
+    let _guard = CLINE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    reset_dynamic_cline_overrides();
 
     // 1. Verify endpoint constants match OpenProxy's Cline constants
     assert_eq!(CLINE_DEFAULT_BASE_URL, "https://api.cline.bot");
@@ -77,8 +102,7 @@ fn test_cline_offline_upstream_code_parity() {
     assert!(auth_src.contains("/user_management/authenticate"));
 
     // 4. Verify client headers from EnvUtils.ts
-    if cline_env_path.exists() {
-        let env_src = std::fs::read_to_string(&cline_env_path).expect("read local EnvUtils.ts");
+    if let Some(env_src) = env_src_opt {
         let expected_headers = [
             "X-PLATFORM",
             "X-PLATFORM-VERSION",
@@ -117,19 +141,21 @@ fn test_cline_offline_upstream_code_parity() {
     assert_eq!(find_hdr("x-is-multiroot"), Some("false"));
 }
 
-#[test]
-fn test_codex_offline_upstream_code_parity() {
-    let _guard = CODEX_TEST_LOCK.lock().unwrap();
-    reset_dynamic_codex_overrides();
-    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let codex_auth_path = Path::new(&base_dir).join("../../other_projects_examples/cline/sdk/packages/core/src/auth/codex.ts");
+#[tokio::test]
+async fn test_codex_upstream_code_parity() {
+    let codex_url =
+        "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/codex.ts";
+    let local_codex_path = "../../other_projects_examples/cline/sdk/packages/core/src/auth/codex.ts";
 
-    if !codex_auth_path.exists() {
-        eprintln!("[LocalCodeTest] Skipping local codex auth check: file not found at {codex_auth_path:?}");
+    let Some(auth_src) = load_upstream_source(codex_url, local_codex_path).await else {
+        eprintln!(
+            "[LocalCodeTest] Skipping codex auth check: unable to fetch from remote URL {codex_url} or local path {local_codex_path}"
+        );
         return;
-    }
+    };
 
-    let auth_src = std::fs::read_to_string(&codex_auth_path).expect("read local codex.ts");
+    let _guard = CODEX_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    reset_dynamic_codex_overrides();
 
     // 1. Verify client ID
     assert!(
