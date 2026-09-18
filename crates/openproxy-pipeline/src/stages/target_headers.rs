@@ -10,7 +10,7 @@
 //! 5. x-opencode-request: msg_... (canonical ascending format)
 
 use openproxy_adapters::spoofer::{
-    OPENCODE_UA, generate_request_id, generate_session_id, has_valid_opencode_version,
+    generate_request_id, generate_session_id, has_valid_opencode_version,
     translate_session_id,
 };
 
@@ -109,11 +109,25 @@ pub fn propagate_opencode_headers(
     set_header(headers, "x-opencode-project", project.to_string());
 
     // 5. User-Agent: preserve downstream only if valid opencode version (>= 1.17.0),
-    // else ensure OPENCODE_UA
+    // else ensure current dynamic OpenCode UA
+    let cur_ua = openproxy_adapters::spoofer::current_opencode_ua();
     let ua = get_header("user-agent")
         .filter(|u| has_valid_opencode_version(u))
-        .unwrap_or(OPENCODE_UA);
+        .unwrap_or(&cur_ua);
     set_header(headers, "User-Agent", ua.to_string());
+
+    // 6. Forward custom x-opencode-* headers (extensions, debugging, dynamic flags)
+    for (k, v) in request_headers {
+        let lower = k.to_ascii_lowercase();
+        if lower.starts_with("x-opencode-")
+            && lower != "x-opencode-session"
+            && lower != "x-opencode-request"
+            && lower != "x-opencode-client"
+            && lower != "x-opencode-project"
+        {
+            set_header(headers, k, v.clone());
+        }
+    }
 }
 
 /// Propagate downstream client headers for Google Antigravity.
@@ -141,9 +155,63 @@ pub fn propagate_antigravity_headers(
     }
 }
 
+/// Propagate downstream client headers for MiniMax Coding / Mavis.
+///
+/// Forwards `anthropic-beta` (for prompt caching & extended output), `x-mavis-*`,
+/// `minimax-*`, and custom client headers while strictly preserving auth credentials.
+pub fn propagate_minimax_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    for (k, v) in request_headers {
+        let lower = k.to_ascii_lowercase();
+        let is_allowed = lower == "anthropic-beta"
+            || lower.starts_with("x-mavis-")
+            || lower.starts_with("x-minimax-")
+            || lower.starts_with("minimax-");
+
+        if is_allowed {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openproxy_adapters::spoofer::OPENCODE_UA;
+
+    #[test]
+    fn test_propagate_minimax_headers() {
+        let mut headers = vec![
+            ("User-Agent".into(), "MiniMaxAgent".into()),
+            ("Anthropic-Version".into(), "2023-06-01".into()),
+            ("x-api-key".into(), "secret".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("anthropic-beta".into(), "prompt-caching-2024-07-31".into());
+        req_headers.insert("x-mavis-agent-id".into(), "custom-agent".into());
+        req_headers.insert("x-minimax-feature".into(), "v2".into());
+        req_headers.insert("authorization".into(), "override-hack".into());
+
+        propagate_minimax_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("anthropic-beta"), Some("prompt-caching-2024-07-31"));
+        assert_eq!(find("x-mavis-agent-id"), Some("custom-agent"));
+        assert_eq!(find("x-minimax-feature"), Some("v2"));
+        assert_eq!(find("authorization"), None);
+    }
 
     #[test]
     fn test_propagate_opencode_headers_default() {
@@ -208,6 +276,51 @@ mod tests {
                 .map(|(_, v)| v.as_str())
         };
         assert_eq!(find("User-Agent"), Some("opencode/1.19.0"));
+    }
+
+    #[test]
+    fn test_propagate_opencode_dynamic_headers_and_extensions() {
+        use openproxy_adapters::spoofer::{
+            reset_dynamic_opencode_overrides, set_dynamic_opencode_version,
+        };
+
+        reset_dynamic_opencode_overrides();
+        set_dynamic_opencode_version("1.30.0");
+
+        let mut headers = vec![("Content-Type".into(), "application/json".into())];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("x-opencode-custom-flag".into(), "speed-mode".into());
+        req_headers.insert("x-opencode-debug".into(), "1".into());
+
+        let openai_req = openproxy_types::OpenAIRequest {
+            model: "big-pickle".into(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
+            extra: serde_json::Map::new(),
+        };
+
+        propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("User-Agent"), Some("opencode/1.30.0"));
+        assert_eq!(find("x-opencode-custom-flag"), Some("speed-mode"));
+        assert_eq!(find("x-opencode-debug"), Some("1"));
+
+        reset_dynamic_opencode_overrides();
     }
 
     #[test]

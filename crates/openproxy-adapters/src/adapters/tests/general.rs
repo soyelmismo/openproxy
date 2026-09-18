@@ -153,7 +153,7 @@ fn opencode_zen_uses_public_auth_when_key_empty() {
     );
     assert_eq!(
         first_header(&headers, "User-Agent"),
-        Some("opencode/1.18.31")
+        Some(crate::spoofer::OPENCODE_UA)
     );
     assert_eq!(first_header(&headers, "x-opencode-client"), Some("cli"));
     assert_eq!(first_header(&headers, "x-opencode-project"), Some("global"));
@@ -180,7 +180,7 @@ fn opencode_zen_headers_have_user_agent_and_content_type() {
         let headers = a.build_headers("k", fmt, &ModelId::new("m"));
         assert_eq!(
             first_header(&headers, "User-Agent"),
-            Some("opencode/1.18.31")
+            Some(crate::spoofer::OPENCODE_UA)
         );
         assert_eq!(first_header(&headers, "x-opencode-client"), Some("cli"));
         assert_eq!(first_header(&headers, "x-opencode-project"), Some("global"));

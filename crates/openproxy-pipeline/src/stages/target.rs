@@ -370,6 +370,13 @@ impl PipelineStage for DispatchStage {
                 &mut headers,
                 &ctx.req.request_headers,
             );
+        } else if target.provider_id.as_str().starts_with("minimax")
+            || adapter.id().as_str().starts_with("minimax")
+        {
+            propagate_minimax_headers(
+                &mut headers,
+                &ctx.req.request_headers,
+            );
         }
 
         openproxy_types::emit_stage_event!(
@@ -700,7 +707,7 @@ impl PipelineStage for CustomAdapterStage {
 }
 
 pub(crate) use super::target_headers::{
-    propagate_antigravity_headers, propagate_opencode_headers,
+    propagate_antigravity_headers, propagate_minimax_headers, propagate_opencode_headers,
 };
 
 #[cfg(test)]

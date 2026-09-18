@@ -321,3 +321,80 @@ fn test_wrap_request_body_muse_spark_responses() {
     assert_eq!(tools[0]["type"], "function");
     assert_eq!(tools[0]["name"], "bash");
 }
+
+#[test]
+fn test_opencode_dynamic_headers_and_config_mut() {
+    use crate::spoofer::{
+        current_opencode_ua, current_opencode_version, reset_dynamic_opencode_overrides,
+        set_dynamic_opencode_extra_header, set_dynamic_opencode_version,
+    };
+
+    reset_dynamic_opencode_overrides();
+    assert_eq!(current_opencode_version(), "1.19.0");
+
+    let mut adapter = OpenCodeZenAdapter::new();
+
+    // 1. Verify config_mut works and allows setting extra_headers
+    let cfg = adapter.config_mut().expect("config_mut must be implemented");
+    cfg.extra_headers.push(("x-admin-injected".into(), "true".into()));
+    cfg.extra_headers.push(("x-custom-rule".into(), "rule-42".into()));
+
+    let model_id = openproxy_types::ModelId::new("claude-3-5-sonnet");
+    let headers = adapter.build_headers("my-key", TargetFormat::Anthropic, &model_id);
+
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    assert_eq!(find("x-admin-injected"), Some("true"));
+    assert_eq!(find("x-custom-rule"), Some("rule-42"));
+    assert_eq!(find("User-Agent"), Some("opencode/1.19.0"));
+
+    // 2. Test in-memory dynamic version upgrade without recompilation
+    set_dynamic_opencode_version("1.25.0");
+    assert_eq!(current_opencode_version(), "1.25.0");
+    assert_eq!(current_opencode_ua(), "opencode/1.25.0");
+
+    let headers_updated = adapter.build_headers("my-key", TargetFormat::Anthropic, &model_id);
+    let find_up = |k: &str| {
+        headers_updated
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_up("User-Agent"), Some("opencode/1.25.0"));
+
+    // 3. Test in-memory dynamic extra header injection without recompilation
+    set_dynamic_opencode_extra_header("x-opencode-experimental", "fast-routing");
+    let headers_dyn = adapter.build_headers("my-key", TargetFormat::Anthropic, &model_id);
+    let find_dyn = |k: &str| {
+        headers_dyn
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_dyn("x-opencode-experimental"), Some("fast-routing"));
+
+    // 4. Test Go adapter as well
+    let mut go_adapter = OpenCodeGoAdapter::new();
+    let go_cfg = go_adapter.config_mut().expect("Go adapter config_mut must be implemented");
+    go_cfg.extra_headers.push(("x-go-test".into(), "active".into()));
+    let go_headers = go_adapter.build_headers("go-key", TargetFormat::Openai, &model_id);
+    let find_go = |k: &str| {
+        go_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_go("x-go-test"), Some("active"));
+    assert_eq!(find_go("User-Agent"), Some("opencode/1.25.0"));
+    assert_eq!(find_go("x-opencode-experimental"), Some("fast-routing"));
+
+    // Clean up
+    reset_dynamic_opencode_overrides();
+    assert_eq!(current_opencode_version(), "1.19.0");
+}
+

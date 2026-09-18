@@ -3,18 +3,88 @@ use super::{
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile, UpstreamClient,
     UpstreamRequest, fetch_openai_models,
 };
-// =====================================================================
-// MiniMax (Coding)
-// =====================================================================
+
+static DYNAMIC_USER_AGENT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+static DYNAMIC_ANTHROPIC_VERSION: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Set dynamic User-Agent override for MiniMax in memory at runtime.
+pub fn set_dynamic_user_agent(ua: impl Into<String>) {
+    if let Ok(mut lock) = DYNAMIC_USER_AGENT.write() {
+        *lock = Some(ua.into());
+    }
+}
+
+/// Set dynamic Anthropic-Version override for MiniMax in memory at runtime.
+pub fn set_dynamic_anthropic_version(ver: impl Into<String>) {
+    if let Ok(mut lock) = DYNAMIC_ANTHROPIC_VERSION.write() {
+        *lock = Some(ver.into());
+    }
+}
+
+/// Resolve current MiniMax User-Agent string.
+pub fn current_user_agent() -> String {
+    if let Ok(lock) = DYNAMIC_USER_AGENT.read()
+        && let Some(ref ua) = *lock
+    {
+        return ua.clone();
+    }
+    if let Ok(env_ua) = std::env::var("OPENPROXY_MINIMAX_USER_AGENT")
+        && !env_ua.is_empty()
+    {
+        return env_ua;
+    }
+    "MiniMaxAgent".to_string()
+}
+
+/// Resolve current MiniMax Anthropic-Version string.
+pub fn current_anthropic_version() -> String {
+    if let Ok(lock) = DYNAMIC_ANTHROPIC_VERSION.read()
+        && let Some(ref ver) = *lock
+    {
+        return ver.clone();
+    }
+    if let Ok(env_ver) = std::env::var("OPENPROXY_MINIMAX_ANTHROPIC_VERSION")
+        && !env_ver.is_empty()
+    {
+        return env_ver;
+    }
+    "2023-06-01".to_string()
+}
+
+static DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Set dynamic extra header override for MiniMax in memory at runtime without recompiling.
+pub fn set_dynamic_extra_header(key: impl Into<String>, val: impl Into<String>) {
+    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
+        lock.insert(key.into(), val.into());
+    }
+}
+
+/// Reset dynamic in-memory overrides for MiniMax (useful for tests and cleanup).
+pub fn reset_dynamic_overrides() {
+    if let Ok(mut lock) = DYNAMIC_USER_AGENT.write() {
+        *lock = None;
+    }
+    if let Ok(mut lock) = DYNAMIC_ANTHROPIC_VERSION.write() {
+        *lock = None;
+    }
+    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
+        lock.clear();
+    }
+}
+
+static EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
+    let Ok(env_str) = std::env::var("OPENPROXY_MINIMAX_EXTRA_HEADERS") else {
+        return Vec::new();
+    };
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
+        return Vec::new();
+    };
+    map.into_iter().collect()
+});
 
 /// Adapter for MiniMax's Anthropic-compatible coding endpoint.
-///
-/// The base URL is `https://api.minimax.io` (the bare host, no path). The
-/// chat endpoint is reached by appending `/anthropic/v1/messages?beta=true`
-/// at request time, and the model-discovery endpoint is reached by
-/// appending `/v1/models`. Splitting the two paths this way is what lets
-/// the same `base_url` serve both surfaces without one being a substring
-/// of the other.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MiniMaxAdapter {
     pub(crate) config: ProviderAdapterConfig,
@@ -31,10 +101,7 @@ impl MiniMaxAdapter {
                 base_url: "https://agent.minimax.io".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Anthropic,
-                extra_headers: vec![
-                    ("Anthropic-Version".into(), "2023-06-01".into()),
-                    ("User-Agent".into(), "MiniMaxAgent".into()),
-                ],
+                extra_headers: vec![],
             },
         }
     }
@@ -46,6 +113,10 @@ crate::adapters::derive_default_from_new!(MiniMaxAdapter);
 impl ProviderAdapter for MiniMaxAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
+    }
+
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
     }
 
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
@@ -77,7 +148,6 @@ impl ProviderAdapter for MiniMaxAdapter {
         } else if base.ends_with("/anthropic/v1") {
             format!("{base}/messages?beta=true")
         } else {
-            // Standard Anthropic Messages endpoint on api.minimax.io
             format!("{base}/anthropic/v1/messages?beta=true")
         }
     }
@@ -92,16 +162,14 @@ impl ProviderAdapter for MiniMaxAdapter {
             Vec::with_capacity(8 + self.config.extra_headers.len());
         let trimmed = api_key.trim();
         if trimmed.starts_with("sk-") {
-            // BYOK MiniMax API key strictly expects X-Api-Key
             headers.push(("x-api-key".into(), trimmed.to_string()));
             headers.push(("Authorization".into(), format!("Bearer {trimmed}")));
         } else if !trimmed.is_empty() {
-            // OAuth access token for MiniMax Coding managed-login
             headers.push(("Authorization".into(), format!("Bearer {trimmed}")));
         }
         headers.push(("Content-Type".into(), "application/json".into()));
-        headers.push(("User-Agent".into(), "MiniMaxAgent".into()));
-        headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
+        headers.push(("User-Agent".into(), current_user_agent()));
+        headers.push(("Anthropic-Version".into(), current_anthropic_version()));
         headers.push(("X-Mavis-Agent-Id".into(), "main".into()));
         headers.push(("X-Mavis-Timezone-Offset".into(), "0".into()));
         headers.push((
@@ -109,8 +177,26 @@ impl ProviderAdapter for MiniMaxAdapter {
             format!("session_{}", uuid::Uuid::new_v4().simple()),
         ));
 
-        for (k, v) in &self.config.extra_headers {
+        for (k, v) in EXTRA_HEADERS.iter() {
             if !headers.iter().any(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+
+        if let Ok(lock) = DYNAMIC_EXTRA_HEADERS.read() {
+            for (k, v) in lock.iter() {
+                if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                    headers[pos].1 = v.clone();
+                } else {
+                    headers.push((k.clone(), v.clone()));
+                }
+            }
+        }
+
+        for (k, v) in &self.config.extra_headers {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
                 headers.push((k.clone(), v.clone()));
             }
         }
@@ -118,8 +204,6 @@ impl ProviderAdapter for MiniMaxAdapter {
     }
 
     fn models_url(&self) -> Option<String> {
-        // MiniMax exposes its model catalogue at /v1/models (on api.minimax.io).
-        // The auth scheme requires an API key (sk-...).
         Some("https://api.minimax.io/v1/models".to_string())
     }
 
@@ -129,9 +213,6 @@ impl ProviderAdapter for MiniMaxAdapter {
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let trimmed = api_key.trim();
-        // MiniMax's public /v1/models endpoint strictly requires an API secret key ("sk-...").
-        // OAuth access tokens (JWTs) are rejected with HTTP 401 code 1004 ("Please carry the API secret key").
-        // For OAuth tokens or non-sk credentials, return the canonical builtin catalog immediately.
         if !trimmed.starts_with("sk-") {
             return Ok(minimax_builtin_models());
         }
@@ -339,8 +420,6 @@ fn parse_minimax_quota(
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         if code != 0 {
-            // MiniMax returns 2062 ("no active token plan subscription") for accounts
-            // that do not have an active paid coding plan subscription (Free tier / daily check-in credits).
             if code == 2062 {
                 return Ok(openproxy_types::AccountQuota {
                     session_used: None,
@@ -498,10 +577,6 @@ fn parse_minimax_meta(
     (op_group, region, tier)
 }
 
-/// Canonical model catalog for MiniMax.
-///
-/// Matches the upstream `MINIMAX_MODELS` specification from `MiniMax-AI/minimax-code`
-/// (`packages/config/src/config.ts`) as well as OpenProxy's database pricing catalog.
 pub fn minimax_builtin_models() -> Vec<DiscoveredModel> {
     use crate::adapters::discovery::build_discovered_model_full;
     vec![
@@ -544,200 +619,4 @@ pub fn minimax_builtin_models() -> Vec<DiscoveredModel> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_minimax_quota_with_end_times() {
-        let json = serde_json::json!({
-            "model_remains": [
-                {
-                    "start_time": 1787842800000_i64,
-                    "end_time": 1787860800000_i64,
-                    "remains_time": 11409757,
-                    "current_interval_total_count": 0,
-                    "current_interval_usage_count": 0,
-                    "model_name": "general",
-                    "current_weekly_total_count": 0,
-                    "current_weekly_usage_count": 0,
-                    "weekly_start_time": 1787529600000_i64,
-                    "weekly_end_time": 1788134400000_i64,
-                    "weekly_remains_time": 285009757,
-                    "current_interval_status": 2,
-                    "current_interval_remaining_percent": 0,
-                    "current_weekly_status": 1,
-                    "current_weekly_remaining_percent": 79
-                }
-            ],
-            "base_resp": {
-                "status_code": 0,
-                "status_msg": "success"
-            }
-        });
-
-        let quota = parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains")
-            .expect("quota parsed successfully");
-
-        assert_eq!(quota.session_reset_at.as_deref(), Some("1787860800"));
-        assert_eq!(quota.weekly_reset_at.as_deref(), Some("1788134400"));
-        assert_eq!(quota.session_used, Some(100));
-        assert_eq!(quota.session_limit, Some(100));
-        assert_eq!(quota.weekly_used, Some(21));
-        assert_eq!(quota.weekly_limit, Some(100));
-    }
-
-    #[test]
-    fn parses_minimax_quota_fallback_remains_time() {
-        let json = serde_json::json!({
-            "model_remains": [
-                {
-                    "remains_time": 3600000,
-                    "model_name": "coding-plan",
-                    "current_interval_total_count": 50,
-                    "current_interval_usage_count": 10
-                }
-            ]
-        });
-
-        let quota = parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains")
-            .expect("quota parsed successfully");
-
-        assert_eq!(quota.session_used, Some(10));
-        assert_eq!(quota.session_limit, Some(50));
-        assert!(quota.session_reset_at.is_some());
-    }
-
-    #[test]
-    fn parses_minimax_quota_code_2062_free_tier() {
-        let json = serde_json::json!({
-            "model_remains": null,
-            "base_resp": {
-                "status_code": 2062,
-                "status_msg": "no active token plan subscription"
-            }
-        });
-
-        let quota = parse_minimax_quota(&json, "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains")
-            .expect("2062 should parse as Free tier");
-
-        assert_eq!(quota.plan_name, Some("Free".to_string()));
-        assert!(quota.fetch_error.is_none());
-        assert_eq!(quota.session_used, None);
-        assert_eq!(quota.weekly_used, None);
-    }
-
-    #[test]
-    fn parses_minimax_quota_base_resp_error() {
-        let json = serde_json::json!({
-            "model_remains": null,
-            "base_resp": {
-                "status_code": 2001,
-                "status_msg": "invalid authorization token"
-            }
-        });
-
-        let err =
-            parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains").unwrap_err();
-
-        match err {
-            CoreError::UpstreamConnection(msg) => {
-                assert!(msg.contains("2001"));
-                assert!(msg.contains("invalid authorization token"));
-            }
-            other => panic!("expected UpstreamConnection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_minimax_chat_url_managed_and_byok() {
-        let mut adapter = MiniMaxAdapter::new();
-        let model = ModelId::new("MiniMax-M3");
-
-        // Default Managed (OAuth MiniMax Coding)
-        assert_eq!(
-            adapter.build_chat_url(TargetFormat::Anthropic, &model),
-            "https://agent.minimax.io/mavis/api/v1/llm/v1/messages"
-        );
-
-        // China Managed endpoint
-        adapter.config.base_url = "https://agent.minimax.cn".into();
-        assert_eq!(
-            adapter.build_chat_url(TargetFormat::Anthropic, &model),
-            "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages"
-        );
-
-        adapter.config.base_url = "https://agent.minimax.cn/mavis/api/v1/llm/v1".into();
-        assert_eq!(
-            adapter.build_chat_url(TargetFormat::Anthropic, &model),
-            "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages"
-        );
-
-        // BYOK endpoint
-        adapter.config.base_url = "https://api.minimax.io".into();
-        assert_eq!(
-            adapter.build_chat_url(TargetFormat::Anthropic, &model),
-            "https://api.minimax.io/anthropic/v1/messages?beta=true"
-        );
-    }
-
-    #[test]
-    fn test_parse_minimax_meta() {
-        let meta_str = r#"{"op_group_id":"grp_123","region":"cn","token_plan_tier":"Pro"}"#;
-        let (group, region, tier) = parse_minimax_meta(Some(meta_str));
-        assert_eq!(group.as_deref(), Some("grp_123"));
-        assert_eq!(region.as_deref(), Some("cn"));
-        assert_eq!(tier.as_deref(), Some("Pro"));
-    }
-
-    #[test]
-    fn test_minimax_build_headers() {
-        let adapter = MiniMaxAdapter::new();
-        let model = ModelId::new("MiniMax-M3");
-
-        // 1. OAuth access token (non-sk)
-        let headers_oauth = adapter.build_headers("test-token-123", TargetFormat::Anthropic, &model);
-        let find_oauth = |key: &str| headers_oauth.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
-
-        assert_eq!(find_oauth("Authorization"), Some("Bearer test-token-123"));
-        assert_eq!(find_oauth("x-api-key"), None);
-        assert_eq!(find_oauth("Content-Type"), Some("application/json"));
-        assert_eq!(find_oauth("User-Agent"), Some("MiniMaxAgent"));
-        assert_eq!(find_oauth("Anthropic-Version"), Some("2023-06-01"));
-        assert_eq!(find_oauth("X-Mavis-Agent-Id"), Some("main"));
-        assert_eq!(find_oauth("X-Mavis-Timezone-Offset"), Some("0"));
-        assert!(find_oauth("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
-
-        // 2. BYOK API key (sk-...)
-        let headers_sk = adapter.build_headers("sk-abc123456", TargetFormat::Anthropic, &model);
-        let find_sk = |key: &str| headers_sk.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
-
-        assert_eq!(find_sk("x-api-key"), Some("sk-abc123456"));
-        assert_eq!(find_sk("Authorization"), Some("Bearer sk-abc123456"));
-    }
-
-    #[tokio::test]
-    async fn test_minimax_fetch_models_oauth_returns_builtin_catalog() {
-        let adapter = MiniMaxAdapter::new();
-        let client = Arc::new(UpstreamClient::new());
-
-        // OAuth tokens (non-sk) must return builtin models immediately without HTTP calls
-        let models = adapter.fetch_models(&client, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...").await.unwrap();
-        assert!(!models.is_empty());
-        assert!(models.iter().any(|m| m.model_id.as_str() == "MiniMax-M3"));
-        assert!(models.iter().any(|m| m.model_id.as_str() == "MiniMax-M2.7-highspeed"));
-
-        // Empty key also returns catalog safely
-        let models_empty = adapter.fetch_models(&client, "").await.unwrap();
-        assert_eq!(models.len(), models_empty.len());
-    }
-
-    #[test]
-    fn test_minimax_builtin_models_structure() {
-        let models = minimax_builtin_models();
-        assert_eq!(models.len(), 5);
-        let m3 = models.iter().find(|m| m.model_id.as_str() == "MiniMax-M3").expect("MiniMax-M3 present");
-        assert_eq!(m3.context_length, Some(1_000_000));
-        assert_eq!(m3.max_output_tokens, Some(128_000));
-        assert_eq!(m3.target_format, TargetFormat::Anthropic);
-    }
-}
+mod tests;

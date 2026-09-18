@@ -112,6 +112,15 @@ pub fn build_opencode_headers(
     append_format_auth_headers(&mut headers, adapter, api_key, target_format);
 
     headers.extend(OpenCodeSpoofer.headers());
+
+    for (k, v) in &adapter.config().extra_headers {
+        if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+            headers[pos].1 = v.clone();
+        } else {
+            headers.push((k.clone(), v.clone()));
+        }
+    }
+
     headers
 }
 
@@ -250,6 +259,10 @@ impl OpenCodeAdapter {
             CoreError::Parse(format!("failed to re-serialize wrapped opencode body: {e}"))
         })?;
         Ok(bytes::Bytes::from(updated_bytes))
+    }
+
+    pub fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        Some(&mut self.config)
     }
 }
 
@@ -513,6 +526,9 @@ impl crate::adapters::ProviderAdapter for OpenCodeGoAdapter {
     fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
         self.0.config()
     }
+    fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        self.0.config_mut()
+    }
     fn is_anonymous_fallback(&self) -> bool {
         self.0.is_anonymous_fallback()
     }
@@ -567,6 +583,9 @@ impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
     fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
         self.0.config()
     }
+    fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        self.0.config_mut()
+    }
     fn is_anonymous_fallback(&self) -> bool {
         self.0.is_anonymous_fallback()
     }
@@ -610,6 +629,10 @@ impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
 impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
     fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
         &self.config
+    }
+
+    fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        Some(&mut self.config)
     }
 
     fn is_anonymous_fallback(&self) -> bool {
