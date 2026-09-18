@@ -34,9 +34,9 @@ static HEADER_X_GOOG_USER_PROJECT: HeaderName = HeaderName::from_static("x-goog-
 /// Known stable Antigravity version (must be >= the version Google's
 /// API requires to accept requests). Updated from the
 /// Antigravity-Manager reference.
-const KNOWN_STABLE_VERSION: &str = "4.3.0";
-const KNOWN_STABLE_CHROME: &str = "132.0.6834.160";
-const KNOWN_STABLE_ELECTRON: &str = "39.2.3";
+pub const KNOWN_STABLE_VERSION: &str = "4.3.0";
+pub const KNOWN_STABLE_CHROME: &str = "132.0.6834.160";
+pub const KNOWN_STABLE_ELECTRON: &str = "39.2.3";
 
 /// Platform info for the User-Agent string.
 fn platform_info() -> &'static str {

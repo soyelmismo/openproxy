@@ -375,38 +375,36 @@ async fn test_opencode_upstream_repo_headers_drift_detection() {
     // 1. Probe upstream client request.ts for new x-opencode headers
     let client_url = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/llm/request.ts";
     let req = UpstreamRequest::get(client_url);
-    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel.clone()).await {
-        if resp.status.is_success() {
-            if let Ok(body) = resp.collect().await {
-                let text = String::from_utf8_lossy(&body);
-                let re = regex::Regex::new(r#""(x-opencode-[a-z0-9-]+)""#).expect("regex");
-                for cap in re.captures_iter(&text) {
-                    let header = &cap[1];
-                    assert!(
-                        known_client_headers.contains(&header),
-                        "Upstream OpenCode added new client header '{header}' in request.ts! Update OpenProxy to support it."
-                    );
-                }
-            }
+    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel.clone()).await
+        && resp.status.is_success()
+        && let Ok(body) = resp.collect().await
+    {
+        let text = String::from_utf8_lossy(&body);
+        let re = regex::Regex::new(r#""(x-opencode-[a-z0-9-]+)""#).expect("regex");
+        for cap in re.captures_iter(&text) {
+            let header = &cap[1];
+            assert!(
+                known_client_headers.contains(&header),
+                "Upstream OpenCode added new client header '{header}' in request.ts! Update OpenProxy to support it."
+            );
         }
     }
 
     // 2. Probe upstream console zen handler.ts for new x-opencode headers
     let handler_url = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/console/app/src/routes/zen/util/handler.ts";
     let handler_req = UpstreamRequest::get(handler_url);
-    if let Ok(resp) = client.call(handler_req, TimeoutProfile::OAuth, cancel).await {
-        if resp.status.is_success() {
-            if let Ok(body) = resp.collect().await {
-                let text = String::from_utf8_lossy(&body);
-                let re = regex::Regex::new(r#""(x-opencode-[a-z0-9-]+)""#).expect("regex");
-                for cap in re.captures_iter(&text) {
-                    let header = &cap[1];
-                    assert!(
-                        known_server_headers.contains(&header),
-                        "Upstream OpenCode Zen handler references new header '{header}'! Update OpenProxy to support it."
-                    );
-                }
-            }
+    if let Ok(resp) = client.call(handler_req, TimeoutProfile::OAuth, cancel).await
+        && resp.status.is_success()
+        && let Ok(body) = resp.collect().await
+    {
+        let text = String::from_utf8_lossy(&body);
+        let re = regex::Regex::new(r#""(x-opencode-[a-z0-9-]+)""#).expect("regex");
+        for cap in re.captures_iter(&text) {
+            let header = &cap[1];
+            assert!(
+                known_server_headers.contains(&header),
+                "Upstream OpenCode Zen handler references new header '{header}'! Update OpenProxy to support it."
+            );
         }
     }
 }
