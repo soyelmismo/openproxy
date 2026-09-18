@@ -211,18 +211,21 @@ export const OAuthLogin: OAuthLoginShape = {
         error?: string;
         device_code?: string;
         verification_uri?: string;
+        verification_uri_complete?: string;
         user_code?: string;
       };
       if (resp.error) throw new Error(resp.error);
       const deviceInfo = document.getElementById("oauth-device-info");
       if (deviceInfo) {
         const verificationUri = resp.verification_uri || "";
+        const verificationUriComplete = resp.verification_uri_complete || "";
+        const targetUrl = verificationUriComplete || verificationUri;
         const userCode = resp.user_code || "";
         render(html`
           <div class="device-code-flow">
             <p>To log in with ${provider}:</p>
             <ol>
-              <li>Open <a href=${verificationUri} target="_blank" rel="noopener">${verificationUri}</a></li>
+              <li>Open <a href=${targetUrl} target="_blank" rel="noopener">${targetUrl}</a></li>
               <li>Enter code: <strong class="copy-text">${userCode}</strong></li>
             </ol>
             <p class="polling-status">Waiting for authorization...</p>

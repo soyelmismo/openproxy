@@ -68,11 +68,73 @@ function renderModelQuotaRows(details: ModelQuotaDetail[]): TemplateResult {
   </details>`;
 }
 
+interface ProviderSpecificMeta {
+  credit_balance?: string | number;
+  last_checkin_date?: string;
+  streak_days?: number;
+}
+
+function parseProviderSpecific(raw: string | null | undefined): ProviderSpecificMeta | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ProviderSpecificMeta;
+  } catch {
+    return null;
+  }
+}
+
+function formatCredits(val: string | number): string {
+  const num = typeof val === "number" ? val : parseFloat(val);
+  if (isNaN(num)) return String(val);
+  return new Intl.NumberFormat().format(num);
+}
+
+function renderMetaBadges(meta: ProviderSpecificMeta | null): TemplateResult | null {
+  if (!meta) return null;
+  const badges: TemplateResult[] = [];
+
+  if (meta.credit_balance != null && meta.credit_balance !== "") {
+    const formatted = formatCredits(meta.credit_balance);
+    badges.push(
+      html`<span class="quota-tag credits" title="Available Credits">🪙 ${formatted} credits</span>`
+    );
+  }
+
+  if (meta.last_checkin_date || meta.streak_days != null) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const isToday = meta.last_checkin_date === todayStr;
+    const streak = meta.streak_days ?? 0;
+    if (isToday) {
+      badges.push(
+        html`<span class="quota-tag checkin-done" title="Daily check-in completed today">✓ Checked in${streak > 0 ? ` (${streak}d streak)` : ""}</span>`
+      );
+    } else {
+      badges.push(
+        html`<span class="quota-tag checkin-pending" title="Daily check-in pending for today">⏳ Check-in pending${streak > 0 ? ` (${streak}d streak)` : ""}</span>`
+      );
+    }
+  }
+
+  if (badges.length === 0) return null;
+  return html`<div class="quota-meta-row">${badges}</div>`;
+}
+
 export function renderQuotaCell(a: Account): TemplateResult {
   if (a.quota_fetch_error) {
     return html`<div class="quota-cell error"><small>✗ ${a.quota_fetch_error}</small></div>`;
   }
+  const meta = parseProviderSpecific(a.oauth_provider_specific);
+  const badgesResult = renderMetaBadges(meta);
+
   if (a.quota_session_used == null && a.quota_weekly_used == null) {
+    if (a.quota_plan_name || badgesResult) {
+      return html`<div class="quota-cell">
+        <div class="quota-plan-row">
+          <small class="quota-plan">${a.quota_plan_name || "Free"}</small>
+        </div>
+        ${badgesResult}
+      </div>`;
+    }
     return html`<div class="quota-cell muted"><small>${a.quota_last_fetched_at ? "no quota data" : "quota: not fetched"}</small></div>`;
   }
   const sessionPct = (a.quota_session_limit && a.quota_session_limit > 0 && a.quota_session_used != null)
@@ -98,7 +160,9 @@ export function renderQuotaCell(a: Account): TemplateResult {
   const monthlyText = monthlyDetail ? getQuotaText(monthlyDetail.session_used, monthlyDetail.session_limit) : "";
 
   return html`<div class="quota-cell">
-    ${a.quota_plan_name ? html`<small class="quota-plan">${a.quota_plan_name}</small>` : null}
+    <div class="quota-plan-row">
+      ${a.quota_plan_name ? html`<small class="quota-plan">${a.quota_plan_name}</small>` : null}
+    </div>
     <div class="quota-bar ${sessionColor}">
       <div class="quota-bar-header">
         <span class="quota-bar-label-left">5h Window</span>
@@ -128,6 +192,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
       </div>
     </div>` : null}
     ${otherModels && otherModels.length > 0 ? renderModelQuotaRows(otherModels) : null}
+    ${badgesResult}
   </div>`;
 }
 

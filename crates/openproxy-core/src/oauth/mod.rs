@@ -46,6 +46,7 @@ pub mod cline;
 pub mod codex;
 pub mod generic;
 pub mod kiro;
+pub mod minimax;
 pub mod tickets;
 
 /// A reference to either a `DbPool` or a locked/lockable database `Connection`.
@@ -380,6 +381,7 @@ define_oauth_provider! {
             Codex(self::codex::CodexOAuthProvider),
             Cline(self::cline::ClineOAuthProvider),
             Kiro(self::kiro::KiroOAuthProvider),
+            MiniMax(self::minimax::MiniMaxOAuthProvider),
         }
         custom {
             Generic(self::generic::GenericOAuthProvider),

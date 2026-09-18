@@ -29,9 +29,12 @@ impl MiniMaxAdapter {
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
                 base_url: "https://api.minimax.io".into(),
-                auth_type: AdapterAuthType::Bearer,
+                auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Anthropic,
-                extra_headers: vec![("Anthropic-Version".into(), "2023-06-01".into())],
+                extra_headers: vec![
+                    ("Anthropic-Version".into(), "2023-06-01".into()),
+                    ("User-Agent".into(), "MiniMaxAgent".into()),
+                ],
             },
         }
     }
@@ -55,14 +58,52 @@ impl ProviderAdapter for MiniMaxAdapter {
         meta.deletable = false;
         meta.supports_quota = true;
         meta.quota_refresh_supported = true;
+        meta.requires_oauth = false;
         meta
     }
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        // MiniMax exposes the Anthropic Messages API at /anthropic/v1/messages.
-        // The `?beta=true` query parameter is required to enable the relevant
-        // beta features (tool use, prompt caching, etc.).
-        format!("{}/anthropic/v1/messages?beta=true", self.config.base_url)
+        let base = self.config.base_url.trim_end_matches('/');
+        if base.contains("agent.minimax") {
+            if base.ends_with("/messages") {
+                base.to_string()
+            } else if base.ends_with("/v1") {
+                format!("{base}/messages")
+            } else {
+                format!("{base}/mavis/api/v1/llm/v1/messages")
+            }
+        } else {
+            // Standard Anthropic Messages endpoint on api.minimax.io
+            format!("{base}/anthropic/v1/messages?beta=true")
+        }
+    }
+
+    fn build_headers(
+        &self,
+        api_key: &str,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let mut headers = Vec::with_capacity(7 + self.config.extra_headers.len());
+        if let Some((name, value)) = self.build_auth_header(api_key) {
+            headers.push((name, value));
+        }
+        headers.push(("Content-Type".into(), "application/json".into()));
+        headers.push(("User-Agent".into(), "MiniMaxAgent".into()));
+        headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
+        headers.push(("X-Mavis-Agent-Id".into(), "main".into()));
+        headers.push(("X-Mavis-Timezone-Offset".into(), "0".into()));
+        headers.push((
+            "X-Mavis-Session-Id".into(),
+            format!("session_{}", uuid::Uuid::new_v4().simple()),
+        ));
+
+        for (k, v) in &self.config.extra_headers {
+            if !headers.iter().any(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+        headers
     }
 
     fn models_url(&self) -> Option<String> {
@@ -77,35 +118,109 @@ impl ProviderAdapter for MiniMaxAdapter {
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
+        let trimmed = api_key.trim();
+        // MiniMax's public /v1/models endpoint strictly requires an API secret key ("sk-...").
+        // OAuth access tokens (JWTs) are rejected with HTTP 401 code 1004 ("Please carry the API secret key").
+        // For OAuth tokens or non-sk credentials, return the canonical builtin catalog immediately.
+        if !trimmed.starts_with("sk-") {
+            return Ok(minimax_builtin_models());
+        }
+
         let url = self.models_url().ok_or_else(|| {
             CoreError::Internal("minimax: models_url is None (impossible)".into())
         })?;
 
-        fetch_openai_models(
+        match fetch_openai_models(
             &url,
             upstream_client,
-            api_key,
+            trimmed,
             "minimax",
             openproxy_types::TargetFormat::Anthropic,
         )
         .await
+        {
+            Ok(models) if !models.is_empty() => Ok(models),
+            Ok(_) | Err(_) => Ok(minimax_builtin_models()),
+        }
     }
 
     async fn fetch_quota(
         &self,
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
-        _: Option<&str>,
-        _: Option<&str>,
+        access_token: Option<&str>,
+        provider_specific: Option<&str>,
     ) -> Option<Result<openproxy_types::AccountQuota>> {
         Some(
-            self.fetch_minimax_quota_local(upstream_client, api_key)
-                .await,
+            self.fetch_minimax_quota_unified(
+                upstream_client,
+                api_key,
+                access_token,
+                provider_specific,
+            )
+            .await,
         )
     }
 }
 
 impl MiniMaxAdapter {
+    async fn fetch_minimax_quota_unified(
+        &self,
+        upstream: &Arc<UpstreamClient>,
+        api_key: &str,
+        access_token: Option<&str>,
+        provider_specific: Option<&str>,
+    ) -> Result<openproxy_types::AccountQuota> {
+        let token = access_token.map(str::trim).filter(|t| !t.is_empty());
+        if let Some(token) = token {
+            let (op_group_id, region, tier) = parse_minimax_meta(provider_specific);
+            let platform_origin = match region.as_deref() {
+                Some("cn") => "https://platform.minimaxi.com",
+                _ => "https://platform.minimax.io",
+            };
+            let url = format!("{platform_origin}/v1/api/openplatform/coding_plan/remains");
+
+            let mut req = UpstreamRequest::get(&url);
+            if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {token}")) {
+                req.headers.insert(http::header::AUTHORIZATION, val);
+            }
+            if let Some(ref gid) = op_group_id
+                && let Ok(val) = http::HeaderValue::from_str(gid)
+            {
+                req.headers.insert(http::HeaderName::from_static("x-group-id"), val);
+            }
+            req.headers.insert(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/json"),
+            );
+
+            let cancel = CancellationToken::new();
+            let response = upstream
+                .call(req, TimeoutProfile::Quota, cancel)
+                .await
+                .map_err(|e| e.to_core_error(&url))?;
+
+            if !response.status.is_success() {
+                return Err(CoreError::UpstreamConnection(format!(
+                    "{url}: status {}",
+                    response.status.as_u16()
+                )));
+            }
+
+            let body_bytes = response.collect().await.map_err(|e| e.to_core_error(&url))?;
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes)
+                .map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
+
+            let mut quota = parse_minimax_quota(&json, &url)?;
+            if quota.plan_name.is_none() && tier.is_some() {
+                quota.plan_name = tier;
+            }
+            return Ok(quota);
+        }
+
+        self.fetch_minimax_quota_local(upstream, api_key).await
+    }
+
     async fn fetch_minimax_quota_local(
         &self,
         upstream: &Arc<UpstreamClient>,
@@ -214,6 +329,22 @@ fn parse_minimax_quota(
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         if code != 0 {
+            // MiniMax returns 2062 ("no active token plan subscription") for accounts
+            // that do not have an active paid coding plan subscription (Free tier / daily check-in credits).
+            if code == 2062 {
+                return Ok(openproxy_types::AccountQuota {
+                    session_used: None,
+                    session_limit: None,
+                    session_reset_at: None,
+                    weekly_used: None,
+                    weekly_limit: None,
+                    weekly_reset_at: None,
+                    plan_name: Some("Free".to_string()),
+                    last_fetched_at: openproxy_types::now_unix_secs_str(),
+                    fetch_error: None,
+                    model_details: None,
+                });
+            }
             let msg = base_resp
                 .get("status_msg")
                 .and_then(|v| v.as_str())
@@ -333,6 +464,75 @@ fn ms_epoch_to_secs_str(ms: i64) -> Option<String> {
     Some(secs.to_string())
 }
 
+fn parse_minimax_meta(
+    provider_specific: Option<&str>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let Some(raw) = provider_specific else {
+        return (None, None, None);
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (None, None, None);
+    };
+    let op_group = json
+        .get("op_group_id")
+        .and_then(serde_json::Value::as_str)
+        .map(std::string::ToString::to_string);
+    let region = json
+        .get("region")
+        .and_then(serde_json::Value::as_str)
+        .map(std::string::ToString::to_string);
+    let tier = json
+        .get("token_plan_tier")
+        .and_then(serde_json::Value::as_str)
+        .map(std::string::ToString::to_string);
+    (op_group, region, tier)
+}
+
+/// Canonical model catalog for MiniMax.
+///
+/// Matches the upstream `MINIMAX_MODELS` specification from `MiniMax-AI/minimax-code`
+/// (`packages/config/src/config.ts`) as well as OpenProxy's database pricing catalog.
+pub fn minimax_builtin_models() -> Vec<DiscoveredModel> {
+    use crate::adapters::discovery::build_discovered_model_full;
+    vec![
+        build_discovered_model_full(
+            "MiniMax-M3".into(),
+            Some("MiniMax-M3".into()),
+            TargetFormat::Anthropic,
+            Some(1_000_000),
+            Some(128_000),
+        ),
+        build_discovered_model_full(
+            "MiniMax-M2.7-highspeed".into(),
+            Some("MiniMax-M2.7-highspeed".into()),
+            TargetFormat::Anthropic,
+            Some(200_000),
+            Some(128_000),
+        ),
+        build_discovered_model_full(
+            "MiniMax-M2.7".into(),
+            Some("MiniMax-M2.7".into()),
+            TargetFormat::Anthropic,
+            Some(200_000),
+            Some(128_000),
+        ),
+        build_discovered_model_full(
+            "minimax-m2.1".into(),
+            Some("MiniMax-M2.1".into()),
+            TargetFormat::Anthropic,
+            Some(200_000),
+            Some(128_000),
+        ),
+        build_discovered_model_full(
+            "MiniMax-M2".into(),
+            Some("MiniMax-M2".into()),
+            TargetFormat::Anthropic,
+            Some(200_000),
+            Some(128_000),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_minimax_quota_base_resp_error() {
+    fn parses_minimax_quota_code_2062_free_tier() {
         let json = serde_json::json!({
             "model_remains": null,
             "base_resp": {
@@ -407,15 +607,111 @@ mod tests {
             }
         });
 
+        let quota = parse_minimax_quota(&json, "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains")
+            .expect("2062 should parse as Free tier");
+
+        assert_eq!(quota.plan_name, Some("Free".to_string()));
+        assert!(quota.fetch_error.is_none());
+        assert_eq!(quota.session_used, None);
+        assert_eq!(quota.weekly_used, None);
+    }
+
+    #[test]
+    fn parses_minimax_quota_base_resp_error() {
+        let json = serde_json::json!({
+            "model_remains": null,
+            "base_resp": {
+                "status_code": 2001,
+                "status_msg": "invalid authorization token"
+            }
+        });
+
         let err =
             parse_minimax_quota(&json, "https://api.minimax.io/v1/token_plan/remains").unwrap_err();
 
         match err {
             CoreError::UpstreamConnection(msg) => {
-                assert!(msg.contains("2062"));
-                assert!(msg.contains("no active token plan subscription"));
+                assert!(msg.contains("2001"));
+                assert!(msg.contains("invalid authorization token"));
             }
             other => panic!("expected UpstreamConnection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_minimax_chat_url_managed_and_byok() {
+        let mut adapter = MiniMaxAdapter::new();
+        let model = ModelId::new("MiniMax-M3");
+
+        // Default BYOK
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Anthropic, &model),
+            "https://api.minimax.io/anthropic/v1/messages?beta=true"
+        );
+
+        // Managed endpoint
+        adapter.config.base_url = "https://agent.minimax.io".into();
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Anthropic, &model),
+            "https://agent.minimax.io/mavis/api/v1/llm/v1/messages"
+        );
+
+        adapter.config.base_url = "https://agent.minimax.cn/mavis/api/v1/llm/v1".into();
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Anthropic, &model),
+            "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages"
+        );
+    }
+
+    #[test]
+    fn test_parse_minimax_meta() {
+        let meta_str = r#"{"op_group_id":"grp_123","region":"cn","token_plan_tier":"Pro"}"#;
+        let (group, region, tier) = parse_minimax_meta(Some(meta_str));
+        assert_eq!(group.as_deref(), Some("grp_123"));
+        assert_eq!(region.as_deref(), Some("cn"));
+        assert_eq!(tier.as_deref(), Some("Pro"));
+    }
+
+    #[test]
+    fn test_minimax_build_headers() {
+        let adapter = MiniMaxAdapter::new();
+        let model = ModelId::new("MiniMax-M3");
+        let headers = adapter.build_headers("test-token-123", TargetFormat::Anthropic, &model);
+
+        let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+        assert_eq!(find("Authorization"), Some("Bearer test-token-123"));
+        assert_eq!(find("Content-Type"), Some("application/json"));
+        assert_eq!(find("User-Agent"), Some("MiniMaxAgent"));
+        assert_eq!(find("Anthropic-Version"), Some("2023-06-01"));
+        assert_eq!(find("X-Mavis-Agent-Id"), Some("main"));
+        assert_eq!(find("X-Mavis-Timezone-Offset"), Some("0"));
+        assert!(find("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
+    }
+
+    #[tokio::test]
+    async fn test_minimax_fetch_models_oauth_returns_builtin_catalog() {
+        let adapter = MiniMaxAdapter::new();
+        let client = Arc::new(UpstreamClient::new());
+
+        // OAuth tokens (non-sk) must return builtin models immediately without HTTP calls
+        let models = adapter.fetch_models(&client, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...").await.unwrap();
+        assert!(!models.is_empty());
+        assert!(models.iter().any(|m| m.model_id.as_str() == "MiniMax-M3"));
+        assert!(models.iter().any(|m| m.model_id.as_str() == "MiniMax-M2.7-highspeed"));
+
+        // Empty key also returns catalog safely
+        let models_empty = adapter.fetch_models(&client, "").await.unwrap();
+        assert_eq!(models.len(), models_empty.len());
+    }
+
+    #[test]
+    fn test_minimax_builtin_models_structure() {
+        let models = minimax_builtin_models();
+        assert_eq!(models.len(), 5);
+        let m3 = models.iter().find(|m| m.model_id.as_str() == "MiniMax-M3").expect("MiniMax-M3 present");
+        assert_eq!(m3.context_length, Some(1_000_000));
+        assert_eq!(m3.max_output_tokens, Some(128_000));
+        assert_eq!(m3.target_format, TargetFormat::Anthropic);
     }
 }

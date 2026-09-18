@@ -191,7 +191,7 @@ async function onApplyLocalCli(accountId: number): Promise<void> {
 // ================================
 
 export function renderOAuthSection(provider: Provider): TemplateResult {
-  if (provider.auth_type !== 'oauth') return html``;
+  if (provider.auth_type !== 'oauth' && !provider.oauth_flows?.length) return html``;
   const buttons: TemplateResult[] = [];
   if (
     provider.oauth_flows?.includes('pkce') ||

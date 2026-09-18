@@ -401,7 +401,9 @@ fn enrich_provider_with_oauth(
     adapters: &[openproxy_adapters::adapters::ProviderAdapterEnum],
     r: &rusqlite::Connection,
 ) -> ProviderWithOAuth {
-    let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {
+    let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth
+        || registry.get(p.id.as_str()).is_some()
+    {
         if let Some(oauth_impl) = registry.get(p.id.as_str()) {
             let mut f = Vec::new();
             match oauth_impl.flow() {

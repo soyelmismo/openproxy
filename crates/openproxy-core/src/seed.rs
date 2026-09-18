@@ -344,7 +344,7 @@ mod tests {
         let minimax = providers::get(&conn, &ProviderId::new("minimax"))
             .expect("get")
             .unwrap();
-        assert_eq!(minimax.auth_type, AuthType::Bearer);
+        assert_eq!(minimax.auth_type, AuthType::OAuth);
         assert_eq!(minimax.format, ProviderFormat::Anthropic);
 
         let zen = providers::get(&conn, &ProviderId::new("opencode-zen"))
