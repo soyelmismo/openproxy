@@ -146,7 +146,21 @@ fn test_antigravity_golden_contract_spec_parity() {
 
     let inner_req = serde_json::json!({
         "contents": [
-            {"role": "user", "parts": [{"text": "hello"}]}
+            {"role": "user", "parts": [{"text": "hello"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {"thought": true, "text": "thinking...", "thought_signature": "existing_snake_sig"},
+                    {"functionCall": {"name": "bash", "args": {"command": "ls"}}}
+                ]
+            },
+            {"role": "user", "parts": [{"text": "next command?"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "read_file", "args": {"path": "main.rs"}}}
+                ]
+            }
         ]
     });
     let wrapped = adapter
@@ -160,11 +174,37 @@ fn test_antigravity_golden_contract_spec_parity() {
 
     let val: serde_json::Value = serde_json::from_slice(&wrapped).expect("valid json");
     assert_eq!(val["project"], "p-proj-123");
+    assert_eq!(val["model"], "gemini-pro-agent", "must map gemini-3.1-pro to physical gemini-pro-agent");
     assert_eq!(val["requestType"], "agent");
     assert_eq!(val["userAgent"], "antigravity");
     assert_eq!(val["enabledCreditTypes"], serde_json::json!(["GOOGLE_ONE_AI"]));
     assert!(val.get("requestId").is_some());
-    assert!(val.get("request").is_some());
+
+    // Verify thought signature normalization, purging of snake_case, and sentinel injection
+    let req_contents = &val["request"]["contents"];
+    let turn1_parts = &req_contents[1]["parts"];
+    assert_eq!(
+        turn1_parts[0]["thoughtSignature"],
+        "existing_snake_sig",
+        "thought part must normalize snake_case thought_signature to camelCase"
+    );
+    assert!(
+        turn1_parts[0].get("thought_signature").is_none(),
+        "Google API rejects snake_case thought_signature, must be removed"
+    );
+    assert_eq!(
+        turn1_parts[1]["thoughtSignature"],
+        "skip_thought_signature_validator",
+        "functionCall part must have sentinel signature"
+    );
+
+    // Verify turn 3: functionCall with NO preceding thought part must have placeholder thought injected
+    let turn3_parts = &req_contents[3]["parts"];
+    assert_eq!(turn3_parts.as_array().unwrap().len(), 2, "must prepend placeholder thought block");
+    assert_eq!(turn3_parts[0]["thought"], true);
+    assert_eq!(turn3_parts[0]["text"], "...");
+    assert_eq!(turn3_parts[0]["thoughtSignature"], "skip_thought_signature_validator");
+    assert_eq!(turn3_parts[1]["thoughtSignature"], "skip_thought_signature_validator");
 }
 
 #[tokio::test]
@@ -256,6 +296,24 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
     assert!(
         oauth_ts.contains(&DEFAULT_CLIENT_SECRET.to_string()),
         "Upstream oauth.rs CLIENT_SECRET diverged from OpenProxy"
+    );
+
+    // 4. Probe upstream thinking_store.rs for chat request thought signature contracts
+    let thinking_url = format!("{raw_base}/src-tauri/src/proxy/thinking_store.rs");
+    let resp = client
+        .call(UpstreamRequest::get(&thinking_url), TimeoutProfile::OAuth, cancel)
+        .await
+        .expect("fetch thinking_store.rs");
+    let thinking_bytes = resp.collect().await.expect("read thinking_store body");
+    let thinking_ts = String::from_utf8_lossy(&thinking_bytes);
+
+    assert!(
+        thinking_ts.contains("skip_thought_signature_validator"),
+        "Upstream thinking_store.rs SENTINEL_SIGNATURE diverged from OpenProxy"
+    );
+    assert!(
+        thinking_ts.contains("gemini-pro-agent"),
+        "Upstream thinking_store.rs missing physical gemini-pro-agent"
     );
 }
 

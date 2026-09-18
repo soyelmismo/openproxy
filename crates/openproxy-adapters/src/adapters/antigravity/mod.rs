@@ -15,15 +15,15 @@ pub use quota::{
     parse_antigravity_user_quota_summary, prune_plan_cache,
 };
 pub use tokens::{
-    COUNT_TOKENS_URL, LOAD_CODE_ASSIST_URL, ONBOARD_USER_URL, count_tokens, load_code_assist,
-    onboard_user, parse_total_tokens,
+    COUNT_TOKENS_URL, LOAD_CODE_ASSIST_URL, ONBOARD_USER_URL, SENTINEL_SIGNATURE, count_tokens,
+    load_code_assist, onboard_user, parse_total_tokens,
 };
 
 crate::define_jump_map! {
     /// Jump map for Antigravity physical model translation.
     pub fn map_antigravity_physical_model(model: &str) -> &str {
-        "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",
-        "gemini-3.5-flash-high" => "gemini-3-flash-agent",
+        "gemini-3.1-pro" | "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" | "gemini-3-pro" => "gemini-pro-agent",
+        "gemini-3.5-flash" | "gemini-3.5-flash-high" | "gemini-3.5-flash-medium" | "gemini-3-flash" => "gemini-3-flash-agent",
         other => other,
     }
 }

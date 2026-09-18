@@ -133,14 +133,22 @@ fn test_inject_sentinel_thought_signatures_flash() {
     ]);
 
     tokens::inject_sentinel_thought_signatures(&mut contents, "gemini-3.7-flash-high");
-    let fc_part = &contents[0]["parts"][0];
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+    assert_eq!(parts.len(), 2, "must prepend placeholder thought block before functionCall");
+    
+    // Part 0: prepended placeholder thought
+    assert_eq!(parts[0]["thought"], true);
+    assert_eq!(parts[0]["text"], "...");
+    assert_eq!(parts[0]["thoughtSignature"], "skip_thought_signature_validator");
+
+    // Part 1: functionCall with sentinel signature and cleaned snake_case
     assert_eq!(
-        fc_part["thoughtSignature"],
+        parts[1]["thoughtSignature"],
         "skip_thought_signature_validator"
     );
-    assert_eq!(
-        fc_part["thought_signature"],
-        "skip_thought_signature_validator"
+    assert!(
+        parts[1].get("thought_signature").is_none(),
+        "snake_case thought_signature must be purged for Google Cloud Code API"
     );
 }
 

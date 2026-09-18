@@ -97,44 +97,151 @@ pub async fn onboard_user(
         .map(std::string::ToString::to_string))
 }
 
-fn patch_part_thought_signature(part: &mut serde_json::Value) {
-    let has_fc = part.get("functionCall").is_some() || part.get("function_call").is_some();
-    if has_fc
-        && part.get("thoughtSignature").is_none()
-        && part.get("thought_signature").is_none()
-        && let Some(obj) = part.as_object_mut()
+pub const SENTINEL_SIGNATURE: &str = "skip_thought_signature_validator";
+
+pub(crate) fn is_real_signature(sig: &str) -> bool {
+    sig.len() >= 50 && sig != SENTINEL_SIGNATURE
+}
+
+/// Models that require thinking / thought signatures on Google Cloud Code (Antigravity).
+/// Aligned 1:1 with Antigravity-Manager `model_forces_server_thinking`.
+pub(crate) fn should_inject_thought_signatures(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    if m.is_empty()
+        || m.contains("image")
+        || m.contains("imagen")
+        || m.contains("embed")
+        || m.contains("lite")
     {
-        obj.insert(
-            "thoughtSignature".to_string(),
-            serde_json::json!("skip_thought_signature_validator"),
-        );
-        obj.insert(
-            "thought_signature".to_string(),
-            serde_json::json!("skip_thought_signature_validator"),
-        );
+        return false;
     }
+    m.contains("claude")
+        || m.contains("gemini")
+        || m.contains("flash")
+        || m.contains("pro")
+        || m.contains("agent")
+        || m.contains("thinking")
+        || m.contains("o1")
+        || m.contains("o3")
+        || m.contains("deepseek")
 }
 
 pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &str) {
-    let bytes = model.as_bytes();
-    let contains = |needle: &str| -> bool {
-        bytes
-            .windows(needle.len())
-            .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
-    };
-    let is_flash_or_agent = (contains("gemini") && contains("flash"))
-        || contains("gemini-pro-agent")
-        || contains("gemini-3-flash-agent");
-    if !is_flash_or_agent {
+    let is_thinking_enabled = should_inject_thought_signatures(model);
+    let Some(arr) = contents.as_array_mut() else {
         return;
-    }
-    if let Some(arr) = contents.as_array_mut() {
-        for msg in arr {
-            if let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) {
-                for part in parts {
-                    patch_part_thought_signature(part);
+    };
+
+    for msg in arr {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        let is_model = role == "model" || role == "assistant";
+
+        let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) else {
+            continue;
+        };
+
+        if !is_thinking_enabled {
+            let mut cleaned_parts = Vec::with_capacity(parts.len());
+            for mut part in parts.drain(..) {
+                if let Some(obj) = part.as_object_mut() {
+                    obj.remove("thought_signature");
+                    obj.remove("thoughtSignature");
+                }
+                let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
+                    || (part.get("thoughtSignature").is_some()
+                        && part.get("functionCall").is_none()
+                        && part.get("functionResponse").is_none());
+                if is_thought {
+                    let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+                    if !text.is_empty() && text != "..." && text != "·" {
+                        cleaned_parts.push(serde_json::json!({ "text": text }));
+                    }
+                } else {
+                    cleaned_parts.push(part);
+                }
+            }
+            *parts = cleaned_parts;
+            continue;
+        }
+
+        // Clean snake_case thought_signature and normalize to camelCase thoughtSignature
+        for part in parts.iter_mut() {
+            if let Some(obj) = part.as_object_mut()
+                && let Some(sig) = obj.remove("thought_signature")
+                && !obj.contains_key("thoughtSignature")
+            {
+                obj.insert("thoughtSignature".to_string(), sig);
+            }
+        }
+
+        if !is_model {
+            continue;
+        }
+
+        let mut thinking_parts = Vec::new();
+        let mut other_parts = Vec::new();
+
+        for part in parts.drain(..) {
+            let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
+                || (part.get("thoughtSignature").is_some()
+                    && part.get("functionCall").is_none()
+                    && part.get("functionResponse").is_none());
+            if is_thought {
+                thinking_parts.push(part);
+            } else {
+                other_parts.push(part);
+            }
+        }
+
+        let turn_real_sig = other_parts.iter().find_map(|p| {
+            if p.get("functionCall").is_some() || p.get("function_call").is_some() {
+                p.get("thoughtSignature")
+                    .and_then(|s| s.as_str())
+                    .filter(|s| is_real_signature(s))
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        });
+
+        if thinking_parts.is_empty() {
+            let has_fc = other_parts.iter().any(|p| {
+                p.get("functionCall").is_some() || p.get("function_call").is_some()
+            });
+            if has_fc {
+                let sig = turn_real_sig.as_deref().unwrap_or(SENTINEL_SIGNATURE);
+                thinking_parts.push(serde_json::json!({
+                    "text": "...",
+                    "thought": true,
+                    "thoughtSignature": sig,
+                }));
+            }
+        } else if let Some(ref real_sig) = turn_real_sig {
+            for tp in &mut thinking_parts {
+                let valid = tp
+                    .get("thoughtSignature")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(is_real_signature);
+                if !valid {
+                    tp["thoughtSignature"] = serde_json::json!(real_sig);
+                }
+            }
+        } else {
+            for tp in &mut thinking_parts {
+                if tp.get("thoughtSignature").is_none() {
+                    tp["thoughtSignature"] = serde_json::json!(SENTINEL_SIGNATURE);
                 }
             }
         }
+
+        for part in &mut other_parts {
+            let has_fc = part.get("functionCall").is_some() || part.get("function_call").is_some();
+            if has_fc && part.get("thoughtSignature").is_none() {
+                part["thoughtSignature"] = serde_json::json!(SENTINEL_SIGNATURE);
+            }
+        }
+
+        parts.extend(thinking_parts);
+        parts.extend(other_parts);
     }
 }
