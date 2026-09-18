@@ -205,6 +205,22 @@ fn test_antigravity_golden_contract_spec_parity() {
     assert_eq!(turn3_parts[0]["text"], "...");
     assert_eq!(turn3_parts[0]["thoughtSignature"], "skip_thought_signature_validator");
     assert_eq!(turn3_parts[1]["thoughtSignature"], "skip_thought_signature_validator");
+
+    // Verify Gemini 3.8 Flash (from agy CLI) mapping to physical agent
+    let flash_wrapped = adapter
+        .wrap_request_body(
+            bytes::Bytes::from(serde_json::to_vec(&inner_req).unwrap()),
+            TargetFormat::Gemini,
+            &ModelId::new("gemini-3.8-flash"),
+            &target,
+        )
+        .expect("wrap antigravity request for flash");
+    let flash_val: serde_json::Value = serde_json::from_slice(&flash_wrapped).expect("valid json");
+    assert_eq!(
+        flash_val["model"],
+        "gemini-3-flash-agent",
+        "must map gemini-3.8-flash to physical gemini-3-flash-agent"
+    );
 }
 
 #[tokio::test]
@@ -319,31 +335,36 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
 
 #[tokio::test]
 async fn test_antigravity_auto_updater_feed_parity() {
-    let feed_url = "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases";
+    let feeds = [
+        ("gui", "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases"),
+        ("cli", "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/releases"),
+    ];
     let client = UpstreamClient::new();
-    let cancel = CancellationToken::new();
 
-    let req = UpstreamRequest::get(feed_url);
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
-        Ok(r) if r.status.is_success() => r,
-        Ok(r) => {
-            eprintln!("[AntigravityContractTest] Auto-updater HTTP {}, skipping feed check", r.status);
-            return;
-        }
-        Err(e) => {
-            eprintln!("[AntigravityContractTest] Auto-updater unreachable ({e}), skipping feed check");
-            return;
-        }
-    };
+    for (flavor, feed_url) in feeds {
+        let cancel = CancellationToken::new();
+        let req = UpstreamRequest::get(feed_url);
+        let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
+            Ok(r) if r.status.is_success() => r,
+            Ok(r) => {
+                eprintln!("[AntigravityContractTest] Auto-updater ({flavor}) HTTP {}, skipping feed check", r.status);
+                continue;
+            }
+            Err(e) => {
+                eprintln!("[AntigravityContractTest] Auto-updater ({flavor}) unreachable ({e}), skipping feed check");
+                continue;
+            }
+        };
 
-    let body_bytes = resp.collect().await.expect("read releases feed");
-    let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse releases json");
-    let releases = json.as_array().expect("releases must be an array");
+        let body_bytes = resp.collect().await.expect("read releases feed");
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse releases json");
+        let releases = json.as_array().expect("releases must be an array");
 
-    assert!(!releases.is_empty(), "Google Auto-Updater feed returned empty list");
-    let first_version = releases[0]["version"].as_str().expect("release has version string");
-    assert!(
-        first_version.split('.').count() >= 3,
-        "Google Auto-Updater version must follow semver X.Y.Z: {first_version}"
-    );
+        assert!(!releases.is_empty(), "Google Auto-Updater ({flavor}) feed returned empty list");
+        let first_version = releases[0]["version"].as_str().expect("release has version string");
+        assert!(
+            first_version.split('.').count() >= 3,
+            "Google Auto-Updater ({flavor}) version must follow semver X.Y.Z: {first_version}"
+        );
+    }
 }
