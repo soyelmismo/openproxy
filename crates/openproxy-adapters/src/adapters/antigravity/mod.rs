@@ -174,6 +174,10 @@ impl ProviderAdapter for AntigravityAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata {
             built_in: true,

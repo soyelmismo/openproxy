@@ -361,6 +361,15 @@ impl PipelineStage for DispatchStage {
                 &ctx.req.request_headers,
                 &ctx.req.openai_request,
             );
+        } else if target.provider_id.as_str().starts_with("antigravity")
+            || adapter.id().as_str().starts_with("antigravity")
+            || target.provider_id.as_str() == "agy"
+            || adapter.id().as_str() == "agy"
+        {
+            propagate_antigravity_headers(
+                &mut headers,
+                &ctx.req.request_headers,
+            );
         }
 
         openproxy_types::emit_stage_event!(
@@ -690,7 +699,9 @@ impl PipelineStage for CustomAdapterStage {
     }
 }
 
-pub(crate) use super::target_headers::propagate_opencode_headers;
+pub(crate) use super::target_headers::{
+    propagate_antigravity_headers, propagate_opencode_headers,
+};
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

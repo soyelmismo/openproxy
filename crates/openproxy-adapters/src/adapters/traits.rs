@@ -87,6 +87,11 @@ pub trait ProviderAdapter: Send + Sync {
     /// Static configuration snapshot.
     fn config(&self) -> &ProviderAdapterConfig;
 
+    /// Mutable configuration access (for dynamic extra headers / overrides).
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        None
+    }
+
     /// Provider metadata for frontend/admin
     fn metadata(&self) -> ProviderMetadata {
         let built_in = true;

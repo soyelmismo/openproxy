@@ -116,6 +116,31 @@ pub fn propagate_opencode_headers(
     set_header(headers, "User-Agent", ua.to_string());
 }
 
+/// Propagate downstream client headers for Google Antigravity.
+///
+/// Forwards trace IDs, custom client extension headers, and safe x-goog-* headers
+/// while strictly preserving machine identity, auth, and preventing bot-triggering headers.
+pub fn propagate_antigravity_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    for (k, v) in request_headers {
+        let lower = k.to_ascii_lowercase();
+        let is_allowed = lower.starts_with("x-cloudaicompanion-")
+            || lower.starts_with("x-antigravity-")
+            || (lower.starts_with("x-client-") && lower != "x-client-name" && lower != "x-client-version")
+            || (lower.starts_with("x-goog-") && lower != "x-goog-api-client" && lower != "x-goog-user-project");
+
+        if is_allowed {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +208,36 @@ mod tests {
                 .map(|(_, v)| v.as_str())
         };
         assert_eq!(find("User-Agent"), Some("opencode/1.19.0"));
+    }
+
+    #[test]
+    fn test_propagate_antigravity_headers() {
+        let mut headers = vec![
+            ("User-Agent".into(), "Antigravity/4.3.0".into()),
+            ("x-client-name".into(), "antigravity".into()),
+            ("x-client-version".into(), "4.3.0".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("x-cloudaicompanion-trace-id".into(), "0x123abc".into());
+        req_headers.insert("x-antigravity-custom".into(), "custom-val".into());
+        req_headers.insert("x-goog-new-feature".into(), "enabled".into());
+        // Prohibited headers must be skipped
+        req_headers.insert("x-goog-api-client".into(), "malicious-sdk".into());
+        req_headers.insert("x-client-version".into(), "hack".into());
+
+        propagate_antigravity_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("x-cloudaicompanion-trace-id"), Some("0x123abc"));
+        assert_eq!(find("x-antigravity-custom"), Some("custom-val"));
+        assert_eq!(find("x-goog-new-feature"), Some("enabled"));
+        assert_eq!(find("x-goog-api-client"), None);
+        assert_eq!(find("x-client-version"), Some("4.3.0"));
     }
 }
