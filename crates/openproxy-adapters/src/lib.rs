@@ -7,8 +7,8 @@ pub mod spoofer;
 pub mod upstream;
 
 pub use spoofer::{
-    AntigravitySpoofer, ClientSpoofer, ClineSpoofer, CodexSpoofer, KilocodeSpoofer, MiniMaxSpoofer,
-    OpenCodeSpoofer,
+    AntigravitySpoofer, ClientSpoofer, ClineSpoofer, CodexSpoofer, KilocodeSpoofer, KiroSpoofer,
+    MiniMaxSpoofer, OpenCodeSpoofer,
 };
 
 #[cfg(any(test, feature = "test-utils"))]

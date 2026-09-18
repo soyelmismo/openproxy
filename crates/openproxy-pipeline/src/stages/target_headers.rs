@@ -247,6 +247,47 @@ pub fn propagate_codex_headers(
     });
 }
 
+/// Propagate downstream client headers for Kiro AI (AWS CodeWhisperer).
+///
+/// Forwards `x-kiro-*`, `kiro-*`, `anthropic-beta`, `x-amzn-bedrock-cache-control`,
+/// `amz-sdk-invocation-id`, `amz-sdk-request`, `tokentype`, and client identity headers
+/// (`x-amz-user-agent`). Extracts session affinity from `x-conversation-id`, `x-session-id`,
+/// or `session-id`.
+pub fn propagate_kiro_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    propagate_matching_headers(headers, request_headers, |k| {
+        starts_with_ignore_ascii_case(k, "x-kiro-")
+            || starts_with_ignore_ascii_case(k, "kiro-")
+            || k.eq_ignore_ascii_case("anthropic-beta")
+            || k.eq_ignore_ascii_case("x-amzn-bedrock-cache-control")
+            || k.eq_ignore_ascii_case("amz-sdk-invocation-id")
+            || k.eq_ignore_ascii_case("amz-sdk-request")
+            || k.eq_ignore_ascii_case("tokentype")
+            || k.eq_ignore_ascii_case("x-amz-user-agent")
+    });
+
+    let session_val = request_headers
+        .iter()
+        .find(|(k, _)| {
+            k.eq_ignore_ascii_case("x-conversation-id")
+                || k.eq_ignore_ascii_case("x-session-id")
+                || k.eq_ignore_ascii_case("session-id")
+        })
+        .map(|(_, v)| v.as_str());
+
+    if let Some(session_id) = session_val
+        && !session_id.trim().is_empty()
+    {
+        upsert_header(
+            headers,
+            "x-conversation-id",
+            session_id.trim().to_string(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +417,40 @@ mod tests {
         assert_eq!(find("x-mavis-session-id"), Some("session_conv-abc-789"));
         assert_eq!(find("x-api-key"), Some("secret"));
         assert_eq!(find("authorization"), None);
+    }
+
+    #[test]
+    fn test_propagate_kiro_headers() {
+        let mut headers = vec![
+            ("Content-Type".into(), "application/json".into()),
+            ("x-amz-user-agent".into(), "aws-sdk-js/3.0.0 kiro/0.1".into()),
+            ("Authorization".into(), "Bearer kiro-tok".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("tokentype".into(), "API_KEY".into());
+        req_headers.insert("x-kiro-profile".into(), "enterprise-1".into());
+        req_headers.insert("kiro-task".into(), "analyze".into());
+        req_headers.insert("x-conversation-id".into(), "conv-kiro-999".into());
+        req_headers.insert("anthropic-beta".into(), "prompt-caching-2024-07-31".into());
+        req_headers.insert("x-amzn-bedrock-cache-control".into(), "enable".into());
+        req_headers.insert("authorization".into(), "hack".into());
+
+        propagate_kiro_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("tokentype"), Some("API_KEY"));
+        assert_eq!(find("x-kiro-profile"), Some("enterprise-1"));
+        assert_eq!(find("kiro-task"), Some("analyze"));
+        assert_eq!(find("x-conversation-id"), Some("conv-kiro-999"));
+        assert_eq!(find("anthropic-beta"), Some("prompt-caching-2024-07-31"));
+        assert_eq!(find("x-amzn-bedrock-cache-control"), Some("enable"));
+        assert_eq!(find("Authorization"), Some("Bearer kiro-tok"));
     }
 
     #[test]

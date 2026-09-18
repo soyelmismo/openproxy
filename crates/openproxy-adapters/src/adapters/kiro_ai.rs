@@ -100,18 +100,32 @@ fn extract_kiro_region(account_label: &str) -> String {
 }
 
 fn build_kiro_model_endpoints(region: &str) -> Vec<String> {
+    let mut endpoints = Vec::new();
+    if let Ok(host) = std::env::var("OPENPROXY_KIRO_HOST")
+        && !host.trim().is_empty()
+    {
+        endpoints.push(format!(
+            "{}/ListAvailableModels?origin=AI_EDITOR",
+            host.trim().trim_end_matches('/')
+        ));
+    }
     if region == "us-east-1" {
-        vec![
+        endpoints.push(
             "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
+        );
+        endpoints.push(
             "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"
                 .to_string(),
-        ]
+        );
     } else {
-        vec![
-            format!("https://q.{region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"),
+        endpoints.push(format!(
+            "https://q.{region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"
+        ));
+        endpoints.push(
             "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
-        ]
+        );
     }
+    endpoints
 }
 
 async fn try_fetch_models_from_endpoint(
@@ -188,13 +202,8 @@ impl ProviderAdapter for KiroAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = vec![
-            ("Content-Type".into(), "application/json".into()),
-            (
-                "x-amz-user-agent".into(),
-                "aws-sdk-js/3.0.0 kiro/0.1".into(),
-            ),
-        ];
+        use crate::spoofer::{ClientSpoofer, KiroSpoofer};
+        let mut headers = KiroSpoofer.headers();
         if let Some(auth) = self.build_auth_header(api_key) {
             headers.push(auth);
         }
@@ -299,12 +308,21 @@ impl ProviderAdapter for KiroAdapter {
 }
 
 pub fn kiro_runtime_url(region: &str) -> String {
+    if let Ok(url) = std::env::var("OPENPROXY_KIRO_RUNTIME_URL")
+        && !url.trim().is_empty()
+    {
+        return url.trim().to_string();
+    }
     let region = if region.is_empty() {
         "us-east-1"
     } else {
         region
     };
-    let host = if region == "us-east-1" {
+    let host = if let Ok(host) = std::env::var("OPENPROXY_KIRO_HOST")
+        && !host.trim().is_empty()
+    {
+        host.trim().trim_end_matches('/').to_string()
+    } else if region == "us-east-1" {
         format!("https://codewhisperer.{region}.amazonaws.com")
     } else {
         format!("https://q.{region}.amazonaws.com")

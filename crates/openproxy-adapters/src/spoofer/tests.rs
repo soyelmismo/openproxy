@@ -526,3 +526,44 @@ fn test_minimax_dynamic_version_and_extra_headers() {
     assert_eq!(current_minimax_anthropic_version(), "2023-06-01");
 }
 
+#[test]
+fn test_kiro_spoofer() {
+    let _guard = KIRO_TEST_LOCK.lock().unwrap();
+    reset_dynamic_kiro_overrides();
+
+    let spoofer = KiroSpoofer;
+    let headers = spoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("Content-Type"), Some("application/json"));
+    assert_eq!(find("x-amz-user-agent"), Some("aws-sdk-js/3.0.0 kiro/0.1"));
+    assert_eq!(find("Amz-Sdk-Request"), Some("attempt=1; max=3"));
+    assert_eq!(find("x-amzn-bedrock-cache-control"), Some("enable"));
+    assert_eq!(find("anthropic-beta"), Some("prompt-caching-2024-07-31"));
+    assert!(find("Amz-Sdk-Invocation-Id").is_some());
+}
+
+#[test]
+fn test_kiro_dynamic_version_and_extra_headers() {
+    let _guard = KIRO_TEST_LOCK.lock().unwrap();
+    reset_dynamic_kiro_overrides();
+
+    assert_eq!(current_kiro_ua(), "aws-sdk-js/3.0.0 kiro/0.1");
+
+    set_dynamic_kiro_ua("aws-sdk-js/3.10.0 kiro/1.0");
+    set_dynamic_kiro_extra_header("tokentype", "API_KEY");
+    set_dynamic_kiro_extra_header("x-kiro-profile", "enterprise-us-east-1");
+
+    assert_eq!(current_kiro_ua(), "aws-sdk-js/3.10.0 kiro/1.0");
+
+    let headers = KiroSpoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("x-amz-user-agent"), Some("aws-sdk-js/3.10.0 kiro/1.0"));
+    assert_eq!(find("tokentype"), Some("API_KEY"));
+    assert_eq!(find("x-kiro-profile"), Some("enterprise-us-east-1"));
+
+    reset_dynamic_kiro_overrides();
+    assert_eq!(current_kiro_ua(), "aws-sdk-js/3.0.0 kiro/0.1");
+}
+

@@ -404,6 +404,13 @@ impl PipelineStage for DispatchStage {
             {
                 headers.push(("chatgpt-account-id".to_string(), ws.clone()));
             }
+        } else if target.provider_id.as_str().starts_with("kiro")
+            || adapter.id().as_str().starts_with("kiro")
+        {
+            propagate_kiro_headers(
+                &mut headers,
+                &ctx.req.request_headers,
+            );
         }
 
         openproxy_types::emit_stage_event!(
@@ -735,7 +742,8 @@ impl PipelineStage for CustomAdapterStage {
 
 pub(crate) use super::target_headers::{
     propagate_antigravity_headers, propagate_cline_headers, propagate_codex_headers,
-    propagate_kilocode_headers, propagate_minimax_headers, propagate_opencode_headers,
+    propagate_kilocode_headers, propagate_kiro_headers, propagate_minimax_headers,
+    propagate_opencode_headers,
 };
 
 #[cfg(test)]

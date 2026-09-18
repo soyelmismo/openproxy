@@ -15,7 +15,9 @@ use openproxy_core::oauth::minimax::{
 
 #[test]
 fn test_minimax_golden_contract_spec_parity() {
-    let _guard = openproxy_adapters::spoofer::MINIMAX_TEST_LOCK.lock().unwrap();
+    let _guard = openproxy_adapters::spoofer::MINIMAX_TEST_LOCK
+        .lock()
+        .expect("lock minimax test lock");
     openproxy_adapters::spoofer::reset_dynamic_minimax_overrides();
 
     // 1. OAuth client identity
@@ -429,7 +431,7 @@ fn test_minimax_dynamic_spoofer_and_endpoint_resolution() {
         set_dynamic_minimax_ua,
     };
 
-    let _guard = MINIMAX_TEST_LOCK.lock().unwrap();
+    let _guard = MINIMAX_TEST_LOCK.lock().expect("lock minimax test lock");
     reset_dynamic_minimax_overrides();
 
     // 1. Default MiniMaxSpoofer contract verification

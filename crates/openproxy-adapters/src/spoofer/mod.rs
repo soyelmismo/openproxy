@@ -144,6 +144,7 @@ pub mod antigravity;
 pub mod cline;
 pub mod codex;
 pub mod kilocode;
+pub mod kiro;
 pub mod minimax;
 pub mod opencode;
 
@@ -151,6 +152,7 @@ pub use antigravity::*;
 pub use cline::*;
 pub use codex::*;
 pub use kilocode::*;
+pub use kiro::*;
 pub use minimax::*;
 pub use opencode::*;
 
