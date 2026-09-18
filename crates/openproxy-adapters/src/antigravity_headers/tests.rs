@@ -106,6 +106,25 @@ fn test_dynamic_version_override() {
 }
 
 #[test]
+fn test_dynamic_extra_headers_override() {
+    reset_dynamic_overrides();
+
+    set_dynamic_extra_header("x-goog-api-client", "gl-rust/1.80");
+    set_dynamic_extra_header("x-antigravity-canary", "canary-v1");
+
+    let mut hm = http::HeaderMap::new();
+    inject_antigravity_headers(&mut hm, None);
+
+    assert_eq!(hm.get("x-goog-api-client").unwrap(), "gl-rust/1.80");
+    assert_eq!(hm.get("x-antigravity-canary").unwrap(), "canary-v1");
+
+    reset_dynamic_overrides();
+    let mut hm_clean = http::HeaderMap::new();
+    inject_antigravity_headers(&mut hm_clean, None);
+    assert!(hm_clean.get("x-antigravity-canary").is_none());
+}
+
+#[test]
 fn build_bearer_header_produces_correct_value() {
     let token = "ya29.test-token-with.dots_and-dashes";
     let header = build_bearer_header(token).expect("ascii token is valid");

@@ -72,6 +72,26 @@ pub fn current_version() -> String {
     KNOWN_STABLE_VERSION.to_string()
 }
 
+static DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Set dynamic extra header override for Antigravity in memory at runtime without recompiling.
+pub fn set_dynamic_extra_header(key: impl Into<String>, val: impl Into<String>) {
+    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
+        lock.insert(key.into(), val.into());
+    }
+}
+
+/// Reset dynamic in-memory overrides for Antigravity (useful for tests and cleanup).
+pub fn reset_dynamic_overrides() {
+    if let Ok(mut lock) = DYNAMIC_VERSION.write() {
+        *lock = None;
+    }
+    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
+        lock.clear();
+    }
+}
+
 static EXTRA_HEADERS: LazyLock<Vec<(HeaderName, HeaderValue)>> = LazyLock::new(|| {
     let Ok(env_str) = std::env::var("OPENPROXY_ANTIGRAVITY_EXTRA_HEADERS") else {
         return Vec::new();
@@ -214,6 +234,16 @@ pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Opt
 
     for (k, v) in EXTRA_HEADERS.iter() {
         headers.insert(k.clone(), v.clone());
+    }
+
+    if let Ok(lock) = DYNAMIC_EXTRA_HEADERS.read() {
+        for (k, v) in lock.iter() {
+            if let Ok(name) = HeaderName::from_bytes(k.as_bytes())
+                && let Ok(val) = HeaderValue::from_str(v)
+            {
+                headers.insert(name, val);
+            }
+        }
     }
 }
 

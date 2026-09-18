@@ -236,7 +236,11 @@ impl ProviderAdapter for AntigravityAdapter {
         headers_vec.extend(AntigravitySpoofer::new().headers());
 
         for (k, v) in &self.config.extra_headers {
-            headers_vec.push((k.clone(), v.clone()));
+            if let Some(pos) = headers_vec.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers_vec[pos].1 = v.clone();
+            } else {
+                headers_vec.push((k.clone(), v.clone()));
+            }
         }
 
         headers_vec
