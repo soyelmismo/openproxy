@@ -384,6 +384,13 @@ impl PipelineStage for DispatchStage {
                 &mut headers,
                 &ctx.req.request_headers,
             );
+        } else if target.provider_id.as_str().starts_with("kilocode")
+            || adapter.id().as_str().starts_with("kilocode")
+        {
+            propagate_kilocode_headers(
+                &mut headers,
+                &ctx.req.request_headers,
+            );
         }
 
         openproxy_types::emit_stage_event!(
@@ -714,8 +721,8 @@ impl PipelineStage for CustomAdapterStage {
 }
 
 pub(crate) use super::target_headers::{
-    propagate_antigravity_headers, propagate_cline_headers, propagate_minimax_headers,
-    propagate_opencode_headers,
+    propagate_antigravity_headers, propagate_cline_headers, propagate_kilocode_headers,
+    propagate_minimax_headers, propagate_opencode_headers,
 };
 
 #[cfg(test)]

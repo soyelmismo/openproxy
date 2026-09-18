@@ -203,6 +203,29 @@ pub fn propagate_cline_headers(
     }
 }
 
+/// Propagate downstream client headers for Kilocode.
+///
+/// Forwards `x-kilocode-*`, `kilocode-*`, and custom client headers
+/// while strictly preserving auth credentials and standard structure.
+pub fn propagate_kilocode_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    for (k, v) in request_headers {
+        let lower = k.to_ascii_lowercase();
+        let is_allowed = lower.starts_with("x-kilocode-")
+            || lower.starts_with("kilocode-");
+
+        if is_allowed {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +255,34 @@ mod tests {
         assert_eq!(find("x-cline-task-id"), Some("task-999"));
         assert_eq!(find("cline-mode"), Some("act"));
         assert_eq!(find("Authorization"), Some("Bearer secret"));
+    }
+
+    #[test]
+    fn test_propagate_kilocode_headers() {
+        let mut headers = vec![
+            ("User-Agent".into(), "Kilo-Code/4.108.0".into()),
+            ("x-title".into(), "Kilo Code".into()),
+            ("Authorization".into(), "Bearer kl-secret".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("x-kilocode-taskid".into(), "task-kilo-123".into());
+        req_headers.insert("x-kilocode-feature".into(), "openclaw".into());
+        req_headers.insert("kilocode-org".into(), "kilo-team".into());
+        req_headers.insert("authorization".into(), "override-hack".into());
+
+        propagate_kilocode_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("x-kilocode-taskid"), Some("task-kilo-123"));
+        assert_eq!(find("x-kilocode-feature"), Some("openclaw"));
+        assert_eq!(find("kilocode-org"), Some("kilo-team"));
+        assert_eq!(find("Authorization"), Some("Bearer kl-secret"));
     }
 
     #[test]

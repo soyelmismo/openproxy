@@ -46,6 +46,52 @@ fn test_cline_dynamic_version_and_extra_headers() {
     assert_eq!(current_cline_version(), "4.1.3");
 }
 
+#[test]
+fn test_kilocode_spoofer() {
+    let _guard = KILOCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_kilocode_overrides();
+    let spoofer = KilocodeSpoofer;
+    let mut req = UpstreamRequest::get("https://dummy.url");
+    spoofer.apply_to_request(&mut req);
+
+    for &(k, v) in KILOCODE_SPOOFING_HEADERS {
+        let header_val = req.headers.get(k).expect("header missing");
+        if k == "user-agent" {
+            assert_eq!(header_val, current_kilocode_ua().as_str());
+        } else if k == "x-kilocode-version" || k == "x-client-version" {
+            assert_eq!(header_val, current_kilocode_version().as_str());
+        } else {
+            assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
+        }
+    }
+}
+
+#[test]
+fn test_kilocode_dynamic_version_and_extra_headers() {
+    let _guard = KILOCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_kilocode_overrides();
+
+    assert_eq!(current_kilocode_version(), "4.108.0");
+    assert_eq!(current_kilocode_ua(), "Kilo-Code/4.108.0");
+
+    set_dynamic_kilocode_version("5.0.0");
+    assert_eq!(current_kilocode_version(), "5.0.0");
+    assert_eq!(current_kilocode_ua(), "Kilo-Code/5.0.0");
+
+    set_dynamic_kilocode_extra_header("x-kilocode-feature", "openclaw");
+
+    let headers = KilocodeSpoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("user-agent"), Some("Kilo-Code/5.0.0"));
+    assert_eq!(find("x-kilocode-version"), Some("5.0.0"));
+    assert_eq!(find("x-client-version"), Some("5.0.0"));
+    assert_eq!(find("x-kilocode-feature"), Some("openclaw"));
+
+    reset_dynamic_kilocode_overrides();
+    assert_eq!(current_kilocode_version(), "4.108.0");
+}
+
 fn assert_opencode_id(prefix: &str, id: &str) {
     assert!(id.starts_with(prefix), "expected prefix {prefix}, got {id}");
     assert_eq!(

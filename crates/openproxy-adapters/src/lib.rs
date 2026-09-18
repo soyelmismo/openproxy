@@ -6,7 +6,9 @@ pub mod schema_cleaner;
 pub mod spoofer;
 pub mod upstream;
 
-pub use spoofer::{AntigravitySpoofer, ClientSpoofer, ClineSpoofer, OpenCodeSpoofer};
+pub use spoofer::{
+    AntigravitySpoofer, ClientSpoofer, ClineSpoofer, KilocodeSpoofer, OpenCodeSpoofer,
+};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use adapters::MockAdapter;
