@@ -2,14 +2,48 @@ use super::*;
 
 #[test]
 fn test_cline_spoofer() {
+    let _guard = CLINE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_cline_overrides();
     let spoofer = ClineSpoofer;
     let mut req = UpstreamRequest::get("https://dummy.url");
     spoofer.apply_to_request(&mut req);
 
     for &(k, v) in CLINE_SPOOFING_HEADERS {
         let header_val = req.headers.get(k).expect("header missing");
-        assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
+        if k == "user-agent" {
+            assert_eq!(header_val, current_cline_ua().as_str());
+        } else if k == "x-client-version" || k == "x-core-version" {
+            assert_eq!(header_val, current_cline_version().as_str());
+        } else {
+            assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
+        }
     }
+}
+
+#[test]
+fn test_cline_dynamic_version_and_extra_headers() {
+    let _guard = CLINE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_cline_overrides();
+
+    assert_eq!(current_cline_version(), "4.1.3");
+    assert_eq!(current_cline_ua(), "Cline/4.1.3");
+
+    set_dynamic_cline_version("5.0.0");
+    assert_eq!(current_cline_version(), "5.0.0");
+    assert_eq!(current_cline_ua(), "Cline/5.0.0");
+
+    set_dynamic_cline_extra_header("x-cline-feature", "turbo");
+
+    let headers = ClineSpoofer.headers();
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    assert_eq!(find("user-agent"), Some("Cline/5.0.0"));
+    assert_eq!(find("x-client-version"), Some("5.0.0"));
+    assert_eq!(find("x-core-version"), Some("5.0.0"));
+    assert_eq!(find("x-cline-feature"), Some("turbo"));
+
+    reset_dynamic_cline_overrides();
+    assert_eq!(current_cline_version(), "4.1.3");
 }
 
 fn assert_opencode_id(prefix: &str, id: &str) {

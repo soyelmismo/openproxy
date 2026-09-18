@@ -180,10 +180,59 @@ pub fn propagate_minimax_headers(
     }
 }
 
+/// Propagate downstream client headers for Cline.
+///
+/// Forwards `x-cline-*`, `cline-*`, and custom client headers
+/// while strictly preserving auth credentials and standard structure.
+pub fn propagate_cline_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    for (k, v) in request_headers {
+        let lower = k.to_ascii_lowercase();
+        let is_allowed = lower.starts_with("x-cline-")
+            || lower.starts_with("cline-");
+
+        if is_allowed {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use openproxy_adapters::spoofer::OPENCODE_UA;
+
+    #[test]
+    fn test_propagate_cline_headers() {
+        let mut headers = vec![
+            ("User-Agent".into(), "Cline/4.1.3".into()),
+            ("x-title".into(), "Cline".into()),
+            ("Authorization".into(), "Bearer secret".into()),
+        ];
+        let mut req_headers = std::collections::BTreeMap::new();
+        req_headers.insert("x-cline-task-id".into(), "task-999".into());
+        req_headers.insert("cline-mode".into(), "act".into());
+        req_headers.insert("authorization".into(), "override-hack".into());
+
+        propagate_cline_headers(&mut headers, &req_headers);
+
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("x-cline-task-id"), Some("task-999"));
+        assert_eq!(find("cline-mode"), Some("act"));
+        assert_eq!(find("Authorization"), Some("Bearer secret"));
+    }
 
     #[test]
     fn test_propagate_minimax_headers() {

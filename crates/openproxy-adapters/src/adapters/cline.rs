@@ -44,7 +44,7 @@ impl ClineAdapter {
                 base_url: "https://api.cline.bot/api/v1".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,
-                extra_headers: ClineSpoofer.headers(),
+                extra_headers: vec![],
             },
         }
     }
@@ -87,6 +87,33 @@ fn map_cline_entry(entry: ClineModelEntry, is_free: bool) -> DiscoveredModel {
 impl ProviderAdapter for ClineAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
+    }
+
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
+    fn build_headers(
+        &self,
+        access_token: &str,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let mut headers = Vec::with_capacity(12 + self.config.extra_headers.len());
+        if let Some(auth) = self.build_auth_header(access_token) {
+            headers.push(auth);
+        }
+        headers.push(("Content-Type".into(), "application/json".into()));
+        headers.extend(ClineSpoofer.headers());
+
+        for (k, v) in &self.config.extra_headers {
+            if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers[pos].1 = v.clone();
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+        headers
     }
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
@@ -271,5 +298,100 @@ mod tests {
             "somemodel"
         );
         assert!(wrapped_json.get("stream").unwrap().as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_cline_build_headers_with_extra_and_dynamic_overrides() {
+        use crate::spoofer::{
+            reset_dynamic_cline_overrides, set_dynamic_cline_extra_header,
+            set_dynamic_cline_version, CLINE_TEST_LOCK,
+        };
+
+        let _guard = CLINE_TEST_LOCK.lock().unwrap();
+        reset_dynamic_cline_overrides();
+
+        let mut adapter = ClineAdapter::new();
+        let cfg = adapter.config_mut().expect("config_mut");
+        cfg.extra_headers.push(("x-admin-rule".into(), "active".into()));
+
+        set_dynamic_cline_version("4.9.1");
+        set_dynamic_cline_extra_header("x-cline-custom-tag", "tag-val");
+
+        let headers = adapter.build_headers("my-token", TargetFormat::Openai, &ModelId::new("somemodel"));
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(find("authorization"), Some("Bearer workos:my-token"));
+        assert_eq!(find("content-type"), Some("application/json"));
+        assert_eq!(find("user-agent"), Some("Cline/4.9.1"));
+        assert_eq!(find("x-client-version"), Some("4.9.1"));
+        assert_eq!(find("x-core-version"), Some("4.9.1"));
+        assert_eq!(find("x-admin-rule"), Some("active"));
+        assert_eq!(find("x-cline-custom-tag"), Some("tag-val"));
+
+        reset_dynamic_cline_overrides();
+    }
+
+    #[test]
+    fn test_cline_default_headers_contract() {
+        use crate::spoofer::{
+            current_cline_ua, current_cline_version, reset_dynamic_cline_overrides,
+            CLINE_TEST_LOCK,
+        };
+
+        let _guard = CLINE_TEST_LOCK.lock().unwrap();
+        reset_dynamic_cline_overrides();
+
+        let adapter = ClineAdapter::new();
+        let headers = adapter.build_headers("access-token-123", TargetFormat::Openai, &ModelId::new("somemodel"));
+        let find = |k: &str| {
+            headers
+                .iter()
+                .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.as_str())
+        };
+
+        // Strict bijective closed-world set equality contract
+        let actual_keys: std::collections::BTreeSet<String> = headers
+            .iter()
+            .map(|(k, _)| k.to_ascii_lowercase())
+            .collect();
+        let expected_keys: std::collections::BTreeSet<String> = [
+            "authorization",
+            "content-type",
+            "http-referer",
+            "x-title",
+            "user-agent",
+            "x-is-multiroot",
+            "x-client-type",
+            "x-client-version",
+            "x-platform",
+            "x-platform-version",
+            "x-core-version",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        assert_eq!(
+            actual_keys, expected_keys,
+            "Cline contract breach: header added or removed"
+        );
+
+        assert_eq!(find("authorization"), Some("Bearer workos:access-token-123"));
+        assert_eq!(find("content-type"), Some("application/json"));
+        assert_eq!(find("http-referer"), Some("https://cline.bot"));
+        assert_eq!(find("x-title"), Some("Cline"));
+        assert_eq!(find("user-agent"), Some(current_cline_ua().as_str()));
+        assert_eq!(find("x-is-multiroot"), Some("false"));
+        assert_eq!(find("x-client-type"), Some("VSCode Extension"));
+        assert_eq!(find("x-client-version"), Some(current_cline_version().as_str()));
+        assert_eq!(find("x-platform"), Some("Visual Studio Code"));
+        assert_eq!(find("x-platform-version"), Some("1.96.0"));
+        assert_eq!(find("x-core-version"), Some(current_cline_version().as_str()));
     }
 }
