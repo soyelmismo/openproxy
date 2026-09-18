@@ -500,7 +500,10 @@ async fn test_compression_stats_empty_requests() {
     assert!(prepared.is_empty(), "prepared messages must be empty");
 
     let guard = req.compression_stats.lock();
-    assert!(guard.is_some(), "empty request must initialize CompressionStats::empty");
+    assert!(
+        guard.is_some(),
+        "empty request must initialize CompressionStats::empty"
+    );
     let stats = guard.as_ref().unwrap();
     assert_eq!(stats.savings_pct_opt(), None);
     assert_eq!(stats.techniques_csv(), None);
@@ -606,7 +609,10 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
     {
         let stats_lock = Arc::clone(&cloned_req.compression_stats);
         let guard2 = stats_lock.lock();
-        assert!(guard2.is_some(), "cloned request retains compression stats across retries");
+        assert!(
+            guard2.is_some(),
+            "cloned request retains compression stats across retries"
+        );
         assert!(
             guard2.as_ref().unwrap().savings_pct_opt().is_some(),
             "savings pct must remain positive on retry"
@@ -622,4 +628,3 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
     let res2 = builder2.record();
     assert!(res2.is_ok(), "recording success on retry must succeed");
 }
-

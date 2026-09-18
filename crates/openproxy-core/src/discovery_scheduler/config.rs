@@ -9,9 +9,9 @@ pub const DISCOVERY_INTERVAL_SECS: u64 = 3_600;
 /// TTL written to the `expires_at` column on each upsert.
 pub const DISCOVERY_TTL_SECONDS: i64 = 3_600;
 
-/// Default initial stagger in seconds. 15 seconds allows quick discovery
-/// on startup without swamping the network immediately.
-pub const DEFAULT_INITIAL_STAGGER_SECS: u64 = 15;
+/// Default initial stagger in seconds. 180 seconds allows smooth discovery
+/// on startup without swamping the CPU or network immediately.
+pub const DEFAULT_INITIAL_STAGGER_SECS: u64 = 180;
 
 /// Configuration knobs exposed to the caller.
 #[derive(Debug, Clone)]

@@ -120,7 +120,11 @@ pub async fn create_custom_proxy(
     let conn_arc = s.db_pool().writer_arc();
     let host = body.host.trim().to_string();
     let r#type = body.r#type.trim().to_string();
-    let country_code = body.country_code.as_deref().map(str::trim).map(String::from);
+    let country_code = body
+        .country_code
+        .as_deref()
+        .map(str::trim)
+        .map(String::from);
     let username = body.username.as_deref().map(str::trim).map(String::from);
     let password = body.password.as_deref().map(str::trim).map(String::from);
     let port = body.port;
@@ -142,7 +146,11 @@ pub async fn create_custom_proxy(
         )
     })
     .await
-    .map_err(|e| ApiError(openproxy_types::CoreError::Internal(format!("writer spawn failed: {e}"))))?
+    .map_err(|e| {
+        ApiError(openproxy_types::CoreError::Internal(format!(
+            "writer spawn failed: {e}"
+        )))
+    })?
     .map_err(ApiError)?;
 
     Ok(Json(p))
@@ -257,7 +265,11 @@ pub async fn update_proxy_test_url(
         openproxy_db::app_config::save_proxy_test_url(&guard, &url_str)
     })
     .await
-    .map_err(|e| ApiError(openproxy_types::CoreError::Internal(format!("writer spawn failed: {e}"))))?
+    .map_err(|e| {
+        ApiError(openproxy_types::CoreError::Internal(format!(
+            "writer spawn failed: {e}"
+        )))
+    })?
     .map_err(ApiError)?;
 
     Ok(Json(serde_json::json!({ "proxy_test_url": url })))
@@ -268,8 +280,11 @@ mod tests {
     use super::*;
 
     async fn create_test_state() -> (AppState, openproxy_db::testing::TempDir) {
-        let temp_dir = openproxy_db::testing::TempDir::new("openproxy-proxies-test").expect("mkdir");
-        let pool = std::sync::Arc::new(openproxy_db::DbPool::open(&temp_dir.path().join("test.db")).expect("open pool"));
+        let temp_dir =
+            openproxy_db::testing::TempDir::new("openproxy-proxies-test").expect("mkdir");
+        let pool = std::sync::Arc::new(
+            openproxy_db::DbPool::open(&temp_dir.path().join("test.db")).expect("open pool"),
+        );
         {
             let mut w = pool.writer();
             openproxy_db::migrations::run(&mut w).expect("migrations");
@@ -292,7 +307,12 @@ mod tests {
         let (state, _temp_dir) = create_test_state().await;
 
         // Verify writer is free before call
-        assert!(state.db_pool().try_writer_for(std::time::Duration::from_millis(50)).is_some());
+        assert!(
+            state
+                .db_pool()
+                .try_writer_for(std::time::Duration::from_millis(50))
+                .is_some()
+        );
 
         let input = CreateCustomProxyInput {
             host: "invalid.domain.that.does.not.exist.test.123456789".to_string(),
@@ -308,8 +328,13 @@ mod tests {
         assert!(res.is_err(), "should fail DNS validation");
 
         // Verify writer lock was never held or locked by create_custom_proxy and is immediately acquirable
-        let writer_guard = state.db_pool().try_writer_for(std::time::Duration::from_millis(50));
-        assert!(writer_guard.is_some(), "writer lock must be free immediately after DNS failure");
+        let writer_guard = state
+            .db_pool()
+            .try_writer_for(std::time::Duration::from_millis(50));
+        assert!(
+            writer_guard.is_some(),
+            "writer lock must be free immediately after DNS failure"
+        );
     }
 
     #[tokio::test]
@@ -317,15 +342,21 @@ mod tests {
         let (state, _temp_dir) = create_test_state().await;
 
         let input = UpdateProxyTestUrlInput {
-            proxy_test_url: "http://invalid.domain.that.does.not.exist.test.123456789:9999".to_string(),
+            proxy_test_url: "http://invalid.domain.that.does.not.exist.test.123456789:9999"
+                .to_string(),
         };
 
         let res = update_proxy_test_url(State(state.clone()), Json(input)).await;
         assert!(res.is_err(), "should fail DNS validation");
 
         // Verify writer lock was never held or locked and is immediately acquirable
-        let writer_guard = state.db_pool().try_writer_for(std::time::Duration::from_millis(50));
-        assert!(writer_guard.is_some(), "writer lock must be free immediately after DNS failure");
+        let writer_guard = state
+            .db_pool()
+            .try_writer_for(std::time::Duration::from_millis(50));
+        assert!(
+            writer_guard.is_some(),
+            "writer lock must be free immediately after DNS failure"
+        );
     }
 
     #[tokio::test]
@@ -343,7 +374,11 @@ mod tests {
         };
 
         let res = create_custom_proxy(State(state.clone()), Json(input)).await;
-        assert!(res.is_ok(), "valid proxy should persist cleanly: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "valid proxy should persist cleanly: {:?}",
+            res.err()
+        );
         let proxy = res.unwrap().0;
         assert_eq!(proxy.host, "8.8.8.8");
         assert_eq!(proxy.port, 1080);
@@ -446,8 +481,14 @@ mod tests {
 
         let writes = write_count.load(std::sync::atomic::Ordering::Relaxed);
         let reads = read_count.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(writes > 0, "must have completed writes during DNS lookup: {writes}");
-        assert!(reads > 0, "must have completed reads during DNS lookup: {reads}");
+        assert!(
+            writes > 0,
+            "must have completed writes during DNS lookup: {writes}"
+        );
+        assert!(
+            reads > 0,
+            "must have completed reads during DNS lookup: {reads}"
+        );
     }
 
     #[tokio::test]
@@ -491,16 +532,16 @@ mod tests {
         let (state, _temp_dir) = create_test_state().await;
 
         let invalid_urls = [
-            "",                                  // empty
-            "not-a-url",                         // no scheme
-            "ftp://example.com/test",            // non-http/https
-            "file:///etc/passwd",                // file scheme
-            "http:///path-without-host",         // no host
-            "http://127.0.0.1:8080/test",        // loopback IPv4
-            "http://169.254.169.254/latest/meta",// AWS metadata
-            "http://10.1.2.3:8080/test",         // private IPv4
-            "http://192.168.0.1/test",           // private IPv4
-            "http://localhost:8080/test",        // loopback hostname
+            "",                                   // empty
+            "not-a-url",                          // no scheme
+            "ftp://example.com/test",             // non-http/https
+            "file:///etc/passwd",                 // file scheme
+            "http:///path-without-host",          // no host
+            "http://127.0.0.1:8080/test",         // loopback IPv4
+            "http://169.254.169.254/latest/meta", // AWS metadata
+            "http://10.1.2.3:8080/test",          // private IPv4
+            "http://192.168.0.1/test",            // private IPv4
+            "http://localhost:8080/test",         // loopback hostname
         ];
 
         for url in invalid_urls {
@@ -518,7 +559,8 @@ mod tests {
         let ipv6_loopback = UpdateProxyTestUrlInput {
             proxy_test_url: "http://[::1]:8080/test".to_string(),
         };
-        let res_ipv6_loopback = update_proxy_test_url(State(state.clone()), Json(ipv6_loopback)).await;
+        let res_ipv6_loopback =
+            update_proxy_test_url(State(state.clone()), Json(ipv6_loopback)).await;
         assert!(
             res_ipv6_loopback.is_err(),
             "http://[::1]:8080/test must be rejected"

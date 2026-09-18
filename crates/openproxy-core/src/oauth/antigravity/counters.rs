@@ -36,6 +36,33 @@ pub(crate) const ANTIGRAVITY_BACKOFF_MS: [u64; 3] = [500, 1_000, 2_000];
 pub(crate) static INVALID_GRANT_COUNTERS: LazyLock<DashMap<i64, AtomicU32>> =
     LazyLock::new(DashMap::new);
 
+/// Maximum number of in-memory account failure counters permitted.
+pub(crate) const MAX_INVALID_GRANT_ENTRIES: usize = 500;
+
+/// Prune entries that have reached saturation (threshold) or evict excess entries
+/// so that `INVALID_GRANT_COUNTERS` is strictly bounded to `MAX_INVALID_GRANT_ENTRIES`.
+pub(crate) fn prune_invalid_grant_counters() -> usize {
+    let mut pruned = 0;
+    INVALID_GRANT_COUNTERS.retain(|_, count| {
+        if count.load(Ordering::Relaxed) >= ANTIGRAVITY_INVALID_GRANT_THRESHOLD {
+            pruned += 1;
+            false
+        } else {
+            true
+        }
+    });
+    while INVALID_GRANT_COUNTERS.len() >= MAX_INVALID_GRANT_ENTRIES {
+        let key_to_remove = INVALID_GRANT_COUNTERS.iter().next().map(|e| *e.key());
+        if let Some(k) = key_to_remove {
+            INVALID_GRANT_COUNTERS.remove(&k);
+            pruned += 1;
+        } else {
+            break;
+        }
+    }
+    pruned
+}
+
 /// Increment the consecutive-`invalid_grant` counter for this account
 /// and return its new value. Lock-free at the call site (the entry
 /// insertion only happens on the first failure for a given account).
@@ -47,6 +74,11 @@ pub(crate) static INVALID_GRANT_COUNTERS: LazyLock<DashMap<i64, AtomicU32>> =
 /// concurrent bumps for the same account converge on
 /// `threshold`, not `N × threshold` (BUG-2).
 pub(crate) fn bump(account_id: AccountId) -> u32 {
+    if !INVALID_GRANT_COUNTERS.contains_key(&account_id.0)
+        && INVALID_GRANT_COUNTERS.len() >= MAX_INVALID_GRANT_ENTRIES
+    {
+        prune_invalid_grant_counters();
+    }
     let counter = INVALID_GRANT_COUNTERS
         .entry(account_id.0)
         .or_insert_with(|| AtomicU32::new(0));
@@ -131,5 +163,100 @@ pub(crate) fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
                 log_failure(&e, "test_path");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_invalid_grant_counters_capacity_bounding() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        INVALID_GRANT_COUNTERS.clear();
+        for i in 0..MAX_INVALID_GRANT_ENTRIES {
+            bump(AccountId(i as i64));
+        }
+        assert_eq!(INVALID_GRANT_COUNTERS.len(), MAX_INVALID_GRANT_ENTRIES);
+
+        // Saturate some entries to threshold
+        bump(AccountId(0));
+        bump(AccountId(0)); // Now count == 3 (threshold)
+
+        // Adding another entry triggers pruning of saturated entries
+        bump(AccountId((MAX_INVALID_GRANT_ENTRIES + 1) as i64));
+        assert!(INVALID_GRANT_COUNTERS.len() <= MAX_INVALID_GRANT_ENTRIES);
+
+        // Clean up
+        INVALID_GRANT_COUNTERS.clear();
+    }
+
+    #[test]
+    fn test_invalid_grant_counters_saturation_600_accounts() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        INVALID_GRANT_COUNTERS.clear();
+        // Insert 600 distinct accounts (all with count 1, below threshold)
+        for i in 0..600 {
+            bump(AccountId(i));
+            assert!(
+                INVALID_GRANT_COUNTERS.len() <= MAX_INVALID_GRANT_ENTRIES,
+                "Capacity exceeded at index {}: len is {}",
+                i,
+                INVALID_GRANT_COUNTERS.len()
+            );
+        }
+        assert_eq!(INVALID_GRANT_COUNTERS.len(), MAX_INVALID_GRANT_ENTRIES);
+        INVALID_GRANT_COUNTERS.clear();
+    }
+
+    #[test]
+    fn test_invalid_grant_counters_eviction_order_threshold_first() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        INVALID_GRANT_COUNTERS.clear();
+        // Fill to capacity 500
+        for i in 0..MAX_INVALID_GRANT_ENTRIES {
+            bump(AccountId(i as i64));
+        }
+        assert_eq!(INVALID_GRANT_COUNTERS.len(), MAX_INVALID_GRANT_ENTRIES);
+
+        // Account 10 is saturated to threshold 3 (expired/terminal)
+        bump(AccountId(10));
+        bump(AccountId(10));
+        assert_eq!(
+            INVALID_GRANT_COUNTERS
+                .get(&10)
+                .unwrap()
+                .load(Ordering::Relaxed),
+            ANTIGRAVITY_INVALID_GRANT_THRESHOLD
+        );
+
+        // Account 20 is active (count 1)
+        assert_eq!(
+            INVALID_GRANT_COUNTERS
+                .get(&20)
+                .unwrap()
+                .load(Ordering::Relaxed),
+            1
+        );
+
+        // Adding a new account triggers pruning: account 10 (saturated) MUST be pruned first
+        bump(AccountId(9999));
+        assert!(INVALID_GRANT_COUNTERS.len() <= MAX_INVALID_GRANT_ENTRIES);
+        assert!(
+            !INVALID_GRANT_COUNTERS.contains_key(&10),
+            "Saturated account 10 should have been evicted first"
+        );
+        assert!(
+            INVALID_GRANT_COUNTERS.contains_key(&20),
+            "Active account 20 should be retained"
+        );
+        assert!(
+            INVALID_GRANT_COUNTERS.contains_key(&9999),
+            "New account 9999 should be inserted"
+        );
+
+        INVALID_GRANT_COUNTERS.clear();
     }
 }

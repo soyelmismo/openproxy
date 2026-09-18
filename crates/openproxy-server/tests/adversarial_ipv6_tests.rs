@@ -1,15 +1,17 @@
 use axum::extract::{Json, State};
 use openproxy_adapters::upstream::is_private_or_reserved;
 use openproxy_server::handlers::admin::proxies::{
-    create_custom_proxy, update_proxy_test_url, CreateCustomProxyInput, UpdateProxyTestUrlInput,
+    CreateCustomProxyInput, UpdateProxyTestUrlInput, create_custom_proxy, update_proxy_test_url,
 };
 use openproxy_server::state::AppState;
 use std::net::IpAddr;
 use std::sync::Arc;
 
 async fn create_test_state() -> (AppState, openproxy_db::testing::TempDir) {
-    let temp_dir = openproxy_db::testing::TempDir::new("openproxy-ipv6-adversarial-test").expect("mkdir");
-    let pool = Arc::new(openproxy_db::DbPool::open(&temp_dir.path().join("test.db")).expect("open pool"));
+    let temp_dir =
+        openproxy_db::testing::TempDir::new("openproxy-ipv6-adversarial-test").expect("mkdir");
+    let pool =
+        Arc::new(openproxy_db::DbPool::open(&temp_dir.path().join("test.db")).expect("open pool"));
     {
         let mut w = pool.writer();
         openproxy_db::migrations::run(&mut w).expect("migrations");

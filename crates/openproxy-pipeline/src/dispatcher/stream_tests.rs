@@ -358,7 +358,11 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
     };
 
     let result = dispatcher.dispatch_upstream_streaming(params).await;
-    assert!(result.error.is_none(), "expected success, got {:?}", result.error);
+    assert!(
+        result.error.is_none(),
+        "expected success, got {:?}",
+        result.error
+    );
     assert_eq!(result.status_code, 200);
 
     let mut received = Vec::new();
@@ -367,7 +371,11 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
     }
     assert!(!received.is_empty(), "must receive chunks");
     let last_chunk = received.last().unwrap();
-    assert_eq!(last_chunk, &crate::pipeline::SSE_DONE_BYTES[..], "last chunk must be [DONE]");
+    assert_eq!(
+        last_chunk,
+        &crate::pipeline::SSE_DONE_BYTES[..],
+        "last chunk must be [DONE]"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -514,7 +522,11 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
     };
 
     let result = dispatcher.dispatch_upstream_streaming(params).await;
-    assert!(result.error.is_none(), "expected success, got {:?}", result.error);
+    assert!(
+        result.error.is_none(),
+        "expected success, got {:?}",
+        result.error
+    );
     assert_eq!(result.status_code, 200);
 
     let mut received = Vec::new();
@@ -523,7 +535,11 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
     }
     assert!(!received.is_empty(), "must receive chunks");
     let last_chunk = received.last().unwrap();
-    assert_eq!(last_chunk, &crate::pipeline::SSE_DONE_BYTES[..], "last chunk must be [DONE]");
+    assert_eq!(
+        last_chunk,
+        &crate::pipeline::SSE_DONE_BYTES[..],
+        "last chunk must be [DONE]"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -540,7 +556,8 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
             let mut buf = [0u8; 2048];
             let _ = socket.read(&mut buf).await;
             // Upstream sends 200 OK headers but closes immediately with zero body bytes
-            let response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+            let response =
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
             let _ = socket.write_all(response.as_bytes()).await;
             let _ = socket.flush().await;
             let _ = socket.shutdown().await;
@@ -670,7 +687,10 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
 
     let result = dispatcher.dispatch_upstream_streaming(params).await;
     // Must fail as empty streaming response
-    assert!(result.error.is_some(), "expected error for completely empty stream");
+    assert!(
+        result.error.is_some(),
+        "expected error for completely empty stream"
+    );
     assert_eq!(result.status_code, 502);
 
     let mut received = Vec::new();
@@ -678,6 +698,10 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
         received.push(chunk);
     }
     // Client must NOT receive [DONE] for failed empty stream
-    assert!(received.is_empty() || received.iter().all(|c| c != &crate::pipeline::SSE_DONE_BYTES[..]));
+    assert!(
+        received.is_empty()
+            || received
+                .iter()
+                .all(|c| c != &crate::pipeline::SSE_DONE_BYTES[..])
+    );
 }
-

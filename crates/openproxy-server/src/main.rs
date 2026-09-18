@@ -32,6 +32,31 @@ use std::env;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+fn configure_allocator() {
+    unsafe {
+        // Immediate segment purge on free (disables 10ms purge delay)
+        libmimalloc_sys::mi_option_set(15 /* mi_option_purge_delay */, 0);
+        // Disable eager arena commit on Linux overcommit systems
+        libmimalloc_sys::mi_option_set(4 /* mi_option_arena_eager_commit */, 0);
+        // Reduce initial arena reservation from 1 GiB to 64 MiB (in KiB)
+        libmimalloc_sys::mi_option_set(23 /* mi_option_arena_reserve */, 64 * 1024);
+        // Immediately purge pages when threads terminate (spawn_blocking pool)
+        libmimalloc_sys::mi_option_set(12 /* mi_option_abandoned_page_purge */, 1);
+    }
+    for (k, v) in [
+        ("MIMALLOC_PURGE_DELAY", "0"),
+        ("MIMALLOC_ARENA_EAGER_COMMIT", "0"),
+        ("MIMALLOC_ARENA_RESERVE", "65536"),
+        ("MIMALLOC_ABANDONED_PAGE_PURGE", "1"),
+    ] {
+        if std::env::var_os(k).is_none() {
+            unsafe {
+                std::env::set_var(k, v);
+            }
+        }
+    }
+}
+
 fn load_server_config() -> anyhow::Result<AppConfig> {
     let config_path = env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
     let config = AppConfig::load_or_default(&config_path)?;
@@ -52,21 +77,48 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // 0. Install rustls crypto provider. `ring` is pure-Rust and
+fn main() -> anyhow::Result<()> {
+    // 0. Programmatic allocator configuration: Tune mimalloc options before
+    // initializing telemetry, Tokio runtime, or database connections.
+    configure_allocator();
+
+    // 1. Install rustls crypto provider. `ring` is pure-Rust and
     // transitively available; `aws-lc-rs` is also pulled in by
     // `UpstreamClient`. `install_default` is idempotent — a second call in
     // the same process is a no-op, so it's safe even if a future
     // test harness re-instruments startup.
-    //
-    // ponytail: this is a single line and mandatory since
-    // rustls 0.23; without it, the first TLS handshake to an
-    // upstream HTTPS endpoint panics with `Could not
-    // automatically determine the process-level CryptoProvider`.
     openproxy_core::install_rustls_crypto_provider();
 
-    let config = load_server_config()?;
-    let state = openproxy_server::state::AppState::new(config)?;
-    run_server(state).await
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let config = load_server_config()?;
+        let state = openproxy_server::state::AppState::new(config)?;
+        unsafe {
+            libmimalloc_sys::mi_collect(true);
+        }
+        run_server(state).await
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_allocator_options_configured() {
+        configure_allocator();
+        unsafe {
+            assert_eq!(libmimalloc_sys::mi_option_get(15), 0);
+            assert_eq!(libmimalloc_sys::mi_option_get(4), 0);
+            assert_eq!(libmimalloc_sys::mi_option_get(23), 64 * 1024);
+            assert_eq!(libmimalloc_sys::mi_option_get(12), 1);
+        }
+        assert_eq!(std::env::var("MIMALLOC_PURGE_DELAY").unwrap(), "0");
+        assert_eq!(std::env::var("MIMALLOC_ARENA_EAGER_COMMIT").unwrap(), "0");
+        assert_eq!(std::env::var("MIMALLOC_ARENA_RESERVE").unwrap(), "65536");
+        assert_eq!(std::env::var("MIMALLOC_ABANDONED_PAGE_PURGE").unwrap(), "1");
+    }
 }

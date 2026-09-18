@@ -130,6 +130,12 @@ impl AppState {
 
         let services = Arc::new(crate::services::Services::new(Arc::clone(&db_pool)));
 
+        // Immediate post-startup page trimming to release migration and seed burst memory.
+        db_pool.shrink_memory();
+        unsafe {
+            libmimalloc_sys::mi_collect(true);
+        }
+
         let state = Self {
             config,
             db_pool,

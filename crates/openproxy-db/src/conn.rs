@@ -112,11 +112,11 @@ impl DbPool {
         )?;
 
         configure_temp_dir(&writer, path);
-        configure_connection(&writer)?;
+        configure_connection(&writer, true)?;
 
         // Readers: open multiple handles on the same file to avoid mutex contention
         // on high-throughput API endpoints.
-        let num_readers = 4;
+        let num_readers = 2;
         let mut readers = Vec::with_capacity(num_readers);
         for i in 0..num_readers {
             let reader = open_and_configure_reader(path, flags, i)?;
@@ -350,7 +350,7 @@ impl DbPool {
         let new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
             crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
         )?;
-        configure_connection(&new_writer)?;
+        configure_connection(&new_writer, true)?;
 
         let mut new_readers = Vec::with_capacity(self.readers.len());
         for (i, _) in self.readers.iter().enumerate() {
@@ -375,7 +375,7 @@ impl DbPool {
                 source: Some(std::sync::Arc::new(e)),
             }
         })?;
-        configure_connection(&conn)?;
+        configure_connection(&conn, false)?;
         Ok(conn)
     }
 
@@ -412,7 +412,7 @@ fn open_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Resul
     let reader = Connection::open_with_flags(path, flags).map_err(
         crate::error::map_db_error_ctx(format!("open reader {idx} for {}", path.display())),
     )?;
-    configure_connection(&reader)?;
+    configure_connection(&reader, false)?;
     Ok(reader)
 }
 
@@ -420,23 +420,35 @@ fn reopen_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Res
     let r = Connection::open_with_flags(path, flags).map_err(crate::error::map_db_error_ctx(
         format!("reopen reader {idx} for {}", path.display()),
     ))?;
-    configure_connection(&r)?;
+    configure_connection(&r, false)?;
     Ok(r)
 }
 
 /// Apply the standard pragmas required by spec §8/§9.
-fn configure_connection(conn: &Connection) -> Result<()> {
+fn configure_connection(conn: &Connection, is_writer: bool) -> Result<()> {
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; \
-         PRAGMA busy_timeout = 5000; \
-         PRAGMA synchronous = NORMAL; \
-         PRAGMA wal_autocheckpoint = 1000; \
-         PRAGMA mmap_size = 4194304; \
-         PRAGMA cache_size = -1000; \
-         PRAGMA temp_store = MEMORY;",
-    )
+    if is_writer {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; \
+             PRAGMA busy_timeout = 5000; \
+             PRAGMA synchronous = NORMAL; \
+             PRAGMA wal_autocheckpoint = 250; \
+             PRAGMA mmap_size = 0; \
+             PRAGMA cache_size = -512; \
+             PRAGMA temp_store = FILE;",
+        )
+    } else {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; \
+             PRAGMA busy_timeout = 5000; \
+             PRAGMA synchronous = NORMAL; \
+             PRAGMA wal_autocheckpoint = 250; \
+             PRAGMA mmap_size = 0; \
+             PRAGMA cache_size = -256; \
+             PRAGMA temp_store = FILE;",
+        )
+    }
     .map_err(crate::error::map_db_error)?;
     Ok(())
 }
@@ -448,6 +460,7 @@ mod tests {
     #[test]
     fn open_creates_file_and_sets_pragmas() {
         let pool = DbPool::test_pool().expect("test pool");
+        assert_eq!(pool.readers.len(), 2);
         let conn = pool.writer();
 
         let journal: String = conn
@@ -464,6 +477,39 @@ mod tests {
             .pragma_query_value(None, "busy_timeout", |r| r.get(0))
             .expect("busy_timeout");
         assert_eq!(busy, 5000);
+
+        let mmap: i64 = conn
+            .pragma_query_value(None, "mmap_size", |r| r.get(0))
+            .expect("mmap_size");
+        assert_eq!(mmap, 0);
+
+        let wal_autocheckpoint: i64 = conn
+            .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))
+            .expect("wal_autocheckpoint");
+        assert_eq!(wal_autocheckpoint, 250);
+
+        let writer_cache: i64 = conn
+            .pragma_query_value(None, "cache_size", |r| r.get(0))
+            .expect("cache_size");
+        assert_eq!(writer_cache, -512);
+
+        let temp_store: i64 = conn
+            .pragma_query_value(None, "temp_store", |r| r.get(0))
+            .expect("temp_store");
+        assert_eq!(temp_store, 1); // 1 = FILE
+
+        drop(conn);
+
+        let reader = pool.reader();
+        let reader_cache: i64 = reader
+            .pragma_query_value(None, "cache_size", |r| r.get(0))
+            .expect("reader cache_size");
+        assert_eq!(reader_cache, -256);
+
+        let reader_mmap: i64 = reader
+            .pragma_query_value(None, "mmap_size", |r| r.get(0))
+            .expect("reader mmap_size");
+        assert_eq!(reader_mmap, 0);
     }
 
     #[test]
@@ -565,6 +611,7 @@ mod tests {
             .query_row("SELECT 42", [], |row| row.get(0))
             .expect("query_row on reader");
         assert_eq!(val, 42);
+        drop(acquired);
 
         // Also test reader_guard bypasses reader 0
         pool.next_reader.store(0, Ordering::Relaxed);
@@ -623,7 +670,10 @@ mod tests {
         let result = pool.try_reader_for(std::time::Duration::from_millis(50));
         let elapsed = start.elapsed();
 
-        assert!(result.is_none(), "try_reader_for must return None when all readers are locked");
+        assert!(
+            result.is_none(),
+            "try_reader_for must return None when all readers are locked"
+        );
         assert!(
             elapsed >= std::time::Duration::from_millis(40),
             "try_reader_for must wait for the specified timeout: elapsed {elapsed:?}"
@@ -638,8 +688,6 @@ mod tests {
         // Lock all readers: reader 0 held for 200ms, reader 1 released after 15ms
         let held_0 = pool.readers[0].lock_arc();
         let held_1 = pool.readers[1].lock_arc();
-        let held_2 = pool.readers[2].lock_arc();
-        let held_3 = pool.readers[3].lock_arc();
 
         // Background thread releases reader 1 after 15ms
         let release_thread = std::thread::spawn(move || {
@@ -657,7 +705,5 @@ mod tests {
             "try_reader_for should acquire reader 1 once freed before timeout!"
         );
         drop(held_0);
-        drop(held_2);
-        drop(held_3);
     }
 }

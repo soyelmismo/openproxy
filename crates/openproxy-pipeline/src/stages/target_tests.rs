@@ -222,11 +222,20 @@ fn test_propagate_opencode_headers_preserves_valid_session() {
 
     propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
 
-    let session = headers.iter().find(|(k, _)| k == "x-opencode-session").unwrap();
+    let session = headers
+        .iter()
+        .find(|(k, _)| k == "x-opencode-session")
+        .unwrap();
     assert_eq!(session.1, valid_session);
-    let client = headers.iter().find(|(k, _)| k == "x-opencode-client").unwrap();
+    let client = headers
+        .iter()
+        .find(|(k, _)| k == "x-opencode-client")
+        .unwrap();
     assert_eq!(client.1, "desktop");
-    let project = headers.iter().find(|(k, _)| k == "x-opencode-project").unwrap();
+    let project = headers
+        .iter()
+        .find(|(k, _)| k == "x-opencode-project")
+        .unwrap();
     assert_eq!(project.1, "project-42");
 }
 
@@ -243,8 +252,13 @@ fn test_propagate_opencode_headers_translates_candidate_session() {
 
     propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
 
-    let session = headers.iter().find(|(k, _)| k == "x-opencode-session").unwrap();
-    assert!(openproxy_adapters::spoofer::is_valid_opencode_session_id(&session.1));
+    let session = headers
+        .iter()
+        .find(|(k, _)| k == "x-opencode-session")
+        .unwrap();
+    assert!(openproxy_adapters::spoofer::is_valid_opencode_session_id(
+        &session.1
+    ));
     assert_ne!(session.1, "ses_default");
 
     let ua = headers.iter().find(|(k, _)| k == "User-Agent").unwrap();
@@ -265,12 +279,16 @@ fn test_propagate_opencode_headers_from_body_user_field() {
 
     propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
 
-    let session = headers.iter().find(|(k, _)| k == "x-opencode-session").unwrap();
-    assert!(openproxy_adapters::spoofer::is_valid_opencode_session_id(&session.1));
+    let session = headers
+        .iter()
+        .find(|(k, _)| k == "x-opencode-session")
+        .unwrap();
+    assert!(openproxy_adapters::spoofer::is_valid_opencode_session_id(
+        &session.1
+    ));
     assert_ne!(session.1, "ses_default");
     assert_eq!(
         session.1,
         openproxy_adapters::spoofer::translate_session_id("chat-session-user-123", None)
     );
 }
-

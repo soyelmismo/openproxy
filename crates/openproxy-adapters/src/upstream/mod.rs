@@ -45,6 +45,8 @@ mod conn_pool;
 #[cfg(feature = "upstream-hyper")]
 mod connector;
 #[cfg(feature = "upstream-hyper")]
+pub(crate) mod connector_types;
+#[cfg(feature = "upstream-hyper")]
 pub(crate) mod dns;
 #[cfg(feature = "upstream-hyper")]
 mod error;

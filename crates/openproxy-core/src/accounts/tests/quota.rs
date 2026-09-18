@@ -271,4 +271,3 @@ fn set_quota_roundtrip_adversarial_details() {
     let a = get(&conn, id, &mk).expect("get").expect("present");
     assert!(a.quota_model_details.is_none());
 }
-

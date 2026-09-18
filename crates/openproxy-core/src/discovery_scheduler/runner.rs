@@ -81,13 +81,40 @@ pub(crate) async fn run_one_tick(
     .await;
 
     if let Some(ref p) = provider_row
-        && p.favicon_base64.is_none()
+        && !p.has_favicon
     {
         let _ =
             providers::fetch_and_cache_favicon(db_pool, &provider, &p.base_url, upstream_client)
                 .await;
     }
+
+    trim_allocator();
 }
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn dlsym(
+        handle: *mut std::ffi::c_void,
+        symbol: *const std::ffi::c_char,
+    ) -> *mut std::ffi::c_void;
+    fn malloc_trim(pad: usize) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn trim_allocator() {
+    unsafe {
+        let sym = dlsym(std::ptr::null_mut(), c"mi_collect".as_ptr());
+        if !sym.is_null() {
+            let mi_collect: unsafe extern "C" fn(bool) = std::mem::transmute(sym);
+            mi_collect(true);
+        } else {
+            malloc_trim(0);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn trim_allocator() {}
 
 fn load_provider_snapshot(
     db_pool: &Arc<DbPool>,
@@ -198,15 +225,14 @@ async fn record_decrypt_failed_notification(
     let provider_str = provider.as_str().to_string();
     let err_str = err_str.to_string();
     let _ = tokio::task::spawn_blocking(move || {
-        if let Ok(notif_conn) = db_pool.open_connection() {
-            let _ = crate::notifications::record_system(
-                &notif_conn,
-                crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
-                &format!("account_id={acc_id}: {err_str}"),
-                Some(&provider_str),
-                None,
-            );
-        }
+        let notif_conn = db_pool.writer();
+        let _ = crate::notifications::record_system(
+            &notif_conn,
+            crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
+            &format!("account_id={acc_id}: {err_str}"),
+            Some(&provider_str),
+            None,
+        );
     })
     .await;
 }
@@ -240,25 +266,17 @@ async fn handle_discovery_outcome(
             let db_pool_clone = Arc::clone(db_pool);
             let provider_clone = provider.clone();
             let keyword = provider_row.and_then(|p| p.auto_activate_keyword.clone());
-            let _ = tokio::task::spawn_blocking(move || match db_pool_clone.open_connection() {
-                Ok(aa_conn) => {
-                    if let Err(e) = models::apply_auto_activation_with_retry(
-                        &aa_conn,
-                        &provider_clone,
-                        keyword.as_deref(),
-                    ) {
-                        tracing::warn!(
-                            provider = %provider_clone,
-                            error = %e,
-                            "discovery tick: auto-activation failed",
-                        );
-                    }
-                }
-                Err(e) => {
+            let _ = tokio::task::spawn_blocking(move || {
+                let aa_conn = db_pool_clone.writer();
+                if let Err(e) = models::apply_auto_activation_with_retry(
+                    &aa_conn,
+                    &provider_clone,
+                    keyword.as_deref(),
+                ) {
                     tracing::warn!(
                         provider = %provider_clone,
                         error = %e,
-                        "discovery tick: failed to open db connection for auto-activation",
+                        "discovery tick: auto-activation failed",
                     );
                 }
             })
@@ -275,15 +293,14 @@ async fn handle_discovery_outcome(
             let provider_str = provider.as_str().to_string();
             let err_str = e.to_string();
             let _ = tokio::task::spawn_blocking(move || {
-                if let Ok(notif_conn) = db_pool.open_connection() {
-                    let _ = crate::notifications::record_system(
-                        &notif_conn,
-                        crate::notifications::CODE_DISCOVERY_FAILED,
-                        &err_str,
-                        Some(&provider_str),
-                        None,
-                    );
-                }
+                let notif_conn = db_pool.writer();
+                let _ = crate::notifications::record_system(
+                    &notif_conn,
+                    crate::notifications::CODE_DISCOVERY_FAILED,
+                    &err_str,
+                    Some(&provider_str),
+                    None,
+                );
             })
             .await;
         }

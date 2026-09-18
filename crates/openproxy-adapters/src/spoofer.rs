@@ -140,7 +140,11 @@ fn next_canonical_id_parts(timestamp: Option<u64>) -> (u64, u64) {
 /// If `descending` is true, the timestamp-counter is inverted (`!current`), exactly
 /// matching OpenCode's `descending()` implementation for sessions.
 /// If false, it uses `current`, matching OpenCode's `ascending()` for messages/requests.
-pub fn create_canonical_id(descending: bool, timestamp: Option<u64>, rng: &mut impl rand::Rng) -> String {
+pub fn create_canonical_id(
+    descending: bool,
+    timestamp: Option<u64>,
+    rng: &mut impl rand::Rng,
+) -> String {
     let (ts, counter) = next_canonical_id_parts(timestamp);
     let current = ((ts as u128) * 0x1000) + (counter as u128);
     let value = if descending { !current } else { current };
@@ -254,7 +258,10 @@ pub fn has_valid_opencode_version(ua: &str) -> bool {
     let Some(minor_str) = parts.next() else {
         return false;
     };
-    let minor_digits: String = minor_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let minor_digits: String = minor_str
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     let Ok(minor) = minor_digits.parse::<u32>() else {
         return false;
     };
@@ -282,9 +289,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
             .and_then(|v| v.to_str().ok())
             .is_some_and(has_valid_opencode_version);
 
-        if !preserve_ua
-            && let Ok(val) = HeaderValue::try_from(OPENCODE_UA)
-        {
+        if !preserve_ua && let Ok(val) = HeaderValue::try_from(OPENCODE_UA) {
             headers.insert(http::header::USER_AGENT, val);
         }
 
@@ -337,9 +342,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
             .and_then(|v| v.to_str().ok())
             .is_none_or(|s| !is_valid_opencode_request_id(s));
 
-        if need_request_id
-            && let Ok(val) = HeaderValue::try_from(generate_request_id())
-        {
+        if need_request_id && let Ok(val) = HeaderValue::try_from(generate_request_id()) {
             headers.insert(request_header_name, val);
         }
     }
@@ -419,7 +422,9 @@ mod tests {
         );
         let (hex_part, b62_part) = suffix.split_at(12);
         assert!(
-            hex_part.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            hex_part
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
             "first 12 chars of suffix must be lowercase hex: {id}"
         );
         assert!(
@@ -556,8 +561,10 @@ mod tests {
 
         // Upgrades foreign User-Agent and translates foreign session.
         let mut req1 = UpstreamRequest::get("https://dummy.url");
-        req1.headers
-            .insert(http::header::USER_AGENT, HeaderValue::from_static("Claude-Code/1.0"));
+        req1.headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static("Claude-Code/1.0"),
+        );
         req1.headers.insert(
             http::header::HeaderName::from_static("x-opencode-session"),
             HeaderValue::from_static("uuid-1234-5678"),
@@ -568,7 +575,12 @@ mod tests {
             req1.headers.get(http::header::USER_AGENT).unwrap(),
             HeaderValue::from_static(OPENCODE_UA)
         );
-        let session1 = req1.headers.get("x-opencode-session").unwrap().to_str().unwrap();
+        let session1 = req1
+            .headers
+            .get("x-opencode-session")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_opencode_id("ses_", session1);
         assert_ne!(session1, "uuid-1234-5678");
 
@@ -601,7 +613,12 @@ mod tests {
             HeaderValue::from_static("foreign-session-abc"),
         );
         spoofer.apply_to_request(&mut req3);
-        let session3 = req3.headers.get("x-opencode-session").unwrap().to_str().unwrap();
+        let session3 = req3
+            .headers
+            .get("x-opencode-session")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_opencode_id("ses_", session3);
         assert_eq!(session3, translate_session_id("foreign-session-abc", None));
     }

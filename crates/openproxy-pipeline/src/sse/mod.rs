@@ -425,7 +425,10 @@ fn check_finish_reason_non_null(payload: &str) -> bool {
     if bytes[i..].starts_with(b"null") {
         let after = i + 4;
         if after == bytes.len()
-            || matches!(bytes[after], b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+            || matches!(
+                bytes[after],
+                b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n'
+            )
         {
             return false;
         }

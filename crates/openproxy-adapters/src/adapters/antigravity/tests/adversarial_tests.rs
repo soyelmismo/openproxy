@@ -297,3 +297,128 @@ fn adv_count_tokens_url_constant() {
         "https://daily-cloudcode-pa.googleapis.com/v1internal:countTokens"
     );
 }
+
+static PLAN_CACHE_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn adv_test_plan_cache_saturation_600_plans() {
+    let _guard = PLAN_CACHE_TEST_MUTEX.lock().unwrap();
+    use crate::adapters::antigravity::quota::{MAX_PLAN_CACHE_ENTRIES, PLAN_CACHE};
+
+    let mut cache = PLAN_CACHE.write();
+    cache.clear();
+
+    for i in 0..600 {
+        let token = format!("token_{i}");
+        let now = std::time::Instant::now();
+        if !cache.contains_key(&token) && cache.len() >= MAX_PLAN_CACHE_ENTRIES {
+            let max_age = std::time::Duration::from_secs(7200);
+            cache.retain(|_, (_, ts)| now.duration_since(*ts) < max_age);
+            while cache.len() >= MAX_PLAN_CACHE_ENTRIES {
+                if let Some(oldest_key) = cache
+                    .iter()
+                    .min_by_key(|(_, (_, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    cache.remove(&oldest_key);
+                } else {
+                    break;
+                }
+            }
+        }
+        cache.insert(token, ("Pro".to_string(), now));
+        assert!(
+            cache.len() <= MAX_PLAN_CACHE_ENTRIES,
+            "PLAN_CACHE capacity violated at {i}: len is {}",
+            cache.len()
+        );
+    }
+
+    assert_eq!(cache.len(), MAX_PLAN_CACHE_ENTRIES);
+    // Oldest 100 tokens (token_0 .. token_99) should have been evicted
+    for i in 0..100 {
+        assert!(
+            !cache.contains_key(&format!("token_{i}")),
+            "token_{i} should have been evicted"
+        );
+    }
+    // Newest 500 tokens (token_100 .. token_599) should be present
+    for i in 100..600 {
+        assert!(
+            cache.contains_key(&format!("token_{i}")),
+            "token_{i} should be retained"
+        );
+    }
+    cache.clear();
+}
+
+#[test]
+fn adv_test_plan_cache_prune_evicts_expired_first_and_oldest_next() {
+    let _guard = PLAN_CACHE_TEST_MUTEX.lock().unwrap();
+    use crate::adapters::antigravity::quota::{
+        MAX_PLAN_CACHE_ENTRIES, PLAN_CACHE, prune_plan_cache,
+    };
+
+    let mut cache = PLAN_CACHE.write();
+    cache.clear();
+    let now = std::time::Instant::now();
+
+    // 10 entries are expired (>7200s old: now - 8000s)
+    for i in 0..10 {
+        cache.insert(
+            format!("expired_{i}"),
+            (
+                "Free".to_string(),
+                now.checked_sub(std::time::Duration::from_secs(8000))
+                    .unwrap(),
+            ),
+        );
+    }
+    // 490 entries are fresh
+    for i in 0..490 {
+        cache.insert(
+            format!("fresh_{i}"),
+            (
+                "Pro".to_string(),
+                now.checked_sub(std::time::Duration::from_secs(100 + i))
+                    .unwrap(),
+            ),
+        );
+    }
+    assert_eq!(cache.len(), 500);
+    drop(cache);
+
+    // prune_plan_cache must evict expired entries first
+    prune_plan_cache();
+
+    let cache = PLAN_CACHE.read();
+    for i in 0..10 {
+        assert!(
+            !cache.contains_key(&format!("expired_{i}")),
+            "expired entry expired_{i} should have been pruned"
+        );
+    }
+    assert_eq!(cache.len(), 490);
+    drop(cache);
+
+    // Now insert 60 more fresh entries to push size to 550 (> MAX_PLAN_CACHE_ENTRIES)
+    let mut cache = PLAN_CACHE.write();
+    for i in 490..550 {
+        cache.insert(
+            format!("fresh_{i}"),
+            (
+                "Pro".to_string(),
+                now.checked_sub(std::time::Duration::from_secs(i)).unwrap(),
+            ),
+        );
+    }
+    assert_eq!(cache.len(), 550);
+    drop(cache);
+
+    // prune_plan_cache must evict the excess 50 oldest entries
+    prune_plan_cache();
+
+    let mut cache = PLAN_CACHE.write();
+    assert_eq!(cache.len(), MAX_PLAN_CACHE_ENTRIES);
+    cache.clear();
+}

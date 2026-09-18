@@ -5,6 +5,7 @@ use super::{
 use axum::{
     Json,
     extract::{Path, Query, State},
+    response::IntoResponse,
 };
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::admin as core_admin;
@@ -156,6 +157,34 @@ pub async fn get_provider(
     Ok(Json(enriched))
 }
 
+pub async fn get_provider_icon(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pool = std::sync::Arc::clone(s.db_pool());
+    let res = tokio::task::spawn_blocking(move || {
+        let r = pool.reader();
+        openproxy_db::providers::get_provider_favicon(&r, &id)
+    })
+    .await;
+
+    match res {
+        Ok(Ok(Some((mime, data)))) => (
+            axum::http::StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, mime),
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "public, max-age=86400".to_string(),
+                ),
+            ],
+            data,
+        )
+            .into_response(),
+        _ => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 pub async fn delete_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -299,7 +328,7 @@ fn spawn_favicon_fetch_if_needed(s: &AppState, provider: &ProviderId) {
             .flatten()
         };
         if let Some(p) = p_opt
-            && p.favicon_base64.is_none()
+            && !p.has_favicon
         {
             let _ = core_providers::fetch_and_cache_favicon(
                 &pool_clone,

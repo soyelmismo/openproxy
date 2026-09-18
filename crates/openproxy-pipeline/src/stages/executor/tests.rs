@@ -190,19 +190,19 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_phase() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use crate::stage::{PipelineChain, PipelineStageEnum};
     use crate::context::PipelineContext;
-    use crate::test_utils::{fresh_pool, make_request, MockAdapter};
+    use crate::stage::{PipelineChain, PipelineStageEnum};
+    use crate::test_utils::{MockAdapter, fresh_pool, make_request};
     use openproxy_adapters::adapters::{AdapterFormat, ProviderAdapterEnum};
+    use openproxy_types::TargetFormat;
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
     use openproxy_types::models::Model;
     use openproxy_types::providers::RateLimitScope;
-    use openproxy_types::TargetFormat;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     unsafe {
         std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
@@ -335,16 +335,33 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
     ctx.combo = Some(combo);
     ctx.targets = targets;
 
-    let chain = PipelineChain::new(vec![PipelineStageEnum::UpstreamExecutor(super::UpstreamExecutorStage)]);
-    let result = chain.execute_nested(&mut ctx).await.expect("pipeline execute");
+    let chain = PipelineChain::new(vec![PipelineStageEnum::UpstreamExecutor(
+        super::UpstreamExecutorStage,
+    )]);
+    let result = chain
+        .execute_nested(&mut ctx)
+        .await
+        .expect("pipeline execute");
 
     assert_eq!(result.status_code, 200);
     assert!(result.error.is_none());
 
     // Crucial race deduplication assertions:
-    assert_eq!(count_t1.load(Ordering::SeqCst), 1, "Target 1 must not be retried sequentially");
-    assert_eq!(count_t2.load(Ordering::SeqCst), 1, "Target 2 must not be retried sequentially");
-    assert_eq!(count_t3.load(Ordering::SeqCst), 1, "Target 3 must execute and succeed in sequential phase");
+    assert_eq!(
+        count_t1.load(Ordering::SeqCst),
+        1,
+        "Target 1 must not be retried sequentially"
+    );
+    assert_eq!(
+        count_t2.load(Ordering::SeqCst),
+        1,
+        "Target 2 must not be retried sequentially"
+    );
+    assert_eq!(
+        count_t3.load(Ordering::SeqCst),
+        1,
+        "Target 3 must execute and succeed in sequential phase"
+    );
 }
 
 #[tokio::test]
@@ -619,7 +636,10 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
     let mut ctx = crate::context::PipelineContext::new(req, pipeline);
 
     let outcome = super::race::try_initial_race(&mut ctx, &combo, &to_run, 1).await;
-    assert!(outcome.is_none(), "Race must be bypassed for race_size <= 1");
+    assert!(
+        outcome.is_none(),
+        "Race must be bypassed for race_size <= 1"
+    );
 
     let evaluated = super::evaluate_initial_race(&mut ctx, &combo, &to_run, 1).await;
     match evaluated {
@@ -638,16 +658,16 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
 
 #[tokio::test]
 async fn test_adversarial_race_winner_returns_empty_failure_sets() {
-    use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use crate::test_utils::{fresh_pool, make_request, MockAdapter};
+    use crate::test_utils::{MockAdapter, fresh_pool, make_request};
     use openproxy_adapters::adapters::{AdapterFormat, ProviderAdapterEnum};
+    use openproxy_types::TargetFormat;
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
     use openproxy_types::models::Model;
     use openproxy_types::providers::RateLimitScope;
-    use openproxy_types::TargetFormat;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     unsafe {
         std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
@@ -744,7 +764,12 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
 
     let outcome = crate::racing::run_race(&pipeline, req, &combo, targets, 2).await;
     assert!(outcome.result.error.is_none(), "Race should succeed");
-    assert!(outcome.failed_targets.is_empty(), "Winner must produce zero failed_targets");
-    assert!(outcome.failed_models.is_empty(), "Winner must produce zero failed_models");
+    assert!(
+        outcome.failed_targets.is_empty(),
+        "Winner must produce zero failed_targets"
+    );
+    assert!(
+        outcome.failed_models.is_empty(),
+        "Winner must produce zero failed_models"
+    );
 }
-

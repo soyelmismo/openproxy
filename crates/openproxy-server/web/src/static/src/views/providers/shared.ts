@@ -117,11 +117,12 @@ export function extractApexDomain(host: string): string {
 }
 
 /** Render the provider favicon with a graceful fallback chain:
- *  1. provider's own `favicon_base64` (if set),
- *  2. Google's `s2/favicons` service keyed on the host,
- *  3. retry against the apex domain (handles `cdn.provider.com`),
- *  4. retry against DuckDuckGo's IP3 icon service,
- *  5. finally hide the <img> and show the letter fallback.
+ *  1. on-demand streaming endpoint `/admin/api/providers/:id/icon` (if `has_favicon` is true),
+ *  2. legacy `favicon_base64` (if set),
+ *  3. Google's `s2/favicons` service keyed on the host,
+ *  4. retry against the apex domain (handles `cdn.provider.com`),
+ *  5. retry against DuckDuckGo's IP3 icon service,
+ *  6. finally hide the <img> and show the letter fallback.
  *
  *  Used by both `renderProviderCard` (grid) and `renderDetailHeader`
  *  (detail) — that's why it lives in shared.ts. */
@@ -130,8 +131,10 @@ export function renderProviderIcon(p: Provider): TemplateResult {
   const host = extractDomain(p.base_url);
   const apex = host ? extractApexDomain(host) : null;
   const src =
-    p.favicon_base64 ||
-    (host ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64` : null);
+    p.has_favicon
+      ? `/admin/api/providers/${encodeURIComponent(p.id)}/icon`
+      : (p.favicon_base64 ||
+        (host ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64` : null));
 
   if (!src) {
     return html`<span>${fallback}</span>`;

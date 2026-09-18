@@ -144,7 +144,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
     let pool_for_sources = Arc::clone(&db_pool);
     let sources_res = tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
-        let w = pool_for_sources.open_connection().map_err(openproxy_db::error::map_db_error)?;
+        let w = pool_for_sources.writer();
         // Ensure built-in sources exist
         for def in BUILTIN_PROXY_SOURCES {
             let _ = w.execute(
@@ -166,7 +166,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
     if !scraped.is_empty() {
         let (before_count, after_count) =
             tokio::task::spawn_blocking(move || -> Result<(i64, i64), crate::error::CoreError> {
-                let mut w = db_pool.open_connection()?;
+                let mut w = db_pool.writer();
                 let before: i64 = w
                     .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
                     .unwrap_or(0);

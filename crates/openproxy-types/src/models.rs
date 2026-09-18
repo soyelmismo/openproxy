@@ -57,6 +57,166 @@ impl Default for Model {
     }
 }
 
+impl Model {
+    /// Returns the parsed compact typed model kind.
+    pub fn kind(&self) -> ModelKind {
+        ModelKind::parse_kind(&self.model_type)
+    }
+
+    /// Returns the compact bitflags for input modalities.
+    pub fn input_modalities(&self) -> ModalityFlags {
+        ModalityFlags::parse_from_json(self.input_modalities_json.as_deref())
+    }
+
+    /// Returns the compact bitflags for output modalities.
+    pub fn output_modalities(&self) -> ModalityFlags {
+        ModalityFlags::parse_from_json(self.output_modalities_json.as_deref())
+    }
+
+    /// Creates a lightweight summary projection for catalog listing.
+    pub fn to_summary(&self) -> ModelSummary {
+        ModelSummary {
+            model_id: self.model_id.clone(),
+            provider_id: self.provider_id.clone(),
+            context_length: self.context_length,
+            max_output_tokens: self.max_output_tokens,
+            family: self.family.clone(),
+            model_type: self.model_type.clone(),
+            active: self.active,
+        }
+    }
+}
+
+/// Compact typed representation of model types (1 byte enum vs heap string).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    #[default]
+    Chat,
+    Image,
+    Embedding,
+    Audio,
+    Rerank,
+    Other,
+}
+
+impl ModelKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Image => "image",
+            Self::Embedding => "embedding",
+            Self::Audio => "audio",
+            Self::Rerank => "rerank",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse_kind(s: &str) -> Self {
+        match s {
+            "chat" => Self::Chat,
+            "image" => Self::Image,
+            "embedding" => Self::Embedding,
+            "audio" => Self::Audio,
+            "rerank" => Self::Rerank,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl std::str::FromStr for ModelKind {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self::parse_kind(s))
+    }
+}
+
+/// Bitflag representation of input/output modalities (1 byte instead of JSON strings on heap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct ModalityFlags(pub u8);
+
+impl ModalityFlags {
+    pub const NONE: u8 = 0;
+    pub const TEXT: u8 = 1 << 0;
+    pub const IMAGE: u8 = 1 << 1;
+    pub const AUDIO: u8 = 1 << 2;
+    pub const VIDEO: u8 = 1 << 3;
+
+    pub fn new(flags: u8) -> Self {
+        Self(flags)
+    }
+
+    pub fn has_text(&self) -> bool {
+        self.0 & Self::TEXT != 0
+    }
+
+    pub fn has_image(&self) -> bool {
+        self.0 & Self::IMAGE != 0
+    }
+
+    pub fn has_audio(&self) -> bool {
+        self.0 & Self::AUDIO != 0
+    }
+
+    pub fn has_video(&self) -> bool {
+        self.0 & Self::VIDEO != 0
+    }
+
+    pub fn parse_from_json(json_str: Option<&str>) -> Self {
+        let Some(s) = json_str else {
+            return Self(Self::TEXT);
+        };
+        let mut flags = 0u8;
+        if s.contains("text") {
+            flags |= Self::TEXT;
+        }
+        if s.contains("image") {
+            flags |= Self::IMAGE;
+        }
+        if s.contains("audio") {
+            flags |= Self::AUDIO;
+        }
+        if s.contains("video") {
+            flags |= Self::VIDEO;
+        }
+        if flags == 0 {
+            flags = Self::TEXT;
+        }
+        Self(flags)
+    }
+
+    pub fn to_json_string(&self) -> Box<str> {
+        let mut parts = Vec::new();
+        if self.has_text() {
+            parts.push("\"text\"");
+        }
+        if self.has_image() {
+            parts.push("\"image\"");
+        }
+        if self.has_audio() {
+            parts.push("\"audio\"");
+        }
+        if self.has_video() {
+            parts.push("\"video\"");
+        }
+        format!("[{}]", parts.join(",")).into_boxed_str()
+    }
+}
+
+/// Compact in-memory projection of a Model for high-throughput catalog listing (/v1/models),
+/// avoiding loading timestamps, override JSONs, and capability trees.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelSummary {
+    pub model_id: ModelId,
+    pub provider_id: ProviderId,
+    pub context_length: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub family: Option<Box<str>>,
+    pub model_type: Box<str>,
+    pub active: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertResult {
     pub touched: usize,
@@ -109,5 +269,64 @@ mod tests {
 
         publish_models_refreshed(event);
         assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_model_kind_and_modality_flags() {
+        let mut m = Model {
+            model_type: "chat".into(),
+            ..Default::default()
+        };
+        assert_eq!(m.kind(), ModelKind::Chat);
+
+        m.model_type = "embedding".into();
+        assert_eq!(m.kind(), ModelKind::Embedding);
+
+        m.input_modalities_json = Some("[\"text\", \"image\"]".into());
+        let in_mod = m.input_modalities();
+        assert!(in_mod.has_text());
+        assert!(in_mod.has_image());
+        assert!(!in_mod.has_audio());
+        assert!(!in_mod.has_video());
+
+        let json_str = in_mod.to_json_string();
+        assert!(json_str.contains("\"text\""));
+        assert!(json_str.contains("\"image\""));
+
+        let summary = m.to_summary();
+        assert_eq!(summary.model_type.as_ref(), "embedding");
+    }
+
+    #[test]
+    fn test_model_serde_compatibility() {
+        let m = Model {
+            row_id: ModelRowId(42),
+            provider_id: ProviderId::new("openai"),
+            model_id: ModelId::new("gpt-4o"),
+            display_name: Some("GPT-4o".into()),
+            discovered_at: "2026-01-01T00:00:00Z".into(),
+            expires_at: None,
+            timeout_overrides_json: None,
+            last_test_at: None,
+            context_length: Some(128000),
+            max_output_tokens: Some(4096),
+            capabilities_json: Some("{\"reasoning\":true}".into()),
+            family: Some("gpt".into()),
+            model_type: "chat".into(),
+            input_modalities_json: Some("[\"text\"]".into()),
+            output_modalities_json: Some("[\"text\"]".into()),
+            last_test_status: Some(200),
+            target_format: TargetFormat::Openai,
+            active: true,
+            custom: false,
+            manually_disabled_at: None,
+        };
+
+        let json = serde_json::to_string(&m).unwrap();
+        let deserialized: Model = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.row_id.0, 42);
+        assert_eq!(deserialized.provider_id.as_str(), "openai");
+        assert_eq!(deserialized.model_id.as_str(), "gpt-4o");
+        assert_eq!(deserialized.kind(), ModelKind::Chat);
     }
 }

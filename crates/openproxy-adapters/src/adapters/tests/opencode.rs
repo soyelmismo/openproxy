@@ -178,10 +178,7 @@ fn test_inject_opencode_agent_quartet_tools_gemini() {
     assert_eq!(tools.len(), 1);
     let decls = tools[0]["functionDeclarations"].as_array().unwrap();
     assert_eq!(decls.len(), 4);
-    let names: Vec<&str> = decls
-        .iter()
-        .map(|d| d["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> = decls.iter().map(|d| d["name"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["bash", "glob", "grep", "read"]);
 }
 
@@ -244,7 +241,9 @@ fn test_wrap_request_body_free_tier() {
         custom_meta: None,
     };
 
-    let initial_body = bytes::Bytes::from(r#"{"model":"big-pickle","messages":[{"role":"user","content":"hi"}],"stream":false}"#);
+    let initial_body = bytes::Bytes::from(
+        r#"{"model":"big-pickle","messages":[{"role":"user","content":"hi"}],"stream":false}"#,
+    );
     let wrapped = adapter
         .wrap_request_body(
             initial_body,

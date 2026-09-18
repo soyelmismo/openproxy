@@ -23,7 +23,7 @@ fn make_custom_provider(
         current_proxy_id: None,
         proxy_rotation_errors: "429,connect_error,timeout".into(),
         proxy_rotation_mode: "global".into(),
-        favicon_base64: None,
+        has_favicon: false,
     }
 }
 

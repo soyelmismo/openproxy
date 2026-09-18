@@ -246,7 +246,9 @@ fn resolve_target_format(
     }
 }
 
-pub(crate) fn prepare_messages_for_formatting(ctx: &PipelineContext) -> &[openproxy_types::OpenAIMessage] {
+pub(crate) fn prepare_messages_for_formatting(
+    ctx: &PipelineContext,
+) -> &[openproxy_types::OpenAIMessage] {
     let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
         let pii_enabled = ctx.pipeline.config.pii_config.pii_enabled;
         let compression_needed = openproxy_compression::would_compress(
@@ -689,7 +691,6 @@ impl PipelineStage for CustomAdapterStage {
 }
 
 pub(crate) use super::target_headers::propagate_opencode_headers;
-
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

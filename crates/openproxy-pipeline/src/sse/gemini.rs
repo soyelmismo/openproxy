@@ -178,9 +178,10 @@ pub fn parse_gemini_sse_line(
     let mut delta_tool_calls = Vec::new();
     for (idx, fc) in function_calls.into_iter().enumerate() {
         let call_id = fc.id.unwrap_or_else(|| format!("call_{chunk_id}_{idx}"));
-        let args_str = fc
-            .args
-            .map_or_else(|| "{}".to_string(), |a| serde_json::to_string(&a).unwrap_or_else(|_| "{}".to_string()));
+        let args_str = fc.args.map_or_else(
+            || "{}".to_string(),
+            |a| serde_json::to_string(&a).unwrap_or_else(|_| "{}".to_string()),
+        );
         delta_tool_calls.push(json!({
             "index": idx,
             "id": call_id,
@@ -574,7 +575,10 @@ mod tests {
         let tc3 = &chunk3.payload["choices"][0]["delta"]["tool_calls"][0];
         assert_eq!(tc3["function"]["name"], "f_null");
         // Check what args_str produces when args is null
-        println!("chunk3 arguments for null args: {:?}", tc3["function"]["arguments"]);
+        println!(
+            "chunk3 arguments for null args: {:?}",
+            tc3["function"]["arguments"]
+        );
     }
 
     #[test]
@@ -592,7 +596,9 @@ mod tests {
         assert_eq!(chunk.stop_reason.as_deref(), Some("tool_calls"));
         assert_eq!(chunk.delta_tool_calls.len(), 3);
 
-        let tcs = chunk.payload["choices"][0]["delta"]["tool_calls"].as_array().unwrap();
+        let tcs = chunk.payload["choices"][0]["delta"]["tool_calls"]
+            .as_array()
+            .unwrap();
         assert_eq!(tcs.len(), 3);
         assert_eq!(tcs[0]["index"], 0);
         assert_eq!(tcs[0]["id"], "call_madrid");
@@ -630,4 +636,3 @@ mod tests {
         assert_eq!(chunk.stop_reason.as_deref(), Some("tool_calls"));
     }
 }
-

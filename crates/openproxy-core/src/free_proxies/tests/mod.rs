@@ -102,6 +102,12 @@ fn setup_test_db() -> Connection {
           cooldown_until TEXT NOT NULL,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           PRIMARY KEY (provider_id, proxy_id)
+        );
+        CREATE TABLE provider_favicons (
+          provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+          mime TEXT NOT NULL,
+          data BLOB NOT NULL,
+          updated_at INTEGER NOT NULL
         );",
     )
     .unwrap();

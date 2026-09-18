@@ -19,9 +19,9 @@ use super::profile::TimeoutProfile;
 use super::response::{UpstreamBodyStream, UpstreamResponse};
 
 #[cfg(feature = "upstream-hyper")]
-use dashmap::DashMap;
-#[cfg(feature = "upstream-hyper")]
 use super::connector::{CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts, phased_phase};
+#[cfg(feature = "upstream-hyper")]
+use dashmap::DashMap;
 #[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::Client as HyperClient;
 #[cfg(feature = "upstream-hyper")]
@@ -193,7 +193,10 @@ impl ProductionTransport {
         }
     }
 
-    pub(crate) fn client_for_proxy(&self, proxy_url: Option<&str>) -> HyperClient<PhasedConnector, Full<Bytes>> {
+    pub(crate) fn client_for_proxy(
+        &self,
+        proxy_url: Option<&str>,
+    ) -> HyperClient<PhasedConnector, Full<Bytes>> {
         match proxy_url {
             None => self.direct_client.clone(),
             Some(proxy) => {

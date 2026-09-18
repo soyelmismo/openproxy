@@ -172,7 +172,11 @@ pub async fn run_test_for_model(
     let is_embedding = effective_type == "embedding";
     let is_image = effective_type == "image";
 
-    let (status, error_msg, elapsed_ms, debug_payload) = if is_stt || is_embedding || is_image || is_tts {
+    let (status, error_msg, elapsed_ms, debug_payload) = if is_stt
+        || is_embedding
+        || is_image
+        || is_tts
+    {
         let (url, body_value, multipart_opt): (
             String,
             serde_json::Value,
@@ -258,7 +262,9 @@ pub async fn run_test_for_model(
             let aid = _account_id_opt;
             tokio::task::spawn_blocking(move || {
                 let r = pool.try_reader_for(std::time::Duration::from_secs(5))?;
-                openproxy_core::free_proxies::get_or_assign_provider_proxy(&r, &pid, aid.as_ref()).ok().flatten()
+                openproxy_core::free_proxies::get_or_assign_provider_proxy(&r, &pid, aid.as_ref())
+                    .ok()
+                    .flatten()
             })
             .await
             .ok()
@@ -338,8 +344,7 @@ pub async fn run_test_for_model(
                         dp["response_body"] = serde_json::from_str(&text)
                             .unwrap_or_else(|_| serde_json::json!(text.to_string()));
                     }
-                    let truncated: String =
-                        text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
+                    let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
                     (status, Some(truncated))
                 } else {
                     (status, None)
@@ -449,7 +454,6 @@ pub async fn run_test_for_model(
 
         (status, error_msg, elapsed_ms, debug_payload)
     };
-
 
     if !opts.in_combo_fanout {
         let status_i32 = i32::from(status);

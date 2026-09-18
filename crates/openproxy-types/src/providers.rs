@@ -125,10 +125,9 @@ pub struct Provider {
     pub notif_keyword_only: bool,
     #[serde(default = "default_proxy_rotation_mode")]
     pub proxy_rotation_mode: Box<str>,
-    /// Cached favicon as a data URI (`data:image/png;base64,...`).
-    /// Populated lazily by the discovery scheduler.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub favicon_base64: Option<Box<str>>,
+    /// Whether a cached favicon BLOB exists for this provider.
+    #[serde(default)]
+    pub has_favicon: bool,
 }
 
 fn default_proxy_rotation_mode() -> Box<str> {
@@ -279,5 +278,47 @@ mod tests {
             AuthType::parse("invalid").unwrap_err(),
             "invalid auth_type: invalid"
         );
+    }
+
+    #[test]
+    fn test_provider_struct_has_favicon_zero_heap_overhead() {
+        let json_with_fav = r#"{
+            "id": "prov1",
+            "name": "Provider 1",
+            "base_url": "https://p1.example.com",
+            "auth_type": "bearer",
+            "format": "openai",
+            "active": true,
+            "created_at": "2026-01-01T00:00:00Z",
+            "rate_limit_scope": "account",
+            "has_favicon": true
+        }"#;
+
+        let p: Provider =
+            serde_json::from_str(json_with_fav).expect("deserialize with has_favicon");
+        assert!(p.has_favicon);
+
+        // Verify legacy JSON containing favicon_base64 is accepted but ignored, defaulting has_favicon to false
+        let legacy_json = r#"{
+            "id": "prov2",
+            "name": "Provider 2",
+            "base_url": "https://p2.example.com",
+            "auth_type": "bearer",
+            "format": "openai",
+            "created_at": "2026-01-01T00:00:00Z",
+            "rate_limit_scope": "account",
+            "favicon_base64": "data:image/x-icon;base64,AAABAAEAICAAAAAAAACoCAAAFgAAACgAAAAg..."
+        }"#;
+
+        let p2: Provider = serde_json::from_str(legacy_json).expect("deserialize legacy json");
+        assert!(!p2.has_favicon);
+
+        // Verify that has_favicon is a single-byte boolean field with no heap string allocation
+        assert_eq!(std::mem::size_of_val(&p.has_favicon), 1);
+
+        // Serialized representation should include "has_favicon" and NOT "favicon_base64"
+        let serialized = serde_json::to_string(&p).expect("serialize provider");
+        assert!(serialized.contains(r#""has_favicon":true"#));
+        assert!(!serialized.contains("favicon_base64"));
     }
 }

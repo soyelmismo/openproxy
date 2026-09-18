@@ -238,11 +238,18 @@ fn test_deserialize_gemini_response_function_call() {
     });
     let resp = deserialize_gemini_response(&body).expect("must deserialize function call");
     assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("tool_calls"));
-    let tool_calls = resp.choices[0].message.tool_calls.as_ref().expect("tool_calls present");
+    let tool_calls = resp.choices[0]
+        .message
+        .tool_calls
+        .as_ref()
+        .expect("tool_calls present");
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0]["type"], "function");
     assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
-    assert_eq!(tool_calls[0]["function"]["arguments"], r#"{"city":"Tokyo"}"#);
+    assert_eq!(
+        tool_calls[0]["function"]["arguments"],
+        r#"{"city":"Tokyo"}"#
+    );
 }
 
 #[test]

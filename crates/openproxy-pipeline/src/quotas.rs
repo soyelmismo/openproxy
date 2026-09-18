@@ -99,15 +99,12 @@ pub(crate) fn get_account_remaining_fraction(
                 calculate_remaining_fraction(account.quota_weekly_used, account.quota_weekly_limit)
             });
 
-    let monthly = account
-        .quota_model_details
-        .as_deref()
-        .and_then(|details| {
-            details
-                .iter()
-                .find(|d| d.model_id == "Monthly Limit" || d.model_id == "Monthly Window")
-                .map(|d| d.remaining_fraction)
-        });
+    let monthly = account.quota_model_details.as_deref().and_then(|details| {
+        details
+            .iter()
+            .find(|d| d.model_id == "Monthly Limit" || d.model_id == "Monthly Window")
+            .map(|d| d.remaining_fraction)
+    });
 
     match (session_or_weekly, monthly) {
         (Some(a), Some(b)) => a.min(b),

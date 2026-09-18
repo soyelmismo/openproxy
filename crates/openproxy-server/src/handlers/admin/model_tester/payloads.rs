@@ -252,7 +252,6 @@ pub fn build_audio_or_specialized_payload(
     }
 }
 
-
 pub fn extract_kiro_meta(
     raw_account: Option<&core_accounts::Account>,
 ) -> (Option<String>, Option<String>) {

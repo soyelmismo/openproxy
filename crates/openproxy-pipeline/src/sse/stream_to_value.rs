@@ -6,10 +6,13 @@
 
 use crate::sse_accumulator::ResponseAccumulator;
 use crate::translation::OpenAIResponse;
-use openproxy_types::error::{CoreError, Result};
 use openproxy_types::TargetFormat;
+use openproxy_types::error::{CoreError, Result};
 
-fn feed_chunk_to_acc(acc: &mut ResponseAccumulator, mut chunk: crate::sse::UpstreamSseChunk) -> bool {
+fn feed_chunk_to_acc(
+    acc: &mut ResponseAccumulator,
+    mut chunk: crate::sse::UpstreamSseChunk,
+) -> bool {
     let done = chunk.done;
     let usage = chunk.usage.take();
     let stop_reason = chunk.stop_reason.take();
@@ -69,10 +72,8 @@ pub fn parse_sse_stream_to_openai_response(
                 if trimmed.is_empty() {
                     continue;
                 }
-                let Some(payload) = crate::sse::parse_anthropic_sse_stream_line(
-                    trimmed,
-                    &mut current_event_type,
-                )?
+                let Some(payload) =
+                    crate::sse::parse_anthropic_sse_stream_line(trimmed, &mut current_event_type)?
                 else {
                     continue;
                 };
@@ -98,11 +99,7 @@ pub fn parse_sse_stream_to_openai_response(
                     continue;
                 }
                 if let Some(chunk) = crate::sse::parse_responses_sse_stream_line(
-                    trimmed,
-                    chunk_id,
-                    created,
-                    model_name,
-                    &mut state,
+                    trimmed, chunk_id, created, model_name, &mut state,
                 )? && feed_chunk_to_acc(&mut acc, chunk)
                 {
                     break;
@@ -115,12 +112,9 @@ pub fn parse_sse_stream_to_openai_response(
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Some(chunk) = crate::sse::parse_gemini_sse_line(
-                    trimmed,
-                    chunk_id,
-                    created,
-                    model_name,
-                )? && feed_chunk_to_acc(&mut acc, chunk)
+                if let Some(chunk) =
+                    crate::sse::parse_gemini_sse_line(trimmed, chunk_id, created, model_name)?
+                    && feed_chunk_to_acc(&mut acc, chunk)
                 {
                     break;
                 }
@@ -132,12 +126,9 @@ pub fn parse_sse_stream_to_openai_response(
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Some(chunk) = crate::sse::parse_atomesus_sse_line(
-                    trimmed,
-                    chunk_id,
-                    created,
-                    model_name,
-                )? && feed_chunk_to_acc(&mut acc, chunk)
+                if let Some(chunk) =
+                    crate::sse::parse_atomesus_sse_line(trimmed, chunk_id, created, model_name)?
+                    && feed_chunk_to_acc(&mut acc, chunk)
                 {
                     break;
                 }
@@ -147,10 +138,12 @@ pub fn parse_sse_stream_to_openai_response(
     }
 
     let val = acc.finish(chunk_id, created, model_name);
-    serde_json::from_value(val)
-        .map_err(|e| CoreError::Parse(format!("failed to parse accumulated sse into OpenAIResponse: {e}")))
+    serde_json::from_value(val).map_err(|e| {
+        CoreError::Parse(format!(
+            "failed to parse accumulated sse into OpenAIResponse: {e}"
+        ))
+    })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -159,15 +152,17 @@ mod tests {
     #[test]
     fn test_parse_openai_sse_stream() {
         let stream_text = "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"created\":1694268190,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"created\":1694268190,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world!\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"created\":1694268190,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\ndata: [DONE]\n\n";
-        let resp = parse_sse_stream_to_openai_response(
-            TargetFormat::Openai,
-            stream_text,
-            "gpt-4",
-        )
-        .unwrap();
+        let resp = parse_sse_stream_to_openai_response(TargetFormat::Openai, stream_text, "gpt-4")
+            .unwrap();
 
         assert_eq!(
-            resp.choices[0].message.content.as_ref().unwrap().as_str().unwrap(),
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "Hello world!"
         );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
@@ -187,7 +182,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            resp.choices[0].message.content.as_ref().unwrap().as_str().unwrap(),
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "Hi from Claude!"
         );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("end_turn"));

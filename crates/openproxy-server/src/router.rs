@@ -184,6 +184,10 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
         // validates the lang code. See `admin_ui::serve_i18n` for the
         // path-traversal guard + cache headers + extension parsing.
         .route("/i18n/{lang}", get(admin_ui::serve_i18n))
+        .route(
+            "/api/providers/{id}/icon",
+            get(handlers::admin::providers::get_provider_icon),
+        )
         .nest("/api", admin_api_routes)
         .fallback(admin_ui::serve_asset)
 }

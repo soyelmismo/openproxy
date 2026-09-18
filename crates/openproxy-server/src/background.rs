@@ -157,24 +157,79 @@ pub struct MemoryCleanupService {
         Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
 }
 
+impl MemoryCleanupService {
+    /// Perform an allocator trim, SQLite pool memory shrink, and abandoned request sweep.
+    pub async fn run_cleanup_pass(&self) {
+        self.run_cleanup_pass_with(true).await;
+    }
+
+    /// Perform allocator trimming with explicit collect intensity and SQLite pool shrinking.
+    pub async fn run_cleanup_pass_with(&self, force_collect: bool) {
+        // Periodic sweep for abandoned requests (>5m TTL)
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        openproxy_core::usage::INFLIGHT_REGISTRY
+            .retain(|_, v| now_ms.saturating_sub(v.updated_at_ms) < 300_000);
+
+        // Shrink SQLite memory on writer and reader pools in blocking thread,
+        // and collect freed allocator pages in the worker pool
+        let pool = Arc::clone(&self.db_pool);
+        let _ = tokio::task::spawn_blocking(move || {
+            pool.shrink_memory();
+            unsafe {
+                libmimalloc_sys::mi_collect(true);
+            }
+        })
+        .await;
+
+        // Collect freed allocator pages on the async worker thread
+        unsafe {
+            libmimalloc_sys::mi_collect(force_collect);
+        }
+    }
+}
+
 impl BackgroundService for MemoryCleanupService {
     fn name(&self) -> &'static str {
         "memory_cleanup"
     }
 
     async fn run(&self, cancel: CancellationToken) {
-        let mut fast_tick = tokio::time::interval(Duration::from_mins(1));
+        // Schedule early startup trims at T+5s and T+8s to purge any startup/discovery allocations
+        // strictly before the T+10s mark.
+        let early_5s = tokio::time::sleep(Duration::from_secs(5));
+        let early_8s = tokio::time::sleep(Duration::from_secs(8));
+        tokio::pin!(early_5s);
+        tokio::pin!(early_8s);
+
+        let mut ran_5s = false;
+        let mut ran_8s = false;
+
+        let mut fast_tick = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(12),
+            Duration::from_secs(30),
+        );
         let mut slow_counter: u32 = 0;
-        fast_tick.tick().await;
+
         loop {
             tokio::select! {
+                biased;
                 () = cancel.cancelled() => break,
+                () = &mut early_5s, if !ran_5s => {
+                    ran_5s = true;
+                    self.run_cleanup_pass_with(true).await;
+                }
+                () = &mut early_8s, if !ran_8s => {
+                    ran_8s = true;
+                    self.run_cleanup_pass_with(true).await;
+                }
                 _ = fast_tick.tick() => {
-                    unsafe {
-                        libmimalloc_sys::mi_collect(true);
-                    }
+                    self.run_cleanup_pass_with(true).await;
+
                     slow_counter = slow_counter.wrapping_add(1);
-                    if slow_counter.is_multiple_of(5) {
+                    if slow_counter.is_multiple_of(4) {
                         let now = std::time::Instant::now();
                         self.api_key_cache.retain(|_, (_, exp)| now < *exp);
                         openproxy_adapters::adapters::antigravity::prune_plan_cache();
@@ -185,6 +240,9 @@ impl BackgroundService for MemoryCleanupService {
                         let _ = tokio::task::spawn_blocking(move || {
                             pool_clone.shrink_memory();
                             pool_clone.checkpoint_wal();
+                            unsafe {
+                                libmimalloc_sys::mi_collect(true);
+                            }
                         })
                         .await;
                     }
@@ -271,9 +329,23 @@ impl BackgroundService for BackfillService {
     }
 
     async fn run(&self, cancel: CancellationToken) {
-        // First pass: fire ~immediately after the listener is bound so
-        // historical usage rows get repriced before the first dashboard
-        // poll. Subsequent passes run on the slow `interval` cadence.
+        // Initial delay isolates T+1s..T+10s startup RSS window before backfill.
+        let default_delay = if cfg!(test) {
+            Duration::from_millis(20)
+        } else {
+            Duration::from_secs(18)
+        };
+        let initial_delay = std::env::var("OPENPROXY_BACKFILL_INITIAL_DELAY_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map_or(default_delay, Duration::from_secs);
+
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            () = tokio::time::sleep(initial_delay) => {}
+        }
+
         if self.run_one_pass().await.is_none() {
             return;
         }
@@ -304,10 +376,21 @@ impl BackfillService {
         }
         let pool = Arc::clone(&self.db_pool);
         let join = tokio::task::spawn_blocking(move || {
-            let w = pool.writer();
-            crate::state::run_boot_backfill(&w)
+            let res = {
+                let w = pool.writer();
+                crate::state::run_boot_backfill(&w)
+            };
+            pool.shrink_memory();
+            unsafe {
+                libmimalloc_sys::mi_collect(true);
+            }
+            res
         })
         .await;
+
+        unsafe {
+            libmimalloc_sys::mi_collect(true);
+        }
 
         let result_str;
         let mut touched = 0usize;
@@ -358,8 +441,9 @@ impl BackgroundService for FreeProxiesSyncService {
             .max(1);
 
         tokio::select! {
+            biased;
             () = cancel.cancelled() => return,
-            () = tokio::time::sleep(Duration::from_secs(10)) => {}
+            () = tokio::time::sleep(Duration::from_secs(20)) => {}
         }
 
         loop {
@@ -626,5 +710,84 @@ mod tests {
         assert!(completed, "backfill pass did not complete; status={s:?}");
         assert_eq!(s.last_result.as_deref(), Some("ok"));
         assert!(!s.in_progress, "status still in_progress after pass");
+    }
+
+    #[tokio::test]
+    async fn memory_cleanup_service_prunes_abandoned_inflight_and_trims() {
+        use openproxy_db::DbPool;
+        use openproxy_types::usage::InflightAttempt;
+
+        let pool = Arc::new(
+            DbPool::test_pool_with_prefix("openproxy-mem-cleanup-test").expect("open pool"),
+        );
+        let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
+        let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
+            &openproxy_types::config::CircuitBreakerConfig {
+                failure_threshold: 5,
+                unhealthy_duration_ms: 60_000,
+            },
+        );
+        let predictive_limiter = Arc::new(openproxy_pipeline::PredictiveRateLimiter::new());
+        let api_key_cache = Arc::new(dashmap::DashMap::new());
+
+        let service = MemoryCleanupService {
+            db_pool: Arc::clone(&pool),
+            selection_registry,
+            circuit_breaker,
+            predictive_limiter,
+            api_key_cache,
+        };
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let fresh_key = "test-fresh-attempt-key".to_string();
+        let stale_key = "test-stale-attempt-key".to_string();
+
+        let make_attempt = |key: &str, updated_at_ms: u64| InflightAttempt {
+            attempt_key: key.to_string(),
+            request_id: "req".to_string(),
+            trace_id: "trace".to_string(),
+            provider_id: "p".to_string(),
+            upstream_model_id: "m".to_string(),
+            started_at_ms: updated_at_ms,
+            updated_at_ms,
+            stage: "started".to_string(),
+            stage_seq: 1,
+            stage_rank: 0,
+            elapsed_ms_at_event: 0,
+            connect_ms: None,
+            ttft_ms: None,
+            status_code: None,
+            terminal: false,
+            terminal_kind: None,
+            error: None,
+            row_id: None,
+            source: "proxy".to_string(),
+            endpoint_kind: None,
+        };
+
+        openproxy_core::usage::INFLIGHT_REGISTRY
+            .insert(fresh_key.clone(), make_attempt(&fresh_key, now_ms));
+        openproxy_core::usage::INFLIGHT_REGISTRY.insert(
+            stale_key.clone(),
+            make_attempt(&stale_key, now_ms.saturating_sub(400_000)),
+        );
+
+        service.run_cleanup_pass().await;
+
+        assert!(
+            !openproxy_core::usage::INFLIGHT_REGISTRY.contains_key(&stale_key),
+            "stale inflight attempt (>300s) should have been pruned"
+        );
+        assert!(
+            openproxy_core::usage::INFLIGHT_REGISTRY.contains_key(&fresh_key),
+            "fresh inflight attempt should have been retained"
+        );
+
+        // Clean up
+        openproxy_core::usage::INFLIGHT_REGISTRY.remove(&fresh_key);
     }
 }

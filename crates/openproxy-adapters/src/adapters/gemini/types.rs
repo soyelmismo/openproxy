@@ -62,9 +62,17 @@ pub struct GeminiPart {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_data: Option<GeminiInlineData>,
-    #[serde(default, rename = "functionCall", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "functionCall",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub function_call: Option<GeminiFunctionCall>,
-    #[serde(default, rename = "functionResponse", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "functionResponse",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub function_response: Option<GeminiFunctionResponse>,
 }
 

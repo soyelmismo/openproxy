@@ -98,8 +98,29 @@ impl AppState {
         }
     }
 
+    pub const MAX_API_KEY_CACHE_ENTRIES: usize = 5000;
+
     /// Insert or refresh a validated API key in the fast in-memory cache (60s TTL).
+    /// Strictly bounded to 5,000 entries; when capacity is reached, expired keys
+    /// are pruned, and if still full, oldest entries are evicted.
     pub fn cache_api_key(&self, key: Arc<openproxy_core::api_keys::ApiKey>) {
+        if !self.api_key_cache.contains_key(&key.key_hash)
+            && self.api_key_cache.len() >= Self::MAX_API_KEY_CACHE_ENTRIES
+        {
+            self.prune_api_key_cache();
+            while self.api_key_cache.len() >= Self::MAX_API_KEY_CACHE_ENTRIES {
+                let to_evict = self
+                    .api_key_cache
+                    .iter()
+                    .min_by_key(|entry| entry.value().1)
+                    .map(|entry| entry.key().clone());
+                if let Some(k) = to_evict {
+                    self.api_key_cache.remove(&k);
+                } else {
+                    break;
+                }
+            }
+        }
         let now = std::time::Instant::now();
         let ttl = std::time::Duration::from_secs(60);
         self.api_key_cache

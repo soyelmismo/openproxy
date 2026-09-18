@@ -133,7 +133,10 @@ fn opencode_zen_uses_public_auth_when_key_empty() {
     let a = OpenCodeZenAdapter::new();
     let headers = a.build_headers("", TargetFormat::Openai, &ModelId::new("m"));
     // OpenCode free tier uses "Bearer public" when key is empty.
-    assert_eq!(first_header(&headers, "Authorization"), Some("Bearer public"));
+    assert_eq!(
+        first_header(&headers, "Authorization"),
+        Some("Bearer public")
+    );
     assert!(first_header(&headers, "x-api-key").is_none());
     // Content-Type and User-Agent are still present.
     assert_eq!(
@@ -151,7 +154,10 @@ fn opencode_zen_uses_public_auth_when_key_empty() {
 
     // Anthropic format uses "x-api-key: public"
     let anthropic_headers = a.build_headers("", TargetFormat::Anthropic, &ModelId::new("m"));
-    assert_eq!(first_header(&anthropic_headers, "x-api-key"), Some("public"));
+    assert_eq!(
+        first_header(&anthropic_headers, "x-api-key"),
+        Some("public")
+    );
     assert_eq!(
         first_header(&anthropic_headers, "Anthropic-Version"),
         Some("2023-06-01")

@@ -343,13 +343,18 @@ mod tests {
             "expiry_date": 1740000000000i64,
             "scope": "openid email"
         });
-        std::fs::write(&creds_target, serde_json::to_vec(&creds_body).expect("ser")).expect("write");
+        std::fs::write(&creds_target, serde_json::to_vec(&creds_body).expect("ser"))
+            .expect("write");
 
         let accounts_body = serde_json::json!({
             "active": "bob@example.com",
             "old": []
         });
-        std::fs::write(&accounts_target, serde_json::to_vec(&accounts_body).expect("ser")).expect("write");
+        std::fs::write(
+            &accounts_target,
+            serde_json::to_vec(&accounts_body).expect("ser"),
+        )
+        .expect("write");
 
         let _guard = lock();
         let _home = HomeGuard::set(tmp.path());
@@ -359,10 +364,17 @@ mod tests {
             .iter()
             .filter(|a| a.provider_id == "antigravity")
             .collect();
-        assert_eq!(agy.len(), 1, "expected exactly one antigravity entry from oauth_creds");
+        assert_eq!(
+            agy.len(),
+            1,
+            "expected exactly one antigravity entry from oauth_creds"
+        );
         assert_eq!(agy[0].label, "antigravity@bob@example.com");
         assert_eq!(agy[0].access_token, "ya-test-creds-access");
-        assert_eq!(agy[0].refresh_token.as_deref(), Some("1//test-creds-refresh"));
+        assert_eq!(
+            agy[0].refresh_token.as_deref(),
+            Some("1//test-creds-refresh")
+        );
         assert_eq!(agy[0].email.as_deref(), Some("bob@example.com"));
         assert_eq!(agy[0].source_path, creds_target);
     }
@@ -403,7 +415,11 @@ mod tests {
             .iter()
             .filter(|a| a.provider_id == "antigravity")
             .collect();
-        assert_eq!(agy.len(), 1, "expected deduplication by shared refresh_token");
+        assert_eq!(
+            agy.len(),
+            1,
+            "expected deduplication by shared refresh_token"
+        );
         assert_eq!(agy[0].access_token, "ya-new-access");
     }
 
@@ -429,7 +445,11 @@ mod tests {
             "active": "   ",
             "old": []
         });
-        std::fs::write(&accounts_target, serde_json::to_vec(&accounts_body).unwrap()).unwrap();
+        std::fs::write(
+            &accounts_target,
+            serde_json::to_vec(&accounts_body).unwrap(),
+        )
+        .unwrap();
 
         let _guard = lock();
         let _home = HomeGuard::set(tmp.path());

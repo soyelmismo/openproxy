@@ -396,7 +396,11 @@ fn adv_multiple_tool_calls() {
     let resp = deserialize_gemini_response(&body).expect("deserialize multiple function calls");
     assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("tool_calls"));
     assert!(resp.choices[0].message.content.is_none());
-    let tcs = resp.choices[0].message.tool_calls.as_ref().expect("tool_calls present");
+    let tcs = resp.choices[0]
+        .message
+        .tool_calls
+        .as_ref()
+        .expect("tool_calls present");
     assert_eq!(tcs.len(), 3);
     assert_eq!(tcs[0]["id"], "call_paris");
     assert_eq!(tcs[0]["function"]["name"], "get_weather");
@@ -421,9 +425,30 @@ fn adv_multiple_tool_calls() {
     }];
     let gemini_req = openai_to_gemini(&req, &messages);
     assert_eq!(gemini_req.contents[0].parts.len(), 3);
-    assert_eq!(gemini_req.contents[0].parts[0].function_call.as_ref().unwrap().name, "f1");
-    assert_eq!(gemini_req.contents[0].parts[1].function_call.as_ref().unwrap().name, "f2");
-    assert_eq!(gemini_req.contents[0].parts[2].function_call.as_ref().unwrap().name, "f3");
+    assert_eq!(
+        gemini_req.contents[0].parts[0]
+            .function_call
+            .as_ref()
+            .unwrap()
+            .name,
+        "f1"
+    );
+    assert_eq!(
+        gemini_req.contents[0].parts[1]
+            .function_call
+            .as_ref()
+            .unwrap()
+            .name,
+        "f2"
+    );
+    assert_eq!(
+        gemini_req.contents[0].parts[2]
+            .function_call
+            .as_ref()
+            .unwrap()
+            .name,
+        "f3"
+    );
 }
 
 // --- Adversarial: Tool responses with structured JSON content ---
@@ -455,12 +480,18 @@ fn adv_tool_responses_structured_json_content() {
     }];
     let gemini_req = openai_to_gemini(&req, &messages_obj);
     let part = &gemini_req.contents[0].parts[0];
-    let fr = part.function_response.as_ref().expect("function_response present");
+    let fr = part
+        .function_response
+        .as_ref()
+        .expect("function_response present");
     assert_eq!(fr.name, "sensor_read");
     // Object content should be preserved directly without {"output": ...} wrapping
     assert_eq!(fr.response["content"]["status"], "success");
     assert_eq!(fr.response["content"]["data"]["temperature"], 21.5);
-    assert_eq!(fr.response["content"]["data"]["metadata"]["calibrated"], true);
+    assert_eq!(
+        fr.response["content"]["data"]["metadata"]["calibrated"],
+        true
+    );
 
     // 2. Structured JSON array (as standard OpenAI wire-format string)
     let array_val = json!(["item1", "item2", 123]);
@@ -473,7 +504,10 @@ fn adv_tool_responses_structured_json_content() {
         extra: serde_json::Map::new(),
     }];
     let gemini_req_arr = openai_to_gemini(&req, &messages_arr);
-    let fr_arr = gemini_req_arr.contents[0].parts[0].function_response.as_ref().unwrap();
+    let fr_arr = gemini_req_arr.contents[0].parts[0]
+        .function_response
+        .as_ref()
+        .unwrap();
     // Non-object JSON is wrapped in {"output": ...}
     assert_eq!(fr_arr.response["content"]["output"], array_val);
 
@@ -487,7 +521,10 @@ fn adv_tool_responses_structured_json_content() {
         extra: serde_json::Map::new(),
     }];
     let gemini_req_arr_direct = openai_to_gemini(&req, &messages_arr_direct);
-    let fr_arr_direct = gemini_req_arr_direct.contents[0].parts[0].function_response.as_ref().unwrap();
+    let fr_arr_direct = gemini_req_arr_direct.contents[0].parts[0]
+        .function_response
+        .as_ref()
+        .unwrap();
     assert_eq!(fr_arr_direct.response["content"]["output"], array_val);
 
     // 3. Primitive values (number, boolean, null)
@@ -505,12 +542,16 @@ fn adv_tool_responses_structured_json_content() {
             extra: serde_json::Map::new(),
         }];
         let g_req = openai_to_gemini(&req, &msgs);
-        let fr_prim = g_req.contents[0].parts[0].function_response.as_ref().unwrap();
+        let fr_prim = g_req.contents[0].parts[0]
+            .function_response
+            .as_ref()
+            .unwrap();
         assert_eq!(fr_prim.response["content"]["output"], exp);
     }
 
     // 4. Verify serialized Gemini request wire format
-    let bytes = serialize_gemini_request(&req, &messages_obj).expect("serialize structured tool response");
+    let bytes =
+        serialize_gemini_request(&req, &messages_obj).expect("serialize structured tool response");
     let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON wire format");
     assert_eq!(parsed["contents"][0]["role"], "function");
     assert_eq!(
@@ -518,4 +559,3 @@ fn adv_tool_responses_structured_json_content() {
         "success"
     );
 }
-

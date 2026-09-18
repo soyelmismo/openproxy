@@ -80,7 +80,11 @@ fn append_format_auth_headers(
     api_key: &str,
     target_format: TargetFormat,
 ) {
-    let effective_key = if api_key.is_empty() { "public" } else { api_key };
+    let effective_key = if api_key.is_empty() {
+        "public"
+    } else {
+        api_key
+    };
     if target_format == TargetFormat::Anthropic {
         headers.push(("x-api-key".into(), effective_key.to_string()));
         headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
@@ -118,7 +122,11 @@ pub async fn fetch_opencode_models(
         .models_url()
         .ok_or_else(|| CoreError::Validation(format!("{}: models_url is None", adapter.id())))?;
 
-    let effective_key = if api_key.is_empty() { "public" } else { api_key };
+    let effective_key = if api_key.is_empty() {
+        "public"
+    } else {
+        api_key
+    };
     let auth = format!("Bearer {effective_key}");
     let body = upstream_get_json(
         upstream_client,
@@ -187,7 +195,9 @@ impl OpenCodeAdapter {
         let api_key = resolved_target
             .custom_meta
             .as_ref()
-            .map_or(resolved_target.api_key.as_str(), |m| m.access_token.as_str());
+            .map_or(resolved_target.api_key.as_str(), |m| {
+                m.access_token.as_str()
+            });
 
         if !is_free_opencode_tier(self.flavor, api_key, model) {
             return Ok(body);
@@ -198,7 +208,9 @@ impl OpenCodeAdapter {
         }
 
         let mut val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            CoreError::Parse(format!("failed to parse request body for opencode wrapping: {e}"))
+            CoreError::Parse(format!(
+                "failed to parse request body for opencode wrapping: {e}"
+            ))
         })?;
 
         if let Some(obj) = val.as_object_mut() {
@@ -278,9 +290,21 @@ pub fn inject_opencode_agent_quartet_tools(
             name: "bash",
             desc: "Execute a shell command in the active workspace",
             params: &[
-                QuartetParam { name: "command", r#type: "string", desc: "Shell command string to execute" },
-                QuartetParam { name: "workdir", r#type: "string", desc: "Working directory" },
-                QuartetParam { name: "timeout", r#type: "integer", desc: "Timeout in milliseconds" },
+                QuartetParam {
+                    name: "command",
+                    r#type: "string",
+                    desc: "Shell command string to execute",
+                },
+                QuartetParam {
+                    name: "workdir",
+                    r#type: "string",
+                    desc: "Working directory",
+                },
+                QuartetParam {
+                    name: "timeout",
+                    r#type: "integer",
+                    desc: "Timeout in milliseconds",
+                },
             ],
             required: &["command"],
         },
@@ -288,9 +312,21 @@ pub fn inject_opencode_agent_quartet_tools(
             name: "glob",
             desc: "Find files matching a glob pattern",
             params: &[
-                QuartetParam { name: "pattern", r#type: "string", desc: "Glob pattern to match files against" },
-                QuartetParam { name: "path", r#type: "string", desc: "Relative directory to search" },
-                QuartetParam { name: "limit", r#type: "integer", desc: "Maximum results to return" },
+                QuartetParam {
+                    name: "pattern",
+                    r#type: "string",
+                    desc: "Glob pattern to match files against",
+                },
+                QuartetParam {
+                    name: "path",
+                    r#type: "string",
+                    desc: "Relative directory to search",
+                },
+                QuartetParam {
+                    name: "limit",
+                    r#type: "integer",
+                    desc: "Maximum results to return",
+                },
             ],
             required: &["pattern"],
         },
@@ -298,10 +334,26 @@ pub fn inject_opencode_agent_quartet_tools(
             name: "grep",
             desc: "Search for regex matches in file contents",
             params: &[
-                QuartetParam { name: "pattern", r#type: "string", desc: "Regex pattern to search for in file contents" },
-                QuartetParam { name: "path", r#type: "string", desc: "Relative directory to search" },
-                QuartetParam { name: "include", r#type: "string", desc: "File glob to include in the search" },
-                QuartetParam { name: "limit", r#type: "integer", desc: "Maximum matches to return" },
+                QuartetParam {
+                    name: "pattern",
+                    r#type: "string",
+                    desc: "Regex pattern to search for in file contents",
+                },
+                QuartetParam {
+                    name: "path",
+                    r#type: "string",
+                    desc: "Relative directory to search",
+                },
+                QuartetParam {
+                    name: "include",
+                    r#type: "string",
+                    desc: "File glob to include in the search",
+                },
+                QuartetParam {
+                    name: "limit",
+                    r#type: "integer",
+                    desc: "Maximum matches to return",
+                },
             ],
             required: &["pattern"],
         },
@@ -309,9 +361,21 @@ pub fn inject_opencode_agent_quartet_tools(
             name: "read",
             desc: "Read a text file or directory",
             params: &[
-                QuartetParam { name: "path", r#type: "string", desc: "Path to file or directory" },
-                QuartetParam { name: "offset", r#type: "integer", desc: "1-based line offset to start reading from" },
-                QuartetParam { name: "limit", r#type: "integer", desc: "Maximum entries or lines to read" },
+                QuartetParam {
+                    name: "path",
+                    r#type: "string",
+                    desc: "Path to file or directory",
+                },
+                QuartetParam {
+                    name: "offset",
+                    r#type: "integer",
+                    desc: "1-based line offset to start reading from",
+                },
+                QuartetParam {
+                    name: "limit",
+                    r#type: "integer",
+                    desc: "Maximum entries or lines to read",
+                },
             ],
             required: &["path"],
         },
@@ -457,7 +521,8 @@ impl crate::adapters::ProviderAdapter for OpenCodeGoAdapter {
         model: &openproxy_types::ModelId,
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        self.0.wrap_request_body(body, target_format, model, resolved_target)
+        self.0
+            .wrap_request_body(body, target_format, model, resolved_target)
     }
 }
 
@@ -510,7 +575,8 @@ impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
         model: &openproxy_types::ModelId,
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        self.0.wrap_request_body(body, target_format, model, resolved_target)
+        self.0
+            .wrap_request_body(body, target_format, model, resolved_target)
     }
 }
 
@@ -551,8 +617,12 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
                 model.as_str()
             )
         } else {
-            let eff_format = crate::adapters::traits::resolve_target_format(self.config.format, target_format);
-            format!("{base_url}{}", crate::adapters::traits::target_format_path(eff_format))
+            let eff_format =
+                crate::adapters::traits::resolve_target_format(self.config.format, target_format);
+            format!(
+                "{base_url}{}",
+                crate::adapters::traits::target_format_path(eff_format)
+            )
         }
     }
 
@@ -574,4 +644,3 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
         self.wrap_request_body(body, target_format, model, resolved_target)
     }
 }
-

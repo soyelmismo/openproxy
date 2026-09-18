@@ -8,7 +8,7 @@ pub use openproxy_types::providers::{NewProvider, VIRTUAL_COMBO_PROVIDER_ID};
 crate::def_table_select!(
     provider_select,
     "providers",
-    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, favicon_base64, notif_keyword_only"
+    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only"
 );
 
 define_column_updaters! {
@@ -16,7 +16,6 @@ define_column_updaters! {
     id_type: &ProviderId,
     id_field: |id| id.as_str(),
     pub fn set_active(active: bool => i64::from(active)) => "active";
-    pub fn set_favicon(favicon: &str) => "favicon_base64";
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
@@ -220,7 +219,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         proxy_rotation_errors: @box_str(11),
         rate_limit_scope: @enum_parse(12, RateLimitScope),
         proxy_rotation_mode: @box_str(13),
-        favicon_base64: @opt_box_str(14),
+        has_favicon: @bool(14),
         notif_keyword_only: @bool(15),
     })
 }
@@ -252,4 +251,122 @@ pub fn get_auth_types(
     ))?;
 
     Ok(rows.into_iter().collect())
+}
+
+pub fn get_provider_favicon(
+    conn: &Connection,
+    provider_id: &str,
+) -> Result<Option<(String, Vec<u8>)>> {
+    let res = conn.query_row(
+        "SELECT mime, data FROM provider_favicons WHERE provider_id = ?1",
+        params![provider_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
+    );
+    match res {
+        Ok(pair) => Ok(Some(pair)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(crate::error::map_db_error(e)),
+    }
+}
+
+pub fn set_provider_favicon(
+    conn: &Connection,
+    provider_id: &str,
+    mime: &str,
+    data: &[u8],
+) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    crate::db_execute!(
+        conn,
+        "INSERT INTO provider_favicons (provider_id, mime, data, updated_at) \
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(provider_id) DO UPDATE SET \
+         mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at",
+        params![provider_id, mime, data, now],
+        format!("set favicon for provider {provider_id}")
+    )?;
+    Ok(())
+}
+
+pub fn delete_provider_favicon(conn: &Connection, provider_id: &str) -> Result<()> {
+    crate::db_execute!(
+        conn,
+        "DELETE FROM provider_favicons WHERE provider_id = ?1",
+        params![provider_id],
+        format!("delete favicon for provider {provider_id}")
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_conn() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open memory db");
+        crate::migrations::run(&mut conn).expect("run migrations");
+        conn
+    }
+
+    #[test]
+    fn test_provider_favicon_crud_and_has_favicon() {
+        let conn = test_conn();
+        let pid = ProviderId::new("test-fav-prov");
+        create(
+            &conn,
+            NewProvider {
+                id: &pid,
+                name: "Favicon Test Provider",
+                base_url: "https://fav.example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                rate_limit_scope: RateLimitScope::Account,
+            },
+        )
+        .expect("create provider");
+
+        // Before favicon: has_favicon is false, get returns None
+        let p = get(&conn, &pid).expect("get").expect("found");
+        assert!(!p.has_favicon, "initially false");
+        assert_eq!(
+            get_provider_favicon(&conn, pid.as_str()).expect("get_fav"),
+            None
+        );
+
+        // Store favicon
+        let fake_icon = b"\x89PNG\r\n\x1a\nfakeimagebytes";
+        set_provider_favicon(&conn, pid.as_str(), "image/png", fake_icon).expect("set_fav");
+
+        // After favicon: has_favicon is true, get returns data
+        let p2 = get(&conn, &pid).expect("get").expect("found");
+        assert!(p2.has_favicon, "has_favicon must be true");
+        let (mime, data) = get_provider_favicon(&conn, pid.as_str())
+            .expect("get_fav")
+            .expect("found favicon");
+        assert_eq!(mime, "image/png");
+        assert_eq!(data, fake_icon);
+
+        // Update favicon
+        let fake_ico = b"\x00\x00\x01\x00newbytes";
+        set_provider_favicon(&conn, pid.as_str(), "image/x-icon", fake_ico).expect("update_fav");
+        let (mime2, data2) = get_provider_favicon(&conn, pid.as_str())
+            .expect("get_fav")
+            .expect("found favicon");
+        assert_eq!(mime2, "image/x-icon");
+        assert_eq!(data2, fake_ico);
+
+        // Delete favicon
+        delete_provider_favicon(&conn, pid.as_str()).expect("del_fav");
+        let p3 = get(&conn, &pid).expect("get").expect("found");
+        assert!(!p3.has_favicon, "has_favicon must be false after deletion");
+        assert_eq!(
+            get_provider_favicon(&conn, pid.as_str()).expect("get_fav"),
+            None
+        );
+    }
 }

@@ -1,4 +1,6 @@
 use super::*;
+use crate::translation::OpenAIUsage;
+use serde_json::Value;
 
 #[test]
 fn empty_accumulator_produces_minimal_response() {
@@ -93,6 +95,19 @@ fn cap_truncates_and_sets_flag() {
         acc.finish("id", 0, "m")["choices"][0]["message"]["truncated"],
         Value::Bool(true)
     );
+}
+
+#[test]
+fn test_256k_cap_exact_boundary() {
+    assert_eq!(MAX_ACCUMULATED_BYTES, 262_144);
+    let mut acc = ResponseAccumulator::new();
+    let exact_bytes = "a".repeat(262_144);
+    acc.append_openai_raw(&format!(
+        r#"{{"choices":[{{"delta":{{"content":"{exact_bytes}"}}}}]}}"#
+    ));
+    assert!(!acc.is_truncated());
+    acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"b"}}]}"#);
+    assert!(acc.is_truncated());
 }
 
 #[test]
@@ -240,26 +255,28 @@ fn test_tool_calls_nested_content_does_not_pollute_message_content() {
     assert!(tc.is_array());
     assert_eq!(tc.as_array().unwrap().len(), 1);
     assert_eq!(tc[0]["function"]["name"], "write_file");
-    assert_eq!(tc[0]["function"]["arguments"], "{\"path\":\"test.txt\",\"content\":\"file content here\"}");
+    assert_eq!(
+        tc[0]["function"]["arguments"],
+        "{\"path\":\"test.txt\",\"content\":\"file content here\"}"
+    );
 }
 
 #[test]
 fn test_adversarial_mixed_escapes_and_surrogate_pairs() {
     let mut acc = ResponseAccumulator::new();
-    // \n, \", \\, \t, \r, \u0041 (A), and surrogate pair \uD83D\uDE00 (😀)
     let payload = r#"{"choices":[{"delta":{"content":"Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:\/Hex:\u0041Emoji:\uD83D\uDE00"}}]}"#;
     acc.append_openai_raw(payload);
     let v = acc.finish("chatcmpl-test", 1234, "test-model");
     let content = v["choices"][0]["message"]["content"].as_str().unwrap();
-    assert_eq!(content, "Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:/Hex:AEmoji:😀");
+    assert_eq!(
+        content,
+        "Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:/Hex:AEmoji:😀"
+    );
 
-    // Single-layer escaping in serialized output
     let serialized = serde_json::to_string(&v).unwrap();
-    // Must NOT contain double-escaped \\n or \\" or \\\\
     assert!(!serialized.contains(r"\\n"));
     assert!(!serialized.contains(r"\\t"));
     assert!(!serialized.contains(r"\\r"));
-    // Must contain single-escaped newline in JSON string representation: "Line 1\nTab:\tCR:\rQuote:\"Backslash:\\Slash:/Hex:AEmoji:😀"
     let re_parsed: Value = serde_json::from_str(&serialized).unwrap();
     assert_eq!(
         re_parsed["choices"][0]["message"]["content"],
@@ -300,13 +317,10 @@ fn test_adversarial_invalid_unicode_escape_multibyte_no_panic() {
     for case in test_cases {
         let mut out = Vec::new();
         decode_json_escape_into(case, &mut out);
-        // Verify output is valid UTF-8 and does not panic
         let decoded = String::from_utf8(out).expect("decoded bytes must be valid utf8");
-        // Non-panic and progress guaranteed
         assert!(!decoded.is_empty() || case.is_empty());
     }
 
-    // Specific verification of r"\u123ñ"
     let mut out_malformed = Vec::new();
     decode_json_escape_into(r"\u123ñ", &mut out_malformed);
     let s = String::from_utf8(out_malformed).expect("valid utf8");
@@ -315,13 +329,7 @@ fn test_adversarial_invalid_unicode_escape_multibyte_no_panic() {
 
 #[test]
 fn test_adversarial_empirical_challenger_stress_utf8() {
-    // 1. Mandatory test strings from challenger mission
-    let mandatory_cases = [
-        r"\u123ñ",
-        r"\uD800\u123ñ",
-        r"\uññññ",
-        r"\u",
-    ];
+    let mandatory_cases = [r"\u123ñ", r"\uD800\u123ñ", r"\uññññ", r"\u"];
 
     for case in &mandatory_cases {
         let mut out = Vec::new();
@@ -330,31 +338,30 @@ fn test_adversarial_empirical_challenger_stress_utf8() {
         assert!(!s.is_empty() || case.is_empty());
     }
 
-    // 2. Comprehensive edge case suite (surrogate pairs, 4-byte emojis, CJK, partial escapes)
     let edge_cases = [
-        r"\uD83D\uDE00", // Valid emoji 😀
-        r"\uD83D\uDE02", // Valid emoji 😂
-        r"\uD83D\u123ñ", // High surrogate + malformed low escape with multibyte
-        r"\uD83D\uññññ", // High surrogate + 4 multibyte chars
-        r"\uD83D\u",     // High surrogate + truncated \u
-        r"\uD83D\u1",    // High surrogate + 1 hex digit
-        r"\uD83D\u12",   // High surrogate + 2 hex digits
-        r"\uD83D\u123",  // High surrogate + 3 hex digits
-        r"\u123🦀",      // 4-byte UTF-8 boundary split
-        r"\u12🦀",       // 4-byte UTF-8 character inside escape
-        r"\u🦀",         // 4-byte UTF-8 character immediately after \u
-        r"\u4e16\u754c", // CJK characters 世界
-        r"\u0000",       // Null byte
-        r"\",            // Lone trailing backslash
-        r"\\",           // Escaped backslash
-        r"\\\",          // Triple backslash
-        r"\\\\",         // Quadruple backslash
-        r"\uD800\uD800", // High surrogate followed by high surrogate
-        r"\uDC00\uDC00", // Low surrogate followed by low surrogate
-        r"\uDC00\uD800", // Inverted surrogates
-        r"\uFFFF",       // Max BMP
+        r"\uD83D\uDE00",       // Valid emoji 😀
+        r"\uD83D\uDE02",       // Valid emoji 😂
+        r"\uD83D\u123ñ",       // High surrogate + malformed low escape with multibyte
+        r"\uD83D\uññññ",       // High surrogate + 4 multibyte chars
+        r"\uD83D\u",           // High surrogate + truncated \u
+        r"\uD83D\u1",          // High surrogate + 1 hex digit
+        r"\uD83D\u12",         // High surrogate + 2 hex digits
+        r"\uD83D\u123",        // High surrogate + 3 hex digits
+        r"\u123🦀",            // 4-byte UTF-8 boundary split
+        r"\u12🦀",             // 4-byte UTF-8 character inside escape
+        r"\u🦀",               // 4-byte UTF-8 character immediately after \u
+        r"\u4e16\u754c",       // CJK characters 世界
+        r"\u0000",             // Null byte
+        r"\",                  // Lone trailing backslash
+        r"\\",                 // Escaped backslash
+        r"\\\",                // Triple backslash
+        r"\\\\",               // Quadruple backslash
+        r"\uD800\uD800",       // High surrogate followed by high surrogate
+        r"\uDC00\uDC00",       // Low surrogate followed by low surrogate
+        r"\uDC00\uD800",       // Inverted surrogates
+        r"\uFFFF",             // Max BMP
         r#"\b\f\n\r\t\/\"\\"#, // Standard JSON escapes
-        r"\a\e\v\z",     // Non-standard escapes (treated as literal backslashes)
+        r"\a\e\v\z",           // Non-standard escapes (treated as literal backslashes)
         r"prefix\u0041middle\u123ñsuffix\uD83D\uDE00end🦀",
     ];
 
@@ -367,17 +374,14 @@ fn test_adversarial_empirical_challenger_stress_utf8() {
         assert!(res.is_ok(), "Panic on adversarial case: {case}");
     }
 
-    // Specific check for surrogate pair decoding
     let mut emoji_out = Vec::new();
     decode_json_escape_into(r"\uD83D\uDE00", &mut emoji_out);
     assert_eq!(String::from_utf8(emoji_out).unwrap(), "😀");
 
-    // 3. Fuzzing / Combinatorial stress test (2,000 combinations)
     let fragments = [
-        r"\", r"\u", r"\u1", r"\u12", r"\u123", r"\u1234",
-        r"\uD800", r"\uD83D", r"\uDC00", r"\uDE00",
-        "ñ", "€", "中", "🦀", "🌟", "A", "0", "\"", "\n", "\r",
-        r"\uñ", r"\u1ñ", r"\u12ñ", r"\u123ñ",
+        r"\", r"\u", r"\u1", r"\u12", r"\u123", r"\u1234", r"\uD800", r"\uD83D", r"\uDC00",
+        r"\uDE00", "ñ", "€", "中", "🦀", "🌟", "A", "0", "\"", "\n", "\r", r"\uñ", r"\u1ñ",
+        r"\u12ñ", r"\u123ñ",
     ];
 
     let mut state: u64 = 0xdeadbeef12345678;
@@ -394,19 +398,192 @@ fn test_adversarial_empirical_challenger_stress_utf8() {
             decode_json_escape_into(&test_str, &mut out);
             String::from_utf8(out).expect("decoded bytes must always be valid UTF-8")
         });
-        assert!(res.is_ok(), "decode_json_escape_into panicked on randomized string: {test_str:?}");
+        assert!(
+            res.is_ok(),
+            "decode_json_escape_into panicked on randomized string: {test_str:?}"
+        );
     }
 
-    // 4. End-to-end integration with ResponseAccumulator
     let mut acc = ResponseAccumulator::new();
     let malformed_chunk = r#"{"id":"test","choices":[{"index":0,"delta":{"content":"Hello \u123ñ \uD800\u123ñ \uññññ \u \uD83D\uDE00 🦀 world"}}]}"#;
     acc.append_openai_raw(malformed_chunk);
     let finished = acc.finish("test-id", 100, "test-model");
-    let content = finished["choices"][0]["message"]["content"].as_str().expect("string content");
+    let content = finished["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("string content");
     assert!(content.contains("Hello"));
     assert!(content.contains("😀"));
     assert!(content.contains("🦀"));
     assert!(content.contains("world"));
 }
 
+#[test]
+fn test_adversarial_exact_256k_boundary_and_overfill() {
+    let mut acc = ResponseAccumulator::new();
+    let exact_bytes = "a".repeat(262_144);
+    acc.append_openai_raw(&format!(
+        r#"{{"choices":[{{"delta":{{"content":"{exact_bytes}"}}}}]}}"#
+    ));
+    assert!(!acc.is_truncated());
+    assert_eq!(acc.content_text().len(), 262_144);
+    let v_exact = acc.finish("id-exact", 1, "m");
+    assert_eq!(
+        v_exact["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap()
+            .len(),
+        262_144
+    );
+    assert!(v_exact["choices"][0]["message"].get("truncated").is_none());
 
+    // Next 1 byte should trigger truncation
+    acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"b"}}]}"#);
+    assert!(acc.is_truncated());
+    assert_eq!(acc.content_text().len(), 262_144);
+    let v_trunc = acc.finish("id-trunc", 2, "m");
+    assert_eq!(
+        v_trunc["choices"][0]["message"]["truncated"],
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn test_adversarial_single_oversized_chunk_1mib() {
+    let mut acc = ResponseAccumulator::new();
+    let one_mib = "x".repeat(1_048_576);
+    acc.append_openai_raw(&format!(
+        r#"{{"choices":[{{"delta":{{"content":"{one_mib}"}}}}]}}"#
+    ));
+    assert!(acc.is_truncated());
+    assert_eq!(acc.content_text().len(), 0);
+    let v = acc.finish("id-1mib", 3, "m");
+    assert_eq!(v["choices"][0]["message"]["truncated"], Value::Bool(true));
+    assert_eq!(v["choices"][0]["message"]["content"], Value::Null);
+}
+
+#[test]
+fn test_adversarial_multibyte_utf8_exact_and_overflow() {
+    let mut acc = ResponseAccumulator::new();
+    // '🦀' is 4 bytes in UTF-8. 262,144 / 4 = 65,536 crabs.
+    let crabs = "🦀".repeat(65_536);
+    acc.append_openai_raw(&format!(
+        r#"{{"choices":[{{"delta":{{"content":"{crabs}"}}}}]}}"#
+    ));
+    assert!(!acc.is_truncated());
+    assert_eq!(acc.content_text().len(), 262_144);
+
+    // Adding another crab should exceed cap
+    acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"🦀"}}]}"#);
+    assert!(acc.is_truncated());
+    assert_eq!(acc.content_text().len(), 262_144);
+    let v = acc.finish("id-crabs", 4, "m");
+    let content = v["choices"][0]["message"]["content"].as_str().unwrap();
+    assert_eq!(content.len(), 262_144);
+    assert!(content.chars().all(|c| c == '🦀'));
+    assert_eq!(v["choices"][0]["message"]["truncated"], Value::Bool(true));
+}
+
+#[test]
+fn test_adversarial_incremental_chunks_boundary() {
+    let mut acc = ResponseAccumulator::new();
+    let chunk_1k = "k".repeat(1024);
+    for i in 0..256 {
+        acc.append_openai_raw(&format!(
+            r#"{{"choices":[{{"delta":{{"content":"{chunk_1k}"}}}}]}}"#
+        ));
+        assert!(
+            !acc.is_truncated(),
+            "Accumulator should not be truncated at chunk {i}"
+        );
+    }
+    assert_eq!(acc.content_text().len(), 262_144);
+
+    // 257th chunk (1 byte)
+    acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"!"}}]}"#);
+    assert!(acc.is_truncated());
+    assert_eq!(acc.content_text().len(), 262_144);
+}
+
+#[test]
+fn test_adversarial_content_plus_reasoning_boundary() {
+    let mut acc = ResponseAccumulator::new();
+    let half_content = "c".repeat(131_072);
+    let half_reasoning = "r".repeat(131_072);
+
+    acc.append_openai_raw(&format!(
+        r#"{{"choices":[{{"delta":{{"content":"{half_content}"}}}}]}}"#
+    ));
+    assert!(!acc.is_truncated());
+
+    acc.append_reasoning(&half_reasoning);
+    assert!(!acc.is_truncated());
+
+    // Adding 1 byte of reasoning
+    acc.append_reasoning("x");
+    assert!(acc.is_truncated());
+
+    let v = acc.finish("id-cr", 5, "m");
+    assert_eq!(
+        v["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap()
+            .len(),
+        131_072
+    );
+    assert_eq!(
+        v["choices"][0]["message"]["reasoning_content"]
+            .as_str()
+            .unwrap()
+            .len(),
+        131_072
+    );
+    assert_eq!(v["choices"][0]["message"]["truncated"], Value::Bool(true));
+}
+
+#[test]
+fn test_adversarial_concurrent_stream_simulation() {
+    use std::thread;
+
+    let handles: Vec<_> = (0..50)
+        .map(|stream_idx| {
+            thread::spawn(move || {
+                let mut acc = ResponseAccumulator::new();
+                let payload_type = stream_idx % 3;
+                match payload_type {
+                    0 => {
+                        for _ in 0..10 {
+                            acc.append_openai_raw(
+                                r#"{"choices":[{"delta":{"content":"normal payload "}}]}"#,
+                            );
+                        }
+                        assert!(!acc.is_truncated());
+                    }
+                    1 => {
+                        let exact = "e".repeat(262_144);
+                        acc.append_openai_raw(&format!(
+                            r#"{{"choices":[{{"delta":{{"content":"{exact}"}}}}]}}"#
+                        ));
+                        assert!(!acc.is_truncated());
+                        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"overflow"}}]}"#);
+                        assert!(acc.is_truncated());
+                    }
+                    2 => {
+                        let big = "m".repeat(524_288);
+                        acc.append_openai_raw(&format!(
+                            r#"{{"choices":[{{"delta":{{"content":"{big}"}}}}]}}"#
+                        ));
+                        assert!(acc.is_truncated());
+                    }
+                    _ => unreachable!(),
+                }
+                let v = acc.finish(&format!("chunk-{stream_idx}"), 100, "model");
+                assert!(v["choices"].is_array());
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join()
+            .expect("Concurrent accumulator thread must not panic");
+    }
+}

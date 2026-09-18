@@ -204,8 +204,8 @@ fn test_production_transport_proxy_pool_segregation() {
 #[cfg(feature = "upstream-hyper")]
 #[test]
 fn test_probe_request_preserves_connection_close_header() {
-    use crate::upstream::client::build_hyper_request;
     use crate::upstream::UpstreamRequest;
+    use crate::upstream::client::build_hyper_request;
 
     let mut req = UpstreamRequest::get("http://example.com/generate_204");
     req.headers.insert(
@@ -246,11 +246,15 @@ async fn test_probe_socket_closed_after_response_with_connection_close() {
 
         let mut eof_buf = [0u8; 16];
         let eof_n = socket.read(&mut eof_buf).await.unwrap();
-        assert_eq!(eof_n, 0, "client socket should be closed after Connection: close response");
+        assert_eq!(
+            eof_n, 0,
+            "client socket should be closed after Connection: close response"
+        );
     });
 
     let client = crate::upstream::UpstreamClient::new();
-    let mut req = crate::upstream::UpstreamRequest::get(format!("http://{local_addr}/generate_204"));
+    let mut req =
+        crate::upstream::UpstreamRequest::get(format!("http://{local_addr}/generate_204"));
     req.headers.insert(
         http::header::CONNECTION,
         http::HeaderValue::from_static("close"),
@@ -267,10 +271,10 @@ async fn test_probe_socket_closed_after_response_with_connection_close() {
 #[cfg(feature = "upstream-hyper")]
 #[tokio::test]
 async fn test_adversarial_concurrent_proxy_pool_segregation() {
-    use std::sync::Arc;
-    use tokio::task::JoinSet;
     use crate::upstream::client::ProductionTransport;
     use crate::upstream::conn_pool::{HostKey, Scheme, UpstreamConnectionPool};
+    use std::sync::Arc;
+    use tokio::task::JoinSet;
 
     let transport = Arc::new(ProductionTransport::new());
     let pool = Arc::new(UpstreamConnectionPool::new());
@@ -289,12 +293,7 @@ async fn test_adversarial_concurrent_proxy_pool_segregation() {
 
             let _client = t.client_for_proxy(proxy.as_deref());
 
-            let host_key = HostKey::with_proxy(
-                Scheme::Https,
-                "api.openai.com",
-                443,
-                proxy,
-            );
+            let host_key = HostKey::with_proxy(Scheme::Https, "api.openai.com", 443, proxy);
             p.record_dial(host_key.clone());
             host_key
         });
@@ -322,12 +321,7 @@ async fn test_adversarial_concurrent_proxy_pool_segregation() {
         tasks.spawn(async move {
             let proxy_url = format!("http://proxy-churn-{i}.internal.local:8080");
             let _client = t.client_for_proxy(Some(&proxy_url));
-            HostKey::with_proxy(
-                Scheme::Https,
-                "api.openai.com",
-                443,
-                Some(proxy_url),
-            )
+            HostKey::with_proxy(Scheme::Https, "api.openai.com", 443, Some(proxy_url))
         });
     }
 
@@ -376,28 +370,45 @@ async fn test_adversarial_probe_socket_never_leaves_warm_connection() {
             // Verify client immediately closes connection (EOF)
             let mut eof_buf = [0u8; 16];
             let eof_n = socket.read(&mut eof_buf).await.unwrap();
-            assert_eq!(eof_n, 0, "Client must close socket after Connection: close response");
+            assert_eq!(
+                eof_n, 0,
+                "Client must close socket after Connection: close response"
+            );
         }
     });
 
     let client = crate::upstream::UpstreamClient::new();
 
     // First probe request
-    let mut req1 = crate::upstream::UpstreamRequest::get(format!("http://{local_addr}/generate_204"));
+    let mut req1 =
+        crate::upstream::UpstreamRequest::get(format!("http://{local_addr}/generate_204"));
     req1.headers.insert(
         http::header::CONNECTION,
         http::HeaderValue::from_static("close"),
     );
-    let res1 = client.call(req1, crate::upstream::TimeoutProfile::Chat, crate::upstream::CancellationToken::new()).await;
+    let res1 = client
+        .call(
+            req1,
+            crate::upstream::TimeoutProfile::Chat,
+            crate::upstream::CancellationToken::new(),
+        )
+        .await;
     assert!(res1.is_ok(), "First probe request must succeed");
 
     // Second probe request to the exact same host and path
-    let mut req2 = crate::upstream::UpstreamRequest::get(format!("http://{local_addr}/generate_204"));
+    let mut req2 =
+        crate::upstream::UpstreamRequest::get(format!("http://{local_addr}/generate_204"));
     req2.headers.insert(
         http::header::CONNECTION,
         http::HeaderValue::from_static("close"),
     );
-    let res2 = client.call(req2, crate::upstream::TimeoutProfile::Chat, crate::upstream::CancellationToken::new()).await;
+    let res2 = client
+        .call(
+            req2,
+            crate::upstream::TimeoutProfile::Chat,
+            crate::upstream::CancellationToken::new(),
+        )
+        .await;
     assert!(res2.is_ok(), "Second probe request must succeed");
 
     server_task.await.unwrap();
@@ -436,5 +447,3 @@ async fn test_adversarial_dial_phase_ipv6_to_ipv4_transparent_fallback() {
 
     drop(accept_task.await);
 }
-
-

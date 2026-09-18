@@ -39,13 +39,19 @@ fn test_decode_and_record_line_resets_event_type_on_empty_line() {
     let line1 = b"event: content_block_delta";
     let res1 = super::processor::decode_and_record_line(&mut state, line1);
     assert_eq!(res1, Some("event: content_block_delta"));
-    assert_eq!(state.current_event_type.as_deref(), Some("content_block_start"));
+    assert_eq!(
+        state.current_event_type.as_deref(),
+        Some("content_block_start")
+    );
 
     // SSE comment does not reset
     let comment = b": ping";
     let res_comment = super::processor::decode_and_record_line(&mut state, comment);
     assert!(res_comment.is_none());
-    assert_eq!(state.current_event_type.as_deref(), Some("content_block_start"));
+    assert_eq!(
+        state.current_event_type.as_deref(),
+        Some("content_block_start")
+    );
 
     // Empty line resets current_event_type
     let empty = b"";
@@ -114,8 +120,9 @@ fn test_anthropic_multi_event_stream_with_comments_and_empty_lines() {
         }
 
         let line = decoded.expect("non-empty non-comment line must be decoded");
-        let payload_opt = crate::sse::parse_anthropic_sse_stream_line(line, &mut state.current_event_type)
-            .expect("parse_anthropic_sse_stream_line must succeed");
+        let payload_opt =
+            crate::sse::parse_anthropic_sse_stream_line(line, &mut state.current_event_type)
+                .expect("parse_anthropic_sse_stream_line must succeed");
 
         if let Some(payload) = payload_opt {
             chunk_counter += 1;
@@ -140,28 +147,46 @@ fn test_anthropic_multi_event_stream_with_comments_and_empty_lines() {
     // 2: content_block_delta -> "Hello" (has_content = true)
     // 3: content_block_delta -> " world" (has_content = true)
     // 4: message_delta -> finish_reason "stop", done: true
-    assert_eq!(collected_chunks.len(), 4, "must collect exactly 4 translated chunks");
     assert_eq!(
-        collected_chunks[0].payload["choices"][0]["delta"]["role"].as_str().unwrap(),
+        collected_chunks.len(),
+        4,
+        "must collect exactly 4 translated chunks"
+    );
+    assert_eq!(
+        collected_chunks[0].payload["choices"][0]["delta"]["role"]
+            .as_str()
+            .unwrap(),
         "assistant"
     );
     assert_eq!(
-        collected_chunks[1].payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+        collected_chunks[1].payload["choices"][0]["delta"]["content"]
+            .as_str()
+            .unwrap(),
         "Hello"
     );
     assert_eq!(
-        collected_chunks[2].payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+        collected_chunks[2].payload["choices"][0]["delta"]["content"]
+            .as_str()
+            .unwrap(),
         " world"
     );
     assert!(collected_chunks[3].done);
     assert_eq!(
-        collected_chunks[3].payload["choices"][0]["finish_reason"].as_str().unwrap(),
+        collected_chunks[3].payload["choices"][0]["finish_reason"]
+            .as_str()
+            .unwrap(),
         "stop"
     );
     assert_eq!(
-        collected_chunks[3].usage.as_ref().unwrap().completion_tokens,
+        collected_chunks[3]
+            .usage
+            .as_ref()
+            .unwrap()
+            .completion_tokens,
         5
     );
-    assert!(state.current_event_type.is_none(), "state must be clean after stream ends");
+    assert!(
+        state.current_event_type.is_none(),
+        "state must be clean after stream ends"
+    );
 }
-

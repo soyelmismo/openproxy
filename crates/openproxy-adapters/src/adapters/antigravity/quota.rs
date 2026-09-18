@@ -36,11 +36,22 @@ pub(crate) static PLAN_CACHE: std::sync::LazyLock<
     parking_lot::RwLock<std::collections::HashMap<String, (String, std::time::Instant)>>,
 > = std::sync::LazyLock::new(|| parking_lot::RwLock::new(std::collections::HashMap::new()));
 
+pub const MAX_PLAN_CACHE_ENTRIES: usize = 500;
+
 pub fn prune_plan_cache() {
     let now = std::time::Instant::now();
     let max_age = std::time::Duration::from_secs(7200);
     let mut cache = PLAN_CACHE.write();
     cache.retain(|_, (_, ts)| now.duration_since(*ts) < max_age);
+    if cache.len() > MAX_PLAN_CACHE_ENTRIES {
+        let mut entries: Vec<(String, std::time::Instant)> =
+            cache.iter().map(|(k, (_, ts))| (k.clone(), *ts)).collect();
+        entries.sort_unstable_by_key(|(_, ts)| *ts);
+        let excess = cache.len() - MAX_PLAN_CACHE_ENTRIES;
+        for (k, _) in entries.into_iter().take(excess) {
+            cache.remove(&k);
+        }
+    }
 }
 
 pub(crate) fn merge_summary_into_models_quota(
@@ -459,8 +470,22 @@ pub async fn fetch_antigravity_subscription_plan_local(
 
     let tier = extract_tier_from_load_code_assist(&json)?;
     let plan = classify_antigravity_plan_name(tier);
-    PLAN_CACHE
-        .write()
-        .insert(access_token.to_string(), (plan.clone(), now));
+    let mut cache = PLAN_CACHE.write();
+    if !cache.contains_key(access_token) && cache.len() >= MAX_PLAN_CACHE_ENTRIES {
+        let max_age = std::time::Duration::from_secs(7200);
+        cache.retain(|_, (_, ts)| now.duration_since(*ts) < max_age);
+        while cache.len() >= MAX_PLAN_CACHE_ENTRIES {
+            if let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, (_, ts))| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                cache.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
+    }
+    cache.insert(access_token.to_string(), (plan.clone(), now));
     Some(plan)
 }
