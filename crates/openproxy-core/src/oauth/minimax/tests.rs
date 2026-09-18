@@ -89,3 +89,37 @@ fn test_build_complete_verification_uri() {
         "https://account.minimax.cn/oauth-authorize?existing=1&user_code=7TM4-GRFT&client_surface=tui&download_source=mcode-internal"
     );
 }
+
+#[test]
+fn test_minimax_identity_display_label() {
+    // 1. Has email -> email wins
+    let id1 = identity::MiniMaxIdentity {
+        real_user_id: Some("12345".into()),
+        email: Some("dev@example.com".into()),
+        display_name: Some("Dev User".into()),
+    };
+    assert_eq!(id1.display_label(), "dev@example.com");
+
+    // 2. Email is empty or None -> display_name wins (e.g. phone / OAuth username)
+    let id2 = identity::MiniMaxIdentity {
+        real_user_id: Some("12345".into()),
+        email: None,
+        display_name: Some("wanton beis".into()),
+    };
+    assert_eq!(id2.display_label(), "wanton beis");
+
+    let id2_empty_email = identity::MiniMaxIdentity {
+        real_user_id: Some("12345".into()),
+        email: Some(String::new()),
+        display_name: Some("wanton beis".into()),
+    };
+    assert_eq!(id2_empty_email.display_label(), "wanton beis");
+
+    // 3. Neither email nor display_name -> MiniMax User {real_user_id}
+    let id3 = identity::MiniMaxIdentity {
+        real_user_id: Some("524030836983414789".into()),
+        email: None,
+        display_name: None,
+    };
+    assert_eq!(id3.display_label(), "MiniMax User 524030836983414789");
+}

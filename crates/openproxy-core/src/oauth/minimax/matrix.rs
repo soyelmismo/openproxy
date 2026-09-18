@@ -82,9 +82,9 @@ pub fn build_gateway_url(
     };
 
     let query = format!(
-        "device_platform=web&biz_id=3&app_id=3001&version_code=22201&is_desktop=1\
-         &desktop_version=1.0.0&unix={now_ms}&timezone_offset=0&sys_language={lang}\
-         &lang={lang}&device_id=0&os_name=linux&browser_name=mcode&user_id={user_id_clean}&client=mcode"
+        "device_platform=mcode&biz_id=3&app_id=3001&version_code=22201&unix={now_ms}\
+         &timezone_offset=0&sys_language={lang}&lang={lang}&device_id=0&os_name=linux\
+         &browser_name=mcode&user_id={user_id_clean}&client=mcode"
     );
 
     let path_with_query = format!("{clean_path}?{query}");

@@ -508,19 +508,18 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             .as_deref()
             .map_or_else(resolve_default_region, MiniMaxRegion::parse_str);
 
-        // 1. Resolve user identity (real_user_id + email)
-        let (resolved_uid, resolved_email) =
-            resolve_user_identity(upstream, &access_token, region).await;
+        // 1. Resolve user identity (real_user_id + email + display_name)
+        let identity = resolve_user_identity(upstream, &access_token, region).await;
 
         let real_user_id = current_meta
             .real_user_id
             .clone()
-            .or(resolved_uid)
+            .or(identity.real_user_id.clone())
             .unwrap_or_else(|| "0".into());
         current_meta.real_user_id = Some(real_user_id.clone());
 
-        if let Some(em) = resolved_email {
-            current_meta.email = Some(em);
+        if let Some(ref em) = identity.email {
+            current_meta.email = Some(em.clone());
         }
 
         // 2. Resolve op_group_id, workspace tier & credits
@@ -551,30 +550,29 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             current_meta.last_checkin_date = Some(chrono::Utc::now().format("%Y-%m-%d").to_string());
         }
 
-        // 4. Save updated metadata and email to DB
+        // 4. Save updated metadata, email, and display label to DB
         let meta_json = serde_json::to_string(&current_meta)
             .map_err(|e| CoreError::Parse(format!("serialize meta: {e}")))?;
 
         let final_email = current_meta.email.clone();
+        let display_label = identity.display_label();
+        let final_label = if display_label.is_empty() {
+            format!("MiniMax User {real_user_id}")
+        } else {
+            display_label
+        };
+
         let pool = Arc::clone(db_pool);
         tokio::task::spawn_blocking(move || -> Result<()> {
             let conn = pool
                 .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
                 .ok_or_else(|| CoreError::Internal("writer timeout".into()))?;
-            if let Some(ref email) = final_email {
-                conn.execute(
-                    "UPDATE accounts SET oauth_provider_specific = ?1, email = ?2, \
-                     label = COALESCE(NULLIF(label, ''), ?2) WHERE id = ?3",
-                    rusqlite::params![meta_json, email, account_id.0],
-                )
-                .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific + email"))?;
-            } else {
-                conn.execute(
-                    "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                    rusqlite::params![meta_json, account_id.0],
-                )
-                .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific"))?;
-            }
+            conn.execute(
+                "UPDATE accounts SET oauth_provider_specific = ?1, email = COALESCE(?2, email), \
+                 label = COALESCE(NULLIF(label, ''), ?3) WHERE id = ?4",
+                rusqlite::params![meta_json, final_email, final_label, account_id.0],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific + label"))?;
             Ok(())
         })
         .await

@@ -287,12 +287,14 @@ fn resolve_account_credentials(
         .find(|a| a.id().as_str() == t.provider_id.as_str())
         .is_some_and(|a| a.metadata().requires_oauth);
 
-    if !has_api_key && !requires_oauth {
-        tracing::error!("account {} has no API key (OAuth account?)", account_id);
+    let is_oauth = raw_account.access_token_encrypted.is_some() || requires_oauth;
+
+    if !has_api_key && !is_oauth {
+        tracing::error!("account {} has neither API key nor OAuth token", account_id);
         return None;
     }
 
-    let custom_meta = if requires_oauth {
+    let custom_meta = if is_oauth {
         Some(resolve_account_oauth_meta(
             raw_account,
             t,

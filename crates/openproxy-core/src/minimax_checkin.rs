@@ -14,6 +14,7 @@ use crate::oauth::minimax::MiniMaxAccountMeta;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
+use rusqlite::OptionalExtension;
 
 const MINIMAX_PROVIDERS: [&str; 4] = ["minimax", "minimax-coding", "minimax-managed", "minimax-cn"];
 const DEFAULT_CHECKIN_INTERVAL_SECS: u64 = 14_400; // 4 hours
@@ -88,19 +89,27 @@ pub async fn run_checkin_cycle(
             let today_clone = today.clone();
             tokio::task::spawn_blocking(move || {
                 let conn = pool.reader();
-                let meta_raw: Option<String> = conn
+                let row = conn
                     .query_row(
-                        "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+                        "SELECT oauth_provider_specific, label FROM accounts WHERE id = ?1",
                         rusqlite::params![account_id.0],
-                        |r| r.get(0),
+                        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
                     )
-                    .unwrap_or(None);
+                    .optional()
+                    .ok()
+                    .flatten();
 
+                let (meta_raw, label) = row.unwrap_or((None, None));
                 let meta = meta_raw
                     .and_then(|r| serde_json::from_str::<MiniMaxAccountMeta>(&r).ok())
                     .unwrap_or_default();
 
-                meta.last_checkin_date.as_deref() != Some(today_clone.as_str())
+                let not_checked_in_today = meta.last_checkin_date.as_deref() != Some(today_clone.as_str());
+                let needs_enrichment = meta.credit_balance.is_none()
+                    || meta.real_user_id.is_none()
+                    || label.as_deref().unwrap_or("").trim().is_empty();
+
+                not_checked_in_today || needs_enrichment
             })
             .await
             .unwrap_or(false)
@@ -167,17 +176,16 @@ pub async fn run_account_checkin(
         .as_deref()
         .map_or(MiniMaxRegion::Global, MiniMaxRegion::parse_str);
 
-    // If identity or credits are not yet fully populated, enrich them dynamically
-    if meta.email.is_none() || meta.real_user_id.is_none() {
-        let (uid, email) =
-            crate::oauth::minimax::resolve_user_identity(upstream_client, &access_token, region).await;
-        if meta.real_user_id.is_none() && uid.is_some() {
-            meta.real_user_id = uid;
-        }
-        if email.is_some() {
-            meta.email = email;
-        }
+    // Enrich identity (real_user_id, email, display_name)
+    let identity =
+        crate::oauth::minimax::resolve_user_identity(upstream_client, &access_token, region).await;
+    if meta.real_user_id.is_none() && identity.real_user_id.is_some() {
+        meta.real_user_id = identity.real_user_id.clone();
     }
+    if meta.email.is_none() && identity.email.is_some() {
+        meta.email = identity.email.clone();
+    }
+
     if meta.credit_balance.is_none() || meta.op_group_id.is_none() {
         let uid = meta.real_user_id.as_deref().unwrap_or("0");
         if let Some((op_group_id, tier, credits)) =
@@ -207,25 +215,24 @@ pub async fn run_account_checkin(
         .map_err(|e| CoreError::Parse(format!("serialize meta: {e}")))?;
 
     let final_email = meta.email.clone();
+    let display_label = identity.display_label();
+    let final_label = if display_label.is_empty() {
+        format!("MiniMax User {user_id}")
+    } else {
+        display_label
+    };
+
     let pool = Arc::clone(db_pool);
     tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool
             .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| CoreError::Internal("writer timeout".into()))?;
-        if let Some(ref email) = final_email {
-            conn.execute(
-                "UPDATE accounts SET oauth_provider_specific = ?1, email = ?2, \
-                 label = COALESCE(NULLIF(label, ''), ?2) WHERE id = ?3",
-                rusqlite::params![meta_json, email, account_id.0],
-            )
-            .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific + email"))?;
-        } else {
-            conn.execute(
-                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                rusqlite::params![meta_json, account_id.0],
-            )
-            .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific"))?;
-        }
+        conn.execute(
+            "UPDATE accounts SET oauth_provider_specific = ?1, email = COALESCE(?2, email), \
+             label = COALESCE(NULLIF(label, ''), ?3) WHERE id = ?4",
+            rusqlite::params![meta_json, final_email, final_label, account_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific + label"))?;
         Ok(())
     })
     .await

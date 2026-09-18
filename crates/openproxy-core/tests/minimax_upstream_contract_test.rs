@@ -221,6 +221,18 @@ async fn test_minimax_remote_upstream_live_contract_parity() {
         "Upstream matrix-account-client.ts missing get_user_extra_info path"
     );
     assert!(
+        matrix_ts.contains("/matrix/api/v1/commerce/get_membership_info"),
+        "Upstream matrix-account-client.ts missing get_membership_info path"
+    );
+    assert!(
+        matrix_ts.contains("device_platform: 'mcode'") || matrix_ts.contains("device_platform: \"mcode\""),
+        "Upstream matrix-account-client.ts missing device_platform mcode"
+    );
+    assert!(
+        matrix_ts.contains("total_remaining_amount"),
+        "Upstream matrix-account-client.ts missing total_remaining_amount credit field"
+    );
+    assert!(
         matrix_ts.contains("/v1/api/user/info"),
         "Upstream matrix-account-client.ts missing user/info path"
     );
