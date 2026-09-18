@@ -276,8 +276,10 @@ fn test_antigravity_adapter_build_headers_with_extra_and_dynamic_overrides() {
     use crate::adapters::ProviderAdapter;
     use crate::antigravity_headers::{
         reset_dynamic_overrides, set_dynamic_extra_header, set_dynamic_version,
+        ANTIGRAVITY_TEST_LOCK,
     };
 
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
     reset_dynamic_overrides();
     let mut a = AntigravityAdapter::new();
     let cfg = a.config_mut().expect("config_mut");
@@ -302,4 +304,30 @@ fn test_antigravity_adapter_build_headers_with_extra_and_dynamic_overrides() {
     assert_eq!(get("x-antigravity-custom-edge"), Some("edge-val"));
 
     reset_dynamic_overrides();
+}
+
+#[test]
+fn test_antigravity_default_headers_contract() {
+    use crate::adapters::ProviderAdapter;
+    use crate::antigravity_headers::{reset_dynamic_overrides, ANTIGRAVITY_TEST_LOCK};
+
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
+    reset_dynamic_overrides();
+    let a = AntigravityAdapter::new();
+    let headers = a.build_headers("token-xyz", TargetFormat::Gemini, &ModelId::new("gemini-1.5-pro"));
+
+    let get = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    // Strict baseline contract: all mandatory headers must be present with valid formats
+    assert_eq!(get("authorization"), Some("Bearer token-xyz"));
+    assert_eq!(get("content-type"), Some("application/json"));
+    assert_eq!(get("x-client-name"), Some("antigravity"));
+    assert!(get("x-client-version").is_some_and(|v| !v.is_empty()));
+    assert!(get("user-agent").is_some_and(|ua| ua.starts_with("Antigravity/")));
+    assert!(get("x-machine-id").is_some_and(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())));
 }

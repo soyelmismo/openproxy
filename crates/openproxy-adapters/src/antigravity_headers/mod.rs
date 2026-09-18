@@ -92,6 +92,9 @@ pub fn reset_dynamic_overrides() {
     }
 }
 
+#[cfg(test)]
+pub(crate) static ANTIGRAVITY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static EXTRA_HEADERS: LazyLock<Vec<(HeaderName, HeaderValue)>> = LazyLock::new(|| {
     let Ok(env_str) = std::env::var("OPENPROXY_ANTIGRAVITY_EXTRA_HEADERS") else {
         return Vec::new();

@@ -170,6 +170,7 @@ fn test_minimax_build_headers() {
 
 #[test]
 fn test_minimax_dynamic_headers_and_config_mut() {
+    let _guard = MINIMAX_TEST_LOCK.lock().unwrap();
     let mut adapter = MiniMaxAdapter::new();
     let model = ModelId::new("MiniMax-M3");
 
@@ -199,6 +200,25 @@ fn test_minimax_dynamic_headers_and_config_mut() {
     reset_dynamic_overrides();
     assert_eq!(current_user_agent(), "MiniMaxAgent");
     assert_eq!(current_anthropic_version(), "2023-06-01");
+}
+
+#[test]
+fn test_minimax_default_headers_contract() {
+    let _guard = MINIMAX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_overrides();
+    let adapter = MiniMaxAdapter::new();
+    let model = ModelId::new("MiniMax-M3");
+    let headers = adapter.build_headers("oauth-token-123", TargetFormat::Anthropic, &model);
+    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+
+    // Strict baseline contract for MiniMax Mavis upstream
+    assert_eq!(find("Authorization"), Some("Bearer oauth-token-123"));
+    assert_eq!(find("Content-Type"), Some("application/json"));
+    assert_eq!(find("User-Agent"), Some("MiniMaxAgent"));
+    assert_eq!(find("Anthropic-Version"), Some("2023-06-01"));
+    assert_eq!(find("X-Mavis-Agent-Id"), Some("main"));
+    assert_eq!(find("X-Mavis-Timezone-Offset"), Some("0"));
+    assert!(find("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
 }
 
 #[tokio::test]

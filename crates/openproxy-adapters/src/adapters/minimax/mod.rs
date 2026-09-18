@@ -74,6 +74,9 @@ pub fn reset_dynamic_overrides() {
     }
 }
 
+#[cfg(test)]
+pub(crate) static MINIMAX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> = std::sync::LazyLock::new(|| {
     let Ok(env_str) = std::env::var("OPENPROXY_MINIMAX_EXTRA_HEADERS") else {
         return Vec::new();

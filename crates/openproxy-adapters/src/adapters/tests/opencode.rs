@@ -399,3 +399,30 @@ fn test_opencode_dynamic_headers_and_config_mut() {
     assert_eq!(current_opencode_version(), "1.19.0");
 }
 
+#[test]
+fn test_opencode_default_headers_contract() {
+    use crate::spoofer::{current_opencode_ua, reset_dynamic_opencode_overrides, OPENCODE_TEST_LOCK};
+
+    let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
+    reset_dynamic_opencode_overrides();
+    let adapter = OpenCodeZenAdapter::new();
+    let model_id = openproxy_types::ModelId::new("claude-3-5-sonnet");
+    let headers = adapter.build_headers("opencode-token", TargetFormat::Anthropic, &model_id);
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    // Strict baseline contract for OpenCode upstream (Anthropic format)
+    assert_eq!(find("Content-Type"), Some("application/json"));
+    assert_eq!(find("x-api-key"), Some("opencode-token"));
+    assert_eq!(find("Anthropic-Version"), Some("2023-06-01"));
+    assert_eq!(find("User-Agent"), Some(current_opencode_ua().as_str()));
+    assert_eq!(find("x-opencode-client"), Some("cli"));
+    assert_eq!(find("x-opencode-project"), Some("global"));
+    assert!(find("x-opencode-session").is_some_and(|s| s.starts_with("ses_")));
+    assert!(find("x-opencode-request").is_some_and(|s| s.starts_with("msg_")));
+}
+

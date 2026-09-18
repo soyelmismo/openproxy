@@ -86,6 +86,7 @@ fn test_oauth_user_agent_and_current_version() {
 
 #[test]
 fn test_dynamic_version_override() {
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
     let old_ver = current_version();
     set_dynamic_version("4.7.3");
     assert_eq!(current_version(), "4.7.3");
@@ -107,6 +108,7 @@ fn test_dynamic_version_override() {
 
 #[test]
 fn test_dynamic_extra_headers_override() {
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
     reset_dynamic_overrides();
 
     set_dynamic_extra_header("x-goog-api-client", "gl-rust/1.80");
