@@ -63,9 +63,23 @@ fn partition_messages_for_gemini(
     let mut system_parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
     let mut contents: Vec<GeminiContent> = Vec::with_capacity(messages.len());
 
+    // Deterministic O(N) map of tool_call_id -> function_name without external state or cache
+    let mut tool_id_to_name: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for m in messages {
+        if let Some(tool_calls) = &m.tool_calls {
+            for tc in tool_calls {
+                if let Some(id) = tc.get("id").and_then(|v| v.as_str())
+                    && let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str())
+                {
+                    tool_id_to_name.insert(id, name);
+                }
+            }
+        }
+    }
+
     for m in messages {
         match m.role.as_str() {
-            "system" => system_parts.push(m.extract_text_cow()),
+            "system" | "developer" => system_parts.push(m.extract_text_cow()),
             "user" => contents.push(GeminiContent {
                 role: "user".to_string(),
                 parts: message_content_to_gemini_parts(m.content.as_ref()),
@@ -76,14 +90,52 @@ fn partition_messages_for_gemini(
                         arr.iter().map(map_single_content_part).collect()
                     }
                     Some(serde_json::Value::String(s)) if !s.is_empty() => {
-                        vec![GeminiPart {
-                            text: Some(s.clone()),
-                            ..Default::default()
-                        }]
+                        // If string contains <think>...</think>, split into thought part and text part
+                        if let Some(start) = s.find("<think>")
+                            && let Some(end) = s[start + 7..].find("</think>")
+                        {
+                            let thought_text = &s[start + 7..start + 7 + end];
+                            let remainder = format!("{}{}", &s[..start], &s[start + 7 + end + 8..]);
+                            let mut res = Vec::with_capacity(2);
+                            if !thought_text.trim().is_empty() {
+                                res.push(GeminiPart {
+                                    text: Some(thought_text.trim().to_string()),
+                                    thought: Some(true),
+                                    ..Default::default()
+                                });
+                            }
+                            if !remainder.trim().is_empty() {
+                                res.push(GeminiPart {
+                                    text: Some(remainder.trim().to_string()),
+                                    ..Default::default()
+                                });
+                            }
+                            res
+                        } else {
+                            vec![GeminiPart {
+                                text: Some(s.clone()),
+                                ..Default::default()
+                            }]
+                        }
                     }
                     Some(val) if !val.is_null() => vec![map_single_content_part(val)],
                     _ => Vec::new(),
                 };
+
+                // Check extra for reasoning_content / thinking if not already present
+                if !parts.iter().any(|p| p.thought.unwrap_or(false))
+                    && let Some(reasoning) = m.extra.get("reasoning_content")
+                        .or_else(|| m.extra.get("thinking"))
+                        .and_then(|v| v.as_str())
+                    && !reasoning.trim().is_empty()
+                {
+                    parts.insert(0, GeminiPart {
+                        text: Some(reasoning.trim().to_string()),
+                        thought: Some(true),
+                        ..Default::default()
+                    });
+                }
+
                 if let Some(tool_calls) = &m.tool_calls {
                     for tc in tool_calls {
                         let name = tc
@@ -122,11 +174,15 @@ fn partition_messages_for_gemini(
                 });
             }
             "tool" => {
-                let name = m.name.clone().unwrap_or_else(|| {
-                    m.tool_call_id
-                        .clone()
-                        .unwrap_or_else(|| "function".to_string())
-                });
+                let name = m.name.clone()
+                    .or_else(|| {
+                        m.tool_call_id.as_deref().and_then(|id| tool_id_to_name.get(id).map(|s| (*s).to_string()))
+                    })
+                    .unwrap_or_else(|| {
+                        m.tool_call_id
+                            .clone()
+                            .unwrap_or_else(|| "function".to_string())
+                    });
                 let response_val = match &m.content {
                     Some(serde_json::Value::Object(map)) => serde_json::Value::Object(map.clone()),
                     Some(serde_json::Value::Array(arr)) => serde_json::json!({ "output": arr }),
@@ -144,19 +200,27 @@ fn partition_messages_for_gemini(
                     Some(serde_json::Value::Null) | None => serde_json::json!({ "output": "" }),
                     Some(other) => serde_json::json!({ "output": other }),
                 };
-                contents.push(GeminiContent {
-                    role: "function".to_string(),
-                    parts: vec![GeminiPart {
-                        function_response: Some(GeminiFunctionResponse {
-                            name: name.clone(),
-                            response: serde_json::json!({
-                                "name": name,
-                                "content": response_val,
-                            }),
+                let function_part = GeminiPart {
+                    function_response: Some(GeminiFunctionResponse {
+                        name: name.clone(),
+                        response: serde_json::json!({
+                            "name": name,
+                            "content": response_val,
                         }),
-                        ..Default::default()
-                    }],
-                });
+                    }),
+                    ..Default::default()
+                };
+
+                if let Some(last) = contents.last_mut()
+                    && last.role == "function"
+                {
+                    last.parts.push(function_part);
+                } else {
+                    contents.push(GeminiContent {
+                        role: "function".to_string(),
+                        parts: vec![function_part],
+                    });
+                }
             }
             _ => {}
         }
