@@ -19,6 +19,9 @@ use openproxy_adapters::spoofer::{
     DEFAULT_COMMANDCODE_CLI_VERSION, DEFAULT_COMMANDCODE_PROJECT_SLUG,
     DEFAULT_COMMANDCODE_TASTE_LEARNING, DEFAULT_COMMANDCODE_UA,
 };
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use openproxy_adapters::ProviderAdapter;
 use openproxy_pipeline::stages::target_headers::propagate_commandcode_headers;
 use openproxy_types::{ModelId, TargetFormat};
@@ -337,3 +340,86 @@ fn test_commandcode_dynamic_overrides_and_pipeline_propagation() {
         Some("raw-session-123")
     );
 }
+
+// ============================================================================
+// 4. Remote Live Upstream Contract & Drift Detection
+// ============================================================================
+
+#[tokio::test]
+async fn test_commandcode_remote_upstream_live_contract_parity() {
+    let client = UpstreamClient::new();
+
+    // 1. Probe official NPM package registry for Command Code CLI metadata
+    let npm_url = "https://registry.npmjs.org/command-code/latest";
+    let cancel = CancellationToken::new();
+    let req = UpstreamRequest::get(npm_url);
+    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await {
+        if resp.status.is_success() {
+            if let Ok(body) = resp.collect().await
+                && let Ok(pkg) = serde_json::from_slice::<serde_json::Value>(&body)
+            {
+                assert_eq!(pkg["name"], "command-code");
+                assert!(
+                    pkg["bin"]["cmd"].is_string()
+                        || pkg["bin"]["commandcode"].is_string()
+                        || pkg["bin"]["command-code"].is_string(),
+                    "Upstream package must expose command-code CLI binaries"
+                );
+                if let Some(ver) = pkg["version"].as_str() {
+                    assert!(
+                        ver.split('.').count() >= 3,
+                        "NPM command-code version must follow semver X.Y.Z: {ver}"
+                    );
+                }
+            }
+        } else {
+            eprintln!(
+                "[CommandCodeLiveTest] NPM registry returned HTTP {}, skipping registry check",
+                resp.status
+            );
+        }
+    } else {
+        eprintln!("[CommandCodeLiveTest] Offline or NPM unreachable, skipping registry check");
+    }
+
+    // 2. Probe live public /provider/v1/models endpoint from api.commandcode.ai
+    let models_url = "https://api.commandcode.ai/provider/v1/models";
+    let cancel2 = CancellationToken::new();
+    let req2 = UpstreamRequest::get(models_url);
+    match client.call(req2, TimeoutProfile::ModelDiscovery, cancel2).await {
+        Ok(resp) if resp.status.is_success() => {
+            let body = resp.collect().await.expect("read models body");
+            let json: serde_json::Value =
+                serde_json::from_slice(&body).expect("parse models json");
+            let data = json
+                .get("data")
+                .and_then(|d| d.as_array())
+                .expect("models response must have 'data' array");
+            assert!(
+                !data.is_empty(),
+                "Live api.commandcode.ai /provider/v1/models returned empty data array"
+            );
+            let first = &data[0];
+            assert!(
+                first.get("id").and_then(|id| id.as_str()).is_some(),
+                "Model entry must have 'id'"
+            );
+            assert_eq!(
+                first.get("owned_by").and_then(|o| o.as_str()),
+                Some("command-code")
+            );
+        }
+        Ok(resp) => {
+            eprintln!(
+                "[CommandCodeLiveTest] Live API returned HTTP {}, skipping API catalog check",
+                resp.status
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "[CommandCodeLiveTest] Offline or api.commandcode.ai unreachable ({e}), skipping live check"
+            );
+        }
+    }
+}
+
