@@ -155,36 +155,37 @@ pub fn resolve_combo_to_targets(
     Ok(flat)
 }
 
+fn query_healthy_account_ids(
+    conn: &rusqlite::Connection,
+    provider_id: &ProviderId,
+    check_rate_limit: bool,
+) -> Result<Vec<AccountId>> {
+    let sql = if check_rate_limit {
+        account_healthy_ids_select!(
+            "WHERE provider_id = ?1 AND health_status = 'healthy' AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
+        )
+    } else {
+        account_healthy_ids_select!(
+            "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
+        )
+    };
+    let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error)?;
+    let rows = stmt
+        .query_map(params![provider_id.as_str()], |r| r.get::<_, i64>(0))
+        .map_err(crate::error::map_db_error)?;
+    Ok(rows.flatten().map(AccountId).collect())
+}
+
 fn fetch_healthy_accounts(
     conn: &rusqlite::Connection,
     provider_id: &ProviderId,
 ) -> Result<Vec<AccountId>> {
-    let mut stmt = conn
-        .prepare(account_healthy_ids_select!(
-            "WHERE provider_id = ?1 AND health_status = 'healthy' AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
-        ))
-        .map_err(crate::error::map_db_error)?;
-    let rows = stmt
-        .query_map(params![provider_id.as_str()], |r| r.get::<_, i64>(0))
-        .map_err(crate::error::map_db_error)?;
-    let mut accounts = Vec::new();
-    for r in rows.flatten() {
-        accounts.push(AccountId(r));
-    }
+    let accounts = query_healthy_account_ids(conn, provider_id, true)?;
     if accounts.is_empty() {
-        let mut fb_stmt = conn
-            .prepare(account_healthy_ids_select!(
-                "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
-            ))
-            .map_err(crate::error::map_db_error)?;
-        let fb_rows = fb_stmt
-            .query_map(params![provider_id.as_str()], |r| r.get::<_, i64>(0))
-            .map_err(crate::error::map_db_error)?;
-        for r in fb_rows.flatten() {
-            accounts.push(AccountId(r));
-        }
+        query_healthy_account_ids(conn, provider_id, false)
+    } else {
+        Ok(accounts)
     }
-    Ok(accounts)
 }
 
 fn expand_single_target_rotation(
