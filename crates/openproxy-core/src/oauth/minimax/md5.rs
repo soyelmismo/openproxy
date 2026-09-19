@@ -38,7 +38,8 @@ pub fn md5_bytes(data: &[u8]) -> [u8; 16] {
     }
     padded.extend_from_slice(&bit_len.to_le_bytes());
 
-    for chunk in padded.chunks_exact(64) {
+    let (chunks, _) = padded.as_chunks::<64>();
+    for chunk in chunks {
         let mut words = [0u32; 16];
         for (i, word) in words.iter_mut().enumerate() {
             let offset = i * 4;
