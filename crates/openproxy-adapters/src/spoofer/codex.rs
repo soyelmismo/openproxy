@@ -1,6 +1,4 @@
-use super::{
-    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
-};
+use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 
 pub const DEFAULT_CODEX_VERSION: &str = "0.144.0";
 
@@ -28,8 +26,8 @@ pub fn current_codex_version() -> String {
 
 /// Dynamic Codex User-Agent string.
 pub fn current_codex_ua() -> String {
-    if let Some(env_ua) = safe_env_value("OPENPROXY_CODEX_USER_AGENT")
-        .or_else(|| safe_env_value("CODEX_USER_AGENT"))
+    if let Some(env_ua) =
+        safe_env_value("OPENPROXY_CODEX_USER_AGENT").or_else(|| safe_env_value("CODEX_USER_AGENT"))
     {
         return env_ua;
     }

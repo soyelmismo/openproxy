@@ -82,8 +82,8 @@ impl ProviderAdapter for KilocodeAdapter {
 mod tests {
     use super::*;
     use crate::spoofer::{
-        current_kilocode_ua, current_kilocode_version, reset_dynamic_kilocode_overrides,
-        set_dynamic_kilocode_extra_header, KILOCODE_TEST_LOCK,
+        KILOCODE_TEST_LOCK, current_kilocode_ua, current_kilocode_version,
+        reset_dynamic_kilocode_overrides, set_dynamic_kilocode_extra_header,
     };
     use http::HeaderValue;
 
@@ -142,7 +142,8 @@ mod tests {
         reset_dynamic_kilocode_overrides();
 
         let adapter = KilocodeAdapter::new();
-        let headers = adapter.build_headers("kl-key-123", TargetFormat::Openai, &ModelId::new("any"));
+        let headers =
+            adapter.build_headers("kl-key-123", TargetFormat::Openai, &ModelId::new("any"));
         let find = |k: &str| {
             headers
                 .iter()
@@ -179,9 +180,14 @@ mod tests {
         assert_eq!(find("http-referer"), Some("https://kilocode.ai"));
         assert_eq!(find("x-title"), Some("Kilo Code"));
         assert_eq!(find("user-agent"), Some(current_kilocode_ua().as_str()));
-        assert_eq!(find("x-kilocode-version"), Some(current_kilocode_version().as_str()));
+        assert_eq!(
+            find("x-kilocode-version"),
+            Some(current_kilocode_version().as_str())
+        );
         assert_eq!(find("x-client-type"), Some("VSCode Extension"));
-        assert_eq!(find("x-client-version"), Some(current_kilocode_version().as_str()));
+        assert_eq!(
+            find("x-client-version"),
+            Some(current_kilocode_version().as_str())
+        );
     }
 }
-

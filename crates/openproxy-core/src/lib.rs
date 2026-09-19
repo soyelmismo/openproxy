@@ -39,9 +39,9 @@ pub mod oauth;
 
 pub mod pricing;
 pub use pricing::{cost, quota};
+pub mod minimax_checkin;
 pub mod providers;
 pub mod quota_sync;
-pub mod minimax_checkin;
 
 pub use openproxy_db::batch;
 pub mod seed;

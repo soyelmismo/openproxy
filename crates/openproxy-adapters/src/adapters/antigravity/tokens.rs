@@ -147,12 +147,19 @@ pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Valu
                     obj.remove("thought_signature");
                     obj.remove("thoughtSignature");
                 }
-                let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
+                let is_thought = part
+                    .get("thought")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
                     || (part.get("thoughtSignature").is_some()
                         && part.get("functionCall").is_none()
                         && part.get("functionResponse").is_none());
                 if is_thought {
-                    let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+                    let text = part
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .trim();
                     if !text.is_empty() && text != "..." && text != "·" {
                         cleaned_parts.push(serde_json::json!({ "text": text }));
                     }
@@ -182,7 +189,10 @@ pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Valu
         let mut other_parts = Vec::new();
 
         for part in parts.drain(..) {
-            let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false)
+            let is_thought = part
+                .get("thought")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
                 || (part.get("thoughtSignature").is_some()
                     && part.get("functionCall").is_none()
                     && part.get("functionResponse").is_none());
@@ -205,9 +215,9 @@ pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Valu
         });
 
         if thinking_parts.is_empty() {
-            let has_fc = other_parts.iter().any(|p| {
-                p.get("functionCall").is_some() || p.get("function_call").is_some()
-            });
+            let has_fc = other_parts
+                .iter()
+                .any(|p| p.get("functionCall").is_some() || p.get("function_call").is_some());
             if has_fc {
                 let sig = turn_real_sig.as_deref().unwrap_or(SENTINEL_SIGNATURE);
                 thinking_parts.push(serde_json::json!({

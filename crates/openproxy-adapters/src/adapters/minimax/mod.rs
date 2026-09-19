@@ -5,8 +5,10 @@ use super::{
 };
 
 pub use crate::spoofer::{
-    MINIMAX_SPOOFING_HEADERS, MiniMaxSpoofer, current_minimax_anthropic_version as current_anthropic_version,
-    current_minimax_ua as current_user_agent, reset_dynamic_minimax_overrides as reset_dynamic_overrides,
+    MINIMAX_SPOOFING_HEADERS, MiniMaxSpoofer,
+    current_minimax_anthropic_version as current_anthropic_version,
+    current_minimax_ua as current_user_agent,
+    reset_dynamic_minimax_overrides as reset_dynamic_overrides,
     set_dynamic_minimax_anthropic_version as set_dynamic_anthropic_version,
     set_dynamic_minimax_extra_header as set_dynamic_extra_header,
     set_dynamic_minimax_ua as set_dynamic_user_agent,
@@ -100,9 +102,17 @@ impl ProviderAdapter for MiniMaxAdapter {
         let trimmed = api_key.trim();
         if trimmed.starts_with("sk-") {
             crate::spoofer::upsert_header(&mut headers, "x-api-key", trimmed);
-            crate::spoofer::upsert_header(&mut headers, "Authorization", format!("Bearer {trimmed}"));
+            crate::spoofer::upsert_header(
+                &mut headers,
+                "Authorization",
+                format!("Bearer {trimmed}"),
+            );
         } else if !trimmed.is_empty() {
-            crate::spoofer::upsert_header(&mut headers, "Authorization", format!("Bearer {trimmed}"));
+            crate::spoofer::upsert_header(
+                &mut headers,
+                "Authorization",
+                format!("Bearer {trimmed}"),
+            );
         }
         crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
         headers
@@ -183,7 +193,8 @@ impl MiniMaxAdapter {
             if let Some(ref gid) = op_group_id
                 && let Ok(val) = http::HeaderValue::from_str(gid)
             {
-                req.headers.insert(http::HeaderName::from_static("x-group-id"), val);
+                req.headers
+                    .insert(http::HeaderName::from_static("x-group-id"), val);
             }
             req.headers.insert(
                 http::header::ACCEPT,
@@ -203,7 +214,10 @@ impl MiniMaxAdapter {
                 )));
             }
 
-            let body_bytes = response.collect().await.map_err(|e| e.to_core_error(&url))?;
+            let body_bytes = response
+                .collect()
+                .await
+                .map_err(|e| e.to_core_error(&url))?;
             let json: serde_json::Value = serde_json::from_slice(&body_bytes)
                 .map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
 

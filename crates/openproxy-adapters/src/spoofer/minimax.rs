@@ -1,6 +1,4 @@
-use super::{
-    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
-};
+use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 
 pub const DEFAULT_MINIMAX_UA: &str = "MiniMaxAgent";
 pub const DEFAULT_MINIMAX_ANTHROPIC_VERSION: &str = "2023-06-01";

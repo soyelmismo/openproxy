@@ -1,6 +1,4 @@
-use super::{
-    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
-};
+use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 
 pub const DEFAULT_COMMANDCODE_CLI_VERSION: &str = "1.54.0";
 pub const DEFAULT_COMMANDCODE_CLI_ENVIRONMENT: &str = "production";

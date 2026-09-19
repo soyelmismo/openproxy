@@ -38,7 +38,11 @@ pub(crate) fn default_region() -> String {
     std::env::var("OPENPROXY_KIRO_REGION")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("AWS_REGION").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("AWS_REGION")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_REGION.to_string())
 }
 

@@ -114,7 +114,10 @@ pub fn build_opencode_headers(
     headers.extend(OpenCodeSpoofer.headers());
 
     for (k, v) in &adapter.config().extra_headers {
-        if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+        if let Some(pos) = headers
+            .iter()
+            .position(|(hk, _)| hk.eq_ignore_ascii_case(k))
+        {
             headers[pos].1 = v.clone();
         } else {
             headers.push((k.clone(), v.clone()));

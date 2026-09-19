@@ -18,9 +18,10 @@ pub fn kiro_oidc_base_url(region: Option<&str>) -> String {
     {
         return base.trim().trim_end_matches('/').to_string();
     }
-    let reg = region
-        .filter(|r| !r.is_empty())
-        .map_or_else(super::profiles::default_region, std::string::ToString::to_string);
+    let reg = region.filter(|r| !r.is_empty()).map_or_else(
+        super::profiles::default_region,
+        std::string::ToString::to_string,
+    );
     format!("https://oidc.{reg}.amazonaws.com")
 }
 

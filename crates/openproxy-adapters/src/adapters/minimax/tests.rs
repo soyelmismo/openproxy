@@ -70,8 +70,11 @@ fn parses_minimax_quota_code_2062_free_tier() {
         }
     });
 
-    let quota = parse_minimax_quota(&json, "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains")
-        .expect("2062 should parse as Free tier");
+    let quota = parse_minimax_quota(
+        &json,
+        "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains",
+    )
+    .expect("2062 should parse as Free tier");
 
     assert_eq!(quota.plan_name, Some("Free".to_string()));
     assert!(quota.fetch_error.is_none());
@@ -149,7 +152,12 @@ fn test_minimax_build_headers() {
 
     // 1. OAuth access token (non-sk)
     let headers_oauth = adapter.build_headers("test-token-123", TargetFormat::Anthropic, &model);
-    let find_oauth = |key: &str| headers_oauth.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find_oauth = |key: &str| {
+        headers_oauth
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find_oauth("Authorization"), Some("Bearer test-token-123"));
     assert_eq!(find_oauth("x-api-key"), None);
@@ -162,7 +170,12 @@ fn test_minimax_build_headers() {
 
     // 2. BYOK API key (sk-...)
     let headers_sk = adapter.build_headers("sk-abc123456", TargetFormat::Anthropic, &model);
-    let find_sk = |key: &str| headers_sk.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find_sk = |key: &str| {
+        headers_sk
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find_sk("x-api-key"), Some("sk-abc123456"));
     assert_eq!(find_sk("Authorization"), Some("Bearer sk-abc123456"));
@@ -182,14 +195,22 @@ fn test_minimax_dynamic_headers_and_config_mut() {
     assert_eq!(current_anthropic_version(), "2024-10-22");
 
     // Test extra_headers via config_mut
-    let cfg = adapter.config_mut().expect("config_mut must be implemented");
-    cfg.extra_headers.push(("x-custom-mavis".into(), "val-123".into()));
+    let cfg = adapter
+        .config_mut()
+        .expect("config_mut must be implemented");
+    cfg.extra_headers
+        .push(("x-custom-mavis".into(), "val-123".into()));
 
     // Test in-memory dynamic extra header injection
     set_dynamic_extra_header("x-mavis-feature-flag", "speculative-decoding");
 
     let headers = adapter.build_headers("test-token", TargetFormat::Anthropic, &model);
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("User-Agent"), Some("MiniMaxCustomAgent/2.0"));
     assert_eq!(find("Anthropic-Version"), Some("2024-10-22"));
@@ -209,7 +230,12 @@ fn test_minimax_default_headers_contract() {
     let adapter = MiniMaxAdapter::new();
     let model = ModelId::new("MiniMax-M3");
     let headers = adapter.build_headers("oauth-token-123", TargetFormat::Anthropic, &model);
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     // Strict bijective baseline contract for MiniMax Mavis upstream: exactly the expected set of keys
     let actual_keys: std::collections::BTreeSet<String> = headers
@@ -248,10 +274,17 @@ async fn test_minimax_fetch_models_oauth_returns_builtin_catalog() {
     let client = Arc::new(UpstreamClient::new());
 
     // OAuth tokens (non-sk) must return builtin models immediately without HTTP calls
-    let models = adapter.fetch_models(&client, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...").await.unwrap();
+    let models = adapter
+        .fetch_models(&client, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+        .await
+        .unwrap();
     assert!(!models.is_empty());
     assert!(models.iter().any(|m| m.model_id.as_str() == "MiniMax-M3"));
-    assert!(models.iter().any(|m| m.model_id.as_str() == "MiniMax-M2.7-highspeed"));
+    assert!(
+        models
+            .iter()
+            .any(|m| m.model_id.as_str() == "MiniMax-M2.7-highspeed")
+    );
 
     // Empty key also returns catalog safely
     let models_empty = adapter.fetch_models(&client, "").await.unwrap();
@@ -262,7 +295,10 @@ async fn test_minimax_fetch_models_oauth_returns_builtin_catalog() {
 fn test_minimax_builtin_models_structure() {
     let models = minimax_builtin_models();
     assert_eq!(models.len(), 5);
-    let m3 = models.iter().find(|m| m.model_id.as_str() == "MiniMax-M3").expect("MiniMax-M3 present");
+    let m3 = models
+        .iter()
+        .find(|m| m.model_id.as_str() == "MiniMax-M3")
+        .expect("MiniMax-M3 present");
     assert_eq!(m3.context_length, Some(1_000_000));
     assert_eq!(m3.max_output_tokens, Some(128_000));
     assert_eq!(m3.target_format, TargetFormat::Anthropic);

@@ -102,10 +102,7 @@ impl OAuthProvider for ClineOAuthProvider {
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let token_url = self.resolver.url_with_path(CLINE_AUTH_TOKEN_PATH);
-        let mut req = UpstreamRequest::post_json(
-            token_url,
-            bytes::Bytes::from(body_bytes),
-        );
+        let mut req = UpstreamRequest::post_json(token_url, bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
@@ -378,8 +375,8 @@ mod tests {
     fn test_cline_email_fallback_to_name() {
         let provider = ClineOAuthProvider::new();
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(r#"{"name":"Developer Bob"}"#);
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"name":"Developer Bob"}"#);
         let token = TokenResponse {
             access_token: format!("{header}.{payload}.sig"),
             token_type: "Bearer".into(),
@@ -428,4 +425,3 @@ mod tests {
         assert_eq!(provider.email_from_token(&token), None);
     }
 }
-

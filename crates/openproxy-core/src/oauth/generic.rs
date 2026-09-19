@@ -146,24 +146,37 @@ impl GenericOAuthProvider {
     }
 
     pub fn resolved_token_url(&self) -> String {
-        let env_key = format!("OPENPROXY_{}_TOKEN_URL", self.spec.id.replace('-', "_").to_ascii_uppercase());
-        if let Ok(val) = std::env::var(&env_key) && !val.trim().is_empty() {
+        let env_key = format!(
+            "OPENPROXY_{}_TOKEN_URL",
+            self.spec.id.replace('-', "_").to_ascii_uppercase()
+        );
+        if let Ok(val) = std::env::var(&env_key)
+            && !val.trim().is_empty()
+        {
             return val.trim().to_string();
         }
         self.spec.token_url.to_string()
     }
 
     pub fn resolved_authorize_url(&self) -> Result<String> {
-        let env_key = format!("OPENPROXY_{}_AUTH_URL", self.spec.id.replace('-', "_").to_ascii_uppercase());
-        if let Ok(val) = std::env::var(&env_key) && !val.trim().is_empty() {
+        let env_key = format!(
+            "OPENPROXY_{}_AUTH_URL",
+            self.spec.id.replace('-', "_").to_ascii_uppercase()
+        );
+        if let Ok(val) = std::env::var(&env_key)
+            && !val.trim().is_empty()
+        {
             return Ok(val.trim().to_string());
         }
-        self.spec.authorize_url.map(ToString::to_string).ok_or_else(|| {
-            CoreError::Validation(format!(
-                "provider '{}' does not support authorization URL",
-                self.spec.id
-            ))
-        })
+        self.spec
+            .authorize_url
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                CoreError::Validation(format!(
+                    "provider '{}' does not support authorization URL",
+                    self.spec.id
+                ))
+            })
     }
 
     pub fn resolved_device_auth_url(&self) -> Result<String> {
@@ -171,7 +184,9 @@ impl GenericOAuthProvider {
             "OPENPROXY_{}_DEVICE_AUTH_URL",
             self.spec.id.replace('-', "_").to_ascii_uppercase()
         );
-        if let Ok(val) = std::env::var(&env_key) && !val.trim().is_empty() {
+        if let Ok(val) = std::env::var(&env_key)
+            && !val.trim().is_empty()
+        {
             return Ok(val.trim().to_string());
         }
         self.spec

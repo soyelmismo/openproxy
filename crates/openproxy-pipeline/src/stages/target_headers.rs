@@ -10,13 +10,14 @@
 //! 5. x-opencode-request: msg_... (canonical ascending format)
 
 use openproxy_adapters::spoofer::{
-    generate_request_id, generate_session_id, has_valid_opencode_version,
-    translate_session_id, upsert_header,
+    generate_request_id, generate_session_id, has_valid_opencode_version, translate_session_id,
+    upsert_header,
 };
 
 #[inline]
 fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
-    s.get(..prefix.len()).is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
+    s.get(..prefix.len())
+        .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
 }
 
 #[inline]
@@ -102,16 +103,17 @@ pub fn propagate_opencode_headers(
     }
 
     // 2b. Parent session: forward if downstream supplied it
-    if let Some(parent_session) = get_header("x-parent-session-id")
-        .filter(|s| !s.trim().is_empty())
+    if let Some(parent_session) = get_header("x-parent-session-id").filter(|s| !s.trim().is_empty())
     {
-        upsert_header(headers, "x-parent-session-id", parent_session.trim().to_string());
+        upsert_header(
+            headers,
+            "x-parent-session-id",
+            parent_session.trim().to_string(),
+        );
     }
 
     // 2c. Anthropic beta: forward if downstream supplied it
-    if let Some(beta) = get_header("anthropic-beta")
-        .filter(|s| !s.trim().is_empty())
-    {
+    if let Some(beta) = get_header("anthropic-beta").filter(|s| !s.trim().is_empty()) {
         upsert_header(headers, "anthropic-beta", beta.trim().to_string());
     }
 
@@ -286,11 +288,7 @@ pub fn propagate_kiro_headers(
     if let Some(session_id) = session_val
         && !session_id.trim().is_empty()
     {
-        upsert_header(
-            headers,
-            "x-conversation-id",
-            session_id.trim().to_string(),
-        );
+        upsert_header(headers, "x-conversation-id", session_id.trim().to_string());
     }
 }
 
@@ -322,11 +320,7 @@ pub fn propagate_commandcode_headers(
     if let Some(session_id) = session_val
         && !session_id.trim().is_empty()
     {
-        upsert_header(
-            headers,
-            "x-conversation-id",
-            session_id.trim().to_string(),
-        );
+        upsert_header(headers, "x-conversation-id", session_id.trim().to_string());
     }
 }
 
@@ -342,9 +336,7 @@ pub fn propagate_provider_target_headers(
     openai_req: &openproxy_types::OpenAIRequest,
     codex_workspace_id: Option<&str>,
 ) {
-    let matches = |prefix: &str| {
-        provider_id.starts_with(prefix) || adapter_id.starts_with(prefix)
-    };
+    let matches = |prefix: &str| provider_id.starts_with(prefix) || adapter_id.starts_with(prefix);
 
     if matches("opencode") {
         propagate_opencode_headers(headers, req_headers, openai_req);
@@ -359,7 +351,9 @@ pub fn propagate_provider_target_headers(
     } else if matches("codex") {
         propagate_codex_headers(headers, req_headers);
         if let Some(ws) = codex_workspace_id
-            && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("chatgpt-account-id"))
+            && !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("chatgpt-account-id"))
         {
             headers.push(("chatgpt-account-id".to_string(), ws.to_string()));
         }
@@ -440,7 +434,10 @@ mod tests {
     #[test]
     fn test_propagate_codex_headers() {
         let mut headers = vec![
-            ("User-Agent".into(), "codex-cli/0.144.0 (Windows 10.0.26200; x64)".into()),
+            (
+                "User-Agent".into(),
+                "codex-cli/0.144.0 (Windows 10.0.26200; x64)".into(),
+            ),
             ("origin".into(), "https://chatgpt.com".into()),
             ("originator".into(), "codex_cli_rs".into()),
             ("Authorization".into(), "Bearer codex-tok".into()),
@@ -505,7 +502,10 @@ mod tests {
     fn test_propagate_kiro_headers() {
         let mut headers = vec![
             ("Content-Type".into(), "application/json".into()),
-            ("x-amz-user-agent".into(), "aws-sdk-js/3.0.0 kiro/0.1".into()),
+            (
+                "x-amz-user-agent".into(),
+                "aws-sdk-js/3.0.0 kiro/0.1".into(),
+            ),
             ("Authorization".into(), "Bearer kiro-tok".into()),
         ];
         let mut req_headers = std::collections::BTreeMap::new();
@@ -761,6 +761,9 @@ mod tests {
             &openai_req,
             None,
         );
-        assert_eq!(find(&cmd_headers, "x-conversation-id"), Some("cmd-sess-99".into()));
+        assert_eq!(
+            find(&cmd_headers, "x-conversation-id"),
+            Some("cmd-sess-99".into())
+        );
     }
 }

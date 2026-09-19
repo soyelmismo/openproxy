@@ -210,8 +210,7 @@ mod tests {
     #[test]
     fn test_apply_cline_spoofing_headers() {
         use crate::spoofer::{
-            current_cline_ua, current_cline_version, reset_dynamic_cline_overrides,
-            CLINE_TEST_LOCK,
+            CLINE_TEST_LOCK, current_cline_ua, current_cline_version, reset_dynamic_cline_overrides,
         };
 
         let _guard = CLINE_TEST_LOCK.lock().unwrap();
@@ -350,8 +349,8 @@ mod tests {
     #[test]
     fn test_cline_build_headers_with_extra_and_dynamic_overrides() {
         use crate::spoofer::{
-            reset_dynamic_cline_overrides, set_dynamic_cline_extra_header,
-            set_dynamic_cline_version, CLINE_TEST_LOCK,
+            CLINE_TEST_LOCK, reset_dynamic_cline_overrides, set_dynamic_cline_extra_header,
+            set_dynamic_cline_version,
         };
 
         let _guard = CLINE_TEST_LOCK.lock().unwrap();
@@ -359,12 +358,14 @@ mod tests {
 
         let mut adapter = ClineAdapter::new();
         let cfg = adapter.config_mut().expect("config_mut");
-        cfg.extra_headers.push(("x-admin-rule".into(), "active".into()));
+        cfg.extra_headers
+            .push(("x-admin-rule".into(), "active".into()));
 
         set_dynamic_cline_version("4.9.1");
         set_dynamic_cline_extra_header("x-cline-custom-tag", "tag-val");
 
-        let headers = adapter.build_headers("my-token", TargetFormat::Openai, &ModelId::new("somemodel"));
+        let headers =
+            adapter.build_headers("my-token", TargetFormat::Openai, &ModelId::new("somemodel"));
         let find = |k: &str| {
             headers
                 .iter()
@@ -386,15 +387,18 @@ mod tests {
     #[test]
     fn test_cline_default_headers_contract() {
         use crate::spoofer::{
-            current_cline_ua, current_cline_version, reset_dynamic_cline_overrides,
-            CLINE_TEST_LOCK,
+            CLINE_TEST_LOCK, current_cline_ua, current_cline_version, reset_dynamic_cline_overrides,
         };
 
         let _guard = CLINE_TEST_LOCK.lock().unwrap();
         reset_dynamic_cline_overrides();
 
         let adapter = ClineAdapter::new();
-        let headers = adapter.build_headers("access-token-123", TargetFormat::Openai, &ModelId::new("somemodel"));
+        let headers = adapter.build_headers(
+            "access-token-123",
+            TargetFormat::Openai,
+            &ModelId::new("somemodel"),
+        );
         let find = |k: &str| {
             headers
                 .iter()
@@ -429,16 +433,25 @@ mod tests {
             "Cline contract breach: header added or removed"
         );
 
-        assert_eq!(find("authorization"), Some("Bearer workos:access-token-123"));
+        assert_eq!(
+            find("authorization"),
+            Some("Bearer workos:access-token-123")
+        );
         assert_eq!(find("content-type"), Some("application/json"));
         assert_eq!(find("http-referer"), Some("https://cline.bot"));
         assert_eq!(find("x-title"), Some("Cline"));
         assert_eq!(find("user-agent"), Some(current_cline_ua().as_str()));
         assert_eq!(find("x-is-multiroot"), Some("false"));
         assert_eq!(find("x-client-type"), Some("VSCode Extension"));
-        assert_eq!(find("x-client-version"), Some(current_cline_version().as_str()));
+        assert_eq!(
+            find("x-client-version"),
+            Some(current_cline_version().as_str())
+        );
         assert_eq!(find("x-platform"), Some("Visual Studio Code"));
         assert_eq!(find("x-platform-version"), Some("1.96.0"));
-        assert_eq!(find("x-core-version"), Some(current_cline_version().as_str()));
+        assert_eq!(
+            find("x-core-version"),
+            Some(current_cline_version().as_str())
+        );
     }
 }

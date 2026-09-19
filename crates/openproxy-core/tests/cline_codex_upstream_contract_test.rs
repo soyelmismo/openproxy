@@ -7,13 +7,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use openproxy_adapters::load_upstream_source;
 use openproxy_adapters::spoofer::{
     CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer, ClineSpoofer,
     CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua, current_cline_version,
     current_codex_ua, current_codex_version, current_kilocode_ua, current_kilocode_version,
     reset_dynamic_cline_overrides, reset_dynamic_codex_overrides, reset_dynamic_kilocode_overrides,
 };
-use openproxy_adapters::load_upstream_source;
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -98,7 +98,9 @@ async fn test_cline_upstream_code_parity() {
                 "Upstream EnvUtils.ts must define header '{hdr}'"
             );
             assert!(
-                CLINE_SPOOFING_HEADERS.iter().any(|(k, _)| k.eq_ignore_ascii_case(hdr)),
+                CLINE_SPOOFING_HEADERS
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case(hdr)),
                 "OpenProxy CLINE_SPOOFING_HEADERS missing upstream header '{hdr}'"
             );
         }
@@ -116,7 +118,10 @@ async fn test_cline_upstream_code_parity() {
     assert_eq!(find_hdr("http-referer"), Some("https://cline.bot"));
     assert_eq!(find_hdr("x-title"), Some("Cline"));
     assert_eq!(find_hdr("user-agent"), Some(current_cline_ua().as_str()));
-    assert_eq!(find_hdr("x-client-version"), Some(current_cline_version().as_str()));
+    assert_eq!(
+        find_hdr("x-client-version"),
+        Some(current_cline_version().as_str())
+    );
     assert_eq!(find_hdr("x-client-type"), Some("VSCode Extension"));
     assert_eq!(find_hdr("x-is-multiroot"), Some("false"));
 }
@@ -125,7 +130,8 @@ async fn test_cline_upstream_code_parity() {
 async fn test_codex_upstream_code_parity() {
     let codex_url =
         "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/codex.ts";
-    let local_codex_path = "../../other_projects_examples/cline/sdk/packages/core/src/auth/codex.ts";
+    let local_codex_path =
+        "../../other_projects_examples/cline/sdk/packages/core/src/auth/codex.ts";
 
     let Some(auth_src) = load_upstream_source(codex_url, local_codex_path).await else {
         eprintln!(
@@ -144,7 +150,10 @@ async fn test_codex_upstream_code_parity() {
     );
 
     // 2. Verify token and authorization endpoints
-    assert_eq!(CODEX_VERIFICATION_URI, "https://auth.openai.com/codex/device");
+    assert_eq!(
+        CODEX_VERIFICATION_URI,
+        "https://auth.openai.com/codex/device"
+    );
     assert!(
         auth_src.contains(CODEX_TOKEN_URL),
         "Upstream codex.ts tokenEndpoint diverged from {CODEX_TOKEN_URL}"
@@ -198,12 +207,19 @@ async fn test_cline_remote_upstream_repo_code_drift_detection() {
     let cancel = CancellationToken::new();
 
     // 1. Probe upstream cline.ts on GitHub
-    let auth_url = "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/cline.ts";
+    let auth_url =
+        "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/cline.ts";
     let req = UpstreamRequest::get(auth_url);
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel.clone()).await {
+    let resp = match client
+        .call(req, TimeoutProfile::OAuth, cancel.clone())
+        .await
+    {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[ClineCodeDrift] Upstream GitHub probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[ClineCodeDrift] Upstream GitHub probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
@@ -234,7 +250,8 @@ async fn test_cline_remote_upstream_repo_code_drift_detection() {
     );
 
     // 2. Probe upstream EnvUtils.ts on GitHub for new X- headers
-    let env_url = "https://raw.githubusercontent.com/cline/cline/main/apps/vscode/src/services/EnvUtils.ts";
+    let env_url =
+        "https://raw.githubusercontent.com/cline/cline/main/apps/vscode/src/services/EnvUtils.ts";
     let env_req = UpstreamRequest::get(env_url);
     if let Ok(env_resp) = client.call(env_req, TimeoutProfile::OAuth, cancel).await
         && env_resp.status.is_success()
@@ -245,7 +262,9 @@ async fn test_cline_remote_upstream_repo_code_drift_detection() {
         for cap in re.captures_iter(&env_ts) {
             let header = &cap[1];
             assert!(
-                CLINE_SPOOFING_HEADERS.iter().any(|(k, _)| k.eq_ignore_ascii_case(header)),
+                CLINE_SPOOFING_HEADERS
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case(header)),
                 "Upstream Cline added new client header '{header}'! Update OpenProxy to support it."
             );
         }
@@ -258,12 +277,16 @@ async fn test_codex_remote_upstream_repo_code_drift_detection() {
     let cancel = CancellationToken::new();
 
     // Probe upstream codex.ts on GitHub
-    let codex_url = "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/codex.ts";
+    let codex_url =
+        "https://raw.githubusercontent.com/cline/cline/main/sdk/packages/core/src/auth/codex.ts";
     let req = UpstreamRequest::get(codex_url);
     let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[CodexCodeDrift] Upstream GitHub probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[CodexCodeDrift] Upstream GitHub probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
@@ -301,11 +324,16 @@ async fn test_kilocode_remote_upstream_repo_code_drift_detection() {
     let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[KilocodeCodeDrift] Upstream GitHub probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[KilocodeCodeDrift] Upstream GitHub probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
-            eprintln!("[KilocodeCodeDrift] Offline or GitHub unreachable ({e}), skipping live check");
+            eprintln!(
+                "[KilocodeCodeDrift] Offline or GitHub unreachable ({e}), skipping live check"
+            );
             return;
         }
     };
@@ -336,8 +364,14 @@ async fn test_kilocode_remote_upstream_repo_code_drift_detection() {
     assert_eq!(find_hdr("http-referer"), Some("https://kilocode.ai"));
     assert_eq!(find_hdr("x-title"), Some("Kilo Code"));
     assert_eq!(find_hdr("user-agent"), Some(current_kilocode_ua().as_str()));
-    assert_eq!(find_hdr("x-kilocode-version"), Some(current_kilocode_version().as_str()));
-    assert_eq!(find_hdr("x-client-version"), Some(current_kilocode_version().as_str()));
+    assert_eq!(
+        find_hdr("x-kilocode-version"),
+        Some(current_kilocode_version().as_str())
+    );
+    assert_eq!(
+        find_hdr("x-client-version"),
+        Some(current_kilocode_version().as_str())
+    );
     assert_eq!(find_hdr("x-client-type"), Some("VSCode Extension"));
     drop(_guard_k);
 }
@@ -347,9 +381,8 @@ fn test_cline_codex_kilocode_dynamic_spoofer_overrides() {
     use openproxy_adapters::spoofer::{
         reset_dynamic_cline_overrides, reset_dynamic_codex_overrides,
         reset_dynamic_kilocode_overrides, set_dynamic_cline_extra_header,
-        set_dynamic_cline_version, set_dynamic_codex_extra_header,
-        set_dynamic_codex_version, set_dynamic_kilocode_extra_header,
-        set_dynamic_kilocode_version,
+        set_dynamic_cline_version, set_dynamic_codex_extra_header, set_dynamic_codex_version,
+        set_dynamic_kilocode_extra_header, set_dynamic_kilocode_version,
     };
 
     let _guard_cline = CLINE_TEST_LOCK.lock().unwrap();
@@ -416,11 +449,11 @@ fn test_cline_codex_kilocode_dynamic_spoofer_overrides() {
 
 #[test]
 fn test_oauth_dynamic_endpoint_resolution_generic_and_kiro() {
+    use openproxy_core::oauth::OAuthFlow;
     use openproxy_core::oauth::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
     use openproxy_core::oauth::kiro::{
         kiro_device_auth_url, kiro_register_url, kiro_social_token_url, kiro_token_url,
     };
-    use openproxy_core::oauth::OAuthFlow;
 
     // 1. GenericOAuthProvider Antigravity resolution
     let spec = OAuthSpec {
@@ -440,17 +473,26 @@ fn test_oauth_dynamic_endpoint_resolution_generic_and_kiro() {
     };
     let ag = GenericOAuthProvider::new(spec);
     assert_eq!(ag.spec().token_url, "https://oauth2.googleapis.com/token");
-    assert_eq!(ag.resolved_token_url(), "https://oauth2.googleapis.com/token");
+    assert_eq!(
+        ag.resolved_token_url(),
+        "https://oauth2.googleapis.com/token"
+    );
 
     // SAFETY: isolated test verification
     unsafe {
-        std::env::set_var("OPENPROXY_ANTIGRAVITY_TOKEN_URL", "https://mock-google.local/token");
+        std::env::set_var(
+            "OPENPROXY_ANTIGRAVITY_TOKEN_URL",
+            "https://mock-google.local/token",
+        );
     }
     assert_eq!(ag.resolved_token_url(), "https://mock-google.local/token");
     unsafe {
         std::env::remove_var("OPENPROXY_ANTIGRAVITY_TOKEN_URL");
     }
-    assert_eq!(ag.resolved_token_url(), "https://oauth2.googleapis.com/token");
+    assert_eq!(
+        ag.resolved_token_url(),
+        "https://oauth2.googleapis.com/token"
+    );
 
     // 2. Kiro dynamic URL resolution
     assert_eq!(

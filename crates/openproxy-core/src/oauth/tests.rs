@@ -125,7 +125,9 @@ fn builtin_registry_all_providers_contract() {
     let ag = reg.get("antigravity").expect("antigravity registered");
     assert_eq!(ag.name(), "antigravity");
     assert_eq!(ag.flow(), OAuthFlow::AuthorizationCode);
-    let ag_cli = reg.get("antigravity-cli").expect("antigravity-cli alias registered");
+    let ag_cli = reg
+        .get("antigravity-cli")
+        .expect("antigravity-cli alias registered");
     assert_eq!(ag_cli.name(), "antigravity");
 
     // 2. Cline
@@ -142,7 +144,9 @@ fn builtin_registry_all_providers_contract() {
     let minimax = reg.get("minimax").expect("minimax registered");
     assert_eq!(minimax.name(), "minimax");
     assert_eq!(minimax.flow(), OAuthFlow::DeviceCode);
-    let mm_coding = reg.get("minimax-coding").expect("minimax-coding alias registered");
+    let mm_coding = reg
+        .get("minimax-coding")
+        .expect("minimax-coding alias registered");
     assert_eq!(mm_coding.name(), "minimax");
     let mm_cn = reg.get("minimax-cn").expect("minimax-cn alias registered");
     assert_eq!(mm_cn.name(), "minimax");

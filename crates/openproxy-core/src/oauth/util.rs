@@ -100,7 +100,8 @@ mod tests {
 
     #[test]
     fn test_resolver_default_and_custom() {
-        let resolver = OAuthEndpointResolver::new("NONEXISTENT_OAUTH_ENV_VAR", "https://api.example.com");
+        let resolver =
+            OAuthEndpointResolver::new("NONEXISTENT_OAUTH_ENV_VAR", "https://api.example.com");
         assert_eq!(resolver.base_url(), "https://api.example.com");
         assert_eq!(
             resolver.url_with_path("/v1/token"),

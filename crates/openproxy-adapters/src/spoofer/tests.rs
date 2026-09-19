@@ -35,7 +35,12 @@ fn test_cline_dynamic_version_and_extra_headers() {
     set_dynamic_cline_extra_header("x-cline-feature", "turbo");
 
     let headers = ClineSpoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("user-agent"), Some("Cline/5.0.0"));
     assert_eq!(find("x-client-version"), Some("5.0.0"));
@@ -81,7 +86,12 @@ fn test_kilocode_dynamic_version_and_extra_headers() {
     set_dynamic_kilocode_extra_header("x-kilocode-feature", "openclaw");
 
     let headers = KilocodeSpoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("user-agent"), Some("Kilo-Code/5.0.0"));
     assert_eq!(find("x-kilocode-version"), Some("5.0.0"));
@@ -133,7 +143,12 @@ fn test_codex_dynamic_version_and_extra_headers() {
     set_dynamic_codex_extra_header("x-codex-feature", "subzero");
 
     let headers = CodexSpoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(
         find("user-agent"),
@@ -189,7 +204,9 @@ fn test_opencode_spoofer() {
         if k == "User-Agent" {
             let cur_ua = current_opencode_ua();
             assert!(
-                headers.iter().any(|(name, val)| name == k && val == &cur_ua),
+                headers
+                    .iter()
+                    .any(|(name, val)| name == k && val == &cur_ua),
                 "missing dynamic header {k}={cur_ua}"
             );
         } else {
@@ -490,10 +507,18 @@ fn test_minimax_spoofer() {
 
     let spoofer = MiniMaxSpoofer;
     let headers = spoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("User-Agent"), Some(current_minimax_ua().as_str()));
-    assert_eq!(find("Anthropic-Version"), Some(current_minimax_anthropic_version().as_str()));
+    assert_eq!(
+        find("Anthropic-Version"),
+        Some(current_minimax_anthropic_version().as_str())
+    );
     assert_eq!(find("X-Mavis-Agent-Id"), Some("main"));
     assert_eq!(find("X-Mavis-Timezone-Offset"), Some("0"));
     assert!(find("X-Mavis-Session-Id").is_some_and(|s| s.starts_with("session_")));
@@ -515,7 +540,12 @@ fn test_minimax_dynamic_version_and_extra_headers() {
     assert_eq!(current_minimax_anthropic_version(), "2024-01-01");
 
     let headers = MiniMaxSpoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("User-Agent"), Some("CustomMiniMax/2.0"));
     assert_eq!(find("Anthropic-Version"), Some("2024-01-01"));
@@ -533,7 +563,12 @@ fn test_kiro_spoofer() {
 
     let spoofer = KiroSpoofer;
     let headers = spoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("Content-Type"), Some("application/json"));
     assert_eq!(find("x-amz-user-agent"), Some("aws-sdk-js/3.0.0 kiro/0.1"));
@@ -557,7 +592,12 @@ fn test_kiro_dynamic_version_and_extra_headers() {
     assert_eq!(current_kiro_ua(), "aws-sdk-js/3.10.0 kiro/1.0");
 
     let headers = KiroSpoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("x-amz-user-agent"), Some("aws-sdk-js/3.10.0 kiro/1.0"));
     assert_eq!(find("tokentype"), Some("API_KEY"));
@@ -574,7 +614,12 @@ fn test_commandcode_spoofer() {
 
     let spoofer = CommandCodeSpoofer;
     let headers = spoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("Content-Type"), Some("application/json"));
     assert_eq!(find("user-agent"), Some("cli"));
@@ -600,7 +645,12 @@ fn test_commandcode_dynamic_version_and_extra_headers() {
     assert_eq!(current_commandcode_ua(), "command-code-cli/1.60.0");
 
     let headers = CommandCodeSpoofer.headers();
-    let find = |key: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str());
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
 
     assert_eq!(find("x-command-code-version"), Some("1.60.0"));
     assert_eq!(find("user-agent"), Some("command-code-cli/1.60.0"));
@@ -610,4 +660,3 @@ fn test_commandcode_dynamic_version_and_extra_headers() {
     assert_eq!(current_commandcode_version(), "1.54.0");
     assert_eq!(current_commandcode_ua(), "cli");
 }
-

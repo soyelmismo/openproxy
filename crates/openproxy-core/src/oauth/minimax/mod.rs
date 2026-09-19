@@ -186,7 +186,10 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             .get("verification_uri")
             .or_else(|| json.get("verification_url"))
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| region.resolved_account_origin(), std::string::ToString::to_string);
+            .map_or_else(
+                || region.resolved_account_origin(),
+                std::string::ToString::to_string,
+            );
 
         let verification_uri_complete = json
             .get("verification_uri_complete")
@@ -199,7 +202,12 @@ impl OAuthProvider for MiniMaxOAuthProvider {
                     s.to_string()
                 }
             })
-            .or_else(|| Some(build_complete_verification_uri(&verification_uri, &user_code)));
+            .or_else(|| {
+                Some(build_complete_verification_uri(
+                    &verification_uri,
+                    &user_code,
+                ))
+            });
 
         let expires_in = json
             .get("expires_in")
@@ -250,12 +258,16 @@ impl OAuthProvider for MiniMaxOAuthProvider {
         device_code: &str,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        let (verifier, region, uses_user_code, user_code_val) = PENDING_AUTH
-            .get(device_code)
-            .map_or_else(
+        let (verifier, region, uses_user_code, user_code_val) =
+            PENDING_AUTH.get(device_code).map_or_else(
                 || {
                     let is_uc = device_code.contains('-') && device_code.len() <= 12;
-                    (String::new(), resolve_default_region(), is_uc, device_code.to_string())
+                    (
+                        String::new(),
+                        resolve_default_region(),
+                        is_uc,
+                        device_code.to_string(),
+                    )
                 },
                 |entry| {
                     (
@@ -268,7 +280,11 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             );
 
         let endpoint = format!("{}/oauth2/token", region.resolved_account_origin());
-        let code_key = if uses_user_code { "user_code" } else { "device_code" };
+        let code_key = if uses_user_code {
+            "user_code"
+        } else {
+            "device_code"
+        };
         let code_val = if uses_user_code && !user_code_val.is_empty() {
             user_code_val.as_str()
         } else {
@@ -283,8 +299,13 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             if let Ok(err_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
                 let error = err_json.get("error").and_then(serde_json::Value::as_str);
                 if error == Some("invalid_request") {
-                    let alt_key = if code_key == "user_code" { "device_code" } else { "user_code" };
-                    poll_token_request(upstream_client, &endpoint, alt_key, code_val, &verifier).await?
+                    let alt_key = if code_key == "user_code" {
+                        "device_code"
+                    } else {
+                        "user_code"
+                    };
+                    poll_token_request(upstream_client, &endpoint, alt_key, code_val, &verifier)
+                        .await?
                 } else {
                     (status, body_bytes)
                 }
@@ -300,22 +321,17 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             if let Ok(err_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
                 let error = err_json.get("error").and_then(serde_json::Value::as_str);
                 let poll_status = err_json.get("status").and_then(serde_json::Value::as_str);
-                if matches!(
-                    error,
-                    Some("authorization_pending" | "slow_down")
-                ) || matches!(
-                    poll_status,
-                    Some("pending" | "slow_down")
-                ) {
+                if matches!(error, Some("authorization_pending" | "slow_down"))
+                    || matches!(poll_status, Some("pending" | "slow_down"))
+                {
                     return Ok(None);
                 }
-                if matches!(
-                    error,
-                    Some("access_denied" | "expired_token")
-                ) || matches!(
-                    poll_status,
-                    Some("denied" | "access_denied" | "expired" | "expired_token")
-                ) {
+                if matches!(error, Some("access_denied" | "expired_token"))
+                    || matches!(
+                        poll_status,
+                        Some("denied" | "access_denied" | "expired" | "expired_token")
+                    )
+                {
                     return Err(CoreError::Validation(format!(
                         "MiniMax device authorization {}",
                         error.or(poll_status).unwrap_or("failed")
@@ -370,7 +386,9 @@ impl OAuthProvider for MiniMaxOAuthProvider {
                     |row| row.get::<_, Option<String>>(0),
                 )
                 .optional()
-                .map_err(openproxy_db::error::map_db_error_ctx("get provider_specific"))
+                .map_err(openproxy_db::error::map_db_error_ctx(
+                    "get provider_specific",
+                ))
             })?
             .flatten()
             .and_then(|raw| serde_json::from_str::<MiniMaxAccountMeta>(&raw).ok())
@@ -533,7 +551,8 @@ impl OAuthProvider for MiniMaxOAuthProvider {
                 summary.message
             );
             current_meta.streak_days = Some(summary.streak_days);
-            current_meta.last_checkin_date = Some(chrono::Utc::now().format("%Y-%m-%d").to_string());
+            current_meta.last_checkin_date =
+                Some(chrono::Utc::now().format("%Y-%m-%d").to_string());
         }
 
         // 3. Resolve op_group_id, workspace tier & credits (after checkin so newly claimed points are included)
@@ -571,7 +590,9 @@ impl OAuthProvider for MiniMaxOAuthProvider {
                  label = COALESCE(NULLIF(label, ''), ?3) WHERE id = ?4",
                 rusqlite::params![meta_json, final_email, final_label, account_id.0],
             )
-            .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific + label"))?;
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "update provider_specific + label",
+            ))?;
             Ok(())
         })
         .await
@@ -593,7 +614,9 @@ fn clean_expired_pending_auth() {
 
 pub fn build_complete_verification_uri(base_uri: &str, user_code: &str) -> String {
     let sep = if base_uri.contains('?') { '&' } else { '?' };
-    format!("{base_uri}{sep}user_code={user_code}&client_surface=tui&download_source=mcode-internal")
+    format!(
+        "{base_uri}{sep}user_code={user_code}&client_surface=tui&download_source=mcode-internal"
+    )
 }
 
 async fn poll_token_request(
@@ -639,4 +662,3 @@ async fn poll_token_request(
 
     Ok((status, body_bytes))
 }
-

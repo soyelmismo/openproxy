@@ -1,6 +1,4 @@
-use super::{
-    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
-};
+use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 
 pub const DEFAULT_KIRO_UA: &str = "aws-sdk-js/3.0.0 kiro/0.1";
 pub const DEFAULT_KIRO_SDK_REQUEST: &str = "attempt=1; max=3";

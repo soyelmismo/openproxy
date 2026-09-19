@@ -1,6 +1,4 @@
-use super::{
-    ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers,
-};
+use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 use http::HeaderValue;
 use rand::RngExt;
 

@@ -437,7 +437,10 @@ fn test_serialize_gemini_request_extracts_thinking_and_reasoning() {
         ..Default::default()
     };
     let mut extra = serde_json::Map::new();
-    extra.insert("reasoning_content".to_string(), json!("Thinking through step 1"));
+    extra.insert(
+        "reasoning_content".to_string(),
+        json!("Thinking through step 1"),
+    );
 
     let messages = vec![
         openproxy_types::OpenAIMessage {
@@ -476,12 +479,21 @@ fn test_serialize_gemini_request_extracts_thinking_and_reasoning() {
     // First model turn with reasoning_content
     assert_eq!(contents[1]["role"], "model");
     let parts1 = contents[1]["parts"].as_array().unwrap();
-    assert!(parts1.iter().any(|p| p.get("thought") == Some(&json!(true)) && p["text"] == "Thinking through step 1"));
+    assert!(
+        parts1
+            .iter()
+            .any(|p| p.get("thought") == Some(&json!(true))
+                && p["text"] == "Thinking through step 1")
+    );
     assert!(parts1.iter().any(|p| p["text"] == "Result is 42"));
 
     // Second model turn with think tag
     assert_eq!(contents[2]["role"], "model");
     let parts2 = contents[2]["parts"].as_array().unwrap();
-    assert!(parts2.iter().any(|p| p.get("thought") == Some(&json!(true)) && p["text"] == "inline thought"));
+    assert!(
+        parts2
+            .iter()
+            .any(|p| p.get("thought") == Some(&json!(true)) && p["text"] == "inline thought")
+    );
     assert!(parts2.iter().any(|p| p["text"] == "final answer"));
 }

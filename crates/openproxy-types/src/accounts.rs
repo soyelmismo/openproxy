@@ -122,8 +122,19 @@ mod tests {
         let specific_obj: serde_json::Value =
             serde_json::from_str(specific_str).expect("must parse internal json");
 
-        assert_eq!(specific_obj.get("credit_balance").and_then(|v| v.as_str()), Some("604.884"));
-        assert_eq!(specific_obj.get("streak_days").and_then(|v| v.as_i64()), Some(1));
-        assert_eq!(specific_obj.get("last_checkin_date").and_then(|v| v.as_str()), Some("2026-09-18"));
+        assert_eq!(
+            specific_obj.get("credit_balance").and_then(|v| v.as_str()),
+            Some("604.884")
+        );
+        assert_eq!(
+            specific_obj.get("streak_days").and_then(|v| v.as_i64()),
+            Some(1)
+        );
+        assert_eq!(
+            specific_obj
+                .get("last_checkin_date")
+                .and_then(|v| v.as_str()),
+            Some("2026-09-18")
+        );
     }
 }

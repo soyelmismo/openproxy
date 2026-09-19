@@ -325,8 +325,9 @@ fn test_wrap_request_body_muse_spark_responses() {
 #[test]
 fn test_opencode_dynamic_headers_and_config_mut() {
     use crate::spoofer::{
-        current_opencode_ua, current_opencode_version, reset_dynamic_opencode_overrides,
-        set_dynamic_opencode_extra_header, set_dynamic_opencode_version, OPENCODE_TEST_LOCK,
+        OPENCODE_TEST_LOCK, current_opencode_ua, current_opencode_version,
+        reset_dynamic_opencode_overrides, set_dynamic_opencode_extra_header,
+        set_dynamic_opencode_version,
     };
 
     let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
@@ -336,9 +337,13 @@ fn test_opencode_dynamic_headers_and_config_mut() {
     let mut adapter = OpenCodeZenAdapter::new();
 
     // 1. Verify config_mut works and allows setting extra_headers
-    let cfg = adapter.config_mut().expect("config_mut must be implemented");
-    cfg.extra_headers.push(("x-admin-injected".into(), "true".into()));
-    cfg.extra_headers.push(("x-custom-rule".into(), "rule-42".into()));
+    let cfg = adapter
+        .config_mut()
+        .expect("config_mut must be implemented");
+    cfg.extra_headers
+        .push(("x-admin-injected".into(), "true".into()));
+    cfg.extra_headers
+        .push(("x-custom-rule".into(), "rule-42".into()));
 
     let model_id = openproxy_types::ModelId::new("claude-3-5-sonnet");
     let headers = adapter.build_headers("my-key", TargetFormat::Anthropic, &model_id);
@@ -381,8 +386,12 @@ fn test_opencode_dynamic_headers_and_config_mut() {
 
     // 4. Test Go adapter as well
     let mut go_adapter = OpenCodeGoAdapter::new();
-    let go_cfg = go_adapter.config_mut().expect("Go adapter config_mut must be implemented");
-    go_cfg.extra_headers.push(("x-go-test".into(), "active".into()));
+    let go_cfg = go_adapter
+        .config_mut()
+        .expect("Go adapter config_mut must be implemented");
+    go_cfg
+        .extra_headers
+        .push(("x-go-test".into(), "active".into()));
     let go_headers = go_adapter.build_headers("go-key", TargetFormat::Openai, &model_id);
     let find_go = |k: &str| {
         go_headers
@@ -401,7 +410,9 @@ fn test_opencode_dynamic_headers_and_config_mut() {
 
 #[test]
 fn test_opencode_default_headers_contract() {
-    use crate::spoofer::{current_opencode_ua, reset_dynamic_opencode_overrides, OPENCODE_TEST_LOCK};
+    use crate::spoofer::{
+        OPENCODE_TEST_LOCK, current_opencode_ua, reset_dynamic_opencode_overrides,
+    };
 
     let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
     reset_dynamic_opencode_overrides();
@@ -447,4 +458,3 @@ fn test_opencode_default_headers_contract() {
     assert!(find("x-opencode-session").is_some_and(|s| s.starts_with("ses_")));
     assert!(find("x-opencode-request").is_some_and(|s| s.starts_with("msg_")));
 }
-

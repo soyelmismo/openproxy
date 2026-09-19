@@ -35,7 +35,8 @@ pub fn parse_env_extra_headers(env_var: &str) -> Vec<(String, String)> {
     let Ok(env_str) = std::env::var(env_var) else {
         return Vec::new();
     };
-    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str)
+    else {
         return Vec::new();
     };
     map.into_iter().collect()
@@ -123,7 +124,10 @@ impl DynamicHeaderOverrides {
 /// Case-insensitively insert or update a header in a list of `(String, String)` pairs.
 /// Avoids allocating a new `String` for the key if it is already present in the list.
 pub fn upsert_header(headers: &mut Vec<(String, String)>, key: &str, val: impl Into<String>) {
-    if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(key)) {
+    if let Some(pos) = headers
+        .iter()
+        .position(|(hk, _)| hk.eq_ignore_ascii_case(key))
+    {
         headers[pos].1 = val.into();
     } else {
         headers.push((key.to_string(), val.into()));

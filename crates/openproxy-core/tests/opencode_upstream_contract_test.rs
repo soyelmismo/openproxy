@@ -12,8 +12,8 @@ use openproxy_adapters::adapters::opencode_common::{
     inject_opencode_agent_quartet_tools, is_free_opencode_tier,
 };
 use openproxy_adapters::spoofer::{
-    OPENCODE_UA, generate_request_id, generate_session_id,
-    is_valid_opencode_request_id, is_valid_opencode_session_id,
+    OPENCODE_UA, generate_request_id, generate_session_id, is_valid_opencode_request_id,
+    is_valid_opencode_session_id,
 };
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
@@ -67,7 +67,10 @@ fn test_opencode_zen_golden_contract_spec_parity() {
     assert_eq!(find_hdr(&headers_paid, "Authorization"), None);
     assert_eq!(find_hdr(&headers_paid, "User-Agent"), Some(OPENCODE_UA));
     assert_eq!(find_hdr(&headers_paid, "x-opencode-client"), Some("cli"));
-    assert_eq!(find_hdr(&headers_paid, "x-opencode-project"), Some("global"));
+    assert_eq!(
+        find_hdr(&headers_paid, "x-opencode-project"),
+        Some("global")
+    );
 
     let session_id = find_hdr(&headers_paid, "x-opencode-session").unwrap();
     assert!(
@@ -154,11 +157,17 @@ fn test_opencode_zen_golden_contract_spec_parity() {
         Some(TargetFormat::Responses)
     );
     assert_eq!(
-        openproxy_core::models_dev_sync::resolve_routing_format(Some("@ai-sdk/openai-compatible"), None),
+        openproxy_core::models_dev_sync::resolve_routing_format(
+            Some("@ai-sdk/openai-compatible"),
+            None
+        ),
         Some(TargetFormat::Openai)
     );
     assert_eq!(
-        openproxy_core::models_dev_sync::resolve_routing_format(None, Some("@ai-sdk/openai-compatible")),
+        openproxy_core::models_dev_sync::resolve_routing_format(
+            None,
+            Some("@ai-sdk/openai-compatible")
+        ),
         Some(TargetFormat::Openai)
     );
 
@@ -263,15 +272,31 @@ fn test_opencode_zen_request_wrapping_and_aliasing() {
         custom_meta: None,
     };
 
-    let body = bytes::Bytes::from(r#"{"model":"mimo-v2.5","messages":[{"role":"user","content":"hi"}]}"#);
+    let body =
+        bytes::Bytes::from(r#"{"model":"mimo-v2.5","messages":[{"role":"user","content":"hi"}]}"#);
     let wrapped = adapter
-        .wrap_request_body(body, TargetFormat::Openai, &ModelId::new("mimo-v2.5"), &target)
+        .wrap_request_body(
+            body,
+            TargetFormat::Openai,
+            &ModelId::new("mimo-v2.5"),
+            &target,
+        )
         .expect("wrap free tier request");
 
     let val: serde_json::Value = serde_json::from_slice(&wrapped).expect("valid json");
-    assert_eq!(val["model"], "mimo-v2.5-free", "must auto-alias mimo-v2.5 to mimo-v2.5-free");
-    assert_eq!(val["stream"], true, "must enforce stream: true on free tier");
-    assert_eq!(val["tools"].as_array().unwrap().len(), 4, "must inject quartet tools");
+    assert_eq!(
+        val["model"], "mimo-v2.5-free",
+        "must auto-alias mimo-v2.5 to mimo-v2.5-free"
+    );
+    assert_eq!(
+        val["stream"], true,
+        "must enforce stream: true on free tier"
+    );
+    assert_eq!(
+        val["tools"].as_array().unwrap().len(),
+        4,
+        "must inject quartet tools"
+    );
 }
 
 #[tokio::test]
@@ -291,10 +316,16 @@ async fn test_opencode_zen_remote_upstream_live_contract_parity() {
         axum::http::HeaderValue::from_static("Bearer public"),
     );
 
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel.clone()).await {
+    let resp = match client
+        .call(req, TimeoutProfile::OAuth, cancel.clone())
+        .await
+    {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[OpenCodeContractTest] Models probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[OpenCodeContractTest] Models probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
@@ -311,8 +342,14 @@ async fn test_opencode_zen_remote_upstream_live_contract_parity() {
         .filter_map(|m| m["id"].as_str())
         .collect();
 
-    assert!(ids.contains(&"big-pickle"), "live catalogue must include big-pickle");
-    assert!(ids.contains(&"claude-sonnet-4-6"), "live catalogue must include claude-sonnet-4-6");
+    assert!(
+        ids.contains(&"big-pickle"),
+        "live catalogue must include big-pickle"
+    );
+    assert!(
+        ids.contains(&"claude-sonnet-4-6"),
+        "live catalogue must include claude-sonnet-4-6"
+    );
 
     // 2. Probe live free tier chat completions endpoint with big-pickle
     let chat_url = "https://opencode.ai/zen/v1/chat/completions";
@@ -328,13 +365,34 @@ async fn test_opencode_zen_remote_upstream_live_contract_parity() {
         ]
     });
 
-    let mut chat_req = UpstreamRequest::post_json(chat_url, bytes::Bytes::from(serde_json::to_vec(&chat_body).unwrap()));
-    chat_req.headers.insert(axum::http::header::USER_AGENT, axum::http::HeaderValue::from_static(OPENCODE_UA));
-    chat_req.headers.insert(axum::http::header::AUTHORIZATION, axum::http::HeaderValue::from_static("Bearer public"));
-    chat_req.headers.insert(axum::http::HeaderName::from_static("x-opencode-client"), axum::http::HeaderValue::from_static("cli"));
-    chat_req.headers.insert(axum::http::HeaderName::from_static("x-opencode-project"), axum::http::HeaderValue::from_static("global"));
-    chat_req.headers.insert(axum::http::HeaderName::from_static("x-opencode-session"), axum::http::HeaderValue::from_str(&generate_session_id()).unwrap());
-    chat_req.headers.insert(axum::http::HeaderName::from_static("x-opencode-request"), axum::http::HeaderValue::from_str(&generate_request_id()).unwrap());
+    let mut chat_req = UpstreamRequest::post_json(
+        chat_url,
+        bytes::Bytes::from(serde_json::to_vec(&chat_body).unwrap()),
+    );
+    chat_req.headers.insert(
+        axum::http::header::USER_AGENT,
+        axum::http::HeaderValue::from_static(OPENCODE_UA),
+    );
+    chat_req.headers.insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_static("Bearer public"),
+    );
+    chat_req.headers.insert(
+        axum::http::HeaderName::from_static("x-opencode-client"),
+        axum::http::HeaderValue::from_static("cli"),
+    );
+    chat_req.headers.insert(
+        axum::http::HeaderName::from_static("x-opencode-project"),
+        axum::http::HeaderValue::from_static("global"),
+    );
+    chat_req.headers.insert(
+        axum::http::HeaderName::from_static("x-opencode-session"),
+        axum::http::HeaderValue::from_str(&generate_session_id()).unwrap(),
+    );
+    chat_req.headers.insert(
+        axum::http::HeaderName::from_static("x-opencode-request"),
+        axum::http::HeaderValue::from_str(&generate_request_id()).unwrap(),
+    );
 
     let chat_resp = match client.call(chat_req, TimeoutProfile::OAuth, cancel).await {
         Ok(r) => r,
@@ -375,7 +433,9 @@ async fn test_opencode_upstream_repo_headers_drift_detection() {
     // 1. Probe upstream client request.ts for new x-opencode headers
     let client_url = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/llm/request.ts";
     let req = UpstreamRequest::get(client_url);
-    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel.clone()).await
+    if let Ok(resp) = client
+        .call(req, TimeoutProfile::OAuth, cancel.clone())
+        .await
         && resp.status.is_success()
         && let Ok(body) = resp.collect().await
     {
@@ -393,7 +453,9 @@ async fn test_opencode_upstream_repo_headers_drift_detection() {
     // 2. Probe upstream console zen handler.ts for new x-opencode headers
     let handler_url = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/console/app/src/routes/zen/util/handler.ts";
     let handler_req = UpstreamRequest::get(handler_url);
-    if let Ok(resp) = client.call(handler_req, TimeoutProfile::OAuth, cancel).await
+    if let Ok(resp) = client
+        .call(handler_req, TimeoutProfile::OAuth, cancel)
+        .await
         && resp.status.is_success()
         && let Ok(body) = resp.collect().await
     {
@@ -408,4 +470,3 @@ async fn test_opencode_upstream_repo_headers_drift_detection() {
         }
     }
 }
-

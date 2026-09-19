@@ -1,7 +1,7 @@
-use super::*;
 use super::checkin::{SigninDayItem, SigninDayStatus, calculate_streak};
 use super::matrix::MiniMaxRegion;
 use super::md5::md5_hex;
+use super::*;
 
 #[test]
 fn test_md5_rfc_vectors() {
@@ -77,13 +77,17 @@ fn test_checkin_streak_progression() {
 
 #[test]
 fn test_build_complete_verification_uri() {
-    let uri = build_complete_verification_uri("https://account.minimax.io/oauth-authorize", "LRAR-BW2A");
+    let uri =
+        build_complete_verification_uri("https://account.minimax.io/oauth-authorize", "LRAR-BW2A");
     assert_eq!(
         uri,
         "https://account.minimax.io/oauth-authorize?user_code=LRAR-BW2A&client_surface=tui&download_source=mcode-internal"
     );
 
-    let uri_cn = build_complete_verification_uri("https://account.minimax.cn/oauth-authorize?existing=1", "7TM4-GRFT");
+    let uri_cn = build_complete_verification_uri(
+        "https://account.minimax.cn/oauth-authorize?existing=1",
+        "7TM4-GRFT",
+    );
     assert_eq!(
         uri_cn,
         "https://account.minimax.cn/oauth-authorize?existing=1&user_code=7TM4-GRFT&client_surface=tui&download_source=mcode-internal"

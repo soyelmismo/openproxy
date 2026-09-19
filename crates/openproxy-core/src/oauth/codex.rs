@@ -76,8 +76,10 @@ impl CodexOAuthProvider {
     }
 
     pub fn usercode_url(&self) -> String {
-        std::env::var("OPENPROXY_CODEX_DEVICE_USERCODE_URL")
-            .unwrap_or_else(|_| self.resolver.url_with_path("api/accounts/deviceauth/usercode"))
+        std::env::var("OPENPROXY_CODEX_DEVICE_USERCODE_URL").unwrap_or_else(|_| {
+            self.resolver
+                .url_with_path("api/accounts/deviceauth/usercode")
+        })
     }
 
     pub fn device_token_url(&self) -> String {
@@ -209,7 +211,8 @@ impl OAuthProvider for CodexOAuthProvider {
         });
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
-        let mut req = UpstreamRequest::post_json(self.device_token_url(), bytes::Bytes::from(body_bytes));
+        let mut req =
+            UpstreamRequest::post_json(self.device_token_url(), bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
@@ -398,10 +401,7 @@ mod tests {
         );
         assert_eq!(VERIFICATION_URI, "https://auth.openai.com/codex/device");
         assert_eq!(REDIRECT_URI, "https://auth.openai.com/deviceauth/callback");
-        assert_eq!(
-            SCOPES,
-            &["openid", "profile", "email", "offline_access"]
-        );
+        assert_eq!(SCOPES, &["openid", "profile", "email", "offline_access"]);
     }
 
     #[test]
@@ -426,7 +426,10 @@ mod tests {
                 "account_id": "acc_nested"
             }
         });
-        assert_eq!(extract_workspace_id(&claims4).as_deref(), Some("acc_nested"));
+        assert_eq!(
+            extract_workspace_id(&claims4).as_deref(),
+            Some("acc_nested")
+        );
 
         let empty = serde_json::json!({ "account_id": "" });
         assert_eq!(extract_workspace_id(&empty), None);
@@ -471,9 +474,8 @@ mod tests {
         let provider = CodexOAuthProvider::new();
 
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-            r#"{"email":"codex_user@example.com","chatgpt_account_id":"acc_chatgpt_777"}"#,
-        );
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"email":"codex_user@example.com","chatgpt_account_id":"acc_chatgpt_777"}"#);
         let id_token_jwt = format!("{header}.{payload}.sig");
 
         let token = TokenResponse {
@@ -510,7 +512,9 @@ mod tests {
         );
 
         // Invalid composite device code (missing pipe)
-        let invalid_poll = provider.poll_device_token("invalid_code_no_pipe", &client).await;
+        let invalid_poll = provider
+            .poll_device_token("invalid_code_no_pipe", &client)
+            .await;
         assert!(invalid_poll.is_err());
     }
 
@@ -525,9 +529,6 @@ mod tests {
             provider.device_token_url(),
             "http://127.0.0.1:7777/api/accounts/deviceauth/token"
         );
-        assert_eq!(
-            provider.token_url(),
-            "http://127.0.0.1:7777/oauth/token"
-        );
+        assert_eq!(provider.token_url(), "http://127.0.0.1:7777/oauth/token");
     }
 }

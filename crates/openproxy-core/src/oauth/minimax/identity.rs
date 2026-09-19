@@ -67,7 +67,10 @@ pub async fn resolve_user_identity(
     let json: serde_json::Value = serde_json::from_slice(&bytes).ok().unwrap_or_default();
 
     let data = json.get("data").unwrap_or(&json);
-    let user_info = data.get("userInfo").or_else(|| data.get("user_info")).unwrap_or(data);
+    let user_info = data
+        .get("userInfo")
+        .or_else(|| data.get("user_info"))
+        .unwrap_or(data);
 
     let real_user_id = user_info
         .get("realUserID")
@@ -187,7 +190,11 @@ pub async fn resolve_membership_info(
     );
 
     if let Ok(c_resp) = upstream
-        .call(commerce_req, TimeoutProfile::OAuth, CancellationToken::new())
+        .call(
+            commerce_req,
+            TimeoutProfile::OAuth,
+            CancellationToken::new(),
+        )
         .await
         && c_resp.status.is_success()
         && let Ok(c_bytes) = c_resp.collect().await

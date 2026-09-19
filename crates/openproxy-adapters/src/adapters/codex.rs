@@ -6,9 +6,7 @@ use super::{
 use openproxy_types::ResultExt;
 
 pub use crate::spoofer::CODEX_SPOOFING_HEADERS;
-use crate::spoofer::{
-    current_codex_ua, current_codex_version, ClientSpoofer, CodexSpoofer,
-};
+use crate::spoofer::{ClientSpoofer, CodexSpoofer, current_codex_ua, current_codex_version};
 
 pub fn codex_client_version() -> String {
     current_codex_version()
@@ -496,7 +494,11 @@ mod tests {
 
         crate::spoofer::set_dynamic_codex_extra_header("x-dynamic-header", "dynamic-val");
 
-        let headers = adapter.build_headers("my-key", TargetFormat::Responses, &ModelId::new("gpt-5.6-luna"));
+        let headers = adapter.build_headers(
+            "my-key",
+            TargetFormat::Responses,
+            &ModelId::new("gpt-5.6-luna"),
+        );
 
         let find = |k: &str| {
             headers
@@ -522,7 +524,11 @@ mod tests {
         crate::spoofer::reset_dynamic_codex_overrides();
 
         let adapter = CodexAdapter::new();
-        let headers = adapter.build_headers("codex-token-xyz", TargetFormat::Responses, &ModelId::new("gpt-5.6-luna"));
+        let headers = adapter.build_headers(
+            "codex-token-xyz",
+            TargetFormat::Responses,
+            &ModelId::new("gpt-5.6-luna"),
+        );
         let find = |k: &str| {
             headers
                 .iter()
@@ -560,4 +566,3 @@ mod tests {
         assert_eq!(find("user-agent"), Some(current_codex_ua().as_str()));
     }
 }
-

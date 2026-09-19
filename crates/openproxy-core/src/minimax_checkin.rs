@@ -8,9 +8,9 @@ use tokio_util::sync::CancellationToken;
 use crate::accounts;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ProviderId};
+use crate::oauth::minimax::MiniMaxAccountMeta;
 use crate::oauth::minimax::checkin::{self, DailyCheckinSummary};
 use crate::oauth::minimax::matrix::MiniMaxRegion;
-use crate::oauth::minimax::MiniMaxAccountMeta;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
@@ -100,7 +100,6 @@ pub async fn run_checkin_cycle(
     };
 
     for account_id in accounts_to_check {
-
         match run_account_checkin(db_pool, upstream_client, master_key, account_id).await {
             Ok(summary) => {
                 tracing::info!(
@@ -170,7 +169,8 @@ pub async fn run_account_checkin(
 
     let user_id = meta.real_user_id.as_deref().unwrap_or("0");
 
-    let summary = checkin::execute_daily_checkin(upstream_client, &access_token, user_id, region).await?;
+    let summary =
+        checkin::execute_daily_checkin(upstream_client, &access_token, user_id, region).await?;
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     meta.last_checkin_date = Some(today);
@@ -179,7 +179,8 @@ pub async fn run_account_checkin(
     // Refresh membership info (op_group_id, tier, credit_balance) AFTER checkin
     let uid = meta.real_user_id.as_deref().unwrap_or("0");
     if let Some((op_group_id, tier, credits)) =
-        crate::oauth::minimax::resolve_membership_info(upstream_client, &access_token, uid, region).await
+        crate::oauth::minimax::resolve_membership_info(upstream_client, &access_token, uid, region)
+            .await
     {
         meta.op_group_id = Some(op_group_id);
         if tier.is_some() {
@@ -211,7 +212,9 @@ pub async fn run_account_checkin(
              label = COALESCE(NULLIF(label, ''), ?3) WHERE id = ?4",
             rusqlite::params![meta_json, final_email, final_label, account_id.0],
         )
-        .map_err(openproxy_db::error::map_db_error_ctx("update provider_specific + label"))?;
+        .map_err(openproxy_db::error::map_db_error_ctx(
+            "update provider_specific + label",
+        ))?;
         Ok(())
     })
     .await

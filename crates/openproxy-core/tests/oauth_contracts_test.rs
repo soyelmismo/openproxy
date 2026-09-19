@@ -8,14 +8,14 @@
 //! 5. Bijective token claims decoding (`workspaceId` and `email` extraction).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
-use axum::Router;
 use base64::Engine;
 use bytes::Bytes;
 use tokio::net::TcpListener;
@@ -23,17 +23,16 @@ use tokio::net::TcpListener;
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
-use openproxy_types::AccountId;
 use openproxy_core::oauth::antigravity::{
-    AUTH_URL as AG_AUTH_URL, CLIENT_ID as AG_CLIENT_ID,
-    DEFAULT_CLIENT_SECRET as AG_CLIENT_SECRET, SCOPES as AG_SCOPES, TOKEN_URL as AG_TOKEN_URL,
+    AUTH_URL as AG_AUTH_URL, CLIENT_ID as AG_CLIENT_ID, DEFAULT_CLIENT_SECRET as AG_CLIENT_SECRET,
+    SCOPES as AG_SCOPES, TOKEN_URL as AG_TOKEN_URL,
 };
 use openproxy_core::oauth::cline::{
-    ClineOAuthProvider, CLINE_AUTH_AUTHORIZE_PATH, CLINE_AUTH_REFRESH_PATH, CLINE_AUTH_TOKEN_PATH,
-    CLINE_CLIENT_TYPE, CLINE_DEFAULT_BASE_URL, CLINE_PROVIDER,
+    CLINE_AUTH_AUTHORIZE_PATH, CLINE_AUTH_REFRESH_PATH, CLINE_AUTH_TOKEN_PATH, CLINE_CLIENT_TYPE,
+    CLINE_DEFAULT_BASE_URL, CLINE_PROVIDER, ClineOAuthProvider,
 };
 use openproxy_core::oauth::codex::{
-    CodexOAuthProvider, CodexProviderMeta, CLIENT_ID as CODEX_CLIENT_ID,
+    CLIENT_ID as CODEX_CLIENT_ID, CodexOAuthProvider, CodexProviderMeta,
     DEVICE_TOKEN_URL as CODEX_DEVICE_TOKEN_URL, DEVICE_USERCODE_URL as CODEX_DEVICE_USERCODE_URL,
     REDIRECT_URI as CODEX_REDIRECT_URI, SCOPES as CODEX_SCOPES, TOKEN_URL as CODEX_TOKEN_URL,
     VERIFICATION_URI as CODEX_VERIFICATION_URI,
@@ -44,8 +43,9 @@ use openproxy_core::oauth::minimax::{
     SCOPE as MM_SCOPE,
 };
 use openproxy_core::oauth::{
-    refresh_lead_seconds, DbRef, OAuthFlow, OAuthProvider, OAuthProviderRegistry,
+    DbRef, OAuthFlow, OAuthProvider, OAuthProviderRegistry, refresh_lead_seconds,
 };
+use openproxy_types::AccountId;
 
 fn create_mock_jwt(payload: serde_json::Value) -> String {
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
@@ -63,7 +63,10 @@ fn test_oauth_golden_contracts_all_providers() {
     // 1. Antigravity OAuth Spec
     assert_eq!(
         AG_CLIENT_ID.as_str(),
-        format!("{}.{}", "1071006060591-tmhssin2h21lcre235vtolojh4g403ep", "apps.googleusercontent.com")
+        format!(
+            "{}.{}",
+            "1071006060591-tmhssin2h21lcre235vtolojh4g403ep", "apps.googleusercontent.com"
+        )
     );
     assert_eq!(
         AG_CLIENT_SECRET.as_str(),
@@ -273,12 +276,7 @@ async fn test_cline_oauth_wire_mock_flow() {
     let conn = parking_lot::Mutex::new(rusqlite::Connection::open_in_memory().unwrap());
     let db = DbRef::Connection(&conn);
     let refreshed = provider
-        .refresh_token(
-            "cline_refresh_token_wire",
-            &client,
-            AccountId(1),
-            db,
-        )
+        .refresh_token("cline_refresh_token_wire", &client, AccountId(1), db)
         .await
         .expect("refresh token success");
 
@@ -311,12 +309,7 @@ async fn test_cline_oauth_error_wire_handling() {
     let client = Arc::new(UpstreamClient::new());
 
     let err = provider
-        .exchange_code(
-            "bad_code",
-            "",
-            &client,
-            "http://127.0.0.1:8080/callback",
-        )
+        .exchange_code("bad_code", "", &client, "http://127.0.0.1:8080/callback")
         .await
         .expect_err("should fail with upstream error");
 
@@ -431,7 +424,9 @@ async fn mock_codex_token_handler(
     assert!(body_str.contains(&format!("client_id={CODEX_CLIENT_ID}")));
     assert!(body_str.contains("code=auth_code_openai_ok"));
     assert!(body_str.contains("code_verifier=verifier_openai_ok"));
-    assert!(body_str.contains("redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback"));
+    assert!(
+        body_str.contains("redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback")
+    );
 
     let id_token = create_mock_jwt(serde_json::json!({
         "email": "chatgpt_user@example.com",
@@ -577,7 +572,11 @@ fn test_oauth_registry_and_refresh_lead_times() {
     // Builtins and aliases resolve cleanly
     let keys = [
         ("antigravity", "antigravity", OAuthFlow::AuthorizationCode),
-        ("antigravity-cli", "antigravity", OAuthFlow::AuthorizationCode),
+        (
+            "antigravity-cli",
+            "antigravity",
+            OAuthFlow::AuthorizationCode,
+        ),
         ("cline", "cline", OAuthFlow::AuthorizationCode),
         ("codex", "codex", OAuthFlow::DeviceCode),
         ("minimax", "minimax", OAuthFlow::DeviceCode),
@@ -606,20 +605,29 @@ async fn test_codex_remote_upstream_live_contract_parity() {
 
     // 1. Probe OpenAI OpenID Configuration
     let req = UpstreamRequest::get("https://auth.openai.com/.well-known/openid-configuration");
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel.clone()).await {
+    let resp = match client
+        .call(req, TimeoutProfile::OAuth, cancel.clone())
+        .await
+    {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[CodexContractTest] OpenAI probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[CodexContractTest] OpenAI probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
-            eprintln!("[CodexContractTest] Offline or OpenAI unreachable ({e}), skipping live check");
+            eprintln!(
+                "[CodexContractTest] Offline or OpenAI unreachable ({e}), skipping live check"
+            );
             return;
         }
     };
 
     let body_bytes = resp.collect().await.expect("read openid config body");
-    let openid_json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse openid json");
+    let openid_json: serde_json::Value =
+        serde_json::from_slice(&body_bytes).expect("parse openid json");
 
     let scopes = openid_json["scopes_supported"]
         .as_array()
@@ -641,7 +649,10 @@ async fn test_codex_remote_upstream_live_contract_parity() {
         }
     };
 
-    assert!(dar.device_code.contains('|'), "device_code must combine auth_id and user_code");
+    assert!(
+        dar.device_code.contains('|'),
+        "device_code must combine auth_id and user_code"
+    );
     assert!(!dar.user_code.is_empty(), "user_code must not be empty");
     assert_eq!(dar.verification_uri, CODEX_VERIFICATION_URI);
     assert_eq!(dar.expires_in, Some(900));
@@ -653,21 +664,32 @@ async fn test_cline_remote_upstream_live_contract_parity() {
     let cancel = CancellationToken::new();
 
     // 1. Probe upstream Cline VSCode extension manifest
-    let req = UpstreamRequest::get("https://raw.githubusercontent.com/cline/cline/main/apps/vscode/package.json");
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel.clone()).await {
+    let req = UpstreamRequest::get(
+        "https://raw.githubusercontent.com/cline/cline/main/apps/vscode/package.json",
+    );
+    let resp = match client
+        .call(req, TimeoutProfile::OAuth, cancel.clone())
+        .await
+    {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[ClineContractTest] Cline GitHub manifest probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[ClineContractTest] Cline GitHub manifest probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
-            eprintln!("[ClineContractTest] Offline or GitHub unreachable ({e}), skipping live check");
+            eprintln!(
+                "[ClineContractTest] Offline or GitHub unreachable ({e}), skipping live check"
+            );
             return;
         }
     };
 
     let body_bytes = resp.collect().await.expect("read package.json body");
-    let pkg_json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse package json");
+    let pkg_json: serde_json::Value =
+        serde_json::from_slice(&body_bytes).expect("parse package json");
     assert_eq!(pkg_json["name"], "claude-dev");
     assert_eq!(pkg_json["displayName"], "Cline");
     assert_eq!(pkg_json["homepage"], "https://cline.bot");
@@ -685,10 +707,15 @@ async fn test_cline_remote_upstream_live_contract_parity() {
         .await;
 
     // Upstream live server returns 400 Bad Request with json error
-    assert!(res.is_err(), "probe code must be rejected by upstream server");
+    assert!(
+        res.is_err(),
+        "probe code must be rejected by upstream server"
+    );
     let err_str = res.unwrap_err().to_string();
     assert!(
-        err_str.contains("400") || err_str.contains("cline") || err_str.contains("invalid or expired"),
+        err_str.contains("400")
+            || err_str.contains("cline")
+            || err_str.contains("invalid or expired"),
         "error must reflect live upstream rejection envelope: {err_str}"
     );
 }
@@ -702,23 +729,33 @@ async fn test_google_antigravity_remote_openid_parity() {
     let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[AntigravityContractTest] Google openid probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[AntigravityContractTest] Google openid probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
-            eprintln!("[AntigravityContractTest] Offline or Google unreachable ({e}), skipping live check");
+            eprintln!(
+                "[AntigravityContractTest] Offline or Google unreachable ({e}), skipping live check"
+            );
             return;
         }
     };
 
-    let body_bytes = resp.collect().await.expect("read google openid config body");
-    let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse google openid json");
+    let body_bytes = resp
+        .collect()
+        .await
+        .expect("read google openid config body");
+    let json: serde_json::Value =
+        serde_json::from_slice(&body_bytes).expect("parse google openid json");
 
     assert_eq!(json["authorization_endpoint"], AG_AUTH_URL);
     assert_eq!(json["token_endpoint"], AG_TOKEN_URL);
 
-    let grants = json["grant_types_supported"].as_array().expect("grant_types_supported array");
+    let grants = json["grant_types_supported"]
+        .as_array()
+        .expect("grant_types_supported array");
     assert!(grants.iter().any(|g| g == "authorization_code"));
     assert!(grants.iter().any(|g| g == "refresh_token"));
 }
-

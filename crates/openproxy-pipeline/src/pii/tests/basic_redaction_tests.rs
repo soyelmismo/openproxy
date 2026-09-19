@@ -198,14 +198,26 @@ fn test_person_placeholder_clean_names_and_reverse_deanonymization() {
     // 1. First entity maps to "Alex Vance" directly without "(P1)" suffix
     let p1 = session.get_or_create_placeholder(PiiEntity::Person, "Miguel");
     assert_eq!(p1, "Alex Vance");
-    assert_eq!(session.forward.get("Miguel"), Some(&"Alex Vance".to_string()));
-    assert_eq!(session.reverse.get("Alex Vance"), Some(&"Miguel".to_string()));
+    assert_eq!(
+        session.forward.get("Miguel"),
+        Some(&"Alex Vance".to_string())
+    );
+    assert_eq!(
+        session.reverse.get("Alex Vance"),
+        Some(&"Miguel".to_string())
+    );
 
     // 2. Second entity maps to "David Chen" without "(P2)" suffix
     let p2 = session.get_or_create_placeholder(PiiEntity::Person, "Carlos");
     assert_eq!(p2, "David Chen");
-    assert_eq!(session.forward.get("Carlos"), Some(&"David Chen".to_string()));
-    assert_eq!(session.reverse.get("David Chen"), Some(&"Carlos".to_string()));
+    assert_eq!(
+        session.forward.get("Carlos"),
+        Some(&"David Chen".to_string())
+    );
+    assert_eq!(
+        session.reverse.get("David Chen"),
+        Some(&"Carlos".to_string())
+    );
 
     // 3. Bidirectional restoration: reverse de-anonymization back to original
     let text = "Hello Alex Vance and David Chen, nice to meet you.";
@@ -217,6 +229,8 @@ fn test_person_placeholder_clean_names_and_reverse_deanonymization() {
     let p_alex = session2.get_or_create_placeholder(PiiEntity::Person, "Alex Vance");
     assert_ne!(p_alex, "Alex Vance");
     assert_eq!(p_alex, "David Chen");
-    assert_eq!(session2.restore_text("Hello David Chen"), "Hello Alex Vance");
+    assert_eq!(
+        session2.restore_text("Hello David Chen"),
+        "Hello Alex Vance"
+    );
 }
-

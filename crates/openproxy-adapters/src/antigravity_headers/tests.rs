@@ -100,7 +100,13 @@ fn test_dynamic_version_override() {
     let mut hm = http::HeaderMap::new();
     inject_antigravity_headers(&mut hm, None);
     assert_eq!(hm.get("x-client-version").unwrap(), "4.7.3");
-    assert!(hm.get(http::header::USER_AGENT).unwrap().to_str().unwrap().contains("Antigravity/4.7.3"));
+    assert!(
+        hm.get(http::header::USER_AGENT)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Antigravity/4.7.3")
+    );
 
     // Reset back to previous
     set_dynamic_version(old_ver);

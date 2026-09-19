@@ -1,5 +1,5 @@
-use super::*;
 use super::super::target_headers::*;
+use super::*;
 use crate::error_classification::{UpstreamErrorClass, is_hard_skip_error};
 use openproxy_db::DbPool;
 use openproxy_types::CoreError;

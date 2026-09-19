@@ -13,8 +13,6 @@ pub use spoofer::{
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use adapters::MockAdapter;
-#[cfg(any(test, feature = "test-utils"))]
-pub use upstream::load_upstream_source;
 pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,
@@ -27,6 +25,8 @@ pub use adapters::{
     ollama_cloud::OllamaCloudAdapter, opencode_common::OpenCodeGoAdapter,
     opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use upstream::load_upstream_source;
 
 pub use upstream::{
     CancellationToken, HostKey, NON_STREAMING_BODY_LIMIT_BYTES, PhasedConnector,

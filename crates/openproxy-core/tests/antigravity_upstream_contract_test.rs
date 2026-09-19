@@ -32,7 +32,10 @@ fn test_antigravity_golden_contract_spec_parity() {
     // 2. OAuth client credentials and endpoints parity
     assert_eq!(
         CLIENT_ID.as_str(),
-        format!("{}.{}", "1071006060591-tmhssin2h21lcre235vtolojh4g403ep", "apps.googleusercontent.com")
+        format!(
+            "{}.{}",
+            "1071006060591-tmhssin2h21lcre235vtolojh4g403ep", "apps.googleusercontent.com"
+        )
     );
     assert_eq!(
         DEFAULT_CLIENT_SECRET.as_str(),
@@ -174,18 +177,23 @@ fn test_antigravity_golden_contract_spec_parity() {
 
     let val: serde_json::Value = serde_json::from_slice(&wrapped).expect("valid json");
     assert_eq!(val["project"], "p-proj-123");
-    assert_eq!(val["model"], "gemini-pro-agent", "must map gemini-3.1-pro to physical gemini-pro-agent");
+    assert_eq!(
+        val["model"], "gemini-pro-agent",
+        "must map gemini-3.1-pro to physical gemini-pro-agent"
+    );
     assert_eq!(val["requestType"], "agent");
     assert_eq!(val["userAgent"], "antigravity");
-    assert_eq!(val["enabledCreditTypes"], serde_json::json!(["GOOGLE_ONE_AI"]));
+    assert_eq!(
+        val["enabledCreditTypes"],
+        serde_json::json!(["GOOGLE_ONE_AI"])
+    );
     assert!(val.get("requestId").is_some());
 
     // Verify thought signature normalization, purging of snake_case, and sentinel injection
     let req_contents = &val["request"]["contents"];
     let turn1_parts = &req_contents[1]["parts"];
     assert_eq!(
-        turn1_parts[0]["thoughtSignature"],
-        "existing_snake_sig",
+        turn1_parts[0]["thoughtSignature"], "existing_snake_sig",
         "thought part must normalize snake_case thought_signature to camelCase"
     );
     assert!(
@@ -193,18 +201,27 @@ fn test_antigravity_golden_contract_spec_parity() {
         "Google API rejects snake_case thought_signature, must be removed"
     );
     assert_eq!(
-        turn1_parts[1]["thoughtSignature"],
-        "skip_thought_signature_validator",
+        turn1_parts[1]["thoughtSignature"], "skip_thought_signature_validator",
         "functionCall part must have sentinel signature"
     );
 
     // Verify turn 3: functionCall with NO preceding thought part must have placeholder thought injected
     let turn3_parts = &req_contents[3]["parts"];
-    assert_eq!(turn3_parts.as_array().unwrap().len(), 2, "must prepend placeholder thought block");
+    assert_eq!(
+        turn3_parts.as_array().unwrap().len(),
+        2,
+        "must prepend placeholder thought block"
+    );
     assert_eq!(turn3_parts[0]["thought"], true);
     assert_eq!(turn3_parts[0]["text"], "...");
-    assert_eq!(turn3_parts[0]["thoughtSignature"], "skip_thought_signature_validator");
-    assert_eq!(turn3_parts[1]["thoughtSignature"], "skip_thought_signature_validator");
+    assert_eq!(
+        turn3_parts[0]["thoughtSignature"],
+        "skip_thought_signature_validator"
+    );
+    assert_eq!(
+        turn3_parts[1]["thoughtSignature"],
+        "skip_thought_signature_validator"
+    );
 
     // Verify Gemini 3.8 Flash (from agy CLI) mapping to physical agent
     let flash_wrapped = adapter
@@ -217,8 +234,7 @@ fn test_antigravity_golden_contract_spec_parity() {
         .expect("wrap antigravity request for flash");
     let flash_val: serde_json::Value = serde_json::from_slice(&flash_wrapped).expect("valid json");
     assert_eq!(
-        flash_val["model"],
-        "gemini-3-flash-agent",
+        flash_val["model"], "gemini-3-flash-agent",
         "must map gemini-3.8-flash to physical gemini-3-flash-agent"
     );
 }
@@ -233,10 +249,16 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
     let constants_url = format!("{raw_base}/src-tauri/src/constants.rs");
     let req = UpstreamRequest::get(&constants_url);
 
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel.clone()).await {
+    let resp = match client
+        .call(req, TimeoutProfile::OAuth, cancel.clone())
+        .await
+    {
         Ok(r) if r.status.is_success() => r,
         Ok(r) => {
-            eprintln!("[AntigravityContractTest] Upstream probe HTTP {}, skipping live check", r.status);
+            eprintln!(
+                "[AntigravityContractTest] Upstream probe HTTP {}, skipping live check",
+                r.status
+            );
             return;
         }
         Err(e) => {
@@ -269,7 +291,11 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
     // 2. Probe upstream client.rs for egress header injection
     let client_url = format!("{raw_base}/src-tauri/src/proxy/upstream/client.rs");
     let resp = client
-        .call(UpstreamRequest::get(&client_url), TimeoutProfile::OAuth, cancel.clone())
+        .call(
+            UpstreamRequest::get(&client_url),
+            TimeoutProfile::OAuth,
+            cancel.clone(),
+        )
         .await
         .expect("fetch client.rs");
     let client_bytes = resp.collect().await.expect("read client body");
@@ -299,7 +325,11 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
     // 3. Probe upstream oauth.rs for Google OAuth credentials parity
     let oauth_url = format!("{raw_base}/src-tauri/src/modules/oauth.rs");
     let resp = client
-        .call(UpstreamRequest::get(&oauth_url), TimeoutProfile::OAuth, cancel.clone())
+        .call(
+            UpstreamRequest::get(&oauth_url),
+            TimeoutProfile::OAuth,
+            cancel.clone(),
+        )
         .await
         .expect("fetch oauth.rs");
     let oauth_bytes = resp.collect().await.expect("read oauth body");
@@ -317,7 +347,11 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
     // 4. Probe upstream thinking_store.rs for chat request thought signature contracts
     let thinking_url = format!("{raw_base}/src-tauri/src/proxy/thinking_store.rs");
     let resp = client
-        .call(UpstreamRequest::get(&thinking_url), TimeoutProfile::OAuth, cancel)
+        .call(
+            UpstreamRequest::get(&thinking_url),
+            TimeoutProfile::OAuth,
+            cancel,
+        )
         .await
         .expect("fetch thinking_store.rs");
     let thinking_bytes = resp.collect().await.expect("read thinking_store body");
@@ -336,8 +370,14 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
 #[tokio::test]
 async fn test_antigravity_auto_updater_feed_parity() {
     let feeds = [
-        ("gui", "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases"),
-        ("cli", "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/releases"),
+        (
+            "gui",
+            "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases",
+        ),
+        (
+            "cli",
+            "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/releases",
+        ),
     ];
     let client = UpstreamClient::new();
 
@@ -347,21 +387,32 @@ async fn test_antigravity_auto_updater_feed_parity() {
         let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
             Ok(r) if r.status.is_success() => r,
             Ok(r) => {
-                eprintln!("[AntigravityContractTest] Auto-updater ({flavor}) HTTP {}, skipping feed check", r.status);
+                eprintln!(
+                    "[AntigravityContractTest] Auto-updater ({flavor}) HTTP {}, skipping feed check",
+                    r.status
+                );
                 continue;
             }
             Err(e) => {
-                eprintln!("[AntigravityContractTest] Auto-updater ({flavor}) unreachable ({e}), skipping feed check");
+                eprintln!(
+                    "[AntigravityContractTest] Auto-updater ({flavor}) unreachable ({e}), skipping feed check"
+                );
                 continue;
             }
         };
 
         let body_bytes = resp.collect().await.expect("read releases feed");
-        let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse releases json");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body_bytes).expect("parse releases json");
         let releases = json.as_array().expect("releases must be an array");
 
-        assert!(!releases.is_empty(), "Google Auto-Updater ({flavor}) feed returned empty list");
-        let first_version = releases[0]["version"].as_str().expect("release has version string");
+        assert!(
+            !releases.is_empty(),
+            "Google Auto-Updater ({flavor}) feed returned empty list"
+        );
+        let first_version = releases[0]["version"]
+            .as_str()
+            .expect("release has version string");
         assert!(
             first_version.split('.').count() >= 3,
             "Google Auto-Updater ({flavor}) version must follow semver X.Y.Z: {first_version}"

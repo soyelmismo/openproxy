@@ -64,12 +64,16 @@ fn partition_messages_for_gemini(
     let mut contents: Vec<GeminiContent> = Vec::with_capacity(messages.len());
 
     // Deterministic O(N) map of tool_call_id -> function_name without external state or cache
-    let mut tool_id_to_name: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut tool_id_to_name: std::collections::HashMap<&str, &str> =
+        std::collections::HashMap::new();
     for m in messages {
         if let Some(tool_calls) = &m.tool_calls {
             for tc in tool_calls {
                 if let Some(id) = tc.get("id").and_then(|v| v.as_str())
-                    && let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str())
+                    && let Some(name) = tc
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
                 {
                     tool_id_to_name.insert(id, name);
                 }
@@ -124,16 +128,21 @@ fn partition_messages_for_gemini(
 
                 // Check extra for reasoning_content / thinking if not already present
                 if !parts.iter().any(|p| p.thought.unwrap_or(false))
-                    && let Some(reasoning) = m.extra.get("reasoning_content")
+                    && let Some(reasoning) = m
+                        .extra
+                        .get("reasoning_content")
                         .or_else(|| m.extra.get("thinking"))
                         .and_then(|v| v.as_str())
                     && !reasoning.trim().is_empty()
                 {
-                    parts.insert(0, GeminiPart {
-                        text: Some(reasoning.trim().to_string()),
-                        thought: Some(true),
-                        ..Default::default()
-                    });
+                    parts.insert(
+                        0,
+                        GeminiPart {
+                            text: Some(reasoning.trim().to_string()),
+                            thought: Some(true),
+                            ..Default::default()
+                        },
+                    );
                 }
 
                 if let Some(tool_calls) = &m.tool_calls {
@@ -174,9 +183,13 @@ fn partition_messages_for_gemini(
                 });
             }
             "tool" => {
-                let name = m.name.clone()
+                let name = m
+                    .name
+                    .clone()
                     .or_else(|| {
-                        m.tool_call_id.as_deref().and_then(|id| tool_id_to_name.get(id).map(|s| (*s).to_string()))
+                        m.tool_call_id
+                            .as_deref()
+                            .and_then(|id| tool_id_to_name.get(id).map(|s| (*s).to_string()))
                     })
                     .unwrap_or_else(|| {
                         m.tool_call_id

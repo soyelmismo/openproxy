@@ -12,7 +12,7 @@ use openproxy_adapters::spoofer::{
     ClientSpoofer, KIRO_SPOOFING_HEADERS, KIRO_TEST_LOCK, KiroSpoofer, current_kiro_ua,
     reset_dynamic_kiro_overrides, set_dynamic_kiro_extra_header, set_dynamic_kiro_ua,
 };
-use openproxy_adapters::{load_upstream_source, KiroAdapter, ProviderAdapter};
+use openproxy_adapters::{KiroAdapter, ProviderAdapter, load_upstream_source};
 use openproxy_core::oauth::kiro::{
     DEFAULT_REGION, DEVICE_AUTH_URL, REGISTER_URL, SCOPES, TOKEN_URL, kiro_codewhisperer_host,
     kiro_device_auth_url, kiro_oidc_base_url, kiro_register_url, kiro_social_token_url,
@@ -58,10 +58,16 @@ fn test_kiro_golden_contract_spec_parity() {
     };
 
     assert_eq!(find_hdr("Content-Type"), Some("application/json"));
-    assert_eq!(find_hdr("x-amz-user-agent"), Some("aws-sdk-js/3.0.0 kiro/0.1"));
+    assert_eq!(
+        find_hdr("x-amz-user-agent"),
+        Some("aws-sdk-js/3.0.0 kiro/0.1")
+    );
     assert_eq!(find_hdr("Amz-Sdk-Request"), Some("attempt=1; max=3"));
     assert_eq!(find_hdr("x-amzn-bedrock-cache-control"), Some("enable"));
-    assert_eq!(find_hdr("anthropic-beta"), Some("prompt-caching-2024-07-31"));
+    assert_eq!(
+        find_hdr("anthropic-beta"),
+        Some("prompt-caching-2024-07-31")
+    );
 
     let inv_id = find_hdr("Amz-Sdk-Invocation-Id").expect("must have Amz-Sdk-Invocation-Id");
     assert!(
@@ -80,7 +86,10 @@ fn test_kiro_golden_contract_spec_parity() {
             .map(|(_, v)| v.as_str())
     };
 
-    assert_eq!(find_adp("x-amz-user-agent"), Some("aws-sdk-js/3.0.0 kiro/0.1"));
+    assert_eq!(
+        find_adp("x-amz-user-agent"),
+        Some("aws-sdk-js/3.0.0 kiro/0.1")
+    );
     assert_eq!(find_adp("Amz-Sdk-Request"), Some("attempt=1; max=3"));
     assert_eq!(find_adp("Authorization"), Some("Bearer test-token-xyz"));
 
@@ -172,7 +181,10 @@ fn test_kiro_dynamic_overrides_and_pipeline_propagation() {
             .map(|(_, v)| v.as_str())
     };
 
-    assert_eq!(find("x-amz-user-agent"), Some("aws-sdk-js/3.20.0 kiro/0.2.0"));
+    assert_eq!(
+        find("x-amz-user-agent"),
+        Some("aws-sdk-js/3.20.0 kiro/0.2.0")
+    );
     assert_eq!(find("x-amzn-codewhisperer-optout"), Some("true"));
 
     reset_dynamic_kiro_overrides();
@@ -183,14 +195,17 @@ fn test_kiro_dynamic_overrides_and_pipeline_propagation() {
     unsafe {
         std::env::set_var("OPENPROXY_KIRO_OIDC_BASE_URL", "https://mock-oidc.internal");
         std::env::set_var("OPENPROXY_KIRO_HOST", "https://mock-host.internal");
-        std::env::set_var("OPENPROXY_KIRO_RUNTIME_URL", "https://mock-runtime.internal/gen");
-        std::env::set_var("OPENPROXY_KIRO_SOCIAL_TOKEN_URL", "https://mock-auth.internal/refresh");
+        std::env::set_var(
+            "OPENPROXY_KIRO_RUNTIME_URL",
+            "https://mock-runtime.internal/gen",
+        );
+        std::env::set_var(
+            "OPENPROXY_KIRO_SOCIAL_TOKEN_URL",
+            "https://mock-auth.internal/refresh",
+        );
     }
 
-    assert_eq!(
-        kiro_oidc_base_url(None),
-        "https://mock-oidc.internal"
-    );
+    assert_eq!(kiro_oidc_base_url(None), "https://mock-oidc.internal");
     assert_eq!(
         kiro_register_url(None),
         "https://mock-oidc.internal/client/register"
@@ -199,10 +214,7 @@ fn test_kiro_dynamic_overrides_and_pipeline_propagation() {
         kiro_device_auth_url(None),
         "https://mock-oidc.internal/device_authorization"
     );
-    assert_eq!(
-        kiro_token_url(None),
-        "https://mock-oidc.internal/token"
-    );
+    assert_eq!(kiro_token_url(None), "https://mock-oidc.internal/token");
     assert_eq!(
         kiro_social_token_url(),
         "https://mock-auth.internal/refresh"
@@ -235,7 +247,10 @@ fn test_kiro_dynamic_overrides_and_pipeline_propagation() {
     // 3. Pipeline header propagation
     let mut pipe_headers = vec![
         ("Content-Type".into(), "application/json".into()),
-        ("x-amz-user-agent".into(), "aws-sdk-js/3.0.0 kiro/0.1".into()),
+        (
+            "x-amz-user-agent".into(),
+            "aws-sdk-js/3.0.0 kiro/0.1".into(),
+        ),
         ("Authorization".into(), "Bearer mock-tok".into()),
     ];
     let mut req_headers = std::collections::BTreeMap::new();

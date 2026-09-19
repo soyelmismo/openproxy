@@ -159,8 +159,7 @@ pub fn apply_matrix_headers(
             .insert(http::HeaderName::from_static("x-signature"), val);
     }
     if let Ok(val) = http::HeaderValue::from_str(&yy) {
-        req.headers
-            .insert(http::HeaderName::from_static("yy"), val);
+        req.headers.insert(http::HeaderName::from_static("yy"), val);
     }
 }
 
@@ -199,20 +198,32 @@ mod tests {
 
     #[test]
     fn test_matrix_signing_format() {
-        let (full_url, path_with_query) =
-            build_gateway_url(MiniMaxRegion::Global, "/api/v1/test", "12345", 1700000000000);
+        let (full_url, path_with_query) = build_gateway_url(
+            MiniMaxRegion::Global,
+            "/api/v1/test",
+            "12345",
+            1700000000000,
+        );
         assert!(full_url.starts_with("https://agent.minimax.io/api/v1/test?"));
         assert!(full_url.contains("user_id=12345"));
         assert!(full_url.contains("client=mcode"));
 
         let mut req = UpstreamRequest::get(&full_url);
-        apply_matrix_headers(&mut req, &path_with_query, None, "test-token", 1700000000000);
+        apply_matrix_headers(
+            &mut req,
+            &path_with_query,
+            None,
+            "test-token",
+            1700000000000,
+        );
 
         assert!(req.headers.contains_key("x-timestamp"));
         assert!(req.headers.contains_key("x-signature"));
         assert!(req.headers.contains_key("yy"));
         assert_eq!(
-            req.headers.get("authorization").and_then(|v| v.to_str().ok()),
+            req.headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok()),
             Some("Bearer test-token")
         );
     }

@@ -99,7 +99,8 @@ static EXTRA_HEADERS: LazyLock<Vec<(HeaderName, HeaderValue)>> = LazyLock::new(|
     let Ok(env_str) = std::env::var("OPENPROXY_ANTIGRAVITY_EXTRA_HEADERS") else {
         return Vec::new();
     };
-    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str)
+    else {
         return Vec::new();
     };
     map.into_iter()
@@ -110,7 +111,6 @@ static EXTRA_HEADERS: LazyLock<Vec<(HeaderName, HeaderValue)>> = LazyLock::new(|
         })
         .collect()
 });
-
 
 /// Persistent machine ID. Generated once per process lifetime from
 /// the hostname + OS. This mimics the `machine_uid` crate used by the

@@ -9,20 +9,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openproxy_adapters::adapters::commandcode::{
-    commandcode_base_url, transform_openai_to_commandcode, CommandCodeGoAdapter,
+    CommandCodeGoAdapter, commandcode_base_url, transform_openai_to_commandcode,
 };
 use openproxy_adapters::spoofer::{
+    COMMANDCODE_SPOOFING_HEADERS, COMMANDCODE_TEST_LOCK, ClientSpoofer, CommandCodeSpoofer,
+    DEFAULT_COMMANDCODE_CLI_ENVIRONMENT, DEFAULT_COMMANDCODE_CLI_VERSION,
+    DEFAULT_COMMANDCODE_PROJECT_SLUG, DEFAULT_COMMANDCODE_TASTE_LEARNING, DEFAULT_COMMANDCODE_UA,
     current_commandcode_ua, current_commandcode_version, reset_dynamic_commandcode_overrides,
     set_dynamic_commandcode_extra_header, set_dynamic_commandcode_ua,
-    set_dynamic_commandcode_version, ClientSpoofer, CommandCodeSpoofer,
-    COMMANDCODE_SPOOFING_HEADERS, COMMANDCODE_TEST_LOCK, DEFAULT_COMMANDCODE_CLI_ENVIRONMENT,
-    DEFAULT_COMMANDCODE_CLI_VERSION, DEFAULT_COMMANDCODE_PROJECT_SLUG,
-    DEFAULT_COMMANDCODE_TASTE_LEARNING, DEFAULT_COMMANDCODE_UA,
+    set_dynamic_commandcode_version,
 };
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
-use openproxy_adapters::{load_upstream_source, ProviderAdapter};
+use openproxy_adapters::{ProviderAdapter, load_upstream_source};
 use openproxy_pipeline::stages::target_headers::propagate_commandcode_headers;
 use openproxy_types::{ModelId, TargetFormat};
 
@@ -32,7 +32,9 @@ use openproxy_types::{ModelId, TargetFormat};
 
 #[test]
 fn test_commandcode_golden_contract_spec_parity() {
-    let _guard = COMMANDCODE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = COMMANDCODE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     reset_dynamic_commandcode_overrides();
 
     // 1. Default CLI contract constants
@@ -128,15 +130,12 @@ fn test_commandcode_golden_contract_spec_parity() {
 
 #[tokio::test]
 async fn test_commandcode_remote_or_local_upstream_code_parity() {
-    let raw_executor_url =
-        "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/executors/commandCode.ts";
+    let raw_executor_url = "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/executors/commandCode.ts";
     let local_executor_path =
         "../../other_projects_examples/OmniRoute/open-sse/executors/commandCode.ts";
 
-    let raw_registry_url =
-        "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/config/providers/registry/command-code/index.ts";
-    let local_registry_path =
-        "../../other_projects_examples/OmniRoute/open-sse/config/providers/registry/command-code/index.ts";
+    let raw_registry_url = "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/open-sse/config/providers/registry/command-code/index.ts";
+    let local_registry_path = "../../other_projects_examples/OmniRoute/open-sse/config/providers/registry/command-code/index.ts";
 
     let Some(executor_src) = load_upstream_source(raw_executor_url, local_executor_path).await
     else {
@@ -213,7 +212,9 @@ async fn test_commandcode_remote_or_local_upstream_code_parity() {
 
 #[test]
 fn test_commandcode_dynamic_overrides_and_pipeline_propagation() {
-    let _guard = COMMANDCODE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = COMMANDCODE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     reset_dynamic_commandcode_overrides();
 
     // 1. In-memory spoofer dynamic overrides
@@ -392,11 +393,13 @@ async fn test_commandcode_remote_upstream_live_contract_parity() {
     let models_url = "https://api.commandcode.ai/provider/v1/models";
     let cancel2 = CancellationToken::new();
     let req2 = UpstreamRequest::get(models_url);
-    match client.call(req2, TimeoutProfile::ModelDiscovery, cancel2).await {
+    match client
+        .call(req2, TimeoutProfile::ModelDiscovery, cancel2)
+        .await
+    {
         Ok(resp) if resp.status.is_success() => {
             let body = resp.collect().await.expect("read models body");
-            let json: serde_json::Value =
-                serde_json::from_slice(&body).expect("parse models json");
+            let json: serde_json::Value = serde_json::from_slice(&body).expect("parse models json");
             let data = json
                 .get("data")
                 .and_then(|d| d.as_array())
@@ -428,4 +431,3 @@ async fn test_commandcode_remote_upstream_live_contract_parity() {
         }
     }
 }
-
