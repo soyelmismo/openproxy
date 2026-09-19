@@ -403,6 +403,7 @@ impl PipelineStage for DispatchStage {
 
         update_circuit_breaker_on_result(&ctx.pipeline, target, model, &result);
         update_predictive_limiter_on_result(&ctx.pipeline, target, &result);
+        update_account_rate_limited_until_on_result(&ctx.pipeline, target, &result);
 
         // Do not call next.execute here. We are the final stage of target execution.
         Ok(result)
@@ -602,6 +603,41 @@ fn update_predictive_limiter_on_result(
         Some(_) => {
             record_predictive_limiter_upstream_error(&pipeline.predictive_limiter, key, result, now)
         }
+    }
+}
+
+fn update_account_rate_limited_until_on_result(
+    pipeline: &crate::Pipeline,
+    target: &openproxy_types::ComboTarget,
+    result: &PipelineResult,
+) {
+    let Some(aid) = target.account_id else {
+        return;
+    };
+    if let Some(err) = &result.error {
+        let retry_secs = match err {
+            CoreError::RateLimited { retry_after_ms, .. } => Some((*retry_after_ms / 1000).max(5)),
+            _ if result.status_code == 429 => Some(60),
+            _ => None,
+        };
+        if let Some(secs) = retry_secs {
+            let until = (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339();
+            let conn_clone = Arc::clone(&pipeline.conn);
+            let handle = tokio::task::spawn_blocking(move || {
+                let conn = conn_clone.lock();
+                if let Err(e) = openproxy_db::accounts::set_rate_limited_until(&conn, aid, Some(&until)) {
+                    tracing::warn!(account_id = aid.0, error = %e, "failed to update rate_limited_until");
+                }
+            });
+            std::mem::drop(handle);
+        }
+    } else {
+        let conn_clone = Arc::clone(&pipeline.conn);
+        let handle = tokio::task::spawn_blocking(move || {
+            let conn = conn_clone.lock();
+            let _ = openproxy_db::accounts::set_rate_limited_until(&conn, aid, None);
+        });
+        std::mem::drop(handle);
     }
 }
 

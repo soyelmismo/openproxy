@@ -161,7 +161,7 @@ fn fetch_healthy_accounts(
 ) -> Result<Vec<AccountId>> {
     let mut stmt = conn
         .prepare(account_healthy_ids_select!(
-            "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
+            "WHERE provider_id = ?1 AND health_status = 'healthy' AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
         ))
         .map_err(crate::error::map_db_error)?;
     let rows = stmt
@@ -170,6 +170,19 @@ fn fetch_healthy_accounts(
     let mut accounts = Vec::new();
     for r in rows.flatten() {
         accounts.push(AccountId(r));
+    }
+    if accounts.is_empty() {
+        let mut fb_stmt = conn
+            .prepare(account_healthy_ids_select!(
+                "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
+            ))
+            .map_err(crate::error::map_db_error)?;
+        let fb_rows = fb_stmt
+            .query_map(params![provider_id.as_str()], |r| r.get::<_, i64>(0))
+            .map_err(crate::error::map_db_error)?;
+        for r in fb_rows.flatten() {
+            accounts.push(AccountId(r));
+        }
     }
     Ok(accounts)
 }
