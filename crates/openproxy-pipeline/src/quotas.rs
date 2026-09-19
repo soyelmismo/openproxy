@@ -43,6 +43,36 @@ fn is_monthly_window_exhausted(account: &openproxy_types::accounts::Account) -> 
     })
 }
 
+fn parse_credits_from_json(raw: &str) -> Option<f64> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let val = v
+        .get("credit_balance")
+        .or_else(|| v.get("credits"))
+        .or_else(|| v.get("op_credit_balance"))
+        .or_else(|| v.get("remains"))?;
+    if let Some(n) = val.as_f64() {
+        Some(n)
+    } else if let Some(s) = val.as_str() {
+        s.trim().replace(',', "").parse::<f64>().ok()
+    } else {
+        None
+    }
+}
+
+fn is_credit_balance_exhausted(account: &openproxy_types::accounts::Account) -> bool {
+    let credits = account
+        .oauth_provider_specific
+        .as_deref()
+        .and_then(parse_credits_from_json)
+        .or_else(|| {
+            account
+                .extra_config_json
+                .as_deref()
+                .and_then(parse_credits_from_json)
+        });
+    credits.is_some_and(|c| c <= 0.0)
+}
+
 fn check_quota_windows_exhausted(account: &openproxy_types::accounts::Account) -> bool {
     let session_exhausted = matches!(
         (account.quota_session_used, account.quota_session_limit),
@@ -52,7 +82,10 @@ fn check_quota_windows_exhausted(account: &openproxy_types::accounts::Account) -
         (account.quota_weekly_used, account.quota_weekly_limit),
         (Some(used), Some(limit)) if used >= limit
     );
-    session_exhausted || weekly_exhausted || is_monthly_window_exhausted(account)
+    session_exhausted
+        || weekly_exhausted
+        || is_monthly_window_exhausted(account)
+        || is_credit_balance_exhausted(account)
 }
 
 pub(crate) fn evaluate_account_quota(
@@ -89,6 +122,10 @@ pub(crate) fn get_account_remaining_fraction(
     account: &openproxy_types::accounts::Account,
     requested_model: &str,
 ) -> f64 {
+    if is_credit_balance_exhausted(account) {
+        return 0.0;
+    }
+
     if let Some(detail) = find_model_quota_detail(account, requested_model) {
         return detail.remaining_fraction;
     }
@@ -229,4 +266,83 @@ pub(crate) fn apply_quota_routing(
         .into_iter()
         .map(|t| t.resolved_target)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_types::accounts::{Account, HealthStatus};
+    use openproxy_types::ids::{AccountId, ProviderId};
+
+    fn make_test_account(provider_specific: Option<&str>) -> Account {
+        Account {
+            id: AccountId(1),
+            provider_id: ProviderId("minimax".into()),
+            label: Some("Test Account".into()),
+            priority: 10,
+            health_status: HealthStatus::Healthy,
+            extra_config_json: None,
+            rate_limited_until: None,
+            quota_session_used: None,
+            quota_session_limit: None,
+            quota_session_reset_at: None,
+            quota_weekly_used: None,
+            quota_weekly_limit: None,
+            quota_weekly_reset_at: None,
+            quota_plan_name: Some("Free".into()),
+            quota_last_fetched_at: None,
+            quota_fetch_error: None,
+            quota_model_details: None,
+            auth_type: "oauth".into(),
+            email: None,
+            oauth_scope: None,
+            oauth_provider_specific: provider_specific.map(|s| s.to_string().into_boxed_str()),
+            expires_at: None,
+            created_at: "2026-09-19".into(),
+            current_proxy_id: None,
+        }
+    }
+
+    #[test]
+    fn test_credit_balance_exhaustion() {
+        let acc_positive = make_test_account(Some(r#"{"credit_balance":"773467"}"#));
+        assert!(!is_credit_balance_exhausted(&acc_positive));
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_positive, "MiniMax-M3"),
+            QuotaStatus::Available
+        );
+
+        let acc_zero = make_test_account(Some(r#"{"credit_balance":"0"}"#));
+        assert!(is_credit_balance_exhausted(&acc_zero));
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_zero, "MiniMax-M3"),
+            QuotaStatus::Exhausted
+        );
+        assert_eq!(get_account_remaining_fraction(&acc_zero, "MiniMax-M3"), 0.0);
+
+        let acc_zero_float = make_test_account(Some(r#"{"credit_balance":0.0}"#));
+        assert!(is_credit_balance_exhausted(&acc_zero_float));
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_zero_float, "MiniMax-M3"),
+            QuotaStatus::Exhausted
+        );
+
+        let acc_comma = make_test_account(Some(r#"{"credit_balance":"773,467"}"#));
+        assert!(!is_credit_balance_exhausted(&acc_comma));
+
+        let mut acc_extra_config = make_test_account(None);
+        acc_extra_config.extra_config_json = Some(r#"{"credits":"0"}"#.into());
+        assert!(is_credit_balance_exhausted(&acc_extra_config));
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_extra_config, "MiniMax-M3"),
+            QuotaStatus::Exhausted
+        );
+
+        let acc_no_specific = make_test_account(None);
+        assert!(!is_credit_balance_exhausted(&acc_no_specific));
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_no_specific, "MiniMax-M3"),
+            QuotaStatus::Available
+        );
+    }
 }
