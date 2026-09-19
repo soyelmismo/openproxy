@@ -305,6 +305,49 @@ mod tests {
     }
 
     #[test]
+    fn test_make_cline_model_id() {
+        assert_eq!(make_cline_model_id("gpt-4o".to_string(), false), "gpt-4o");
+        assert_eq!(
+            make_cline_model_id("gpt-4o".to_string(), true),
+            "gpt-4o:free"
+        );
+        assert_eq!(
+            make_cline_model_id("gpt-4o:free".to_string(), true),
+            "gpt-4o:free"
+        );
+        assert_eq!(
+            make_cline_model_id("gpt-4o-free".to_string(), true),
+            "gpt-4o-free"
+        );
+    }
+
+    #[test]
+    fn test_build_auth_header() {
+        let adapter = ClineAdapter::new();
+        let header1 = adapter
+            .build_auth_header("token123")
+            .expect("header missing");
+        assert_eq!(
+            header1,
+            (
+                "Authorization".to_string(),
+                "Bearer workos:token123".to_string()
+            )
+        );
+
+        let header2 = adapter
+            .build_auth_header("workos:token123")
+            .expect("header missing");
+        assert_eq!(
+            header2,
+            (
+                "Authorization".to_string(),
+                "Bearer workos:token123".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn test_cline_build_headers_with_extra_and_dynamic_overrides() {
         use crate::spoofer::{
             reset_dynamic_cline_overrides, set_dynamic_cline_extra_header,
