@@ -43,13 +43,7 @@ fn is_monthly_window_exhausted(account: &openproxy_types::accounts::Account) -> 
     })
 }
 
-fn parse_credits_from_json(raw: &str) -> Option<f64> {
-    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let val = v
-        .get("credit_balance")
-        .or_else(|| v.get("credits"))
-        .or_else(|| v.get("op_credit_balance"))
-        .or_else(|| v.get("remains"))?;
+fn parse_number_value(val: &serde_json::Value) -> Option<f64> {
     if let Some(n) = val.as_f64() {
         Some(n)
     } else if let Some(s) = val.as_str() {
@@ -59,18 +53,74 @@ fn parse_credits_from_json(raw: &str) -> Option<f64> {
     }
 }
 
-fn is_credit_balance_exhausted(account: &openproxy_types::accounts::Account) -> bool {
-    let credits = account
+fn parse_credits_and_total_from_json(raw: &str) -> Option<(f64, Option<f64>)> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let rem_val = v
+        .get("credit_balance")
+        .or_else(|| v.get("credits"))
+        .or_else(|| v.get("op_credit_balance"))
+        .or_else(|| v.get("remains"))
+        .or_else(|| v.get("remaining_amount"))
+        .or_else(|| v.get("total_remaining_amount"))?;
+
+    let rem = parse_number_value(rem_val)?;
+
+    let total_val = v
+        .get("total_amount")
+        .or_else(|| v.get("total_credits"))
+        .or_else(|| v.get("initial_credits"))
+        .or_else(|| v.get("credit_limit"))
+        .or_else(|| v.get("total_limit"))
+        .or_else(|| v.get("total"));
+
+    let total = total_val.and_then(parse_number_value);
+
+    Some((rem, total))
+}
+
+fn get_credit_balance_info(
+    account: &openproxy_types::accounts::Account,
+) -> Option<(f64, Option<f64>)> {
+    account
         .oauth_provider_specific
         .as_deref()
-        .and_then(parse_credits_from_json)
+        .and_then(parse_credits_and_total_from_json)
         .or_else(|| {
             account
                 .extra_config_json
                 .as_deref()
-                .and_then(parse_credits_from_json)
-        });
-    credits.is_some_and(|c| c <= 0.0)
+                .and_then(parse_credits_and_total_from_json)
+        })
+}
+
+const MINIMAX_DEFAULT_CREDIT_BASELINE: f64 = 1_000_000.0;
+
+fn get_credit_balance_fraction(account: &openproxy_types::accounts::Account) -> Option<f64> {
+    let (rem, total_opt) = get_credit_balance_info(account)?;
+    if rem <= 0.0 {
+        return Some(0.0);
+    }
+    if let Some(total) = total_opt
+        && total > 0.0
+    {
+        return Some((rem / total).clamp(0.0, 1.0));
+    }
+    if account.provider_id.0.eq_ignore_ascii_case("minimax") {
+        return Some((rem / MINIMAX_DEFAULT_CREDIT_BASELINE).clamp(0.0, 1.0));
+    }
+    if let Some(limit) = account.quota_session_limit
+        && limit > 0
+    {
+        return Some((rem / limit as f64).clamp(0.0, 1.0));
+    }
+    if rem <= 1.0 {
+        return Some(rem.clamp(0.0, 1.0));
+    }
+    None
+}
+
+fn is_credit_balance_exhausted(account: &openproxy_types::accounts::Account) -> bool {
+    get_credit_balance_info(account).is_some_and(|(rem, _)| rem <= 0.0)
 }
 
 fn check_quota_windows_exhausted(account: &openproxy_types::accounts::Account) -> bool {
@@ -98,15 +148,15 @@ pub(crate) fn evaluate_account_quota(
         return QuotaStatus::Exhausted;
     }
 
-    if let Some(detail) = find_model_quota_detail(account, requested_model) {
-        if detail.remaining_fraction <= 0.0 {
-            return QuotaStatus::Exhausted;
-        }
-        if quota_protection_enabled {
-            let threshold_fraction = f64::from(threshold_percentage) / 100.0;
-            if detail.remaining_fraction <= threshold_fraction {
-                return QuotaStatus::Protected;
-            }
+    let remaining = get_account_remaining_fraction(account, requested_model);
+    if remaining <= 0.0 {
+        return QuotaStatus::Exhausted;
+    }
+
+    if quota_protection_enabled {
+        let threshold_fraction = f64::from(threshold_percentage) / 100.0;
+        if remaining <= threshold_fraction {
+            return QuotaStatus::Protected;
         }
     }
 
@@ -126,8 +176,17 @@ pub(crate) fn get_account_remaining_fraction(
         return 0.0;
     }
 
+    let mut min_fraction: Option<f64> = None;
+
     if let Some(detail) = find_model_quota_detail(account, requested_model) {
-        return detail.remaining_fraction;
+        min_fraction = Some(detail.remaining_fraction);
+    }
+
+    if let Some(credits) = get_credit_balance_fraction(account) {
+        min_fraction = Some(match min_fraction {
+            Some(cur) => cur.min(credits),
+            None => credits,
+        });
     }
 
     let session_or_weekly =
@@ -136,6 +195,13 @@ pub(crate) fn get_account_remaining_fraction(
                 calculate_remaining_fraction(account.quota_weekly_used, account.quota_weekly_limit)
             });
 
+    if let Some(frac) = session_or_weekly {
+        min_fraction = Some(match min_fraction {
+            Some(cur) => cur.min(frac),
+            None => frac,
+        });
+    }
+
     let monthly = account.quota_model_details.as_deref().and_then(|details| {
         details
             .iter()
@@ -143,12 +209,14 @@ pub(crate) fn get_account_remaining_fraction(
             .map(|d| d.remaining_fraction)
     });
 
-    match (session_or_weekly, monthly) {
-        (Some(a), Some(b)) => a.min(b),
-        (Some(a), None) => a,
-        (None, Some(b)) => b,
-        (None, None) => 1.0,
+    if let Some(frac) = monthly {
+        min_fraction = Some(match min_fraction {
+            Some(cur) => cur.min(frac),
+            None => frac,
+        });
     }
+
+    min_fraction.unwrap_or(1.0)
 }
 
 struct TargetWithQuota {
@@ -343,6 +411,128 @@ mod tests {
         assert_eq!(
             evaluate_account_quota(true, 10, &acc_no_specific, "MiniMax-M3"),
             QuotaStatus::Available
+        );
+    }
+
+    #[test]
+    fn test_credit_balance_quota_protection() {
+        // MiniMax default baseline is 1,000,000. 50,000 / 1,000,000 = 0.05 (5%)
+        let acc_low = make_test_account(Some(r#"{"credit_balance":"50000"}"#));
+        assert!(!is_credit_balance_exhausted(&acc_low));
+        let fraction = get_account_remaining_fraction(&acc_low, "MiniMax-M3");
+        assert!((fraction - 0.05).abs() < 1e-6);
+
+        // Protected when threshold (10%) >= 5%
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_low, "MiniMax-M3"),
+            QuotaStatus::Protected
+        );
+
+        // Available when quota protection is disabled
+        assert_eq!(
+            evaluate_account_quota(false, 10, &acc_low, "MiniMax-M3"),
+            QuotaStatus::Available
+        );
+
+        // Available when threshold (4%) < 5%
+        assert_eq!(
+            evaluate_account_quota(true, 4, &acc_low, "MiniMax-M3"),
+            QuotaStatus::Available
+        );
+
+        // Explicit total_credits: 80 / 1000 = 8%
+        let acc_explicit = make_test_account(Some(r#"{"credit_balance":80,"total_credits":1000}"#));
+        let fraction_explicit = get_account_remaining_fraction(&acc_explicit, "MiniMax-M3");
+        assert!((fraction_explicit - 0.08).abs() < 1e-6);
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc_explicit, "MiniMax-M3"),
+            QuotaStatus::Protected
+        );
+        assert_eq!(
+            evaluate_account_quota(true, 5, &acc_explicit, "MiniMax-M3"),
+            QuotaStatus::Available
+        );
+    }
+
+    #[test]
+    fn test_session_window_quota_protection() {
+        let mut acc = make_test_account(None);
+        acc.quota_session_used = Some(95);
+        acc.quota_session_limit = Some(100);
+
+        let fraction = get_account_remaining_fraction(&acc, "any-model");
+        assert!((fraction - 0.05).abs() < 1e-6);
+
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, "any-model"),
+            QuotaStatus::Protected
+        );
+        assert_eq!(
+            evaluate_account_quota(false, 10, &acc, "any-model"),
+            QuotaStatus::Available
+        );
+        assert_eq!(
+            evaluate_account_quota(true, 3, &acc, "any-model"),
+            QuotaStatus::Available
+        );
+    }
+
+    #[test]
+    fn test_compare_targets_with_quota_sorts_by_credits() {
+        use crate::context::ResolvedTarget;
+        use openproxy_types::combos::ComboTarget;
+        use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId};
+        use openproxy_types::models::Model;
+        use openproxy_types::{RateLimitScope, TargetFormat};
+
+        let combo_target = ComboTarget {
+            id: ComboTargetId(1),
+            combo_id: ComboId(1),
+            provider_id: ProviderId("minimax".into()),
+            account_id: None,
+            model_row_id: Some(ModelRowId(10)),
+            priority_order: 1,
+            sub_combo_id: None,
+            weight: 1,
+            active: true,
+            rate_limit_scope: RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+        };
+
+        let make_target = |acc_id: i64, fraction: f64| TargetWithQuota {
+            resolved_target: ResolvedTarget {
+                target: combo_target.clone(),
+                model: Model {
+                    row_id: ModelRowId(10),
+                    provider_id: ProviderId("minimax".into()),
+                    model_id: ModelId::new("MiniMax-M3"),
+                    target_format: TargetFormat::Openai,
+                    ..Default::default()
+                },
+                api_key: format!("key-{acc_id}"),
+                api_key_label: None,
+                custom_meta: None,
+            },
+            status: QuotaStatus::Available,
+            remaining_fraction: fraction,
+            priority: 10,
+        };
+
+        let t_high = make_target(1, 0.8);
+        let t_low = make_target(2, 0.2);
+
+        // Higher remaining fraction should sort before lower fraction
+        assert_eq!(
+            compare_targets_with_quota(&t_high, &t_low),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_targets_with_quota(&t_low, &t_high),
+            std::cmp::Ordering::Greater
         );
     }
 }
