@@ -316,3 +316,41 @@ fn oauth_store_preserves_existing_refresh_token_when_none() {
         Some("r1")
     );
 }
+
+#[test]
+fn oauth_store_preserves_existing_provider_specific_when_none() {
+    let (pool, _path, mk, id) = setup_account();
+    let conn = pool.writer();
+    let initial_specific = r#"{"credit_balance":"799.942","streak_days":2}"#;
+    store_oauth_tokens(
+        &conn,
+        id,
+        &mk,
+        StoreOAuthTokensParams {
+            access_token: "t1",
+            token_type: "Bearer",
+            provider_specific: Some(initial_specific),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let acc = get(&conn, id, &mk).unwrap().unwrap();
+    assert_eq!(acc.oauth_provider_specific.as_deref(), Some(initial_specific));
+
+    // Token refresh passes provider_specific: None to avoid wiping out metadata
+    store_oauth_tokens(
+        &conn,
+        id,
+        &mk,
+        StoreOAuthTokensParams {
+            access_token: "t2",
+            token_type: "Bearer",
+            provider_specific: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let acc2 = get(&conn, id, &mk).unwrap().unwrap();
+    assert_eq!(acc2.oauth_provider_specific.as_deref(), Some(initial_specific));
+}
+

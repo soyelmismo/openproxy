@@ -134,17 +134,12 @@ pub async fn run_account_checkin(
         tokio::task::spawn_blocking(move || -> Result<(String, MiniMaxAccountMeta)> {
             let conn = pool.reader();
             let token = accounts::decrypt_access_token(&conn, account_id, &key)?;
-            let raw: Option<String> = conn
-                .query_row(
-                    "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-                    rusqlite::params![account_id.0],
-                    |r| r.get(0),
-                )
-                .unwrap_or(None);
-
-            let meta = raw
-                .and_then(|s| serde_json::from_str::<MiniMaxAccountMeta>(&s).ok())
-                .unwrap_or_default();
+            let meta = openproxy_db::accounts::read_provider_meta::<MiniMaxAccountMeta>(
+                &conn,
+                Some(&key),
+                account_id.0,
+            )?
+            .unwrap_or_default();
 
             Ok((token, meta))
         })
@@ -203,14 +198,17 @@ pub async fn run_account_checkin(
     };
 
     let pool = Arc::clone(db_pool);
+    let key = Arc::clone(master_key);
     tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool
             .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| CoreError::Internal("writer timeout".into()))?;
+        let encrypted_meta =
+            openproxy_db::accounts::encrypt_oauth_provider_specific(&meta_json, &key)?;
         conn.execute(
             "UPDATE accounts SET oauth_provider_specific = ?1, email = COALESCE(?2, email), \
              label = COALESCE(NULLIF(label, ''), ?3) WHERE id = ?4",
-            rusqlite::params![meta_json, final_email, final_label, account_id.0],
+            rusqlite::params![encrypted_meta, final_email, final_label, account_id.0],
         )
         .map_err(openproxy_db::error::map_db_error_ctx(
             "update provider_specific + label",

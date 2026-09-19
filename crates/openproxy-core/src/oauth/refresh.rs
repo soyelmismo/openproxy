@@ -93,7 +93,7 @@ impl TokenRefreshCoordinator {
                         token_type: &token.token_type,
                         expires_at: expires_at.as_deref(),
                         scope: token.scope.as_deref(),
-                        provider_specific: provider.provider_specific_from_token(&token).as_deref(),
+                        provider_specific: None,
                         email: provider.email_from_token(&token).as_deref(),
                     },
                 )
