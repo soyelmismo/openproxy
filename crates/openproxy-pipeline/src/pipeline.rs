@@ -247,6 +247,32 @@ pub fn is_upstream_health_issue(err: &CoreError) -> bool {
     }
 }
 
+pub fn is_model_wide_failure(target: &openproxy_types::ComboTarget, err: &CoreError) -> bool {
+    match err {
+        CoreError::ModelNotFound { .. } => true,
+        CoreError::RateLimited { .. } => {
+            target.rate_limit_scope == openproxy_types::RateLimitScope::Model
+        }
+        CoreError::UpstreamError { status, body, .. } => {
+            if *status == 429 {
+                target.rate_limit_scope == openproxy_types::RateLimitScope::Model
+            } else if *status == 404 {
+                true
+            } else if *status == 400 {
+                let lower = body.to_ascii_lowercase();
+                lower.contains("model is unavailable")
+                    || lower.contains("is not supported")
+                    || lower.contains("does not exist")
+                    || lower.contains("model not found")
+                    || lower.contains("invalid model")
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 fn parse_retry_after_seconds(trimmed: &str) -> Option<u64> {
     let secs = trimmed.parse::<f64>().ok()?;
     (secs.is_finite() && secs >= 0.0).then_some((secs * 1000.0) as u64)
@@ -342,5 +368,49 @@ mod tests {
             openproxy_types::UpstreamErrorClass::ResourceExhausted,
         );
         assert!(is_upstream_health_issue(&masked_err));
+    }
+
+    #[test]
+    fn test_is_model_wide_failure() {
+        use openproxy_types::combos::ComboTarget;
+        use openproxy_types::ids::{ComboId, ComboTargetId, ModelRowId, ProviderId};
+        use openproxy_types::providers::RateLimitScope;
+
+        let mut target = ComboTarget {
+            id: ComboTargetId(1),
+            combo_id: ComboId(1),
+            provider_id: ProviderId::new("minimax"),
+            account_id: Some(openproxy_types::AccountId(204)),
+            model_row_id: Some(ModelRowId(1736)),
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+            active: true,
+            rate_limit_scope: RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+        };
+
+        // 429 on RateLimitScope::Account must NOT be considered model-wide
+        let rate_limit_err = CoreError::RateLimited {
+            provider: "minimax".into(),
+            retry_after_ms: 300000,
+            is_proxy_rotated: false,
+        };
+        assert!(!is_model_wide_failure(&target, &rate_limit_err));
+
+        // 429 on RateLimitScope::Model MUST be considered model-wide
+        target.rate_limit_scope = RateLimitScope::Model;
+        assert!(is_model_wide_failure(&target, &rate_limit_err));
+
+        // 404 ModelNotFound is always model-wide
+        let not_found_err = CoreError::ModelNotFound {
+            provider: "minimax".into(),
+            model: "unknown-model".into(),
+        };
+        assert!(is_model_wide_failure(&target, &not_found_err));
     }
 }

@@ -1,14 +1,15 @@
 use crate::{PipelineRequest, PipelineResult};
+use openproxy_types::TargetExecutionId;
 use openproxy_types::combos::Combo;
 use openproxy_types::error::CoreError;
-use openproxy_types::ids::{ComboTargetId, ModelRowId, TraceId};
+use openproxy_types::ids::{ModelRowId, TraceId};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct RaceOutcome {
     pub result: PipelineResult,
-    pub failed_targets: HashSet<ComboTargetId>,
+    pub failed_targets: HashSet<TargetExecutionId>,
     pub failed_models: HashSet<ModelRowId>,
 }
 
@@ -66,7 +67,7 @@ struct RaceContext {
     queue: Arc<parking_lot::Mutex<std::collections::VecDeque<crate::context::ResolvedTarget>>>,
     winner: Arc<parking_lot::Mutex<Option<PipelineResult>>>,
     last_err: Arc<parking_lot::Mutex<Option<CoreError>>>,
-    failed_targets: Arc<parking_lot::Mutex<HashSet<ComboTargetId>>>,
+    failed_targets: Arc<parking_lot::Mutex<HashSet<TargetExecutionId>>>,
     failed_models: Arc<parking_lot::Mutex<HashSet<ModelRowId>>>,
     running: Arc<std::sync::atomic::AtomicUsize>,
     all_done: Arc<tokio::sync::Notify>,
@@ -123,8 +124,12 @@ async fn execute_race_worker(mut req: PipelineRequest, ctx: RaceContext) {
 
         if let Some(e) = &result.error {
             *ctx.last_err.lock() = Some(e.clone_for_result());
-            ctx.failed_targets.lock().insert(target.target.id);
-            if let Some(m) = target.target.model_row_id {
+            ctx.failed_targets
+                .lock()
+                .insert(TargetExecutionId::from_target(&target.target));
+            if crate::pipeline::is_model_wide_failure(&target.target, e)
+                && let Some(m) = target.target.model_row_id
+            {
                 ctx.failed_models.lock().insert(m);
             }
         }

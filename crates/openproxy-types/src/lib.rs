@@ -68,7 +68,7 @@ pub use capabilities::{
 };
 pub use combos::{
     AddTargetInput, Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH, PriorityMode,
-    Strategy,
+    Strategy, TargetExecutionId,
 };
 pub use config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,

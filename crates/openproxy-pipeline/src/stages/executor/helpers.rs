@@ -103,6 +103,7 @@ pub(super) fn log_target_failure(
         tracing::warn!(
             combo_id = combo.id.0,
             target_id = target.target.id.0,
+            account_id = ?target.target.account_id,
             provider = %target.target.provider_id,
             model_row_id = ?target.target.model_row_id,
             attempts_on_target = target_local_retry_count,
@@ -117,6 +118,7 @@ pub(super) fn log_target_failure(
         tracing::debug!(
             combo_id = combo.id.0,
             target_id = target.target.id.0,
+            account_id = ?target.target.account_id,
             provider = %target.target.provider_id,
             strategy = ?combo.strategy,
             retryable,
@@ -125,9 +127,13 @@ pub(super) fn log_target_failure(
             "target failed; trying next target"
         );
     }
+    let acc_str = target
+        .target
+        .account_id
+        .map_or_else(String::new, |a| format!(" account_id={}", a.0));
     ctx.combo_walk_log.push(format!(
-        "  target_id={} provider={} attempts={} error={}",
-        target.target.id.0, target.target.provider_id, target_local_retry_count, e
+        "  target_id={}{} provider={} attempts={} error={}",
+        target.target.id.0, acc_str, target.target.provider_id, target_local_retry_count, e
     ));
 }
 

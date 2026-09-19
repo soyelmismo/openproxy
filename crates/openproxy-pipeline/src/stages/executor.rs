@@ -11,6 +11,8 @@ use retry::run_target_with_retries;
 use crate::PipelineResult;
 use crate::context::PipelineContext;
 use crate::stage::PipelineStage;
+use openproxy_types::TargetExecutionId;
+use openproxy_types::combos::ComboTarget;
 use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
@@ -50,9 +52,18 @@ enum InitialRaceOutcome {
     Success(PipelineResult),
     Exhausted {
         last_result: Option<PipelineResult>,
-        failed_targets: std::collections::HashSet<openproxy_types::ids::ComboTargetId>,
+        failed_targets: std::collections::HashSet<TargetExecutionId>,
         failed_models: std::collections::HashSet<openproxy_types::ids::ModelRowId>,
     },
+}
+
+#[inline]
+fn target_has_failed(
+    failed_targets: &std::collections::HashSet<TargetExecutionId>,
+    target: &ComboTarget,
+) -> bool {
+    failed_targets.contains(&TargetExecutionId::from_target(target))
+        || failed_targets.contains(&TargetExecutionId::new(target.id, None))
 }
 
 enum TargetLoopOutcome {
@@ -115,16 +126,17 @@ pub(super) async fn execute_sequential_targets(
     to_run: &[crate::context::ResolvedTarget],
     race_size: usize,
     mut last_result: Option<PipelineResult>,
-    mut failed_targets: std::collections::HashSet<openproxy_types::ids::ComboTargetId>,
+    mut failed_targets: std::collections::HashSet<TargetExecutionId>,
     mut failed_models: std::collections::HashSet<openproxy_types::ids::ModelRowId>,
 ) -> Result<PipelineResult, CoreError> {
     let mut overall_attempt: u8 = (failed_targets.len() as u8).saturating_add(1);
 
     for (idx, target) in to_run.iter().enumerate() {
-        if failed_targets.contains(&target.target.id) {
+        if target_has_failed(&failed_targets, &target.target) {
             tracing::info!(
                 combo_id = combo.id.0,
                 target_id = target.target.id.0,
+                account_id = ?target.target.account_id,
                 provider = %target.target.provider_id,
                 "skipping target that already failed in this request"
             );
@@ -136,6 +148,7 @@ pub(super) async fn execute_sequential_targets(
             tracing::info!(
                 combo_id = combo.id.0,
                 target_id = target.target.id.0,
+                account_id = ?target.target.account_id,
                 model_row_id = m.0,
                 provider = %target.target.provider_id,
                 "skipping target whose model already failed in this request"
@@ -152,8 +165,10 @@ pub(super) async fn execute_sequential_targets(
                     && let Some(ref err) = r.error
                     && (crate::pipeline::is_upstream_health_issue(err) || err.is_hard_skip())
                 {
-                    failed_targets.insert(target.target.id);
-                    if let Some(m) = target.target.model_row_id {
+                    failed_targets.insert(TargetExecutionId::from_target(&target.target));
+                    if crate::pipeline::is_model_wide_failure(&target.target, err)
+                        && let Some(m) = target.target.model_row_id
+                    {
                         failed_models.insert(m);
                     }
                 }

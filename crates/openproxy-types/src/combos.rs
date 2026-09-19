@@ -91,6 +91,53 @@ pub struct ComboTarget {
     pub thinking_effort: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TargetExecutionId {
+    pub target_id: ComboTargetId,
+    pub account_id: Option<AccountId>,
+}
+
+impl TargetExecutionId {
+    #[inline]
+    pub const fn new(target_id: ComboTargetId, account_id: Option<AccountId>) -> Self {
+        Self {
+            target_id,
+            account_id,
+        }
+    }
+
+    #[inline]
+    pub fn from_target(target: &ComboTarget) -> Self {
+        Self {
+            target_id: target.id,
+            account_id: target.account_id,
+        }
+    }
+
+    #[inline]
+    pub fn matches_target(&self, target: &ComboTarget) -> bool {
+        self.target_id == target.id
+            && (self.account_id.is_none() || self.account_id == target.account_id)
+    }
+}
+
+impl From<ComboTargetId> for TargetExecutionId {
+    #[inline]
+    fn from(id: ComboTargetId) -> Self {
+        Self {
+            target_id: id,
+            account_id: None,
+        }
+    }
+}
+
+impl From<&ComboTarget> for TargetExecutionId {
+    #[inline]
+    fn from(target: &ComboTarget) -> Self {
+        Self::from_target(target)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComboTargetWithModel {
     pub id: ComboTargetId,
