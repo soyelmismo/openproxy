@@ -248,6 +248,28 @@ fn gemini_headers_include_content_type() {
     );
 }
 
+// ---- Atomesus -------------------------------------------------------
+
+#[tokio::test]
+async fn atomesus_fetch_models_returns_expected_catalog() {
+    let a = AtomesusAdapter::new();
+    let upstream = Arc::new(UpstreamClient::new());
+    let models = a.fetch_models(&upstream, "dummy-key").await.unwrap();
+    assert_eq!(models.len(), 6);
+    let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "atomesus-1-5-fast",
+            "atomesus-1-5-thinking",
+            "atomesus-2-fast",
+            "atomesus-2-thinking",
+            "cipher-fast",
+            "cipher-thinking",
+        ]
+    );
+}
+
 // ---- Antigravity ---------------------------------------------------
 
 #[test]
